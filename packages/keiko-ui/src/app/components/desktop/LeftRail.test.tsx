@@ -21,6 +21,11 @@ function renderRail(openTools: ReadonlySet<string> = new Set()): void {
 }
 
 describe("LeftRail — workspace tool buttons", () => {
+  it("keeps redundant diagnostic windows out of the normal navigation", () => {
+    renderRail(new Set(["diagnostics"]));
+    expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
+  });
+
   it("renders the left rail as a labeled navigation landmark", () => {
     renderRail();
     expect(

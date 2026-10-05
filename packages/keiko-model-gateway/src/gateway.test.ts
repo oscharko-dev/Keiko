@@ -463,8 +463,9 @@ describe("Gateway.chat", () => {
       random: (): number => 1,
     });
     await gateway.chat(REQUEST);
-    // `overrunMs` in the first attempt and the 100 ms Retry-After leave the rest of the budget.
-    expect(seenTimeouts).toEqual([attemptTimeoutMs, budgetMs - overrunMs - 100]);
+    // The actual clock includes both the announced minimum and positive retry jitter.
+    expect(clock.now()).toBe(overrunMs + 100 + route.retryBaseDelayMs);
+    expect(seenTimeouts).toEqual([attemptTimeoutMs, budgetMs - clock.now()]);
   });
 
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {

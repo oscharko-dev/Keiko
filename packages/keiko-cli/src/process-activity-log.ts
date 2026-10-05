@@ -174,7 +174,9 @@ export function processExitingActivityLogEvent(
       : classifyErrorKind(input.onShutdownErrorKind);
   return activityLogEvent(
     PROCESS_EXITING_OPERATION,
-    input.reason === "fatal-exception" ? { level: "error", errorKind: "internal" } : {},
+    input.reason === "fatal-exception" || onShutdownErrorKind !== undefined
+      ? { level: "error", errorKind: "internal" }
+      : {},
     {
       reason: input.reason,
       uptimeMs: Number.isFinite(input.uptimeMs) ? Math.max(0, input.uptimeMs) : 0,

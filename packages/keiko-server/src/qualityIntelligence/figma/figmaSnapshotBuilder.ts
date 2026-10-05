@@ -15,7 +15,7 @@
 // the render-url download, an error, or a log.
 
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
-import { mapWithConcurrency } from "./figmaConcurrency.js";
+import { mapWithConcurrency } from "../../bounded-concurrency.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
 import type { FigmaRenderPort } from "./figmaRenderPort.js";
 import type { FigmaProvenance } from "./figmaConnector.js";

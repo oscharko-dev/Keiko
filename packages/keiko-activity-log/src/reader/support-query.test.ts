@@ -2,6 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  MAX_SUPPORT_REPORT_RECORDS,
+  activityLogOperationSchema,
+  type ActivityLogFieldContract,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
@@ -69,6 +74,111 @@ function diagnostic(
 
 function signal(process: FixtureProcess, atMs: number): string {
   return fixtureLine(process, atMs, { op: SIGNAL });
+}
+
+function requestLine(
+  process: FixtureProcess,
+  correlationId: string,
+  parentCorrelationId?: string,
+  status = 200,
+  atMs = T0 + 100,
+): string {
+  return fixtureLine(process, atMs, {
+    op: "request",
+    correlationId,
+    parentCorrelationId,
+    status,
+    fields: {
+      method: "GET",
+      path: "/api/health",
+      queryParamNames: [],
+      responseBytes: 0,
+      aborted: false,
+    },
+  });
+}
+
+function manualSelection(toMs = T0 + 1000): SupportQuerySelection {
+  return {
+    kind: "closure",
+    queryClass: "incident",
+    roots: [],
+    windows: [{ fromMs: T0, toMs }],
+    requiredClasses: { kind: "observed-failures" },
+    unresolved: false,
+  };
+}
+
+function streamLifecycle(
+  process: FixtureProcess,
+  atMs: number,
+  correlationId: string,
+  phase: "started" | "completed",
+): string {
+  return fixtureLine(process, atMs, {
+    op: `gateway.stream.${phase}`,
+    correlationId,
+    fields: {
+      modelId: "test-model",
+      costClass: "low",
+      ...(phase === "started"
+        ? { timeoutMs: 0, maxRetries: 0, streaming: true }
+        : { chunkCount: 1 }),
+    },
+  });
+}
+
+function pinProtectionWarning(
+  process: FixtureProcess,
+  atMs: number,
+  correlationId: string,
+  parentCorrelationId?: string,
+): string {
+  return fixtureLine(process, atMs, {
+    op: "activity-log.pin.quota-exhausted",
+    correlationId,
+    parentCorrelationId,
+    level: "error",
+    errorKind: "unavailable",
+    fields: {
+      pinQuotaBytes: 1,
+      requestedPinnedBytes: 512,
+      protectedPinnedBytes: 0,
+      protectedSegmentCount: 0,
+      unprotectedSegmentCount: 1,
+      unprotectedBytes: 512,
+      unprotectedSeqSpan: 1,
+      unknownSpanSegmentCount: 0,
+      activePinCount: 1,
+      completeness: "partial",
+      loss: "none",
+    },
+  });
+}
+
+function requiredStringFieldValue(contract: ActivityLogFieldContract): unknown {
+  if (contract.dataClass === "digest") return "a".repeat(Math.min(contract.maxLength ?? 64, 64));
+  if (contract.dataClass === "closed-enum") return contract.values?.[0];
+  if (contract.dataClass === "completeness-state") return "complete";
+  if (contract.dataClass === "loss-state") return "none";
+  return "fixture-value";
+}
+
+function requiredFieldValue(contract: ActivityLogFieldContract): unknown {
+  if (contract.type === "boolean") return false;
+  if (contract.type === "integer" || contract.type === "number") return 0;
+  if (contract.type === "string-array") return contract.values?.slice(0, 1) ?? [];
+  return requiredStringFieldValue(contract);
+}
+
+function registeredRequiredFields(op: string): Readonly<Record<string, unknown>> {
+  const schema = activityLogOperationSchema(op);
+  if (schema === undefined) throw new Error("Missing registered test operation");
+  return Object.fromEntries(
+    Object.entries(schema.fields)
+      .filter(([, contract]) => contract.required)
+      .map(([name, contract]) => [name, requiredFieldValue(contract)]),
+  );
 }
 
 function writeGraph(stateDir: string): GraphFixture {
@@ -337,6 +447,160 @@ describe("support query causal closure (#3531)", () => {
     });
     expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
     expect(result.metrics.closureEventCount).toBe(6);
+    expect(
+      result.events
+        .filter((event) => event.role === "context")
+        .map((event) => Date.parse(event.parsed.view.ts)),
+    ).toEqual([T0 + 63_100]);
+  });
+
+  it.each([1, 2])("ranks context against every selected time with stable ties: %i", (limit) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      signal(process, T0 + 50),
+      diagnostic(process, T0 + 100, IDS.root),
+      signal(process, T0 + 490),
+      diagnostic(process, T0 + 500, IDS.root),
+      signal(process, T0 + 510),
+      diagnostic(process, T0 + 900, IDS.root),
+      signal(process, T0 + 940),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), {
+      maxContextEvents: limit,
+    });
+    expect(
+      result.events
+        .filter((event) => event.parsed.view.op === SIGNAL)
+        .map((event) => Date.parse(event.parsed.view.ts)),
+    ).toEqual([T0 + 490, T0 + 510].slice(0, limit));
+    expect(result.metrics.closureEventCount).toBe(3);
+    expect(result.truncation.omittedContextEventCount).toBe(4 - limit);
+    expect(result.events.map((event) => event.index)).toEqual(
+      result.events.map((event) => event.index).sort((a, b) => a - b),
+    );
+  });
+
+  it("retains fitting nearby context after an earlier optional line exceeds its bytes", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      fixtureLine(process, T0 + 1, { op: "process.heartbeat" }),
+      signal(process, T0 + 9),
+      diagnostic(process, T0 + 10, IDS.root),
+    ]);
+    const required = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    const full = query(stateDir, correlationSelection(IDS.root)).result;
+    const fitting = full.events.find((event) => event.parsed.view.op === SIGNAL);
+    if (fitting === undefined) throw new TypeError("Missing fixture context");
+    const maxResultBytes = required.metrics.selectedBytes + fitting.bytes;
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxResultBytes });
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      SIGNAL,
+      DIAGNOSTIC,
+    ]);
+    expect(result.metrics.selectedBytes).toBe(maxResultBytes);
+    expect(result.truncation.omittedContextEventCount).toBe(1);
+  });
+
+  it("keeps required evidence and counts every omitted context event when its budget is zero", () => {
+    writeGraph(stateDir);
+    const required = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    for (const limits of [
+      { maxContextEvents: 0 },
+      { maxResultBytes: required.metrics.selectedBytes },
+    ]) {
+      const { result } = query(stateDir, correlationSelection(IDS.root), limits);
+      expect(result.events).toEqual(required.events);
+      expect(result.metrics.selectedBytes).toBe(required.metrics.selectedBytes);
+      expect(result.truncation).toMatchObject({
+        state: "context-truncated",
+        omittedContextEventCount: 2,
+      });
+    }
+  });
+
+  it("reserves the canonical record ceiling for the complete closure and its lifetime anchor", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      signal(process, T0 + 1),
+      signal(process, T0 + 2),
+      ...Array.from({ length: MAX_SUPPORT_REPORT_RECORDS - 3 }, () =>
+        diagnostic(process, T0 + 3, IDS.root),
+      ),
+      diagnostic(process, T0 + 4, IDS.child, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.events).toHaveLength(MAX_SUPPORT_REPORT_RECORDS);
+    expect(result.metrics.closureEventCount).toBe(MAX_SUPPORT_REPORT_RECORDS - 2);
+    expect(result.metrics.candidateEventCount).toBe(MAX_SUPPORT_REPORT_RECORDS + 1);
+    expect(result.query.limits.maxResultRecords).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(result.closure?.edges).toEqual([
+      { correlationId: IDS.child, parentCorrelationId: IDS.root },
+    ]);
+    expect(
+      result.events.filter((event) => event.parsed.view.op === "process.started"),
+    ).toHaveLength(1);
+    expect(result.truncation).toMatchObject({
+      state: "context-truncated",
+      omittedContextEventCount: 1,
+      requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS - 1,
+    });
+    expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+    expect(result.lifetimes).toEqual([
+      { pid: process.pid, instanceId: process.instanceId, start: "selected" },
+    ]);
+  });
+
+  it("reports the exact required record count when 20001 small required events cannot fit", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, T0, 1),
+      Array.from({ length: MAX_SUPPORT_REPORT_RECORDS + 1 }, () =>
+        diagnostic(process, T0, IDS.root),
+      ),
+    );
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.truncation.requiredBytes).toBeLessThan(
+      DEFAULT_SUPPORT_QUERY_LIMITS.maxResultBytes,
+    );
+    expect(result.events).toEqual([]);
+    expect(result.truncation).toMatchObject({
+      state: "budget-exceeded",
+      requiredRecordCount: 20001,
+    });
+    expect(result.metrics.candidateEventCount).toBe(20001);
+    expect(result.closure).toMatchObject({ correlationCount: 1, missingCorrelationCount: 0 });
+    expect(result.diagnosticSufficiency.reasons).toEqual(["report-budget-exceeded"]);
+    const filtered = query(stateDir, {
+      kind: "events",
+      queryClass: "operation",
+      filter: { op: DIAGNOSTIC },
+    }).result;
+    expect(filtered.truncation).toMatchObject({
+      state: "budget-exceeded",
+      requiredRecordCount: 20001,
+    });
+    expect(filtered.events).toHaveLength(0);
+  });
+
+  it("retains fitting optional context when a later optional record exceeds its byte allowance", () => {
+    writeGraph(stateDir);
+    const required = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    const full = query(stateDir, correlationSelection(IDS.root)).result;
+    const firstContext = full.events.find((event) => event.role === "context");
+    expect(firstContext).toBeDefined();
+    const maxResultBytes = required.truncation.requiredBytes + (firstContext?.bytes ?? 0);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxResultBytes });
+    expect(result.metrics.closureEventCount).toBe(required.metrics.closureEventCount);
+    expect(result.metrics.contextEventCount).toBe(1);
+    expect(result.truncation).toMatchObject({
+      state: "context-truncated",
+      omittedContextEventCount: 1,
+    });
   });
 
   it("declares an unreadable candidate segment instead of omitting it silently", () => {
@@ -680,7 +944,540 @@ describe("support query causal closure (#3531)", () => {
     expect(result.events.map((event) => event.parsed.correlationId)).toEqual([IDS.root, IDS.root]);
   });
 
-  it("selects a user-reported window and the closure of every correlation inside it", () => {
+  it("keeps useful manual evidence despite more than 8036 independent successful requests", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const noise = Array.from({ length: 8100 }, (_, index) =>
+      requestLine(process, `routine-request-${String(index)}`, undefined, 200, T0 + index),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      ...noise,
+      diagnostic(process, T0 + 8100, IDS.root),
+      requestLine(process, "causal-request", IDS.root, 200, T0 + 8101),
+      requestLine(process, "failed-request", undefined, 500, T0 + 8101),
+      fixtureLine(process, T0 + 8102, {
+        op: "search.connected-context.completed",
+        correlationId: IDS.child,
+        parentCorrelationId: IDS.root,
+        fields: {
+          scopeIdentitySha256: "a".repeat(64),
+          queryIdentitySha256: "b".repeat(64),
+          activityDetailStatus: "complete",
+        },
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection(T0 + 9000), { contextMs: 10_000 });
+    expect(DEFAULT_SUPPORT_QUERY_LIMITS.maxClosureCorrelations).toBe(4096);
+    expect(result.truncation.state).not.toBe("budget-exceeded");
+    expect(result.events.length).toBeGreaterThan(4);
+    expect(result.events.length).toBeLessThanOrEqual(261);
+    for (const id of [IDS.root, IDS.child, "causal-request", "failed-request"])
+      expect(eventCorrelations(result).has(id)).toBe(true);
+    expect(result.truncation.omittedContextEventCount).toBeGreaterThan(7800);
+    expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
+    const optionalIds = result.events
+      .filter((event) => event.role === "context" && event.index !== 0)
+      .map((event) => event.parsed.correlationId);
+    expect(optionalIds).toEqual(
+      Array.from({ length: 256 }, (_, index) => `routine-request-${String(7844 + index)}`),
+    );
+  });
+
+  it("keeps a manual diagnostic despite 4097 independent successful non-HTTP correlations", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const noise = Array.from({ length: 4097 }, (_, index) =>
+      fixtureLine(process, T0 + 100, {
+        op: "chat.response.message",
+        correlationId: `chat-success-${String(index)}`,
+      }),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      ...noise,
+      diagnostic(process, T0 + 101, IDS.root),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.truncation.state).toBe("context-truncated");
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.some((event) => event.parsed.correlationId === IDS.root)).toBe(true);
+    expect(result.events.length).toBeLessThanOrEqual(258);
+    expect(result.truncation.omittedContextEventCount).toBeGreaterThan(3800);
+    expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+  });
+
+  it.each([
+    ["chat.response.streamed", { outcome: "failed" }],
+    ["chat.response.streamed", { outcome: "stalled" }],
+    ["chat.response.streamed", { outputExhausted: true }],
+    ["gateway.readiness.completed", { overallStatus: "failed" }],
+    ["gateway.readiness.completed", { overallStatus: "partial" }],
+    ["gateway.readiness.automatic.completed", { overallStatus: "failed" }],
+    ["coding-sidecar.gateway.outcome", { outcome: "failed" }],
+    ["coding-sidecar.gateway.outcome", { outcome: "output-limit" }],
+    ["editor.producer-turn.completed", { outcome: "failed" }],
+    ["gateway.stream.abandoned", { reason: "consumer-stopped-iterating" }],
+    ["embedding.batch.completed", { errorCount: 1 }],
+  ] as const)("keeps parentless informational %s failure facts mandatory: %j", (op, fields) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      fixtureLine(process, T0 + 100, {
+        op,
+        correlationId: IDS.root,
+        fields: { ...registeredRequiredFields(op), ...fields },
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual(["process.started", op]);
+    expect(result.events[1]?.parsed.view.level).toBe("info");
+    expect(result.events[1]?.role).toBe(op === "embedding.batch.completed" ? "window" : "closure");
+    expect(result.truncation.omittedContextEventCount).toBe(0);
+  });
+
+  it.each([
+    ["chat.response.streamed", { outcome: "completed", outputExhausted: false }],
+    ["chat.response.streamed", { outcome: "whole-body" }],
+    ["gateway.readiness.completed", { overallStatus: "ready" }],
+    ["gateway.readiness.automatic.completed", { overallStatus: "ready" }],
+    [
+      "coding-sidecar.gateway.outcome",
+      { outcome: "accepted", completionTokens: 1024, outputBytes: 4096 },
+    ],
+    ["editor.producer-turn.completed", { outcome: "completed" }],
+    ["embedding.batch.completed", { errorCount: 0 }],
+    ["gateway.stream.completed", { costClass: "high", modelId: "failed" }],
+  ] as const)("keeps successful %s variants optional: %j", (op, fields) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      fixtureLine(process, T0 + 100, {
+        op,
+        correlationId: IDS.unrelated,
+        fields: { ...registeredRequiredFields(op), ...fields },
+      }),
+      diagnostic(process, T0 + 101, IDS.root),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      DIAGNOSTIC,
+    ]);
+    expect(result.truncation.omittedContextEventCount).toBe(1);
+  });
+
+  it("does not promote 4097 normal catalog-derived metadata records into failure roots", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const op = "gateway.stream.completed";
+    const costClasses = activityLogOperationSchema(op)?.fields.costClass?.values ?? [];
+    expect(costClasses.length).toBeGreaterThan(0);
+    const requiredFields = registeredRequiredFields(op);
+    const metadata = Array.from({ length: 4097 }, (_, index) =>
+      fixtureLine(process, T0 + 100, {
+        op,
+        correlationId: `normal-stream-${String(index)}`,
+        fields: {
+          ...requiredFields,
+          costClass: costClasses[index % costClasses.length],
+          modelId: "failed",
+          chunkCount: 100,
+          promptTokens: 1000,
+          completionTokens: 100,
+        },
+      }),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      ...metadata,
+      diagnostic(process, T0 + 101, IDS.root),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.some((event) => event.parsed.correlationId === IDS.root)).toBe(true);
+    expect(result.events.length).toBeLessThanOrEqual(258);
+    expect(result.truncation.omittedContextEventCount).toBeGreaterThan(3800);
+    expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+  });
+
+  it("keeps non-causal protection evidence without promoting its borrowed successful request tree", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 - 100, 1), [
+      fixtureLine(process, T0 - 100, { op: "process.started" }),
+      requestLine(process, IDS.unrelated, undefined, 200, T0 - 60),
+      requestLine(process, IDS.child, IDS.unrelated, 200, T0 - 50),
+      pinProtectionWarning(process, T0 + 100, IDS.unrelated),
+      requestLine(process, IDS.unrelated, undefined, 200, T0 + 150),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(0);
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      "activity-log.pin.quota-exhausted",
+    ]);
+    expect(result.events[1]?.role).toBe("window");
+    expect(result.metrics.closureEventCount).toBe(0);
+    expect(result.truncation.omittedContextEventCount).toBe(1);
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-partial");
+    expect(result.diagnosticSufficiency.reasons).not.toContain("lifecycle-start-missing");
+  });
+
+  it.each(["ancestor", "descendant"] as const)(
+    "does not create a closure %s from a declared non-causal parent field",
+    (direction) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      const id = direction === "ancestor" ? IDS.root : IDS.unrelated;
+      const parent = direction === "ancestor" ? IDS.unrelated : IDS.root;
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+        fixtureLine(process, T0, { op: "process.started" }),
+        diagnostic(process, T0 + 100, IDS.root),
+        pinProtectionWarning(process, T0 + 101, id, parent),
+        requestLine(process, IDS.unrelated, undefined, 200, T0 + 102),
+      ]);
+      const { result } = query(stateDir, correlationSelection(IDS.root), {
+        maxContextEvents: 0,
+      });
+      expect(result.closure).toMatchObject({ rootCount: 1, ancestorCount: 0, descendantCount: 0 });
+      expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+        "process.started",
+        DIAGNOSTIC,
+      ]);
+      expect(result.metrics.closureEventCount).toBe(1);
+    },
+  );
+
+  it("retains a borrowed maintenance identity only as nearby process context for a selected failure", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      diagnostic(process, T0 + 100, IDS.root),
+      pinProtectionWarning(process, T0 + 101, IDS.root),
+      diagnostic(process, T0 + 102, IDS.child, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.closure).toMatchObject({ rootCount: 1, descendantCount: 1 });
+    expect(
+      result.events.find((event) => event.parsed.view.op === "activity-log.pin.quota-exhausted"),
+    ).toMatchObject({ role: "context" });
+    expect(result.metrics.closureEventCount).toBe(2);
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-partial");
+  });
+
+  it.each(["never finished", "restarted"] as const)(
+    "keeps a %s stream mandatory among 4097 completed lifecycles",
+    (state) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      const lines = [streamLifecycle(process, T0, IDS.root, "started")];
+      if (state === "restarted")
+        lines.push(
+          streamLifecycle(process, T0 + 1, IDS.root, "completed"),
+          streamLifecycle(process, T0 + 2, IDS.root, "started"),
+        );
+      for (let index = 0; index < 4097; index += 1) {
+        const id = `completed-stream-${String(index)}`;
+        lines.push(
+          streamLifecycle(process, T0 + 100, id, "started"),
+          streamLifecycle(process, T0 + 101, id, "completed"),
+        );
+      }
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), lines);
+      const { result } = query(stateDir, manualSelection());
+      const owned = result.events.filter((event) => event.parsed.correlationId === IDS.root);
+      expect(owned).toHaveLength(state === "restarted" ? 3 : 1);
+      expect(owned.every((event) => event.role === "closure")).toBe(true);
+      expect(result.closure?.rootCount).toBe(1);
+      expect(result.events.length).toBeLessThanOrEqual(259);
+      expect(result.truncation.state).toBe("context-truncated");
+      expect(result.truncation.omittedContextEventCount).toBeGreaterThan(7900);
+      expect(result.metrics.selectedBytes).toBe(
+        result.events.reduce((sum, event) => sum + event.bytes, 0),
+      );
+      expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+    },
+  );
+
+  it.each(["other class", "outside window"] as const)(
+    "does not close an open lifecycle with a terminal from %s",
+    (source) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+        streamLifecycle(process, T0, IDS.root, "started"),
+        ...(source === "other class"
+          ? [
+              fixtureLine(process, T0 + 1, {
+                op: "gateway.readiness.completed",
+                correlationId: IDS.root,
+                fields: { trigger: "settings", overallStatus: "ready", probeCount: 1 },
+              }),
+            ]
+          : []),
+        ...(source === "outside window"
+          ? [streamLifecycle(process, T0 + 2000, IDS.root, "completed")]
+          : []),
+      ]);
+      const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+      expect(result.closure?.rootCount).toBe(1);
+      expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+      expect(result.events[0]?.parsed.view.op).toBe("gateway.stream.started");
+    },
+  );
+
+  it("matches a terminal across writers under the same correlation and registered class", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const peer = fixtureProcess(4202, "bbbbbbb2");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      streamLifecycle(process, T0, IDS.root, "started"),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(peer, T0 + 1, 1), [
+      streamLifecycle(peer, T0 + 1, IDS.root, "completed"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(0);
+    expect(result.events).toEqual([]);
+  });
+
+  it("retains out-of-order matching terminals conservatively", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const peer = fixtureProcess(4202, "bbbbbbb2");
+    writeFixtureSegment(stateDir, segmentIdentity(peer, T0, 1), [
+      streamLifecycle(peer, T0 + 2, IDS.root, "completed"),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 + 1, 1), [
+      streamLifecycle(process, T0 + 1, IDS.root, "started"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+  });
+
+  it("retains unmatched concurrent starts after only one terminal", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      streamLifecycle(process, T0, IDS.root, "started"),
+      streamLifecycle(process, T0 + 1, IDS.root, "started"),
+      streamLifecycle(process, T0 + 2, IDS.root, "completed"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure", "closure"]);
+  });
+
+  it("reports the existing closure budget when open lifecycle tracking exceeds it", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      streamLifecycle(process, T0, IDS.root, "started"),
+      streamLifecycle(process, T0 + 1, IDS.child, "started"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxClosureCorrelations: 1 });
+    expect(result.events).toEqual([]);
+    expect(result.closure?.rootCount).toBe(2);
+    expect(result.truncation.state).toBe("budget-exceeded");
+    expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+  });
+
+  it.each([
+    { level: "warn" as const },
+    { level: "error" as const },
+    { errorKind: "internal" as const },
+    { fields: { completeness: "partial" } },
+    { fields: { loss: "event-dropped" } },
+  ])("keeps non-HTTP diagnostic facts mandatory: %j", (overrides) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0 + 100, {
+        op: "chat.response.message",
+        correlationId: IDS.root,
+        ...overrides,
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.role).toBe("closure");
+  });
+
+  // These pre-v2 records deliberately lack a current writer envelope. They exercise the reader's
+  // retained legacy boundary, including shapes a current registered producer refuses to write.
+  it.each([
+    ["status", { status: 500 }],
+    ["frames", { frames: ["packages/keiko-server/dist/routes.js:1:1"] }],
+    ["cause chain", { causeChain: ["TypeError"] }],
+    ["failure kind", { failureKind: "TypeError" }],
+    ["error class", { errorClass: "TypeError" }],
+    ["known parent", { parentCorrelationId: IDS.parent }],
+    ["unregistered operation", { op: "legacy.unregistered.operation" }],
+    ["diagnostic category", { op: "client.stage.settled" }],
+    ["failure lifecycle at info", { op: "gateway.stream.failed" }],
+    ["missing completeness", { completeness: undefined }],
+    ["missing loss", { loss: undefined }],
+    ["no extra fields", { completeness: undefined, loss: undefined }],
+  ])("keeps the %s guard mandatory for retained non-HTTP evidence", (_label, fields) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const text = JSON.stringify({
+      ts: new Date(T0 + 100).toISOString(),
+      level: "info",
+      category: "gateway",
+      op: "chat.response.message",
+      correlationId: IDS.root,
+      completeness: "complete",
+      loss: "none",
+      ...fields,
+    });
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [text]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({ role: "closure", text });
+    expect(result.integrity.legacyLineCount).toBe(1);
+  });
+
+  it("keeps a retained non-causal loss mandatory without assigning its borrowed correlation a closure", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const text = JSON.stringify({
+      ts: new Date(T0 + 100).toISOString(),
+      level: "info",
+      category: "gateway",
+      op: "gateway.log.sink-failed",
+      correlationId: IDS.root,
+      completeness: "complete",
+      loss: "none",
+    });
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [text]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(0);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({ role: "window", text });
+    expect(result.integrity.legacyLineCount).toBe(1);
+  });
+
+  it.each(["info", "debug"] as const)(
+    "keeps positively complete independent %s activity optional",
+    (level) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+        fixtureLine(process, T0 + 100, {
+          op: "chat.response.message",
+          correlationId: IDS.unrelated,
+          level,
+        }),
+        diagnostic(process, T0 + 101, IDS.root),
+      ]);
+      const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+      expect(result.closure?.rootCount).toBe(1);
+      expect(eventCorrelations(result)).toEqual(new Set([IDS.root]));
+      expect(result.truncation.omittedContextEventCount).toBe(1);
+      expect(result.truncation.state).toBe("context-truncated");
+    },
+  );
+
+  it("still rejects an explicit causal closure exceeding 4096 request children", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      diagnostic(process, T0, IDS.root),
+      ...Array.from({ length: 4100 }, (_, index) =>
+        requestLine(process, `causal-request-${String(index)}`, IDS.root),
+      ),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.events).toEqual([]);
+    expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+  });
+
+  it.each([
+    { status: 500 },
+    { status: 200, level: "warn" as const },
+    { status: 200, level: "error" as const },
+    { status: 200, errorKind: "internal" as const },
+    { status: 200, fields: { aborted: true } },
+    { status: undefined },
+  ])("keeps failed or uncertain HTTP transport mandatory: %j", (overrides) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0 + 100, {
+        op: "request",
+        correlationId: "important-transport",
+        ...overrides,
+        fields: {
+          method: "GET",
+          path: "/api/health",
+          queryParamNames: [],
+          responseBytes: 0,
+          aborted: false,
+          ...overrides.fields,
+        },
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.role).toBe("closure");
+  });
+
+  it("keeps successful transport ancestors of a selected failure mandatory", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      requestLine(process, IDS.parent),
+      diagnostic(process, T0 + 101, IDS.root, IDS.parent),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+    expect(eventCorrelations(result)).toEqual(new Set([IDS.parent, IDS.root]));
+  });
+
+  it("keeps a linked successful request and its outside-window ancestor mandatory", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      diagnostic(process, T0 - 1000, IDS.parent),
+      requestLine(process, IDS.root, IDS.parent),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+    expect(eventCorrelations(result)).toEqual(new Set([IDS.parent, IDS.root]));
+  });
+
+  it("keeps a retained beginning beside historical pin protection failure", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      signal(process, T0),
+      fixtureLine(process, T0 + 1, {
+        op: "activity-log.pin.created",
+        correlationId: IDS.root,
+        fields: {
+          pinStatus: "created",
+          pinKind: "window",
+          pinReason: "incident",
+          pinnedSegmentCount: 1,
+          pinnedBytes: 512,
+          expiresInSeconds: 3600,
+          quotaStatus: "exceeded",
+          completeness: "partial",
+        },
+      }),
+      fixtureLine(process, T0 + 2, {
+        op: "activity-log.pin.quota-exhausted",
+        correlationId: IDS.root,
+        fields: {
+          pinQuotaBytes: 1,
+          requestedPinnedBytes: 512,
+          protectedPinnedBytes: 0,
+          protectedSegmentCount: 0,
+          unprotectedSegmentCount: 1,
+          unprotectedBytes: 512,
+          unprotectedSeqSpan: 1,
+          unknownSpanSegmentCount: 0,
+          activePinCount: 1,
+          completeness: "partial",
+          loss: "event-dropped",
+        },
+      }),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.lifetimes).toEqual([
+      { pid: process.pid, instanceId: process.instanceId, start: "absent" },
+    ]);
+    expect(result.diagnosticSufficiency).toMatchObject({
+      status: "degraded",
+      reasons: ["evidence-partial"],
+    });
+  });
+
+  it("selects a user-reported window and the closure of every diagnostic correlation inside it", () => {
     writeGraph(stateDir);
     const files = listActivityLogStoreFiles(stateDir);
     const firstSegment = files.find((file) => file.name.includes("-4101-"));

@@ -5,7 +5,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, fetchGitBranches } from "./api";
-import { bffFetchJson, bffRequestErrorKind, responseCorrelationIdOf } from "./http";
+import {
+  bffFetchJson,
+  bffCodeErrorKind,
+  bffRequestErrorKind,
+  responseCorrelationIdOf,
+} from "./http";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 // bffFetchJson loads this primitive through a dynamic import() (http.ts documents why: a static
@@ -210,10 +215,19 @@ describe("bffFetchJson — success bodies", () => {
   });
 
   it("routes the body through opts.validator when supplied", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ raw: true })));
+    const response = jsonResponse({ raw: true });
+    response.headers.set("Date", "Mon, 05 Oct 2026 12:00:00 GMT");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
     const validator = vi.fn((_: string, value: unknown) => ({ mapped: value }));
     const result = await bffFetchJson<{ mapped: unknown }>("/api/x", undefined, { validator });
-    expect(validator).toHaveBeenCalledWith("/api/x", { raw: true });
+    expect(validator).toHaveBeenCalledExactlyOnceWith(
+      "/api/x",
+      { raw: true },
+      {
+        headers: response.headers,
+        receivedAtMs: expect.any(Number),
+      },
+    );
     expect(result).toEqual({ mapped: { raw: true } });
   });
 });
@@ -587,6 +601,8 @@ describe("bffRequestErrorKind", () => {
     [new ApiError("RATE", "no", 429), "rate-limited"],
     [new ApiError("CANCELLED", "no", 499), "cancelled"],
     [new ApiError("INTERNAL", "no", 500), "internal"],
+    [new ApiError("INTERNAL", "no", 200), "internal"],
+    [new ApiError("UNAVAILABLE", "no", 0), "unavailable"],
     [new ApiError("UPSTREAM", "no", 502), "unavailable"],
     [new ApiError("NOT_FOUND", "no", 404), "invalid-request"],
     [new DOMException("aborted", "AbortError"), "cancelled"],
@@ -596,4 +612,29 @@ describe("bffRequestErrorKind", () => {
   ] as const)("classifies %s as %s", (error, kind) => {
     expect(bffRequestErrorKind(error)).toBe(kind);
   });
+});
+
+describe("bffCodeErrorKind", () => {
+  it.each([
+    ["BAD_REQUEST", 400],
+    ["CLARIFICATION_NEEDED", 400],
+    ["NOT_FOUND", 404],
+    ["DENIED", 403],
+    ["FORBIDDEN", 403],
+    ["UNAUTHORIZED", 401],
+    ["CONFLICT", 409],
+    ["RATE_LIMITED", 429],
+    ["CANCELLED", 499],
+    ["TIMEOUT", 408],
+    ["INTERNAL", 500],
+    ["UNAVAILABLE", 503],
+    ["GATEWAY_UNAVAILABLE", 503],
+  ] as const)("matches the typed %s response classification", (code, status) => {
+    expect(bffCodeErrorKind(code)).toBe(bffRequestErrorKind(new ApiError(code, "private", status)));
+  });
+
+  it.each([undefined, "", "__proto__", "toString", "PRIVATE_CODE", "unavailable"])(
+    "does not infer a class for unknown code %s",
+    (code) => expect(bffCodeErrorKind(code)).toBe("unknown"),
+  );
 });

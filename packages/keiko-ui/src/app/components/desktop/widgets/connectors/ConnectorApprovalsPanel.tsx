@@ -1,3 +1,6 @@
+"use client";
+
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238, ADR-0128 D4, ADR-0125) — the write-action approval surface.
 //
 // Renders the pending review-required connector actions from GET /action-approvals with the action
@@ -7,12 +10,10 @@
 // rejection without executing. Every control is a native button; the surface is keyboard-operable
 // end to end. Approval-UX vocabulary matches the editor lane (Approve / Reject / disposition).
 
-"use client";
-
 import { useEffect, useState, type ReactNode } from "react";
 import type { AtlassianConnectorPendingApproval } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+
 import type {
   ApproveAtlassianConnectorActionResult,
   AtlassianConnectorsClient,

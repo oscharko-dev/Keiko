@@ -216,12 +216,60 @@ first edit, with a diagnostic naming only the digest of the event type; the refu
 labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.
 
 Repository search v1 is local lexical/literal/safe-regex/symbol search through the workspace owner.
-It caps query characters at 200, hits at 50, scanned files at 2,000, file bytes at 512 KiB, time at
-5 seconds, snippets at 512 bytes, result at 64 KiB and discovery inventory at 50,000. Each include
-and exclude list has at most 32 globs of 200 characters. Yield after at most 32 candidates. Search
-must reject dangerous regexes, honor cancellation during inventory and scanning, and report omitted
-coverage. Existing `repoSearch` defaults of 200 hits do not widen the coding projection's 50-hit cap.
-`keiko_workspace_discover` stays path-only. Semantic reranking remains deferred to #3416/#2554.
+It caps query characters at 200, hits at 50, file bytes at an inclusive 2 MiB, snippets at
+512 bytes and result at 64 KiB. Discovery and scanning do not impose an arbitrary file-count,
+depth or source-search time ceiling on the selected folder. An explicit request deadline,
+cancellation and output caps still apply, with incomplete coverage reported explicitly. Source-search
+waiting is separate from the model gateway's execution budgets. Each include and exclude list has at
+most 32 globs of 200 characters. Yield after at most 32 candidates. Search must reject dangerous
+regexes, honor cancellation during inventory and scanning, and report omitted coverage. Existing
+`repoSearch` defaults of 200 hits do not widen the coding projection's 50-hit cap.
+
+The governed repository tool declares the existing sandbox settlement budget explicitly. Its
+server-private execution guard carries the catalog's effective deadline and clock, including any
+shorter authority deadline; model arguments cannot replace them. Inside that invocation, the
+handler reserves up to one second each for validated snippet projection and final bounded-result
+settlement (at most one quarter of the remaining invocation for each phase). Reaching either soft
+phase deadline returns already validated hits with `time-limit` and incomplete `timeout` coverage.
+Optional semantic reranking is then skipped with `budget-exhausted` provenance so it cannot consume
+the settlement reserve. A user cancellation, revoked authority, or the catalog's hard deadline still
+withholds content. Direct searches without a caller deadline remain unlimited in elapsed time;
+these settlement phases introduce no corpus file-count or source eligibility limit.
+
+Recursive search does not require Git metadata. In an ordinary folder, directory names such as
+`build`, `dist` or `generated` alone do not classify text documents as code noise; Git repositories
+retain their coding-noise exclusions. Both scopes retain the same sensitive-path, containment,
+symlink, binary and image denials. The ordinary Chat can search a connected folder; launching a
+Coding Workbench write task still requires its existing verified Git workspace authority.
+
+The policy mode is selected by Git metadata at the connected root (`.git`), not by a parent
+directory or a nested repository. File eligibility uses the inclusive 2 MiB byte bound and
+excludes image formats, including SVG, before decoding. Text is decoded as UTF-8 or detected
+UTF-16; HTML also supports declared legacy encodings through the shared decoder. A byte-order
+mark takes precedence over an HTML declaration. An unsupported explicit HTML encoding is an
+`io-error`, not a silently excluded binary file. Decoded NULs, malformed text and an excessive
+control-character ratio identify binary content; ordinary tabs and line endings remain text.
+Default content scans and direct coding reads share the guarded UTF-aware binary-head inspection.
+It reuses complete files of at most 4 KiB and rejects binary heads before full-file I/O. Larger text
+receives its full decoder check after the head, with the same file snapshot required across reads.
+Binary, image and oversized exclusions are policy decisions, distinct from incomplete search
+coverage. The executable bounds table uses `null` only for the unbounded search file-count,
+inventory-count and duration fields; query, file-byte and result-size bounds remain finite.
+
+The governed model prompt describes the actual search result: bounded hits and
+`truncationReasons`, without a continuation cursor. The agent refines a truncated search with a
+more selective query or `includeGlobs`, reads the matched line window before editing, and cannot
+infer absence from an empty result whose coverage is incomplete. Literal mode matches an exact
+phrase; lexical mode searches concepts; symbol and safe-regex modes retain their explicit semantics.
+Unreadable eligible files disclose `io-error`, including when other files produce valid hits.
+Whole-scan binary, oversized, and unreadable counts are independent of the bounded omitted-path
+sample. The existing handler settlement records the policy mode, applied low-value rescue,
+coverage reasons and exclusion counts without queries or paths. Cancellation retains available
+scan observations and labels unavailable progress explicitly rather than implying zero work.
+`keiko_workspace_discover` stays path-only. Optional semantic reranking follows #3416/#2554 below;
+its availability never gates recursive lexical search. The same prompt distinguishes existing-file
+reads from new-file creation: existing edits bind the latest whole-file read digest; creation uses
+a `/dev/null` source diff and the empty-content digest already owned by the changeset contract.
 
 ### D5 — Version-1 result, paging and recovery table
 
@@ -447,6 +495,11 @@ gap and independent stderr warning; support analysis reports unknown, never fabr
 Transient UI/child event sinks and a sink persisting only run terminals do not satisfy this contract.
 
 ### D8 — Raw-coordinate lane and delivery dependency
+
+Search-hit revalidation reuses the scan's physical-line normalization, including CRLF stripping
+for matching, and supplies the same source classification to natural-language matchers. Excerpt
+coordinates and redacted output remain tied to the unchanged raw source; line-ending differences
+alone cannot turn a verified hit into a source-change failure.
 
 ADR-0165 D2/D3 define the prerequisite lane: only workspace code computes coding-search raw
 coordinates through its existing guarded reads; snippets are separately redacted afterward. A

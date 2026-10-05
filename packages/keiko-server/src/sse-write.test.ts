@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -317,6 +318,22 @@ describe("sse.stream.closed terminal line", () => {
 
     expect(sink.events).toHaveLength(1);
   });
+
+  it.each(["server-error", "backpressure-killed", "client-disconnected"] as const)(
+    "preserves the actual %s terminal diagnostic when optional context is exhausted",
+    (reason) => {
+      const sink = captureServerLog();
+      const { res, fireClose } = listenableFakeRes(reason !== "backpressure-killed");
+      writeOrDestroy(res, "PRIVATE_FRAME", new AbortController(), undefined, "sse-query-failure");
+      if (reason === "server-error") markSseStreamServerErrored(res);
+      fireClose();
+      expect(sink.events[0]?.extra?.reason).toBe(reason);
+      const query = observedFailureQuery(sink.events);
+      const retained = query.events.filter((event) => event.parsed.view.op === "sse.stream.closed");
+      expect(retained).toHaveLength(1);
+      expect(JSON.stringify(query)).not.toContain("PRIVATE_FRAME");
+    },
+  );
 
   it("reports reason=server-error when the response emits an error before closing", () => {
     const sink = captureServerLog();

@@ -15,6 +15,14 @@
 title = "Keiko secret scan"
 
 [[allowlists]]
+description = "PR #3687: synthetic Workbench JWT used only to prove that credential-shaped refresh identities cannot create error-specific reports. Its payload is synthetic and its signature is the literal word signature, not a cryptographic credential. Scoped to the exact test path, JWT rule and fixture line for history and squash-equivalent scans; all other tokens remain scanned."
+condition = "AND"
+paths = ['''^packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow\.test\.tsx$''']
+targetRules = ["jwt"]
+regexTarget = "line"
+regexes = ['''^\s*"eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJzeW50aGV0aWMifQ\.c2lnbmF0dXJl",$''']
+
+[[allowlists]]
 description = "PR #3685: deterministic watcher root-token fixture in one immutable checkpoint; this 16-hex sequence is test metadata, not a credential, and is assembled from fragments in subsequent commits."
 condition = "AND"
 commits = ["69bb4b8ed88ac1a77d1107df52e533c30af9ef70"]

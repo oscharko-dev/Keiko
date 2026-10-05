@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { createRequire } from "node:module";
 import * as workspace from "./index.js";
+import { WORKSPACE_INDEX_SNAPSHOT_VERSION } from "./workspaceIndex.js";
 
 // The packaged manifest owns the version; a literal here re-states it and goes
 // stale on every release cut (KfQ findings on #3055).
@@ -65,7 +66,7 @@ describe("keiko-workspace public surface", () => {
     expect(workspace.DEFAULT_CONTEXT_REQUEST).toBeDefined();
     expect(workspace.DEFAULT_DISCOVERY_OPTIONS).toBeDefined();
     expect(workspace.DEFAULT_READ_OPTIONS).toBeDefined();
-    expect(workspace.WORKSPACE_INDEX_SNAPSHOT_VERSION).toBe(5);
+    expect(workspace.WORKSPACE_INDEX_SNAPSHOT_VERSION).toBe(WORKSPACE_INDEX_SNAPSHOT_VERSION);
     expect(workspace.SELECTION_REASON_PRIORITY).toBeDefined();
     expect(workspace.WORKSPACE_CODES).toBeDefined();
     expect(workspace.WorkspaceError).toBeDefined();

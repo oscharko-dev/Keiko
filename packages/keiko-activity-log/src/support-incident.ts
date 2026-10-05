@@ -23,53 +23,57 @@
 // so a failure storm costs no filesystem work. User reports are never merged: each explicit "Report
 // a problem" is its own occurrence.
 //
-// QUOTAS AND EXPIRY. The store holds at most MAX_SUPPORT_INCIDENTS records (each at most
-// MAX_SUPPORT_INCIDENT_RECORD_BYTES), of which registered-failure candidates may occupy at most
-// MAX_REGISTERED_FAILURE_INCIDENTS so a failure flood can never block an explicit user report. Both
-// bounds hold atomically across processes too: every candidate claims one of a bounded pool of
-// exclusive-create quota-slot files before its record is written (automatics from slot 0 up,
-// reserving the top slots for user reports, exactly as the count-based reserve always intended). A
-// full store rejects the new candidate with body-free loss evidence; it never evicts a candidate the
-// user has not seen. Every candidate expires SUPPORT_INCIDENT_TTL_MS after creation; its pin expires
-// at the same instant, and its fingerprint and slot claims release with it, so an unreported incident
-// releases its evidence and its claims predictably.
+// RETENTION. Small candidate records reserve their maximal bytes through exclusive-create claims
+// under the governing Activity Log byte policy. Manual reports retain a protected share. On byte
+// pressure the oldest eligible candidate rolls out and releases its pin and claims. Unreported
+// diagnostics expire after twenty-four hours; generated reports are transient download artifacts.
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+  SUPPORT_INCIDENT_TTL_MS,
+  supportIncidentEffectiveExpiry,
+  supportIncidentWindow,
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
-  SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogEvent,
+  activityLogErrorKindOr,
   activityLogOperationSchema,
   defineActivityLogOperation,
   normalizeDefectFrameSignature,
   recordActivityLogLoss,
   supportIncidentBuild,
+  type ActivityLogErrorKind,
   type DefectFingerprintInput,
   type SupportIncidentCorrelation,
   type SupportIncidentPin,
   type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentSegmentReference,
   type SupportIncidentTrigger,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   activityLogPinCovers,
+  activeActivityLogPins,
+  MAX_ACTIVITY_LOG_PINS,
   isActivityLogSegmentEntry,
   listActivityLogDirectory,
+  readActivityLogPins,
   type ActivityLogPinRecord,
 } from "./activity-log-store.js";
 import type { ServerLogEnv } from "./log-level.js";
+import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
 import {
   claimActivityLogWriterOwnership,
   createFileServerLogSink,
   pinActivityLogWindow,
   releaseActivityLogPin,
   reportServerLogFailure,
+  errorKindOf,
   serverLogProcessIdentity,
   type ActivityLogPinResult,
   type ServerLogEvent,
@@ -81,14 +85,20 @@ import {
   registeredFailureFingerprintInput,
   registeredFailureDeduplicationKey,
 } from "./defect-fingerprint.js";
+import { causeChain, keikoStackFrames } from "./stack-frames.js";
+import { contentFreeErrorClass } from "./error-classification.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
   claimSupportIncidentFingerprint,
   claimSupportIncidentSlot,
+  countSupportIncidentEntries,
   ensureSupportIncidentDirectory,
+  isSupportIncidentRecordAbsent,
   listSupportIncidentClaims,
+  listSupportIncidentSlotIndexes,
   listSupportIncidentEntries,
   readSupportIncidentFingerprintClaim,
+  readSupportIncidentSlotClaim,
   readSupportIncidentRecord,
   releaseSupportIncidentFingerprintClaim,
   releaseSupportIncidentSlot,
@@ -103,20 +113,11 @@ import {
 } from "./support-incident-store.js";
 
 const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
-
-/** An unreported candidate (and its pin) expires this long after creation. */
-export const SUPPORT_INCIDENT_TTL_MS = 14 * DAY_MS;
-/** The pinned window reaches this far before the incident … */
-export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * MINUTE_MS;
-/** … and this far after it, so segments sealed after the incident are retained too. */
-export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * MINUTE_MS;
-/** Records the store holds at most (count quota); also the quota-slot claim file grammar's bound. */
-export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
-/** Of those, registered-failure candidates may occupy at most this many. */
-export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
-// Browser occurrences cannot occupy the sixteen slots reserved for server failures.
-const MAX_BROWSER_FAILURE_INCIDENTS = 8;
+export {
+  SUPPORT_INCIDENT_TTL_MS,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
+  SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 /** A process re-evaluates one defectFingerprint at most this often. */
 export const SUPPORT_INCIDENT_SUPPRESSION_MS = MINUTE_MS;
 /**
@@ -157,6 +158,37 @@ const TRIGGER_FIELD = {
   values: ["registered-failure", "user-report"],
 } as const;
 const OPEN_COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+
+const FAILURE_KIND_FIELD = {
+  type: "string",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 64,
+} as const;
+const TERMINAL_FAILURE_FIELDS = {
+  failureKind: FAILURE_KIND_FIELD,
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 64,
+    maxItems: 5,
+  },
+} as const;
+// Additive for older persisted terminal lines; current producers always emit this status.
+const CLAIMS_STATUS_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: ["released", "failed", "not-attempted"],
+} as const;
 
 const SUPPORT_INCIDENT_CREATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -241,6 +273,7 @@ const SUPPORT_INCIDENT_REJECTED_OPERATION = defineActivityLogOperation({
     fingerprintAlgorithm: ALGORITHM_FIELD,
     trigger: TRIGGER_FIELD,
     openIncidentCount: OPEN_COUNT_FIELD,
+    evictedIncidentId: { ...INCIDENT_ID_FIELD, required: false },
   },
   causal: "correlation",
   lifecycle: "loss",
@@ -248,6 +281,31 @@ const SUPPORT_INCIDENT_REJECTED_OPERATION = defineActivityLogOperation({
   failureClasses: ["support-incident"],
   proofIds: ["support.incident.rejected.emitted-line"],
   releaseImpact: "minor",
+});
+
+const SUPPORT_INCIDENT_RETIREMENT_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.incident.retirement-started",
+  category: "diagnostic",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.retirementStartedEvidence",
+  fields: {
+    incidentId: INCIDENT_ID_FIELD,
+    trigger: TRIGGER_FIELD,
+    incidentState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["candidate", "reported"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-incident"],
+  proofIds: ["support.incident.retirement-started.emitted-line"],
+  releaseImpact: "patch",
 });
 
 const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
@@ -258,6 +316,8 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
   owner: "keiko-activity-log",
   emitter: "support-incident.dismissedEvidence",
   fields: {
+    ...TERMINAL_FAILURE_FIELDS,
+    claimsStatus: CLAIMS_STATUS_FIELD,
     incidentId: INCIDENT_ID_FIELD,
     defectFingerprint: FINGERPRINT_FIELD,
     fingerprintAlgorithm: ALGORITHM_FIELD,
@@ -272,9 +332,21 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["released", "not-pinned", "rejected"],
+      values: ["released", "not-pinned", "rejected", "not-attempted"],
+    },
+    removalStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["removed", "failed"],
     },
     openIncidentCount: OPEN_COUNT_FIELD,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["abandoned"],
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -282,6 +354,38 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
   failureClasses: ["support-incident"],
   proofIds: ["support.incident.dismissed.emitted-line"],
   releaseImpact: "minor",
+});
+
+const SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.incident.retirement-failed",
+  category: "diagnostic",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.retirementFailedEvidence",
+  fields: {
+    ...TERMINAL_FAILURE_FIELDS,
+    incidentId: INCIDENT_ID_FIELD,
+    failureKind: { ...FAILURE_KIND_FIELD, required: true },
+    failureStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["read", "sweep"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["abandoned"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-incident"],
+  proofIds: ["support.incident.retirement-failed.emitted-line"],
+  releaseImpact: "patch",
 });
 
 const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
@@ -292,12 +396,14 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
   owner: "keiko-activity-log",
   emitter: "support-incident.expiredEvidence",
   fields: {
+    ...TERMINAL_FAILURE_FIELDS,
+    claimsStatus: CLAIMS_STATUS_FIELD,
     incidentId: INCIDENT_ID_FIELD,
     expiryReason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["expired", "invalid-record"],
+      values: ["expired", "invalid-record", "retention", "ttl-shortened"],
     },
     removalStatus: {
       type: "string",
@@ -306,6 +412,25 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
       values: ["removed", "failed"],
     },
     defectFingerprint: { ...FINGERPRINT_FIELD, required: false },
+    pinRelease: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["released", "not-pinned", "rejected"],
+    },
+    retentionCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["slot-pressure", "pin-ceiling"],
+    },
+    evictingCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    evictingIncidentId: { ...INCIDENT_ID_FIELD, required: false },
     openIncidentCount: OPEN_COUNT_FIELD,
   },
   causal: "correlation",
@@ -322,6 +447,8 @@ export const SUPPORT_INCIDENT_OPERATIONS: ReadonlySet<string> = new Set([
   SUPPORT_INCIDENT_DEDUPLICATED_OPERATION.op,
   SUPPORT_INCIDENT_REJECTED_OPERATION.op,
   SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+  SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION.op,
+  SUPPORT_INCIDENT_RETIREMENT_STARTED_OPERATION.op,
   SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
 ]);
 
@@ -353,7 +480,9 @@ function createdEvidence(
         pinnedBytes: record.pin.pinnedBytes,
         evidenceLostBeforePin: record.pin.evidenceLostBeforePin,
         windowSeconds: Math.ceil((record.window.toMs - record.window.fromMs) / 1000),
-        expiresInSeconds: Math.ceil((record.expiresAtMs - record.createdAtMs) / 1000),
+        expiresInSeconds: Math.ceil(
+          (supportIncidentEffectiveExpiry(record) - record.createdAtMs) / 1000,
+        ),
         openIncidentCount,
         completeness:
           record.pin.status === "pinned" && !record.pin.evidenceLostBeforePin
@@ -406,6 +535,7 @@ interface RejectionFacts {
   readonly correlationId: string;
   readonly openIncidentCount: number;
   readonly fingerprintAlgorithm?: 1 | 2;
+  readonly evictedIncidentId?: string;
 }
 
 function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
@@ -426,6 +556,9 @@ function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
         fingerprintAlgorithm: facts.fingerprintAlgorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
         trigger: facts.trigger,
         openIncidentCount: facts.openIncidentCount,
+        ...(facts.evictedIncidentId === undefined
+          ? {}
+          : { evictedIncidentId: facts.evictedIncidentId }),
         completeness: "partial",
         loss: "event-dropped",
       },
@@ -442,10 +575,97 @@ function rejectionErrorKind(
 
 export type SupportIncidentPinRelease = "released" | "not-pinned" | "rejected";
 
-interface DismissalFacts {
+interface DismissalContext {
   readonly correlationId: string;
   readonly openIncidentCount: number;
-  readonly pinRelease: SupportIncidentPinRelease;
+  readonly reason?: "abandoned" | undefined;
+  readonly failure?: RetirementFailure | undefined;
+}
+
+type DismissalFacts = DismissalContext &
+  (
+    | {
+        readonly removalStatus: "failed";
+        readonly pinRelease: "not-attempted";
+        readonly claimsReleased: false;
+      }
+    | {
+        readonly removalStatus?: "removed";
+        readonly pinRelease: SupportIncidentPinRelease;
+        readonly claimsReleased: boolean;
+      }
+  );
+
+interface RetirementFailure {
+  readonly errorKind: ActivityLogErrorKind;
+  readonly failureKind: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+function retirementFailure(error: unknown): RetirementFailure {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  const failureKind = errorKindOf(error);
+  return {
+    errorKind: activityLogErrorKindOr(failureKind, "internal"),
+    failureKind:
+      failureKind.length <= FAILURE_KIND_FIELD.maxLength
+        ? failureKind
+        : contentFreeErrorClass(error),
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(causes.length === 0 ? {} : { causeChain: causes }),
+  };
+}
+function terminalFailureFields(
+  failure: RetirementFailure | undefined,
+): Partial<Omit<RetirementFailure, "errorKind">> {
+  if (failure === undefined) return {};
+  return {
+    failureKind: failure.failureKind,
+    ...(failure.frames === undefined ? {} : { frames: failure.frames }),
+    ...(failure.causeChain === undefined ? {} : { causeChain: failure.causeChain }),
+  };
+}
+function retirementEnvelope(
+  correlationId: string,
+  failure: RetirementFailure | undefined,
+  record?: SupportIncidentRecord,
+  incomplete = false,
+): {
+  readonly correlationId: string;
+  readonly parentCorrelationId?: string;
+  readonly level?: "warn";
+  readonly errorKind?: ActivityLogErrorKind;
+} {
+  const parent = record === undefined ? undefined : incidentLifecycleCorrelation(record);
+  return {
+    correlationId,
+    ...(parent === undefined || parent === correlationId ? {} : { parentCorrelationId: parent }),
+    ...(failure === undefined && !incomplete
+      ? {}
+      : { level: "warn", errorKind: failure?.errorKind ?? "unavailable" }),
+  };
+}
+
+function retirementStartedEvidence(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  correlationId: string,
+  state: "candidate" | "reported",
+): void {
+  writeEvidence(
+    stateDir,
+    activityLogEvent(
+      SUPPORT_INCIDENT_RETIREMENT_STARTED_OPERATION,
+      retirementEnvelope(correlationId, undefined, record),
+      { incidentId: record.incidentId, trigger: record.trigger, incidentState: state },
+    ),
+  );
+}
+
+function dismissedClaimsStatus(facts: DismissalFacts): (typeof CLAIMS_STATUS_FIELD.values)[number] {
+  if (facts.removalStatus === "failed") return "not-attempted";
+  return facts.claimsReleased ? "released" : "failed";
 }
 
 function dismissedEvidence(
@@ -453,11 +673,12 @@ function dismissedEvidence(
   record: SupportIncidentRecord,
   facts: DismissalFacts,
 ): void {
+  const incomplete = facts.pinRelease === "rejected" || !facts.claimsReleased;
   writeEvidence(
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_DISMISSED_OPERATION,
-      { correlationId: facts.correlationId },
+      retirementEnvelope(facts.correlationId, facts.failure, record, incomplete),
       {
         incidentId: record.incidentId,
         defectFingerprint: record.fingerprint.defectFingerprint,
@@ -466,17 +687,58 @@ function dismissedEvidence(
         incidentState: record.state,
         pinRelease: facts.pinRelease,
         openIncidentCount: facts.openIncidentCount,
-        ...(facts.pinRelease === "rejected" ? { completeness: "partial" as const } : {}),
+        ...(facts.reason === undefined ? {} : { reason: facts.reason }),
+        removalStatus: facts.removalStatus ?? "removed",
+        claimsStatus: dismissedClaimsStatus(facts),
+        ...terminalFailureFields(facts.failure),
+        ...(incomplete ? { completeness: "partial" as const } : {}),
       },
     ),
   );
 }
 
-interface ExpiryFacts {
-  readonly entry: SupportIncidentStoreEntry;
+interface EntryRemoval {
   readonly removed: boolean;
+  readonly complete: boolean;
+  readonly pinRelease?: SupportIncidentPinRelease;
+  readonly claimsStatus?: "released" | "failed";
+  readonly failure?: RetirementFailure;
+}
+
+interface ExpiryFacts {
+  readonly nowMs: number;
+  readonly retention?: {
+    readonly cause: "slot-pressure" | "pin-ceiling";
+    readonly correlationId: string;
+    readonly incidentId: string;
+  };
+  readonly entry: SupportIncidentStoreEntry;
+  readonly removal: EntryRemoval;
   readonly correlationId: string;
   readonly openIncidentCount: number;
+}
+
+// Automatic cleanup closes the record's own lifecycle, rather than the request that retires it.
+function incidentLifecycleCorrelation(
+  record: SupportIncidentRecord | undefined,
+  fallback?: string,
+): string {
+  return (
+    record?.correlation.childCorrelationIds[0] ??
+    record?.correlation.rootCorrelationId ??
+    fallback ??
+    randomUUID()
+  );
+}
+
+function incidentExpiryReason(
+  record: SupportIncidentRecord | undefined,
+  nowMs: number,
+): "invalid-record" | "ttl-shortened" | "expired" {
+  if (record === undefined) return "invalid-record";
+  if (supportIncidentEffectiveExpiry(record) <= nowMs && nowMs < record.expiresAtMs)
+    return "ttl-shortened";
+  return "expired";
 }
 
 function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
@@ -485,16 +747,34 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_EXPIRED_OPERATION,
-      { correlationId: facts.correlationId },
+      retirementEnvelope(
+        incidentLifecycleCorrelation(record, facts.correlationId),
+        facts.removal.failure,
+        undefined,
+        !facts.removal.complete,
+      ),
       {
         incidentId: facts.entry.incidentId,
-        expiryReason: record === undefined ? "invalid-record" : "expired",
-        removalStatus: facts.removed ? "removed" : "failed",
+        ...terminalFailureFields(facts.removal.failure),
+        ...(facts.removal.claimsStatus === undefined
+          ? {}
+          : { claimsStatus: facts.removal.claimsStatus }),
+        expiryReason:
+          facts.retention === undefined ? incidentExpiryReason(record, facts.nowMs) : "retention",
+        ...(facts.retention === undefined
+          ? {}
+          : {
+              retentionCause: facts.retention.cause,
+              evictingCorrelationId: facts.retention.correlationId,
+              evictingIncidentId: facts.retention.incidentId,
+            }),
+        removalStatus: facts.removal.removed ? "removed" : "failed",
+        ...(facts.removal.pinRelease === undefined ? {} : { pinRelease: facts.removal.pinRelease }),
         ...(record === undefined
           ? {}
           : { defectFingerprint: record.fingerprint.defectFingerprint }),
         openIncidentCount: facts.openIncidentCount,
-        ...(facts.removed ? {} : { completeness: "partial" as const }),
+        ...(facts.removal.complete ? {} : { completeness: "partial" as const }),
       },
     ),
   );
@@ -557,10 +837,17 @@ export type SupportIncidentCreation =
   | { readonly status: "rejected"; readonly reason: SupportIncidentRejection };
 
 export interface SupportIncidentOptions {
+  /** Inspect readable live candidates without expiry cleanup or writer ownership. */
+  readonly readOnly?: boolean | undefined;
   readonly env?: ServerLogEnv | undefined;
   readonly nowMs?: number | undefined;
   // The correlation of the user action (Report a problem); a fresh one is minted when absent.
   readonly correlationId?: string | undefined;
+}
+
+interface SupportIncidentRetirementOptions extends SupportIncidentOptions {
+  /** Owner withdrawal of a newly created manual preparation whose report never completed. */
+  readonly retirementReason?: "abandoned" | undefined;
 }
 
 interface CandidateDraft {
@@ -571,8 +858,10 @@ interface CandidateDraft {
   // Set only by the registered-failure trigger (observeSupportIncidentTrigger): the window pin it
   // already published synchronously, in the same turn as the triggering failure write, before any
   // later maintenance pass could run against an unprotected window. publishCandidate reuses it
-  // instead of pinning again; any outcome other than "created" releases it (releasePrePinned).
+  // instead of pinning again. A rejected pre-pin can retry after admission; immediate protection
+  // never retires another candidate before deduplication. Non-created outcomes release the pin.
   readonly prePinned?: SupportIncidentPin | undefined;
+  readonly sealedSegmentsBeforePin?: ReadonlySet<string> | undefined;
 }
 
 interface CandidateContext {
@@ -580,14 +869,8 @@ interface CandidateContext {
   readonly nowMs: number;
   readonly env: ServerLogEnv;
   readonly defectFingerprint: string;
-}
-
-function incidentWindow(nowMs: number): SupportIncidentRecord["window"] {
-  return {
-    fromMs: Math.max(0, nowMs - SUPPORT_INCIDENT_WINDOW_BEFORE_MS),
-    incidentAtMs: nowMs,
-    toMs: nowMs + SUPPORT_INCIDENT_WINDOW_AFTER_MS,
-  };
+  // Preserve actual displacement if reserve recovery is followed by rejected admission/publication.
+  evictedIncidentId?: string;
 }
 
 function pinFromResult(result: ActivityLogPinResult): SupportIncidentPin {
@@ -649,13 +932,12 @@ function overlappingSealedSegmentNames(
   }
 }
 
-function buildRecord(
+function buildDescriptor(
   draft: CandidateDraft,
-  context: CandidateContext,
+  context: Pick<CandidateContext, "nowMs" | "defectFingerprint">,
   pin: SupportIncidentPin,
   incidentId: string,
-  slotIndex: number,
-): SupportIncidentRecord {
+): SupportIncidentDescriptorRecord {
   const identity = serverLogProcessIdentity();
   return {
     schemaVersion: SUPPORT_INCIDENT_SCHEMA_VERSION,
@@ -672,51 +954,196 @@ function buildRecord(
     },
     correlation: draft.correlation,
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
-    window: incidentWindow(context.nowMs),
+    window: supportIncidentWindow(context.nowMs),
     pin,
-    slotIndex,
     createdAtMs: context.nowMs,
     expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
   };
 }
 
-// Automatics claim ascending from slot 0 (0..MAX_REGISTERED_FAILURE_INCIDENTS-1); user reports
-// claim descending from the top (MAX_SUPPORT_INCIDENTS-1..0). Automatics never touch the top
-// MAX_SUPPORT_INCIDENTS-MAX_REGISTERED_FAILURE_INCIDENTS slots, so those stay available to a user
-// report even when automatics hold their full share -- reproducing quotaAllows's old count-based
-// reserve atomically, one exclusive-create attempt at a time instead of one racy directory count.
-function slotSearchOrder(trigger: SupportIncidentTrigger, op: string): readonly number[] {
-  if (trigger === "user-report") {
-    return Array.from(
-      { length: MAX_SUPPORT_INCIDENTS },
-      (_, index) => MAX_SUPPORT_INCIDENTS - 1 - index,
-    );
-  }
-  const length =
-    op === "client.diagnostic" ? MAX_BROWSER_FAILURE_INCIDENTS : MAX_REGISTERED_FAILURE_INCIDENTS;
-  return Array.from({ length }, (_, index) => index);
+function buildRecord(
+  draft: CandidateDraft,
+  context: CandidateContext,
+  pin: SupportIncidentPin,
+  incidentId: string,
+  slotIndex: number,
+): SupportIncidentRecord {
+  return { ...buildDescriptor(draft, context, pin, incidentId), slotIndex };
 }
 
-/**
- * Atomically claims one quota slot for `incidentId`, or `undefined` when every slot this trigger
- * may use is already held -- the store (or, for a registered failure, its 24-slot share) is full.
- * Each attempt is one exclusive-create (#3533 review 4050606506): two processes racing the same
- * free slot can never both win it, unlike a count read from a directory listing.
- */
-function claimQuotaSlot(
-  stateDir: string,
-  trigger: SupportIncidentTrigger,
+/** Pure transient descriptor: no store, pin, retention or log access. */
+export function prepareUnretainedUserReportDescriptor(
+  correlationId: string,
+): SupportIncidentDescriptorRecord {
+  const safeCorrelationId = incidentCorrelationId(correlationId);
+  if (safeCorrelationId === undefined) throw new TypeError("Invalid support report correlation");
+  const input = UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT;
+  return buildDescriptor(
+    {
+      trigger: "user-report",
+      input,
+      correlation: { rootCorrelationId: safeCorrelationId, childCorrelationIds: [] },
+      evidenceCorrelationId: safeCorrelationId,
+    },
+    {
+      nowMs: Date.now(),
+      defectFingerprint: computeDefectFingerprint(input),
+    },
+    { status: "rejected", pinnedSegmentCount: 0, pinnedBytes: 0, evidenceLostBeforePin: false },
+    randomBytes(16).toString("hex"),
+  );
+}
+
+function slotCapacity(context: CandidateContext, draft: CandidateDraft): number {
+  const policy = supportIncidentRetentionPolicy(context.stateDir, context.env);
+  if (draft.trigger === "user-report") return policy.capacity;
+  return draft.input.op === "client.diagnostic" ? policy.browserCapacity : policy.automaticCapacity;
+}
+
+function occupiedSlots(stateDir: string): ReadonlySet<number> {
+  return new Set(listSupportIncidentSlotIndexes(stateDir));
+}
+
+function claimAvailableSlot(
+  context: CandidateContext,
+  draft: CandidateDraft,
   incidentId: string,
-  op: string,
+  capacity: number,
+  occupied: Set<number>,
 ): number | undefined {
-  for (const slotIndex of slotSearchOrder(trigger, op)) {
-    if (claimSupportIncidentSlot(stateDir, slotIndex, incidentId)) return slotIndex;
+  for (let offset = 0; offset < capacity; offset += 1) {
+    const index = draft.trigger === "user-report" ? capacity - 1 - offset : offset;
+    if (occupied.has(index)) continue;
+    occupied.add(index);
+    if (claimSupportIncidentSlot(context.stateDir, index, incidentId)) return index;
   }
   return undefined;
 }
 
+function mayEvictCandidate(draft: CandidateDraft, record: SupportIncidentRecord): boolean {
+  if (draft.trigger === "user-report") return true;
+  if (record.trigger !== "registered-failure") return false;
+  return draft.input.op !== "client.diagnostic" || record.fingerprint.op === "client.diagnostic";
+}
+
+function occupiedClassSlots(occupied: ReadonlySet<number>, capacity: number): Set<number> {
+  return new Set([...occupied].filter((index) => index <= capacity));
+}
+
+function evictableRecord(
+  record: SupportIncidentRecord | undefined,
+  draft: CandidateDraft,
+  capacity: number,
+): record is SupportIncidentRecord {
+  return record !== undefined && record.slotIndex <= capacity && mayEvictCandidate(draft, record);
+}
+
+function evictOldestCandidate(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  entries: readonly SupportIncidentStoreEntry[],
+  capacity: number,
+  publishedIncidentId: string,
+  openIncidentCount = entries.length,
+): string | undefined {
+  const entry = entries.find(
+    ({ record }) =>
+      evictableRecord(record, draft, capacity) && record.incidentId !== publishedIncidentId,
+  );
+  if (entry === undefined) return undefined;
+  const removal = removeEntry(context.stateDir, entry, context);
+  if (removal.removed) context.evictedIncidentId = entry.incidentId;
+  expiredEvidence(context.stateDir, {
+    nowMs: context.nowMs,
+    entry,
+    removal,
+    correlationId: draft.evidenceCorrelationId,
+    openIncidentCount: openIncidentCount - Number(removal.removed),
+    retention: {
+      cause: "slot-pressure",
+      correlationId: draft.evidenceCorrelationId,
+      incidentId: publishedIncidentId,
+    },
+  });
+  // Cleanup completeness describes evidence, not slot availability. The next exclusive claim
+  // rechecks the actual slot; a failed pin/fingerprint cleanup must not reject a freed slot.
+  return removal.removed ? entry.incidentId : undefined;
+}
+
+function ownsRecoveryClaim(stateDir: string, record: SupportIncidentRecord | undefined): boolean {
+  return (
+    record !== undefined &&
+    readSupportIncidentSlotClaim(stateDir, record.slotIndex)?.incidentId === record.incidentId
+  );
+}
+
+function recoverPublicationReserve(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  entries: readonly SupportIncidentStoreEntry[],
+  capacity: number,
+  incidentId: string,
+  occupied: ReadonlySet<number>,
+): boolean {
+  const classSlots = occupiedClassSlots(occupied, capacity);
+  if (classSlots.size <= capacity) return false;
+  const durable = entries.filter(
+    ({ record }) => record !== undefined && classSlots.has(record.slotIndex),
+  );
+  // Unpublished peers are recognized by names alone, before any claim contents are opened.
+  if (new Set(durable.map((entry) => entry.record?.slotIndex)).size !== classSlots.size)
+    return false;
+  for (const { record } of durable) {
+    if (!ownsRecoveryClaim(context.stateDir, record)) {
+      // A withdrawn owner permits a fresh exclusive attempt. A missing claim alone does not
+      // authorize reusing a slot while its prior durable record still exists.
+      return (
+        record !== undefined && isSupportIncidentRecordAbsent(context.stateDir, record.incidentId)
+      );
+    }
+  }
+  const eligible = durable.filter(
+    ({ record }) => record !== undefined && mayEvictCandidate(draft, record),
+  );
+  if (eligible.length <= capacity) return false;
+  return (
+    evictOldestCandidate(context, draft, durable, capacity, incidentId, entries.length) !==
+    undefined
+  );
+}
+
+function claimQuotaSlot(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  incidentId: string,
+  entries: readonly SupportIncidentStoreEntry[],
+): number | undefined {
+  const capacity = slotCapacity(context, draft);
+  const occupied = new Set(occupiedSlots(context.stateDir));
+  if (
+    occupiedClassSlots(occupied, capacity).size >= capacity &&
+    !entries.some(({ record }) => evictableRecord(record, draft, capacity))
+  )
+    return undefined;
+  let slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
+  if (slotIndex === undefined) {
+    if (!recoverPublicationReserve(context, draft, entries, capacity, incidentId, occupied))
+      return undefined;
+    // Recovery or a peer may have released a claim since the first snapshot. Names only guide
+    // this one retry; the exclusive claim still refuses a slot reclaimed after the fresh read.
+    slotIndex = claimAvailableSlot(
+      context,
+      draft,
+      incidentId,
+      capacity + 1,
+      new Set(occupiedSlots(context.stateDir)),
+    );
+  }
+  return slotIndex;
+}
+
 // Releases a window pin a draft already published before dedup or quota was decided (the
-// registered-failure trigger always pre-pins; see observeSupportIncidentTrigger). Nothing will
+// registered-failure trigger attempts immediate protection; see observeSupportIncidentTrigger). Nothing will
 // reference it once the candidate is rejected or turns out to be a duplicate, so it must not sit
 // and hold its segments for no reason until its own TTL. Never throws: `releaseWindowPin` mirrors
 // `releaseActivityLogPin`'s own closed, evidenced-rejection contract.
@@ -741,7 +1168,10 @@ function reject(
     defectFingerprint: context.defectFingerprint,
     fingerprintAlgorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
     correlationId: draft.evidenceCorrelationId,
-    openIncidentCount,
+    openIncidentCount: openIncidentCount - Number(context.evictedIncidentId !== undefined),
+    ...(context.evictedIncidentId === undefined
+      ? {}
+      : { evictedIncidentId: context.evictedIncidentId }),
   });
   return { status: "rejected", reason };
 }
@@ -752,6 +1182,67 @@ const REJECTED_PIN: SupportIncidentPin = {
   pinnedBytes: 0,
   evidenceLostBeforePin: false,
 };
+
+interface IncidentPinContext {
+  readonly stateDir: string;
+  readonly nowMs: number;
+  readonly correlationId: string;
+  readonly env: ServerLogEnv;
+  readonly candidate: CandidateDraft | undefined;
+}
+
+function ownsDiagnosticPin(record: SupportIncidentRecord, pin: ActivityLogPinRecord): boolean {
+  return (
+    record.pin.pinId === pin.pinId &&
+    pin.reason === "incident" &&
+    pin.scope.kind === "window" &&
+    pin.scope.fromMs === record.window.fromMs &&
+    pin.scope.toMs === record.window.toMs
+  );
+}
+
+function rollDiagnosticPin(context: IncidentPinContext, publishedIncidentId: string): void {
+  const directory = join(context.stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
+  const pins = activeActivityLogPins(
+    readActivityLogPins(listActivityLogDirectory(directory), directory),
+    context.nowMs,
+  );
+  if (pins.length < MAX_ACTIVITY_LOG_PINS) return;
+  const entries = listSupportIncidentEntries(context.stateDir);
+  const oldest = entries.find(
+    ({ record }) =>
+      record !== undefined &&
+      record.incidentId !== publishedIncidentId &&
+      context.candidate !== undefined &&
+      mayEvictCandidate(context.candidate, record) &&
+      pins.some((pin) => ownsDiagnosticPin(record, pin)),
+  );
+  if (oldest === undefined) return;
+  const removal = removeEntry(context.stateDir, oldest, context);
+  expiredEvidence(context.stateDir, {
+    nowMs: context.nowMs,
+    entry: oldest,
+    removal,
+    retention: {
+      cause: "pin-ceiling",
+      correlationId: context.correlationId,
+      incidentId: publishedIncidentId,
+    },
+    correlationId: context.correlationId,
+    openIncidentCount: entries.length - Number(removal.removed),
+  });
+}
+
+function requestIncidentPin(context: Omit<IncidentPinContext, "candidate">): ActivityLogPinResult {
+  const window = supportIncidentWindow(context.nowMs);
+  const request = {
+    scope: { kind: "window" as const, fromMs: window.fromMs, toMs: window.toMs },
+    expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
+    reason: "incident" as const,
+    correlationId: context.correlationId,
+  };
+  return pinActivityLogWindow(context.stateDir, request, context.env);
+}
 
 /**
  * Publishes the Activity Log retention pin for the incident window and seals the caller's own
@@ -767,22 +1258,14 @@ function pinIncidentWindow(
   nowMs: number,
   correlationId: string,
   env: ServerLogEnv,
+  candidate?: CandidateDraft,
 ): SupportIncidentPin {
-  const window = incidentWindow(nowMs);
-  const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
+  const window = supportIncidentWindow(nowMs);
+  const before =
+    candidate?.sealedSegmentsBeforePin ??
+    overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
-    const pin = pinFromResult(
-      pinActivityLogWindow(
-        stateDir,
-        {
-          scope: { kind: "window", fromMs: window.fromMs, toMs: window.toMs },
-          expiresAtMs: nowMs + SUPPORT_INCIDENT_TTL_MS,
-          reason: "incident",
-          correlationId,
-        },
-        env,
-      ),
-    );
+    const pin = pinFromResult(requestIncidentPin({ stateDir, nowMs, correlationId, env }));
     if (pin.status === "rejected" || before.size === 0) return pin;
     const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
     const evidenceLostBeforePin = [...before].some((name) => !after.has(name));
@@ -801,11 +1284,19 @@ function publishCandidate(
   slotIndex: number,
 ): SupportIncidentCreation {
   const pin =
-    draft.prePinned ??
-    pinIncidentWindow(context.stateDir, context.nowMs, draft.evidenceCorrelationId, context.env);
+    draft.prePinned !== undefined && draft.prePinned.status !== "rejected"
+      ? draft.prePinned
+      : pinIncidentWindow(
+          context.stateDir,
+          context.nowMs,
+          draft.evidenceCorrelationId,
+          context.env,
+          draft,
+        );
   const record = buildRecord(draft, context, pin, incidentId, slotIndex);
   const payload = serializeSupportIncidentRecord(record);
-  if (payload === undefined) return reject(context, draft, "record-too-large", entries.length);
+  if (payload === undefined)
+    return reject(context, { ...draft, prePinned: pin }, "record-too-large", entries.length);
   try {
     writeSupportIncidentRecord(
       supportIncidentDirectory(context.stateDir),
@@ -817,11 +1308,37 @@ function publishCandidate(
       op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
       correlationId: draft.evidenceCorrelationId,
     });
-    // The pin (if any) still expires with the candidate's TTL; nothing is left unbounded.
-    return reject(context, draft, "store-unavailable", entries.length);
+    return reject(context, { ...draft, prePinned: pin }, "store-unavailable", entries.length);
   }
-  createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, entries.length + 1);
+  const publishedEntries = listSupportIncidentEntries(context.stateDir);
+  const retainedCount = publishedEntries.filter((entry) => openEntry(entry, context.nowMs)).length;
+  createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, retainedCount);
+  finishCandidateRetention(context, draft, record.incidentId, publishedEntries);
   return { status: "created", incidentId: record.incidentId, record };
+}
+
+// Retirement only follows durable publication. Exclusive slot ownership admits at most one
+// replacement above each retained share; a peer's pending claim is never stolen to make space.
+function finishCandidateRetention(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  incidentId: string,
+  entries: readonly SupportIncidentStoreEntry[],
+): void {
+  try {
+    const capacity = slotCapacity(context, draft);
+    if ([...occupiedSlots(context.stateDir)].filter((index) => index <= capacity).length > capacity)
+      evictOldestCandidate(context, draft, entries, capacity, incidentId);
+    rollDiagnosticPin(
+      { ...context, correlationId: draft.evidenceCorrelationId, candidate: draft },
+      incidentId,
+    );
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+  }
 }
 
 type DedupOutcome =
@@ -990,6 +1507,45 @@ function draftDeduplicationKey(draft: CandidateDraft, fingerprint: string): stri
     : undefined;
 }
 
+function releaseDraftFingerprint(
+  context: CandidateContext,
+  fingerprint: string | undefined,
+  incidentId: string,
+  correlationId: string,
+): void {
+  if (fingerprint === undefined) return;
+  try {
+    releaseSupportIncidentFingerprintClaim(context.stateDir, fingerprint, incidentId);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId,
+    });
+  }
+}
+
+function admitCandidateQuota(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  incidentId: string,
+  entries: readonly SupportIncidentStoreEntry[],
+  fingerprint: string | undefined,
+): number | SupportIncidentCreation {
+  try {
+    const quota = claimQuotaSlot(context, draft, incidentId, entries);
+    if (quota !== undefined) return quota;
+    releaseDraftFingerprint(context, fingerprint, incidentId, draft.evidenceCorrelationId);
+    return reject(context, draft, "quota-exhausted", entries.length);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+    releaseDraftFingerprint(context, fingerprint, incidentId, draft.evidenceCorrelationId);
+    return reject(context, draft, "store-unavailable", entries.length);
+  }
+}
+
 function createCandidate(
   stateDir: string,
   draft: CandidateDraft,
@@ -1020,16 +1576,11 @@ function createCandidate(
     if (handled.done) return handled.result;
   }
 
-  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId, draft.input.op);
-  if (slotIndex === undefined) {
-    if (dedupFingerprint !== undefined) {
-      releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint);
-    }
-    return reject(context, draft, "quota-exhausted", entries.length);
-  }
+  const quota = admitCandidateQuota(context, draft, incidentId, entries, dedupFingerprint);
+  if (typeof quota !== "number") return quota;
 
-  const created = publishCandidate(draft, context, entries, incidentId, slotIndex);
-  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, slotIndex);
+  const created = publishCandidate(draft, context, entries, incidentId, quota);
+  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, quota, incidentId);
   return created;
 }
 
@@ -1083,7 +1634,7 @@ export function recordUserReportedIncident(
 // ─── Reading, expiry, dismissal ────────────────────────────────────────────────────────────────
 
 function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
-  return entry.record !== undefined && entry.record.expiresAtMs > nowMs;
+  return entry.record !== undefined && supportIncidentEffectiveExpiry(entry.record) > nowMs;
 }
 
 // An expired record, or an unreadable one whose writer is gone. An unreadable record younger than
@@ -1091,7 +1642,7 @@ function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
 function removableEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
   return entry.record === undefined
     ? abandonedStoreFile(entry.modifiedAtMs)
-    : entry.record.expiresAtMs <= nowMs;
+    : supportIncidentEffectiveExpiry(entry.record) <= nowMs;
 }
 
 // Releases the quota-slot claim, and (for a registered failure) the fingerprint claim, that a
@@ -1101,11 +1652,23 @@ function releaseClaims(
   stateDir: string,
   defectFingerprint: string | undefined,
   slotIndex: number,
+  incidentId: string,
 ): void {
   if (defectFingerprint !== undefined) {
-    releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
+    try {
+      releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint, incidentId);
+    } catch (error) {
+      try {
+        releaseSupportIncidentSlot(stateDir, slotIndex, incidentId);
+      } catch (slotError) {
+        throw new AggregateError([error, slotError], "Support incident claim cleanup failed", {
+          cause: slotError,
+        });
+      }
+      throw error;
+    }
   }
-  releaseSupportIncidentSlot(stateDir, slotIndex);
+  releaseSupportIncidentSlot(stateDir, slotIndex, incidentId);
 }
 
 function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): void {
@@ -1120,50 +1683,96 @@ function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): v
         )
       : undefined,
     record.slotIndex,
+    record.incidentId,
   );
 }
 
-function removeEntry(stateDir: string, entry: SupportIncidentStoreEntry): boolean {
+type ClaimRelease =
+  { readonly released: true } | { readonly released: false; readonly failure: RetirementFailure };
+function releaseEntryClaims(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  op:
+    | "support.incident.expired"
+    | "support.incident.dismissed" = SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+  correlationId = incidentLifecycleCorrelation(record),
+): ClaimRelease {
+  try {
+    releaseRecordClaims(stateDir, record);
+    return { released: true };
+  } catch (error) {
+    reportServerLogFailure(error, { op, correlationId });
+    return { released: false, failure: retirementFailure(error) };
+  }
+}
+
+function removeEntry(
+  stateDir: string,
+  entry: SupportIncidentStoreEntry,
+  options: Pick<SupportIncidentOptions, "env" | "correlationId"> = {},
+): EntryRemoval {
   try {
     removeSupportIncidentRecord(stateDir, entry.incidentId);
   } catch (error) {
-    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
-    return false;
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+      correlationId: options.correlationId ?? incidentLifecycleCorrelation(entry.record),
+    });
+    return { removed: false, complete: false, failure: retirementFailure(error) };
   }
-  if (entry.record !== undefined) releaseRecordClaims(stateDir, entry.record);
-  return true;
+  if (entry.record === undefined) return { removed: true, complete: true };
+  const claims = releaseEntryClaims(
+    stateDir,
+    entry.record,
+    SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+    options.correlationId ?? incidentLifecycleCorrelation(entry.record),
+  );
+  const pinRelease = releaseIncidentPin(stateDir, entry.record, {
+    correlationId: incidentLifecycleCorrelation(entry.record, options.correlationId),
+    env: options.env ?? process.env,
+  });
+  return {
+    removed: true,
+    complete: claims.released && pinRelease !== "rejected",
+    pinRelease,
+    claimsStatus: claims.released ? "released" : "failed",
+    ...(claims.released ? {} : { failure: claims.failure }),
+  };
 }
 
 // A claim whose referenced incidentId names no record right now is an orphan once it is older than
 // the in-flight grace: a crash between claiming and writing that record, or a record already
 // removed by the loop above in this same pass. A younger claim may belong to an occurrence still
 // publishing its record in another process, so it is left alone (#3533 review 4050606506).
-// Checks each claim against a FRESH read, never a pre-computed "open" set: entries/open is
-// a snapshot taken earlier in this same sweep, and a claim (with its record) can legitimately be
-// published by another process in the gap between that snapshot and this loop -- reusing the
-// stale snapshot here would delete a brand-new, perfectly live claim out from under its owner,
-// silently reopening the exact cross-process race this whole scheme exists to close. Best-effort
-// per claim (#3533 review 4050606506) so one bad removal never blocks the rest.
-function sweepOrphanedClaims(stateDir: string): void {
+// A validated retained owner in this sweep is sufficient to KEEP a claim. If a peer removes that
+// owner after the snapshot, conservative retention only postpones orphan cleanup to the next pass.
+// A snapshot can never prove absence: an unknown owner is freshly read before guarded removal,
+// preserving a peer that published between this sweep's first scan and its claim inspection.
+function sweepOrphanedClaims(
+  stateDir: string,
+  correlationId: string,
+  retained: ReadonlySet<string>,
+): void {
   let claims: readonly SupportIncidentClaimEntry[];
   try {
     claims = listSupportIncidentClaims(stateDir);
   } catch (error) {
-    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
+    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op, correlationId });
     return;
   }
   for (const claim of claims) {
     if (!abandonedStoreFile(claim.claimedAtMs)) continue;
     if (
       claim.incidentId !== undefined &&
-      readSupportIncidentRecord(stateDir, claim.incidentId) !== undefined
+      (retained.has(claim.incidentId) ||
+        readSupportIncidentRecord(stateDir, claim.incidentId) !== undefined)
     ) {
       continue;
     }
     try {
-      removeSupportIncidentClaimFile(stateDir, claim.fileName);
+      removeSupportIncidentClaimFile(stateDir, claim.fileName, claim);
     } catch (error) {
-      reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
+      reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op, correlationId });
     }
   }
 }
@@ -1184,10 +1793,19 @@ function sweepExpiredEntries(
   const open = entries.filter((entry) => openEntry(entry, nowMs));
   for (const entry of entries) {
     if (!removableEntry(entry, nowMs)) continue;
-    const removed = removeEntry(stateDir, entry);
-    expiredEvidence(stateDir, { entry, removed, correlationId, openIncidentCount: open.length });
+    const removal = removeEntry(stateDir, entry, { correlationId });
+    expiredEvidence(stateDir, {
+      entry,
+      removal,
+      correlationId,
+      openIncidentCount: open.length,
+      nowMs,
+    });
   }
-  sweepOrphanedClaims(stateDir);
+  const retained = new Set(
+    open.flatMap(({ record }) => (record === undefined ? [] : [record.incidentId])),
+  );
+  sweepOrphanedClaims(stateDir, correlationId, retained);
   return open;
 }
 
@@ -1197,9 +1815,12 @@ export function listSupportIncidents(
   options: SupportIncidentOptions = {},
 ): readonly SupportIncidentRecord[] {
   const correlationId = options.correlationId ?? randomUUID();
-  return sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId).flatMap(
-    (entry) => (entry.record === undefined ? [] : [entry.record]),
-  );
+  const nowMs = options.nowMs ?? Date.now();
+  const entries =
+    options.readOnly === true
+      ? listSupportIncidentEntries(stateDir).filter((entry) => openEntry(entry, nowMs))
+      : sweepExpiredEntries(stateDir, nowMs, correlationId);
+  return entries.flatMap((entry) => (entry.record === undefined ? [] : [entry.record]));
 }
 
 /**
@@ -1212,7 +1833,8 @@ export function readSupportIncident(
   options: Pick<SupportIncidentOptions, "nowMs"> = {},
 ): SupportIncidentRecord | undefined {
   const record = readSupportIncidentRecord(stateDir, incidentId);
-  return record !== undefined && record.expiresAtMs > (options.nowMs ?? Date.now())
+  return record !== undefined &&
+    supportIncidentEffectiveExpiry(record) > (options.nowMs ?? Date.now())
     ? record
     : undefined;
 }
@@ -1230,7 +1852,7 @@ export interface SupportIncidentSegmentFile extends SupportIncidentSegmentRefere
  */
 export function supportIncidentSegmentFiles(
   stateDir: string,
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
 ): readonly SupportIncidentSegmentFile[] {
   const coverage = windowCoverageRecord(record.window, record.pin.pinId);
   return listActivityLogDirectory(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME))
@@ -1244,12 +1866,13 @@ export function supportIncidentSegmentFiles(
     }));
 }
 
-export type SupportIncidentDismissal = "dismissed" | "not-found" | "failed";
+export type SupportIncidentDismissal =
+  "dismissed" | "dismissed-incomplete" | "not-found" | "failed";
 
 // Shared by dismissal (an existing record's own pin) and by a candidate outcome other than
 // "created" that must release a pin it published pre-emptively (releasePrePinned above). Never
-// throws: an absent pin id is `not-pinned`, and `releaseActivityLogPin` closes every other outcome
-// into `released` or a rejection on its own.
+// throws: an absent pin id or a pin already removed by a peer is `not-pinned`;
+// other failed releases remain rejected, preserving their partial-cleanup evidence.
 function releaseWindowPin(
   stateDir: string,
   pinId: string | undefined,
@@ -1261,7 +1884,8 @@ function releaseWindowPin(
     { pinId, correlationId: context.correlationId },
     context.env,
   );
-  return result.status === "released" ? "released" : "rejected";
+  if (result.status === "released") return "released";
+  return result.reason === "not-found" ? "not-pinned" : "rejected";
 }
 
 function releaseIncidentPin(
@@ -1272,36 +1896,190 @@ function releaseIncidentPin(
   return releaseWindowPin(stateDir, record.pin.pinId, context);
 }
 
-/**
- * Explicit human dismissal: removes the record and releases its Activity Log pin, so the window
- * returns to ordinary retention. A pin that cannot be released still lapses at its bounded expiry.
- */
-export function dismissSupportIncident(
+function failedWithdrawal(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  context: DismissalContext,
+): SupportIncidentDismissal {
+  dismissedEvidence(stateDir, record, {
+    ...context,
+    removalStatus: "failed",
+    pinRelease: "not-attempted",
+    claimsReleased: false,
+  });
+  return "failed";
+}
+
+interface RetirementInspection {
+  readonly record: SupportIncidentRecord;
+  readonly openIncidentCount: number;
+}
+
+function retirementFailedEvidence(
+  incidentId: string,
+  options: SupportIncidentRetirementOptions & { readonly correlationId: string },
+  failureStage: "read" | "sweep",
+  error: unknown,
+): ServerLogEvent {
+  const { errorKind, ...failureFields } = retirementFailure(error);
+  return activityLogEvent(
+    SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION,
+    {
+      level: "warn",
+      correlationId: options.correlationId,
+      errorKind,
+    },
+    {
+      incidentId,
+      failureStage,
+      ...failureFields,
+      ...(options.retirementReason === undefined ? {} : { reason: options.retirementReason }),
+      completeness: "partial",
+      loss: "none",
+    },
+  );
+}
+
+function inspectRetirement(
   stateDir: string,
   incidentId: string,
-  options: SupportIncidentOptions = {},
+  options: SupportIncidentRetirementOptions & { readonly correlationId: string },
+): RetirementInspection | "not-found" | "failed" {
+  let stage: "read" | "sweep" = "read";
+  try {
+    // Keep this cheap guard before the mutating sweep: an unknown or already withdrawn id must
+    // not expire unrelated candidates. A known target is re-read by the sweep before retirement.
+    if (readSupportIncidentRecord(stateDir, incidentId) === undefined) return "not-found";
+    stage = "sweep";
+    const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), options.correlationId);
+    const record = open.find((entry) => entry.incidentId === incidentId)?.record;
+    return record === undefined ? "not-found" : { record, openIncidentCount: open.length };
+  } catch (error) {
+    try {
+      const sink = createFileServerLogSink(stateDir, { level: "debug" });
+      sink.write(retirementFailedEvidence(incidentId, options, stage, error));
+    } catch {
+      recordActivityLogLoss("persistence-failed");
+      reportServerLogFailure(error, {
+        op: SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION.op,
+        correlationId: options.correlationId,
+        loss: "event-dropped",
+      });
+    }
+    return "failed";
+  }
+}
+
+function finishRetirement(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  options: SupportIncidentRetirementOptions & { readonly correlationId: string },
+  openIncidentCount: number,
 ): SupportIncidentDismissal {
-  const correlationId = options.correlationId ?? randomUUID();
-  const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId);
-  const record = open.find((entry) => entry.incidentId === incidentId)?.record;
-  if (record === undefined) return "not-found";
+  const claims = releaseEntryClaims(
+    stateDir,
+    record,
+    SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+    options.correlationId,
+  );
+  const pinRelease = releaseIncidentPin(stateDir, record, {
+    correlationId: incidentLifecycleCorrelation(record, options.correlationId),
+    env: options.env ?? process.env,
+  });
+  dismissedEvidence(stateDir, record, {
+    correlationId: options.correlationId,
+    openIncidentCount: openIncidentCount - 1,
+    pinRelease,
+    claimsReleased: claims.released,
+    ...(claims.released ? {} : { failure: claims.failure }),
+    reason: options.retirementReason,
+  });
+  return claims.released && pinRelease !== "rejected" ? "dismissed" : "dismissed-incomplete";
+}
+
+/** Withdraw the owned record before releasing its pin and claims; retain ownership on failure. */
+function retireSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentRetirementOptions,
+  state: "candidate" | "reported",
+): SupportIncidentDismissal {
+  const requestCorrelationId = options.correlationId ?? randomUUID();
+  // Ownership refusal is already evidenced by the owning graph. Keep it outside the filesystem
+  // inspection catch so a rejected graph never tries to open a second diagnostic sink.
+  claimActivityLogWriterOwnership(stateDir, requestCorrelationId);
+  try {
+    return retireOwnedSupportIncident(stateDir, incidentId, options, state, requestCorrelationId);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+      correlationId: requestCorrelationId,
+      loss: "event-dropped",
+    });
+    return "failed";
+  }
+}
+
+function retireOwnedSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentRetirementOptions,
+  state: "candidate" | "reported",
+  requestCorrelationId: string,
+): SupportIncidentDismissal {
+  const inspected = inspectRetirement(stateDir, incidentId, {
+    ...options,
+    correlationId: requestCorrelationId,
+  });
+  if (typeof inspected === "string") return inspected;
+  const { record, openIncidentCount } = inspected;
+  const correlationId =
+    options.correlationId ?? incidentLifecycleCorrelation(record, requestCorrelationId);
+  retirementStartedEvidence(stateDir, record, correlationId, state);
   try {
     removeSupportIncidentRecord(stateDir, incidentId);
   } catch (error) {
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
-    return "failed";
+    return failedWithdrawal(
+      stateDir,
+      { ...record, state },
+      {
+        correlationId,
+        openIncidentCount,
+        reason: options.retirementReason,
+        failure: retirementFailure(error),
+      },
+    );
   }
-  releaseRecordClaims(stateDir, record);
-  const pinRelease = releaseIncidentPin(stateDir, record, {
-    correlationId,
-    env: options.env ?? process.env,
-  });
-  dismissedEvidence(stateDir, record, {
-    correlationId,
-    openIncidentCount: open.length - 1,
-    pinRelease,
-  });
-  return "dismissed";
+  return finishRetirement(
+    stateDir,
+    { ...record, state },
+    { ...options, correlationId },
+    openIncidentCount,
+  );
+}
+
+/** Explicit withdrawal of one retained candidate, including an owner's abandoned preparation. */
+export function dismissSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentRetirementOptions = {},
+): SupportIncidentDismissal {
+  return retireSupportIncident(stateDir, incidentId, options, "candidate");
+}
+
+/** The canonical artifact is prepared and cached; this never claims transmission or a saved file. */
+export function completePreparedSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentOptions = {},
+): SupportIncidentDismissal {
+  return retireSupportIncident(
+    stateDir,
+    incidentId,
+    { ...options, retirementReason: undefined },
+    "reported",
+  );
 }
 
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────
@@ -1438,7 +2216,7 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
 
 // At most one `support.incident.rejected` line per suppression window (see
 // lastRateLimitEvidenceAtMs above), so a sustained storm costs one evidenced line per minute, not
-// one per dropped evaluation. openIncidentCount is a plain listing, never the full expiry sweep:
+// one per dropped evaluation. openIncidentCount counts directory entries without opening records:
 // this path exists specifically to stay cheap under a storm.
 function reportRateLimitedEvaluation(
   stateDir: string,
@@ -1460,7 +2238,7 @@ function reportRateLimitedEvaluation(
     defectFingerprint,
     fingerprintAlgorithm,
     correlationId: correlationId ?? randomUUID(),
-    openIncidentCount: listSupportIncidentEntries(stateDir).length,
+    openIncidentCount: countSupportIncidentEntries(stateDir),
   });
 }
 
@@ -1503,8 +2281,9 @@ function scheduleDrain(): void {
 
 /**
  * Called by the Activity Log file sink after it persisted `event`. For an eligible, admitted
- * failure, publishes the incident window's retention pin right now (before returning) and queues
- * the rest of candidate creation; never throws. An ineligible or suppressed event does no
+ * failure, attempts immediate window protection without retiring another candidate and queues
+ * admission. A rejected pin retries only after deduplication and quota admission; never throws.
+ * An ineligible or suppressed event does no
  * filesystem work at all.
  */
 export function observeSupportIncidentTrigger(stateDir: string, event: ServerLogEvent): void {
@@ -1522,8 +2301,16 @@ export function observeSupportIncidentTrigger(stateDir: string, event: ServerLog
     }
     if (admission.status !== "admitted") return;
     const nowMs = Date.now();
-    const draft = registeredFailureDraft(admission.evidence);
-    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env);
+    const initial = registeredFailureDraft(admission.evidence);
+    const draft = {
+      ...initial,
+      sealedSegmentsBeforePin: overlappingSealedSegmentNames(
+        stateDir,
+        supportIncidentWindow(nowMs),
+        initial.evidenceCorrelationId,
+      ),
+    };
+    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env, draft);
     pendingCandidates.push({ stateDir, draft: { ...draft, prePinned: pin }, nowMs });
     scheduleDrain();
   } catch (error) {

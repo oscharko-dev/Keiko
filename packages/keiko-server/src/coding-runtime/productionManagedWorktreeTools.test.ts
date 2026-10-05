@@ -20,7 +20,7 @@ import type {
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { nodeWorkspaceFs, type WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   expectActivityLogProof,
@@ -2404,6 +2404,33 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     return root;
   }
 
+  function softDeadlineFs(advance: () => void): typeof nodeWorkspaceFs {
+    const read = nodeWorkspaceFs.readFileBytes;
+    if (read === undefined) throw new Error("fixture byte reader missing");
+    let readCompleted!: () => void;
+    const firstRead = new Promise<void>((resolve) => {
+      readCompleted = resolve;
+    });
+    return {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (...args): Promise<Uint8Array> => {
+        const bytes = await read(...args);
+        readCompleted();
+        return bytes;
+      },
+      iterateDirectory: async function* (path): AsyncGenerator<WorkspaceDirEntry> {
+        for (const entry of nodeWorkspaceFs.readDir(path)) {
+          yield entry;
+          if (entry.name === "a.ts") {
+            await firstRead;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            advance();
+          }
+        }
+      },
+    };
+  }
+
   function searchBody(overrides: Record<string, unknown> = {}): string {
     return JSON.stringify({
       action: "search",
@@ -2549,6 +2576,56 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     });
     return { slot: { current: resolve }, closed: (): number => closes };
   }
+
+  it("settles retained lexical hits before the catalog kill and skips optional reranking", async () => {
+    const root = tempWorkspace();
+    writeFileSync(join(root, "a.ts"), "export const parseConfig = 'early';");
+    writeFileSync(join(root, "z.ts"), "export const parseConfig = 'late';");
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const provider = vi.fn(() => Promise.resolve([]));
+    const bound = semanticSlot({ search: provider });
+    const events: ServerLogEvent[] = [];
+    const fs = softDeadlineFs(() => {
+      elapsed = 28_500;
+    });
+    const facade = searchFacade({
+      workspaceRoot: root,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: root,
+        repositoryRoot: root,
+        fs,
+      }),
+      repositorySemanticSearch: bound.slot,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    try {
+      const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+      expect(result).toMatchObject({
+        status: "completed",
+        search: {
+          hits: [{ path: "a.ts" }],
+          truncationReasons: ["time-limit"],
+          provenance: { ranking: "lexical", fallbackReason: "budget-exhausted" },
+        },
+      });
+      expect(provider).not.toHaveBeenCalled();
+      expect(
+        events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+      ).toMatchObject({
+        status: "completed",
+      });
+      expect(
+        events.find((event) => event.op === "coding-runtime.repository-rerank")?.extra,
+      ).toMatchObject({
+        fallbackReason: "budget-exhausted",
+        lexicalHits: 1,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   function twoMatchingFiles(): string {
     const root = tempWorkspace();

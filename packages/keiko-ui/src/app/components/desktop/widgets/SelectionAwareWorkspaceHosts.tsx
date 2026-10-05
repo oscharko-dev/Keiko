@@ -1,3 +1,4 @@
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
@@ -7,7 +8,7 @@ import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/
 import { updateChat } from "@/lib/api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
-import { useTranslate } from "@/lib/i18n";
+
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
@@ -48,6 +49,7 @@ import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
 import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
+import { normalizeEditorFile } from "./cards/editorPaneGeometry";
 import { gitObjectId } from "./gitObjectId";
 import { isManagedTaskWorkspaceRoot, managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
@@ -1612,7 +1614,7 @@ export function EditorWindowSessionHost({
     ...(file === undefined ? {} : { file }),
     ...(openFiles === undefined ? {} : { openFiles }),
     ...(layoutJson === undefined ? {} : { layoutJson }),
-    onWorkspaceChange: (patch) => updateEditorCfg(ctx, configuredRoot, patch),
+    onWorkspaceChange: (patch) => updateEditorCfg(ctx, configuredRoot, file, patch),
   };
 
   // V1/unbound roots keep the ADR-0090 remount guarantee. V2 manifests instead keep one keyed
@@ -1628,22 +1630,24 @@ type EditorSessionBaseProps = Omit<
 function updateEditorCfg(
   ctx: WindowRenderContext,
   configuredRoot: string | undefined,
+  configuredFile: string | undefined,
   patch: EditorWidgetWorkspacePatch,
 ): void {
   const rootChanged = patch.root !== undefined && patch.root !== configuredRoot;
+  const fileChanged =
+    patch.file !== undefined &&
+    configuredFile !== undefined &&
+    normalizeEditorFile(patch.root ?? configuredRoot ?? "", patch.file) !==
+      normalizeEditorFile(configuredRoot ?? "", configuredFile);
   ctx.updateCfg({
     root: patch.root,
     ...(patch.rootBinding === undefined ? {} : { rootBinding: patch.rootBinding }),
     file: patch.file,
     openFiles: patch.openFiles,
     layoutJson: patch.layoutJson,
-    // Issue #2621 — the reveal in cfg is addressed to the root named there, so re-homing the window
-    // to a different root invalidates it. The editor applies a reveal from its Monaco mount wiring,
-    // and a root change remounts this branch's editor (ADR-0090 D4), so keeping the triple would
-    // fire the line jump again in another root's file — and would silently re-address it to the new
-    // root, which is the very targeting the multi-root branch then trusts. Only on a root change: an
-    // ordinary layout commit carries the same root and must not kill an in-flight reveal.
-    ...(rootChanged
+    // A reveal belongs to the root and file selected when it was issued. Preserve layout-only
+    // commits, but never persist the old request onto a newly selected document.
+    ...(rootChanged || fileChanged
       ? { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined }
       : {}),
   });

@@ -1,4 +1,7 @@
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfile,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GatewayCallRequest, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { splitUnifiedDiffSections } from "../gitDiffParser.js";
@@ -42,10 +45,10 @@ export function prepareCommitDraft(
 ): PreparedCommitDraft {
   const profile = deriveContextProfileFromCapability(capability);
   const full = build(diff, false);
-  const maxPromptTokens = Math.max(
-    0,
-    profile.maxInputTokens - (full.maxOutputTokens ?? 0) - profile.safetyMarginTokens,
-  );
+  const maxPromptTokens = deriveContextProfile({
+    ...profile,
+    reservedOutputTokens: full.maxOutputTokens ?? 0,
+  }).effectiveInputBudget;
   const prepare = (request: GatewayCallRequest, diffCompacted: boolean): PreparedCommitDraft => ({
     request,
     diffCompacted,

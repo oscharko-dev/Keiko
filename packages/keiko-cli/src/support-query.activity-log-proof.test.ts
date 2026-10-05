@@ -13,7 +13,10 @@ import {
 import { loadActivityLog } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { runSupportCli } from "./support.js";
-import { DEFAULT_SUPPORT_QUERY_LIMITS } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  type SupportQueryResult,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { runSupportQueryCli } from "./support-query-cli.js";
 import {
   fixtureLine,
@@ -48,6 +51,24 @@ function stateWithHistory(): string {
   return stateDir;
 }
 
+function stateWithNearbyContext(): string {
+  const stateDir = mkdtempSync(join(REAL_TMPDIR, "keiko-query-nearby-"));
+  roots.push(stateDir);
+  const process = fixtureProcess(6101, "fedcba01");
+  writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+    fixtureLine(process, T0, { op: "process.started" }),
+    ...Array.from({ length: 300 }, (_, index) =>
+      fixtureLine(process, T0 + index + 1, { op: "cli.lifecycle.stop-requested" }),
+    ),
+    fixtureLine(process, T0 + 301, { op: "client.diagnostic", correlationId: ROOT_ID }),
+  ]);
+  return stateDir;
+}
+
+type QueryProjection = Omit<SupportQueryResult, "events"> & {
+  readonly events: readonly { readonly record: { readonly op: string; readonly ts: string } }[];
+};
+
 function makeIo(): { readonly io: CliIo; readonly out: () => string; readonly err: () => string } {
   const out: string[] = [];
   const err: string[] = [];
@@ -72,6 +93,45 @@ beforeAll(async () => {
   await loadActivityLog();
 }, 60_000);
 describe("support query activity log proofs (#3531)", () => {
+  it("persists true counts and bytes after selecting nearby optional context", async () => {
+    const stateDir = stateWithNearbyContext();
+    const { io, out } = makeIo();
+    expect(
+      await runSupportCli(
+        ["query", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--json"],
+        io,
+        {},
+      ),
+    ).toBe(0);
+    const result = JSON.parse(out()) as QueryProjection;
+    const signals = result.events.filter(
+      ({ record }) => record.op === "cli.lifecycle.stop-requested",
+    );
+    expect(signals).toHaveLength(256);
+    expect(signals[0]?.record.ts).toBe(new Date(T0 + 45).toISOString());
+    expect(signals.at(-1)?.record.ts).toBe(new Date(T0 + 300).toISOString());
+    expect(result.truncation).toMatchObject({
+      state: "context-truncated",
+      omittedContextEventCount: 44,
+    });
+    const completed = expectActivityLogProof(
+      "support.query.completed.query-evidence",
+      lineOf(stateDir, "support.query.completed"),
+    );
+    expect(completed).toMatchObject({
+      candidateEventCount: 302,
+      resultEventCount: 258,
+      contextEventCount: 257,
+      requiredRecordCount: 2,
+      selectedBytes: result.metrics.selectedBytes,
+      requiredBytes: result.truncation.requiredBytes,
+      truncation: "context-truncated",
+    });
+    expect(completed.sufficiencyReasons).toContain("context-truncated");
+    for (const privateValue of [ROOT_ID, stateDir, "fedcba01"])
+      expect(JSON.stringify(completed)).not.toContain(privateValue);
+  });
+
   it("persists support.manifest.rebuilt and support.query.completed for one correlated query", async () => {
     const stateDir = stateWithHistory();
     const { io, out } = makeIo();

@@ -13,7 +13,8 @@ export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
 /** Advisory browser hygiene only; server-side expiry in the registry is the authoritative bound. */
 export const APP_SESSION_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
 /**
- * Path scopes: only API families that consume protected coding-session authority. W1.9 (#2482)
+ * Path scopes: API families that consume protected authority or explicit normal Chat activity.
+ * W1.9 (#2482)
  * first added Git; the managed-worktree integration adds Files, Editor (including ADR-0147 D7
  * local-history reads), runtime capabilities, and canonical workspace-manifest projections without
  * returning to their broader `/api` ancestor. `Path` is browser hygiene, not a security boundary
@@ -30,8 +31,10 @@ export const APP_SESSION_DESKTOP_COOKIE_PATH = "/api/desktop/chat";
 export const APP_SESSION_TASK_WORKSPACES_COOKIE_PATH = "/api/task-workspaces";
 export const APP_SESSION_CLONE_COOKIE_PATH = "/api/repositories/clone";
 export const APP_SESSION_SUPPORT_REPORT_COOKIE_PATH = "/api/diagnostics/report";
+/** Explicit normal Chat activity consumes the existing session without requiring or minting one. */
+export const APP_SESSION_GROUNDED_SEND_COOKIE_PATH = "/api/chats/messages/grounded";
 
-// Issuance and revocation use one list so a new protected family cannot retain a stale bearer.
+// Issuance and revocation use one list so a new consuming route cannot retain a stale bearer.
 const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_COOKIE_PATH,
   APP_SESSION_GIT_COOKIE_PATH,
@@ -44,7 +47,11 @@ const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_TASK_WORKSPACES_COOKIE_PATH,
   APP_SESSION_SUPPORT_REPORT_COOKIE_PATH,
   APP_SESSION_CLONE_COOKIE_PATH,
+  APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
 ] as const;
+
+/** Count of live route projections; retired cookies are not successful session repairs. */
+export const APP_SESSION_ACTIVE_COOKIE_COUNT = APP_SESSION_ACTIVE_COOKIE_PATHS.length;
 
 export interface SessionCookieOptions {
   readonly secure: boolean;
@@ -76,7 +83,7 @@ function expiredCookie(secure: boolean, path: string): string {
   return `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, path)}; Max-Age=0`;
 }
 
-/** Serialize least-privilege cookie projections consumed by authenticated Code reads. */
+/** Serialize narrowly scoped projections consumed by authenticated reads and explicit Chat sends. */
 export function serializeSessionCookies(
   cookieToken: string,
   options: SessionCookieOptions,

@@ -1,3 +1,7 @@
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238) — sync status/progress/change presentation atoms.
 //
 // Reuses the Epic #1856 / Issue #1893 manual-refresh presentation language verbatim: the global
@@ -12,8 +16,7 @@ import type {
   AtlassianSyncJobStatus,
   AtlassianSyncProgressCounts,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import { syncFailureReasonKey, syncStatusBadgeState, syncStatusLabelKey } from "./connector-labels";
 
 const PROGRESS_ROWS: ReadonlyArray<readonly [keyof AtlassianSyncProgressCounts, MessageKey]> = [

@@ -1,3 +1,9 @@
+"use client";
+
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238, ADR-0128 D5) — sync scope selection.
 //
 // Confluence: space keys; Jira: project keys plus an optional JQL filter. Key entry mirrors the
@@ -5,8 +11,6 @@
 // bound (`ATLASSIAN_SYNC_SCOPE_MAX_KEYS`) with inline feedback; the per-run item bound
 // (`DEFAULT_ATLASSIAN_SYNC_BOUNDS.maxItems`) is surfaced so truncation is understood. The JQL hint
 // states plainly that JQL runs under the user's own Atlassian permissions.
-
-"use client";
 
 import { useId, useState, type ReactNode } from "react";
 import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
@@ -17,8 +21,6 @@ import {
   isSafeConfluenceSpaceKey,
   isSafeJiraProjectKey,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { useTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
 
 export interface ConnectorScopeValue {
   readonly keys: readonly string[];

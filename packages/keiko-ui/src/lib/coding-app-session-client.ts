@@ -7,7 +7,8 @@
  * a content-free acknowledgement and, on approval, sets the HttpOnly session cookie — and strips the
  * fragment from the address bar and history entry immediately, whether or not it was well-formed.
  * Normal reloads and reused tabs confirm an existing valid cookie. A missing, revoked or
- * restart-invalidated session needs a fresh launcher attestation; confirmation never issues one.
+ * restart-invalidated session needs a fresh launcher attestation; confirmation never issues a
+ * session. It refreshes scoped cookie projections of an already verified bearer after an upgrade.
  *
  * Redemption success is deliberately unobservable here (the acknowledgement never distinguishes
  * approval from denial, and page script cannot read the HttpOnly cookie); the questions surface
@@ -27,10 +28,12 @@ import {
   reportClientDiagnostic,
   type ClientDiagnosticSessionRepairReport,
 } from "./client-diagnostics";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
+import { clientErrorEvidence } from "./client-error-evidence";
 import { bffFetchJson, bffRequestErrorKind } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
+export const LOCAL_SESSION_TIMEOUT_MS = 15_000;
 const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 // The pairing requests are the repair: their denial is final and never starts another repair.
 const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
@@ -39,7 +42,10 @@ const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
 export interface CodingAppSessionPairingSeams {
   readonly readFragment: () => string;
   readonly stripFragment: () => void;
-  readonly postPairing: (attestation: CodingAppSessionPairingAttestation) => Promise<unknown>;
+  readonly postPairing: (
+    attestation: CodingAppSessionPairingAttestation,
+    correlationId: string,
+  ) => Promise<unknown>;
   // `correlationId` is the id the local-session request carries. The caller mints it, so a failure
   // that never reached the server still names its request.
   readonly postLocalSession?: (correlationId: string) => Promise<unknown>;
@@ -52,16 +58,25 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
     stripFragment: (): void => {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     },
-    postPairing: (attestation: CodingAppSessionPairingAttestation): Promise<unknown> =>
+    postPairing: (attestation, correlationId): Promise<unknown> =>
       bffFetchJson(
         PAIR_PATH,
-        { method: "POST", cache: "no-store", body: JSON.stringify(attestation) },
-        WITHOUT_SESSION_REPAIR,
+        {
+          method: "POST",
+          cache: "no-store",
+          body: JSON.stringify(attestation),
+          signal: AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS),
+        },
+        { ...WITHOUT_SESSION_REPAIR, correlationId },
       ),
     postLocalSession: (correlationId: string): Promise<unknown> =>
       bffFetchJson(
         LOCAL_SESSION_PATH,
-        { method: "POST", cache: "no-store" },
+        {
+          method: "POST",
+          cache: "no-store",
+          signal: AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS),
+        },
         { ...WITHOUT_SESSION_REPAIR, correlationId },
       ),
   };
@@ -81,18 +96,28 @@ export async function redeemCodingAppSessionPairingFragment(
   seams.stripFragment();
   const attestation = decodeCodingAppSessionPairingFragment(fragment);
   if (attestation === undefined) return false;
+  const correlationId = newClientCorrelationId();
   try {
-    await seams.postPairing(attestation);
+    await seams.postPairing(attestation, correlationId);
     return true;
-  } catch {
+  } catch (error) {
     // The pair endpoint acknowledges without distinguishing outcomes; a transport failure leaves
     // the window unpaired, which the questions surface reports honestly (#2478).
+    reportClientDiagnostic(
+      `[keiko] local app session pairing failed: ${clientErrorSummary(error)}`,
+      {
+        correlationId: correlationIdOf(error) ?? correlationId,
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      },
+    );
     return false;
   }
 }
 
 /**
- * Confirm this browser's existing app-session cookie without issuing or replacing it. The endpoint
+ * Confirm this browser's existing app-session bearer and refresh its exact scoped cookie
+ * projections without minting a session or replacing the token. The endpoint
  * intentionally acknowledges without revealing whether the cookie is valid; subsequent channel
  * reads report the honest paired/unpaired state.
  */
@@ -142,13 +167,43 @@ export interface LocalCodingAppSessionRepair {
 
 let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 
+function waitForSharedSessionWork<T>(
+  repair: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return repair;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject): void => {
+    const abort = (): void => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void repair.then(
+      (outcome): void => {
+        signal.removeEventListener("abort", abort);
+        if (signal.aborted) reject(signal.reason);
+        else resolve(outcome);
+      },
+      (error: unknown): void => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * Confirms the current app session once for concurrent denied surfaces (ADR-0141 D5). An invalid
  * session stays unpaired; surfaces join the one attempt in flight instead of each posting its own, and
  * the next denial after it settled starts a fresh one. Every joiner learns the repair request's
- * correlation id, so its own evidence can name the repair it waited for.
+ * correlation id, so its own evidence can name the repair it waited for. Cancelling a joiner
+ * stops only its wait; the bounded shared request remains available to other consumers.
  */
-export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAppSessionRepair> {
+export function repairLocalCodingAppSessionWithEvidence(
+  signal?: AbortSignal,
+): Promise<LocalCodingAppSessionRepair> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason);
   if (localSessionRepair === undefined) {
     const correlationId = newClientCorrelationId();
     localSessionRepair = localSessionOutcome(defaultSeams(), correlationId)
@@ -161,7 +216,7 @@ export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAp
         localSessionRepair = undefined;
       });
   }
-  return localSessionRepair;
+  return waitForSharedSessionWork(localSessionRepair, signal);
 }
 
 /** {@link repairLocalCodingAppSessionWithEvidence}, for callers that need only the verdict. */
@@ -250,8 +305,9 @@ export function redeemCodingAppSessionPairingOnBoot(): Promise<boolean> {
  * this before their first read so a freshly opened window cannot race its own bootstrap into a stale
  * `unpaired` state; no timers, retries, or second session state are involved.
  */
-export function codingAppSessionPairingSettled(): Promise<boolean> {
-  return redeemCodingAppSessionPairingOnBoot();
+export function codingAppSessionPairingSettled(signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason);
+  return waitForSharedSessionWork(redeemCodingAppSessionPairingOnBoot(), signal);
 }
 
 // F65: a pairing can arrive without a page load (the launcher link opened in the tab that already

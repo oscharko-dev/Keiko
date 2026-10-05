@@ -1683,6 +1683,33 @@ describe("gateway readiness route", () => {
 });
 
 describe("longContextTokens (KEIKO-0358)", () => {
+  it("does not treat an assumed placeholder as the deployment's declared ceiling", () => {
+    const capability = {
+      ...createDefaultChatCapability("probe-model"),
+      contextWindow: 4_096,
+      contextWindowAssumed: true,
+    };
+    expect(longContextTokens(undefined, capability)).toBe(32_000);
+    expect(longContextTokens({ maxContextTokens: 64_000 }, capability)).toBe(64_000);
+    expect(longContextTokens(undefined, { ...capability, maxInputTokens: 16_000 })).toBe(16_000);
+  });
+
+  it("never probes beyond a declared input ceiling in a larger total window", () => {
+    const capped = {
+      ...createDefaultChatCapability("probe-model"),
+      contextWindow: 128_000,
+      maxInputTokens: 16_000,
+    };
+    expect(longContextTokens(undefined, capped)).toBe(16_000);
+    expect(longContextTokens({ maxContextTokens: 64_000 }, capped)).toBe(16_000);
+  });
+
+  it("caps the long-context probe to a known 8k total window", () => {
+    const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 8_000 };
+    expect(longContextTokens(undefined, capability)).toBe(8_000);
+    expect(longContextTokens({ maxContextTokens: 64_000 }, capability)).toBe(8_000);
+  });
+
   it("returns the extended long-context budget for an unknown contextWindow", () => {
     // Before the fix, contextWindow=0 (a placeholder / not-yet-probed capability) fell
     // through to DEFAULT_LONG_CONTEXT_TOKENS (32_000). That capped the deep-probe test
@@ -1697,12 +1724,9 @@ describe("longContextTokens (KEIKO-0358)", () => {
     expect(longContextTokens(undefined, undefined)).toBe(64_000);
   });
 
-  it("still caps a genuinely small window at the default budget", () => {
-    // Fix must be scoped to the 0 sentinel. A model that reports a small but positive
-    // window (e.g. 16k) still probes only up to DEFAULT_LONG_CONTEXT_TOKENS so the probe
-    // never asks past the model's real ceiling.
+  it("keeps the probe inside a genuinely small declared window", () => {
     const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 16_000 };
-    expect(longContextTokens(undefined, capability)).toBe(32_000);
+    expect(longContextTokens(undefined, capability)).toBe(16_000);
   });
 });
 

@@ -33,7 +33,7 @@ interface ScopeShape {
 }
 
 interface LimitsShape {
-  readonly maxFilesScanned: number;
+  readonly maxFilesScanned: number | null;
 }
 
 interface EntryWalk {
@@ -50,6 +50,7 @@ interface EntryWalk {
   maxFilesPruned: number;
   truncated: boolean;
   entriesVisited: number;
+  unrepresentablePaths: number;
 }
 
 const EXPLICIT_SCOPE_MAX_DEPTH = DEFAULT_DISCOVERY_OPTIONS.maxDepth;
@@ -120,7 +121,7 @@ function pushAllowedFile(
   relPath: string,
   stat: ReturnType<WorkspaceFs["stat"]>,
 ): void {
-  if (walk.files.length >= walk.limits.maxFilesScanned) {
+  if (walk.files.length >= (walk.limits.maxFilesScanned ?? Infinity)) {
     walk.maxFilesPruned += 1;
     walk.truncated = true;
     return;
@@ -175,6 +176,10 @@ function handleDirectoryEntry(
   }
   const root = walk.realRoot;
   const childRel = dirRel.length === 0 ? entry.name : `${dirRel}/${entry.name}`;
+  if (!isValidScopePath(childRel, { mustBeRelative: true })) {
+    walk.unrepresentablePaths += 1;
+    return;
+  }
   if (!allowedByFilters(childRel)) {
     return;
   }
@@ -199,7 +204,7 @@ function handleDirectoryEntry(
 function entryWalkStopped(walk: EntryWalk): boolean {
   return (
     walk.truncated ||
-    walk.files.length >= walk.limits.maxFilesScanned ||
+    walk.files.length >= (walk.limits.maxFilesScanned ?? Infinity) ||
     walk.entriesVisited >= walk.traversalEntryBudget ||
     (walk.executionControl !== undefined && structuralExecutionStopped(walk.executionControl))
   );
@@ -238,39 +243,45 @@ function walkEntryDirectory(
   }
 }
 
-function handleScopeEntry(walk: EntryWalk, entry: string): void {
-  const root = walk.realRoot;
+export function admittedSearchScopeEntry(
+  fs: WorkspaceFs,
+  root: string,
+  entry: string,
+):
+  | {
+      readonly path: string;
+      readonly relativePath: string;
+      readonly stat: ReturnType<WorkspaceFs["stat"]>;
+    }
+  | undefined {
   const entryRel = normalizeScopePath(entry);
-  if (isDenied(entryRel)) {
-    return;
-  }
+  if (isDenied(entryRel)) return undefined;
   const abs = resolveWithinWorkspace(root, entryRel);
-  const contained = containedRealPathInfo(walk.fs, root, abs);
+  const contained = containedRealPathInfo(fs, root, abs);
   const realRel = normalizeScopePath(contained.realRelative);
-  if (contained.realBase !== walk.realRoot) {
-    return;
-  }
+  if (contained.realBase !== root) return undefined;
   if (!isCanonicalAllowedContainedPath(contained, root, entryRel)) {
     if (contained.path === abs && isAllowedContainedPathParent(contained, root, entryRel)) {
       inaccessibleScopeEntry();
     }
-    return;
+    return undefined;
   }
-  const stat = readContainedScopeEntryStat(walk.fs, contained.path);
-  if (realRel !== entryRel) {
-    return;
-  }
-  if (!allowedByFilters(entryRel) || !allowedByFilters(realRel)) {
-    return;
-  }
-  if (stat.isDirectory) {
-    walkEntryDirectory(walk, contained.path, realRel, 1);
-    return;
-  }
-  pushAllowedFile(walk, realRel, stat);
+  const stat = readContainedScopeEntryStat(fs, contained.path);
+  if (realRel !== entryRel || !allowedByFilters(realRel)) return undefined;
+  return { path: contained.path, relativePath: realRel, stat };
 }
 
-function resolveEntryWalkRoot(fs: WorkspaceFs, root: string): string {
+function handleScopeEntry(walk: EntryWalk, entry: string): void {
+  const current = admittedSearchScopeEntry(walk.fs, walk.realRoot, entry);
+  if (current === undefined) return;
+  if (current.stat.isDirectory) {
+    walkEntryDirectory(walk, current.path, current.relativePath, 1);
+    return;
+  }
+  pushAllowedFile(walk, current.relativePath, current.stat);
+}
+
+export function resolveEntryWalkRoot(fs: WorkspaceFs, root: string): string {
   try {
     return resolveExistingAllowedWorkspaceRealRoot(fs, root);
   } catch (error) {
@@ -302,7 +313,7 @@ function createEntryWalk(
     fs: workspaceFsBoundToCanonicalRoot(fs, realRoot),
     realRoot,
     ...(executionControl === undefined ? {} : { executionControl }),
-    traversalEntryBudget: explicitScopeTraversalEntryBudget(limits.maxFilesScanned),
+    traversalEntryBudget: explicitScopeTraversalEntryBudget(limits.maxFilesScanned ?? 2048),
     files: [],
     directories: [],
     directorySnapshots: new Map<string, WorkspaceDirectorySnapshot>(),
@@ -310,6 +321,7 @@ function createEntryWalk(
     maxFilesPruned: 0,
     truncated: false,
     entriesVisited: 0,
+    unrepresentablePaths: 0,
   };
 }
 
@@ -333,6 +345,7 @@ export function collectFromEntries(
   files: readonly DiscoveredFile[];
   directories: readonly string[];
   directorySnapshots: readonly WorkspaceDirectorySnapshot[];
+  unrepresentablePaths: number;
   filesDiscovered: number;
   truncated: boolean;
   depthPruned: number;
@@ -350,11 +363,12 @@ export function collectFromEntries(
     handleScopeEntry(walk, entry);
   }
   return {
-    files: walk.files.slice(0, limits.maxFilesScanned),
+    files: walk.files.slice(0, limits.maxFilesScanned ?? undefined),
     directories: [...new Set(walk.directories)].sort(compareStrings),
     directorySnapshots: [...walk.directorySnapshots.values()].sort((a, b) =>
       compareStrings(a.scopePath, b.scopePath),
     ),
+    unrepresentablePaths: walk.unrepresentablePaths,
     filesDiscovered: walk.files.length,
     truncated: walk.truncated,
     depthPruned: walk.depthPruned,

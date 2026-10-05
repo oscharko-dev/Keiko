@@ -1,3 +1,10 @@
+import {
+  caughtGroundedPackValidation,
+  inspectGroundedPack,
+  recordGroundedPackValidation,
+  GROUNDED_PACK_VALIDATION_MESSAGE,
+  type GroundedPackValidationFailure,
+} from "./grounded-pack-validation.js";
 // Epic #532 — multi-source (1+N) grounded retrieval merge. A chat may connect N folders/files at
 // once; asking one question must search EVERY connected source and return ONE merged answer with
 // per-source attribution. This module owns the new branch only. The single-source path
@@ -7,9 +14,12 @@
 // the shared formatters/projection/persistence helpers (now exported) so the two paths build their
 // gateway messages, citations, and evidence from the exact same primitives.
 
+import { mapWithConcurrency } from "./bounded-concurrency.js";
+import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import {
+  CancelledError,
   ContextOverflowError,
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
@@ -20,6 +30,7 @@ import type { ContextBudgetPressure, ContextLaneId } from "@oscharko-dev/keiko-c
 import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
+  connectedContextOmittedCount,
   CANDIDATE_OMISSION_REASONS,
   DEFAULT_EXPLORATION_BUDGET,
   type CandidateOmissionReason,
@@ -30,6 +41,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   buildGroundedAnswerContextPackSummary,
+  chatConnectedScopeFingerprintInput,
   type ChatConnectedScope,
   type GroundedAnswer,
   type GroundedAnswerContextSummary,
@@ -65,13 +77,12 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import {
-  GROUNDED_NO_EVIDENCE_ANSWER,
+  connectedSearchNoEvidenceAnswer,
   buildPackCitationIndex,
   citationSourceIdForIndex,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   packsHaveUsableEvidence,
-  reconcileInlineCitations,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import {
@@ -86,6 +97,7 @@ import {
   deriveScopeIdFrom,
   ensureNotCancelled,
   evidenceLines,
+  omissionReasonLines,
   groundedContextAssemblyInput,
   groundedContextSummaryInput,
   groundedEvidenceRunId,
@@ -93,9 +105,9 @@ import {
   groundedScopeWorkspaceFs,
   type GroundedGatewayPromptOptions,
   internalError,
-  isValidGroundedPack,
   mappedGatewayError,
   mappedWorkspaceError,
+  modelWindowAwareBudget,
   modelInputPromptByteLimit,
   packBudgetSummary,
   promptExcerptCount,
@@ -103,6 +115,8 @@ import {
   registerGroundedTurn,
   redactString,
   uncertaintyLines,
+  sizeExclusionLines,
+  fitPromptOmissionMetadata,
   withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
@@ -184,11 +198,17 @@ function sumBudget(
   return summaries.reduce<GroundedAnswerContextPackSummary["budget"]>(
     (acc, s) => ({
       searchCallsMax: acc.searchCallsMax + s.budget.searchCallsMax,
-      filesReadMax: acc.filesReadMax + s.budget.filesReadMax,
+      filesReadMax:
+        acc.filesReadMax === null || s.budget.filesReadMax === null
+          ? null
+          : acc.filesReadMax + s.budget.filesReadMax,
       excerptBytesMax: acc.excerptBytesMax + s.budget.excerptBytesMax,
       modelInputTokensMax: acc.modelInputTokensMax + s.budget.modelInputTokensMax,
       modelOutputTokensMax: acc.modelOutputTokensMax + s.budget.modelOutputTokensMax,
-      elapsedMsMax: acc.elapsedMsMax + s.budget.elapsedMsMax,
+      elapsedMsMax:
+        acc.elapsedMsMax === null || s.budget.elapsedMsMax === null
+          ? null
+          : acc.elapsedMsMax + s.budget.elapsedMsMax,
       rerankCallsMax: acc.rerankCallsMax + s.budget.rerankCallsMax,
     }),
     {
@@ -283,6 +303,7 @@ type SummableCoverageField =
   | "filesSkipped"
   | "ignoredByDiscovery"
   | "deniedByDiscovery"
+  | "unrepresentablePathsByDiscovery"
   | "depthPrunedByDiscovery"
   | "maxFilesPrunedByDiscovery"
   | "matchesReturned"
@@ -295,17 +316,21 @@ function isCoverageSummary(
 }
 
 function sumCoverage(summaries: readonly CoverageSummary[], field: SummableCoverageField): number {
-  return summaries.reduce((sum, coverage) => sum + coverage[field], 0);
+  return summaries.reduce((sum, coverage) => sum + (coverage[field] ?? 0), 0);
 }
 
 function mergeCoverageLimits(summaries: readonly CoverageSummary[]): CoverageSummary["limits"] {
   return {
-    maxFilesScanned: summaries.reduce((sum, coverage) => sum + coverage.limits.maxFilesScanned, 0),
+    maxFilesScanned: summaries.some((coverage) => coverage.limits.maxFilesScanned === null)
+      ? null
+      : summaries.reduce((sum, coverage) => sum + (coverage.limits.maxFilesScanned ?? 0), 0),
     maxMatchesReturned: summaries.reduce(
       (sum, coverage) => sum + coverage.limits.maxMatchesReturned,
       0,
     ),
-    elapsedMsMax: summaries.reduce((sum, coverage) => sum + coverage.limits.elapsedMsMax, 0),
+    elapsedMsMax: summaries.some((coverage) => coverage.limits.elapsedMsMax === null)
+      ? null
+      : summaries.reduce((sum, coverage) => sum + (coverage.limits.elapsedMsMax ?? 0), 0),
   };
 }
 
@@ -327,6 +352,14 @@ function mergeCoverageSummaries(
     truncated: coverageSummaries.some((coverage) => coverage.truncated),
     ignoredByDiscovery: sumCoverage(coverageSummaries, "ignoredByDiscovery"),
     deniedByDiscovery: sumCoverage(coverageSummaries, "deniedByDiscovery"),
+    ...(sumCoverage(coverageSummaries, "unrepresentablePathsByDiscovery") > 0
+      ? {
+          unrepresentablePathsByDiscovery: sumCoverage(
+            coverageSummaries,
+            "unrepresentablePathsByDiscovery",
+          ),
+        }
+      : {}),
     depthPrunedByDiscovery: sumCoverage(coverageSummaries, "depthPrunedByDiscovery"),
     maxFilesPrunedByDiscovery: sumCoverage(coverageSummaries, "maxFilesPrunedByDiscovery"),
     matchesReturned: sumCoverage(coverageSummaries, "matchesReturned"),
@@ -374,12 +407,19 @@ export interface LabeledPack {
   readonly pack: ConnectedContextPack;
 }
 
-function sourceSection(entry: LabeledPack, index: number, redactor: Redactor): readonly string[] {
+function sourceSection(
+  entry: LabeledPack,
+  index: number,
+  redactor: Redactor,
+  omissionPathBytes?: number,
+): readonly string[] {
   const { label, pack } = entry;
   return [
     `### Source ${String(index + 1)}: ${label}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
-    `- omitted evidence atoms: ${String(pack.omitted.length)}`,
+    `- omitted files: ${String(connectedContextOmittedCount(pack))}`,
+    ...omissionReasonLines(pack),
+    ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",
     ...evidenceLines(pack, redactor),
@@ -404,8 +444,11 @@ function buildRawMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
+  omissionPathBytes?: number,
 ): readonly GatewayChatMessage[] {
-  const sections = labeledPacks.flatMap((entry, index) => sourceSection(entry, index, redactor));
+  const sections = labeledPacks.flatMap((entry, index) =>
+    sourceSection(entry, index, redactor, omissionPathBytes),
+  );
   const userContent = [
     "User question:",
     redactString(redactor, question),
@@ -419,14 +462,6 @@ function buildRawMultiSourceGatewayMessages(
     { role: "system", content: GROUNDED_SYSTEM_PROMPT },
     { role: "user", content: userContent },
   ];
-}
-
-function multiSourceExcerptCount(labeledPacks: readonly LabeledPack[]): number {
-  return labeledPacks.reduce(
-    (count, entry) =>
-      count + entry.pack.files.reduce((fileCount, file) => fileCount + file.excerpts.length, 0),
-    0,
-  );
 }
 
 function withMultiSourcePromptExcerptByteLimit(
@@ -484,6 +519,7 @@ function withMultiSourcePromptExcerptTotalBudget(
 }
 
 interface FittedMultiSourcePrompt {
+  readonly omissionPathBytes?: number;
   readonly messages: readonly GatewayChatMessage[];
   readonly packs: readonly LabeledPack[];
 }
@@ -526,18 +562,21 @@ function budgetedMultiSourceGatewayMessages(
   const { limit, fits } = multiSourcePromptFit(labeledPacks, options);
   const fullMessages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
   if (fits(fullMessages)) return { messages: fullMessages, packs: labeledPacks };
-  if (multiSourceExcerptCount(labeledPacks) === 0) {
-    return { messages: fullMessages, packs: labeledPacks };
-  }
+  const metadataFit = fitPromptOmissionMetadata(
+    (bytes) => buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor, bytes),
+    fits,
+    limit,
+  );
+  if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
 
   const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
   const overheadBytes = promptByteLength(
-    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
+    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
   );
   // When overhead alone (system prompt + question + framing for all sources) exceeds the limit,
   // no amount of excerpt trimming can bring the prompt within budget. Throw instead of sending
   // an over-limit prompt to the provider which would result in an opaque 400 context-window error.
-  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor))) {
+  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0))) {
     throw new ContextOverflowError(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
@@ -545,15 +584,16 @@ function budgetedMultiSourceGatewayMessages(
   let totalExcerptBytes = Math.max(0, limit - overheadBytes);
   while (totalExcerptBytes >= 0) {
     const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
-    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor);
+    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor, 0);
     if (fits(messages) || totalExcerptBytes === 0) {
-      return { messages, packs };
+      return { messages, packs, omissionPathBytes: 0 };
     }
     totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
   }
   return {
-    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
+    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
     packs: emptyPacks,
+    omissionPathBytes: 0,
   };
 }
 
@@ -577,16 +617,17 @@ function loggedMultiSourceFit(
   } catch (error) {
     if (error instanceof ContextOverflowError) {
       const empty = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor));
+      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor, 0));
       const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
       logPromptWindowFit({ state: "refused", ...fit }, correlationId);
     }
     throw error;
   }
-  if (fitted.packs !== labeledPacks) {
+  if (fitted.packs !== labeledPacks || fitted.omissionPathBytes !== undefined) {
     const sentReferenceCount = promptExcerptCount(fitted.packs.map((entry) => entry.pack));
     const fit = { referenceCount, sentReferenceCount, promptTokens: tokens(fitted.messages) };
-    logPromptWindowFit({ state: "trimmed", ...fit, inputBudget }, correlationId);
+    const state = fitted.packs === labeledPacks ? "metadata-trimmed" : "trimmed";
+    logPromptWindowFit({ state, ...fit, inputBudget }, correlationId);
   }
   return fitted;
 }
@@ -609,6 +650,7 @@ export function fittedMultiSourcePrompt(
       question,
       withMultiSourcePromptExcerptByteLimit(labeledPacks, 0),
       redactor,
+      -1,
     ),
     sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
     availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),
@@ -617,7 +659,10 @@ export function fittedMultiSourcePrompt(
 
 // ─── Per-source retrieval seam (test injection) ───────────────────────────────
 
-export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalOnlyOutput>;
+export type GroundedRetriever = (
+  input: OrchestratorInput,
+  signal?: AbortSignal,
+) => Promise<RetrievalOnlyOutput>;
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
@@ -626,16 +671,16 @@ export function defaultRetriever(
   deps?: UiHandlerDeps,
   correlationId?: string,
 ): GroundedRetriever {
-  return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
+  return (input: OrchestratorInput, childSignal = signal): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     const semanticLease =
       deps === undefined
         ? { provider: undefined, close: (): void => undefined }
-        : configuredRepoSemanticSearchProviderLeaseFor(deps, signal, input.workspaceRoot);
+        : configuredRepoSemanticSearchProviderLeaseFor(deps, childSignal, input.workspaceRoot);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
-      signal,
+      signal: childSignal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
@@ -711,6 +756,7 @@ export function createMultiSourceAnswerer(
 const MAX_RETRIEVAL_CONCURRENCY = 4;
 
 interface RetrievedSource {
+  readonly sourceScopeFingerprint: string;
   readonly label: string;
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
@@ -730,6 +776,7 @@ interface RetrievalOutcome {
 }
 
 export interface MultiSourceAskInput {
+  readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly scopes: readonly ChatConnectedScope[];
@@ -760,8 +807,32 @@ export interface MultiSourceAskInput {
 function classifyPerSourceRetrieveError(
   error: unknown,
   label: string,
-): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
-  const mapped = mappedWorkspaceError(error);
+  correlationId: string | undefined,
+  deps: UiHandlerDeps,
+  sourceIndex: number,
+):
+  | {
+      readonly skipped: SkippedScope;
+      readonly mapped: RouteResult;
+      readonly validationFailure?: GroundedPackValidationFailure;
+    }
+  | undefined {
+  const validationFailure = caughtGroundedPackValidation(error);
+  if (validationFailure !== undefined) {
+    recordGroundedPackValidation(
+      deps,
+      correlationId,
+      validationFailure,
+      "source-skipped",
+      sourceIndex,
+    );
+    return {
+      skipped: { label, message: GROUNDED_PACK_VALIDATION_MESSAGE },
+      mapped: internalError(GROUNDED_PACK_VALIDATION_MESSAGE, correlationId),
+      validationFailure,
+    };
+  }
+  const mapped = mappedWorkspaceError(error, { correlationId });
   if (mapped === undefined) return undefined;
   const body = mapped.body as { readonly error?: { readonly message?: unknown } };
   const safeMessage =
@@ -778,6 +849,42 @@ interface RetrieveAccumulator {
   readonly retrieved: (RetrievedSource | undefined)[];
   readonly skipped: SkippedScope[];
   firstError: RouteResult | undefined;
+  firstValidationFailure?: {
+    readonly failure: GroundedPackValidationFailure;
+    readonly sourceIndex: number;
+  };
+}
+
+function rememberSkippedSource(
+  acc: RetrieveAccumulator,
+  classified: NonNullable<ReturnType<typeof classifyPerSourceRetrieveError>>,
+  sourceIndex: number,
+): void {
+  acc.skipped.push(classified.skipped);
+  acc.firstError ??= classified.mapped;
+  if (classified.validationFailure !== undefined) {
+    acc.firstValidationFailure ??= { failure: classified.validationFailure, sourceIndex };
+  }
+}
+
+function classifyReturnedPack(
+  ctx: MultiSourceAskInput,
+  pack: ConnectedContextPack,
+  label: string,
+  sourceIndex: number,
+): ReturnType<typeof classifyPerSourceRetrieveError> {
+  const validationFailure = inspectGroundedPack(pack, {
+    deps: ctx.deps,
+    correlationId: ctx.correlationId,
+    outcome: "source-skipped",
+    sourceIndex,
+  });
+  if (validationFailure === undefined) return undefined;
+  return {
+    skipped: { label, message: GROUNDED_PACK_VALIDATION_MESSAGE },
+    mapped: internalError(GROUNDED_PACK_VALIDATION_MESSAGE, ctx.correlationId),
+    validationFailure,
+  };
 }
 
 // Retrieve one source into the shared accumulator. GRD-006: a recoverable workspace error skips
@@ -800,27 +907,36 @@ async function retrieveOneSource(
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
     const workspaceFs = groundedScopeWorkspaceFs(cs);
-    out = await ctx.retriever({
-      scope,
-      query,
-      workspaceRoot: scope.workspaceRoot,
-      budget,
-      ...(workspaceFs === undefined ? {} : { workspaceFs }),
-    });
+    out = await ctx.retriever(
+      {
+        scope,
+        query,
+        workspaceRoot: scope.workspaceRoot,
+        budget,
+        ...(workspaceFs === undefined ? {} : { workspaceFs }),
+      },
+      ctx.signal,
+    );
     ensureNotCancelled(ctx.signal);
   } catch (error) {
-    const classified = classifyPerSourceRetrieveError(error, label);
+    const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId, ctx.deps, i);
     if (classified === undefined) throw error; // non-workspace error → outer handler
-    acc.skipped.push(classified.skipped);
-    acc.firstError ??= classified.mapped;
+    rememberSkippedSource(acc, classified, i);
     return;
   }
-  if (!isValidGroundedPack(out.pack)) {
-    acc.skipped.push({ label, message: "Pack validation failed." });
-    acc.firstError ??= internalError("Grounded answer context pack failed validation.");
+  const classified = classifyReturnedPack(ctx, out.pack, label, i);
+  if (classified !== undefined) {
+    rememberSkippedSource(acc, classified, i);
     return;
   }
-  acc.retrieved[i] = { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan };
+  acc.retrieved[i] = {
+    label,
+    pack: out.pack,
+    elapsedMs: out.elapsedMs,
+    scope,
+    plan: out.plan,
+    sourceScopeFingerprint: groundedSourceScopeFingerprint(scope, cs, ctx.sourceScopeFingerprints),
+  };
 }
 
 async function retrieveAllSources(
@@ -834,24 +950,30 @@ async function retrieveAllSources(
     skipped: [],
     firstError: undefined,
   };
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    for (;;) {
-      const i = nextIndex;
-      nextIndex += 1;
-      if (i >= ctx.scopes.length) return;
-      await retrieveOneSource(ctx, query, perScopeBudgets, labels, acc, i);
-    }
-  }
-
-  const workerCount = Math.min(MAX_RETRIEVAL_CONCURRENCY, Math.max(1, ctx.scopes.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  await mapWithConcurrency(
+    ctx.scopes,
+    MAX_RETRIEVAL_CONCURRENCY,
+    (_scope, index, signal) =>
+      retrieveOneSource({ ...ctx, signal }, query, perScopeBudgets, labels, acc, index),
+    ctx.signal,
+  );
   ensureNotCancelled(ctx.signal);
   const sources = acc.retrieved.filter((source): source is RetrievedSource => source !== undefined);
   const skipped = acc.skipped;
   const firstError = acc.firstError;
-  if (sources.length === 0 && firstError !== undefined) return firstError;
+  if (sources.length === 0 && firstError !== undefined) {
+    const validation = acc.firstValidationFailure;
+    if (firstError.status === 500 && validation !== undefined) {
+      recordGroundedPackValidation(
+        ctx.deps,
+        ctx.correlationId,
+        validation.failure,
+        "request-failed",
+        validation.sourceIndex,
+      );
+    }
+    return firstError;
+  }
   return { retrieved: sources, skipped, firstError };
 }
 
@@ -861,14 +983,37 @@ interface SourceCitationBundle {
   readonly labeledCitations: readonly GroundedEvidenceCitation[];
 }
 
+export function groundedSourceScopeFingerprint(
+  scope: SelectedScope,
+  connectedScope?: ChatConnectedScope,
+  selectedFingerprints?: ReadonlyMap<ChatConnectedScope, string>,
+): string {
+  if (connectedScope !== undefined && selectedFingerprints !== undefined) {
+    const fingerprint = selectedFingerprints.get(connectedScope);
+    if (fingerprint === undefined)
+      throw new TypeError("Selected source attribution is unavailable");
+    return fingerprint;
+  }
+  const input = chatConnectedScopeFingerprintInput({
+    root: scope.workspaceRoot,
+    kind: scope.kind,
+    relativePaths: scope.relativePaths,
+    connectedAtMs: 0,
+  });
+  if (input === undefined) throw new TypeError("Connected source identity is unavailable");
+  return createHash("sha256").update(input).digest("hex");
+}
+
 function labelAnswerCitations(
   citations: readonly GroundedEvidenceCitation[],
   sourceLabel: string,
   redactor: Redactor,
+  sourceScopeFingerprint?: string,
 ): readonly GroundedEvidenceCitation[] {
   return citations.map((citation) => ({
     ...citation,
     source: redactString(redactor, sourceLabel),
+    ...(sourceScopeFingerprint === undefined ? {} : { sourceScopeFingerprint }),
   }));
 }
 
@@ -903,7 +1048,12 @@ function sourceCitationBundles(
     return {
       source,
       citations,
-      labeledCitations: labelAnswerCitations(citations, source.label, redactor),
+      labeledCitations: labelAnswerCitations(
+        citations,
+        source.label,
+        redactor,
+        source.sourceScopeFingerprint,
+      ),
     };
   });
 }
@@ -1017,7 +1167,7 @@ function assembleMultiSourceAnswer(
   // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
   // evidence packs the model actually received; flag references to un-retrieved files.
   const reconciliationUncertainty = modelInvoked
-    ? buildMultiSourceReconciliationUncertainty(assistant, sources, redactor)
+    ? buildMultiSourceReconciliationUncertainty(assistant, sources, redactor, ctx.correlationId)
     : [];
   return {
     groundingKind: "connected-context",
@@ -1031,7 +1181,7 @@ function assembleMultiSourceAnswer(
       ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
       ...reconciliationUncertainty,
     ],
-    omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
+    omittedCount: sources.reduce((acc, src) => acc + connectedContextOmittedCount(src.pack), 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: withMergedAssistantUsage(mergedSummary, assistant),
     ...(modelInvoked && assistant.promptContext !== undefined
@@ -1061,11 +1211,13 @@ function buildMultiSourceReconciliationUncertainty(
   assistant: GroundedAnswerResult,
   sources: readonly RetrievedSource[],
   redactor: Redactor,
+  correlationId: string | undefined,
 ): readonly GroundedUncertainty[] {
   const nowMs = Date.now();
-  const reconciliation = reconcileInlineCitations(
+  const reconciliation = reconcileAndLogInlineCitations(
     assistant.content,
     buildPackCitationIndex(sources.map((s) => s.pack)),
+    correlationId,
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const missing =
@@ -1158,15 +1310,30 @@ function recordMultiSourceAnswer(
   );
 }
 
+function withAnswerDuration(answer: GroundedAnswer, startedAtMs: number): GroundedAnswer {
+  if (answer.groundingKind !== "connected-context") return answer;
+  const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  return { ...answer, elapsedMs, contextPack: { ...answer.contextPack, elapsedMs } };
+}
+
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
+  const startedAtMs = Date.now();
   const query = buildQuery(ctx.retrievalContent ?? ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
-  const perScopeBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, ctx.scopes, query);
+  const perScopeBudgets = splitExplorationBudgets(
+    modelWindowAwareBudget(ctx.deps, ctx.modelId),
+    ctx.scopes,
+    query,
+  );
   let outcome: RetrievalOutcome | RouteResult;
   try {
     outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);
   } catch (error) {
-    return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
+    const failure =
+      ctx.signal.aborted && error === ctx.signal.reason
+        ? new CancelledError("grounded request cancelled")
+        : error;
+    return mapMultiSourceError(failure, ctx.deps, ctx.correlationId);
   }
   if (isRouteResult(outcome)) {
     return outcome;
@@ -1193,8 +1360,9 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     !abstained || ctx.answerOnlyContextAvailable === true,
   );
   ensureNotCancelled(ctx.signal);
-  recordMultiSourceAnswer(ctx, retrieved, answer, persisted.assistantMessageId, abstained);
-  return { status: 200, body: answer };
+  const completedAnswer = withAnswerDuration(answer, startedAtMs);
+  recordMultiSourceAnswer(ctx, retrieved, completedAnswer, persisted.assistantMessageId, abstained);
+  return { status: 200, body: completedAnswer };
 }
 
 function isRouteResult(
@@ -1214,7 +1382,7 @@ async function answerMultiSource(
   ensureNotCancelled(ctx.signal);
   if (abstained && ctx.answerOnlyContextAvailable !== true) {
     return {
-      content: GROUNDED_NO_EVIDENCE_ANSWER,
+      content: connectedSearchNoEvidenceAnswer(ctx.content),
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }
@@ -1240,7 +1408,7 @@ function mapMultiSourceError(
   if (error instanceof ClarificationNeededError) {
     return clarificationRequest(clarificationUserMessage(error));
   }
-  const workspaceResult = mappedWorkspaceError(error);
+  const workspaceResult = mappedWorkspaceError(error, { correlationId });
   if (workspaceResult !== undefined) return workspaceResult;
   // The request's correlation, so a local refusal's diagnostic joins the ask (PR #3678 review).
   const gatewayResult = mappedGatewayError(error, deps, correlationId);

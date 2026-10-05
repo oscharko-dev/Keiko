@@ -5,6 +5,7 @@
 // from events/RunResult, never Date objects.
 
 import type { ContextAssemblyDiagnostics, ContextCompactionRecord } from "./context-engineering.js";
+import type { ContextOmissionCounts } from "./connected-context.js";
 import { deepFreeze } from "./deep-freeze.js";
 import type { CostClass } from "./gateway.js";
 import type {
@@ -294,9 +295,13 @@ export interface EvidenceConnectedContextAudit {
   readonly budget: {
     readonly usage: Record<string, number>;
     readonly limits: Record<string, number>;
+    readonly filesReadBounded?: boolean | undefined;
+    readonly elapsedMsBounded?: boolean | undefined;
   };
   readonly files: readonly EvidenceConnectedContextFile[];
   readonly omitted: readonly EvidenceConnectedContextOmitted[];
+  // Exact closed totals when the retained per-path detail list was bounded.
+  readonly omittedCounts?: ContextOmissionCounts | undefined;
   readonly uncertainty: readonly EvidenceConnectedContextUncertainty[];
   // Additive (M2): the candidate-ranking rationale. Absent on legacy runs / packs without
   // diagnostics — additive-optional, no evidence schema-version bump (mirrors `plan`).

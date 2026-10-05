@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+
 // Issue #211 — Inline edit form for memory body, tags, and sensitivity.
 // Controlled: caller owns the record; this dialog calls editMemory/correctMemory and reports back.
 //
@@ -12,7 +14,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { correctMemory, editMemory } from "@/lib/memory-api";
-import { useTranslate } from "@/lib/i18n";
+
 import { useDialogTabTrap } from "../../components/desktop/hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../../components/desktop/hooks/useModalInteractionLock";
 import { NATIVE_DIALOG_STYLE } from "../../components/desktop/native-element-styles";

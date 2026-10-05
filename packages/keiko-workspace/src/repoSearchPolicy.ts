@@ -30,7 +30,9 @@ import {
   repositoryRouteQuery,
 } from "./repoSearchRoutes.js";
 import { repositorySourceLines } from "./repoSearchSourceClassification.js";
-import type { DiscoveredFile } from "./types.js";
+import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import type { WorkspaceFs } from "./fs.js";
+import { resolveWithinWorkspace } from "./paths.js";
 
 export type SearchIntent =
   | "project-metadata"
@@ -56,6 +58,8 @@ export type CandidateBucket =
   | "other";
 
 export interface SearchHints {
+  readonly allowSourceInspection?: boolean | undefined;
+  readonly hasGitMetadata?: boolean | undefined;
   readonly retrievalIntent?: SearchIntent | undefined;
   readonly lowValuePathAllowlist?: readonly string[] | undefined;
   readonly recentPaths?: readonly string[] | undefined;
@@ -83,6 +87,7 @@ export interface RankedCandidateDiagnostic {
 }
 
 export interface SearchDiagnostics {
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
   readonly filesDiscovered: number;
@@ -96,6 +101,14 @@ export interface SearchDiagnostics {
   readonly candidateBuckets: Readonly<Record<CandidateBucket, number>>;
   // Top-ranked candidates with their ranking-signal breakdown, bounded for audit readability.
   readonly rankedCandidates: readonly RankedCandidateDiagnostic[];
+  readonly fileExclusionCounts?:
+    | {
+        readonly binary: number;
+        readonly oversized: number;
+        readonly unreadable: number;
+      }
+    | undefined;
+  readonly lowValuePolicyApplied?: boolean | undefined;
 }
 
 // Upper bound on how many ranked candidates carry an explainability breakdown in diagnostics. The
@@ -109,6 +122,7 @@ export interface CandidateOrderingResult {
 }
 
 export interface OrderCandidatesForSearchOptions {
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly files: readonly DiscoveredFile[];
   readonly query: RetrievalQuery;
   readonly policy: SearchPolicy;
@@ -295,6 +309,22 @@ export const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
   "importiert",
   "exportiert",
 ]);
+
+const EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS = [
+  /\buse\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)\b/giu,
+  /\bverwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen)\b/giu,
+];
+
+/** Output evidence instructions do not ask which source symbols use another symbol. */
+export function hasSymbolRelationshipQuery(text: string): boolean {
+  const relationshipText = EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS.reduce(
+    (value, pattern) => value.replace(pattern, " "),
+    text,
+  ).toLowerCase();
+  return [...relationshipText.matchAll(/[\p{L}\p{N}_]+/gu)].some((match) =>
+    SYMBOL_RELATION_TERMS.has(match[0]),
+  );
+}
 
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
@@ -840,8 +870,7 @@ function prefersSourceOverProse(query: RetrievalQuery, terms: readonly string[])
     return true;
   }
   return (
-    terms.some((term) => SYMBOL_RELATION_TERMS.has(term)) &&
-    anchorIdentifierQueryTerms(query.text).length > 0
+    hasSymbolRelationshipQuery(query.text) && anchorIdentifierQueryTerms(query.text).length > 0
   );
 }
 
@@ -961,6 +990,7 @@ function bucketCounts(
 export function resolveSearchPolicy(
   hasExplicitRelativePaths: boolean,
   hints: SearchHints | undefined,
+  hasGitMetadata = true,
 ): SearchPolicy {
   const mode = hasExplicitRelativePaths ? "explicit-scope" : "workspace-root-default";
   const intent = hints?.retrievalIntent ?? "generic";
@@ -968,10 +998,21 @@ export function resolveSearchPolicy(
     mode,
     intent,
     applyGitignore: mode === "workspace-root-default",
-    omitLowValueWorkspaceFiles: mode === "workspace-root-default",
+    omitLowValueWorkspaceFiles: mode === "workspace-root-default" && hasGitMetadata,
     lowValuePathAllowlist: normalizedHintPaths(hints?.lowValuePathAllowlist),
     recentPaths: normalizedHintPaths(hints?.recentPaths),
   };
+}
+
+/** Plain document folders have no repository-generated noise to infer from directory names. */
+export function resolveWorkspaceSearchPolicy(
+  scope: { readonly workspace: WorkspaceInfo; readonly relativePaths: readonly string[] },
+  fs: WorkspaceFs,
+  hints: SearchHints | undefined,
+): SearchPolicy {
+  const hasGitMetadata =
+    hints?.hasGitMetadata ?? fs.exists(resolveWithinWorkspace(scope.workspace.root, ".git"));
+  return resolveSearchPolicy(scope.relativePaths.length > 0, hints, hasGitMetadata);
 }
 
 // The legacy `gatherCandidates(scope, limits, fs)` overload predates the search-policy work and is
@@ -995,6 +1036,20 @@ export function lowValueRescuePolicy(policy: SearchPolicy): SearchPolicy {
     ...policy,
     omitLowValueWorkspaceFiles: false,
   };
+}
+
+export function querySupportsLowValueRescue(
+  query: RetrievalQuery,
+  policy: SearchPolicy,
+  fileListing = false,
+): boolean {
+  if (fileListing) return query.kind === "file-pattern";
+  if (query.kind === "exact-symbol") return true;
+  return (
+    query.kind === "natural-language" &&
+    policy.intent !== "repository-overview" &&
+    policy.intent !== "project-metadata"
+  );
 }
 
 export function policyOmissionReason(
@@ -1045,6 +1100,7 @@ export function orderCandidatesForSearch(
     policy,
     ignoredByDiscovery,
     deniedByDiscovery,
+    unrepresentablePathsByDiscovery = 0,
     depthPrunedByDiscovery = 0,
     maxFilesPrunedByDiscovery = 0,
     contentScores,
@@ -1068,6 +1124,7 @@ export function orderCandidatesForSearch(
       filesAfterPolicy: ranked.length,
       ignoredByDiscovery,
       deniedByDiscovery,
+      ...(unrepresentablePathsByDiscovery > 0 ? { unrepresentablePathsByDiscovery } : {}),
       depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery,
       candidateBuckets: bucketCounts(ranked),

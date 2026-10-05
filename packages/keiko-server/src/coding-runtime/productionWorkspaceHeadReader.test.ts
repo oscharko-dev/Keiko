@@ -23,6 +23,7 @@ import {
 } from "./productionWorkspaceHeadReader.js";
 
 const roots: string[] = [];
+const temporaryRoot = realpathSync(tmpdir());
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -30,7 +31,7 @@ afterEach(() => {
 
 describe("production workspace HEAD reader", () => {
   it("reads the exact managed worktree HEAD without ambient Git lookup", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-head-"));
+    const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-"));
     roots.push(root);
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.email", "runtime@keiko.example"]);
@@ -44,7 +45,7 @@ describe("production workspace HEAD reader", () => {
   });
 
   it("rejects a pathname swap between lstat and handle open", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-head-swap-"));
+    const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-swap-"));
     roots.push(root);
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.email", "runtime@keiko.example"]);
@@ -90,7 +91,7 @@ interface WorktreeFixture {
 }
 
 function worktreeFixture(): WorktreeFixture {
-  const root = mkdtempSync(join(tmpdir(), "keiko-runtime-head-worktree-"));
+  const root = mkdtempSync(join(temporaryRoot, "keiko-runtime-head-worktree-"));
   roots.push(root);
   const repoRoot = join(root, "repo");
   const commonGitDir = join(repoRoot, ".git");

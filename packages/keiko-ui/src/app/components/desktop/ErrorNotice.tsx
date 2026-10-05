@@ -1,10 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 import { Icons } from "./Icons";
 import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
+import { SupportReportButton } from "./SupportReportButton";
 import { useTranslate } from "@/lib/i18n";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffCodeErrorKind, bffRequestErrorKind } from "@/lib/http";
+import type { ClientOnlySupportReportInput } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import styles from "./ErrorNotice.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CloseIcon = Icons.close;
@@ -41,39 +46,44 @@ function ErrorNoticeDismiss({
   );
 }
 
-function ErrorNotice({
+function ErrorNoticeReportAction({
   notice,
-  className = "ui-error-notice",
-  id,
-  onDismiss,
-  dismissible = true,
+  noticeKey,
+  failure,
 }: {
   readonly notice: UserErrorNotice;
-  readonly className?: string | undefined;
-  readonly id?: string | undefined;
-  readonly onDismiss?: (() => void) | undefined;
-  readonly dismissible?: boolean | undefined;
+  readonly noticeKey: string;
+  readonly failure: () => ClientOnlySupportReportInput["failure"];
 }): ReactNode {
-  const t = useTranslate();
-  // RB-6 / ADR-0173 D5 — correlationId is a user-visible field (the "Support ID" line), so it must
-  // be part of the dismissal identity: without it, a later failure with the same title/message/code
-  // but a NEW support id would still match a stale dismissedKey and stay hidden (#3241 review).
-  const noticeKey = `${notice.title}\n${notice.message}\n${notice.code ?? ""}\n${notice.remediation ?? ""}\n${notice.correlationId ?? ""}`;
-  const [dismissedKey, setDismissedKey] = useState<string | undefined>();
-  if (dismissedKey === noticeKey) return null;
   return (
-    <div id={id} className={className} role="alert" aria-live="assertive">
-      <div className="ui-error-notice-title-row">
-        <div className="ui-error-notice-title">{notice.title}</div>
-        <ErrorNoticeDismiss
-          dismissible={dismissible}
-          label={t("common.dismissError")}
-          onClick={() => {
-            setDismissedKey(noticeKey);
-            onDismiss?.();
-          }}
-        />
-      </div>
+    <SupportReportButton
+      key={noticeKey}
+      correlationId={notice.correlationId}
+      errorKey={noticeKey}
+      failure={failure}
+      clientOnly={notice.correlationId === undefined}
+      disposeOnUnmount={notice.correlationId === undefined}
+    />
+  );
+}
+
+function noticeFailure(
+  error: unknown,
+  notice: UserErrorNotice,
+): ClientOnlySupportReportInput["failure"] {
+  const kind = bffRequestErrorKind(error);
+  return {
+    errorEvidence: clientErrorEvidence(error),
+    errorKind: kind === "unknown" ? bffCodeErrorKind(notice.code) : kind,
+    context: [],
+  };
+}
+
+function NoticeText({ notice }: { readonly notice: UserErrorNotice }): ReactNode {
+  const t = useTranslate();
+  return (
+    <div className={styles.cmpText} role="alert" aria-live="assertive">
+      <div className="ui-error-notice-title">{notice.title}</div>
       <div className="ui-error-notice-message">{notice.message}</div>
       {notice.remediation !== undefined ? (
         <div className="ui-error-notice-remediation">{notice.remediation}</div>
@@ -90,6 +100,55 @@ function ErrorNotice({
   );
 }
 
+function ErrorNotice({
+  notice,
+  noticeKey,
+  failure,
+  className = "ui-error-notice",
+  id,
+  onDismiss,
+  dismissible = true,
+}: {
+  readonly notice: UserErrorNotice;
+  readonly noticeKey: string;
+  readonly failure: () => ClientOnlySupportReportInput["failure"];
+  readonly className?: string | undefined;
+  readonly id?: string | undefined;
+  readonly onDismiss?: (() => void) | undefined;
+  readonly dismissible?: boolean | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const [dismissedKey, setDismissedKey] = useState<string | undefined>();
+  if (dismissedKey === noticeKey) return null;
+  return (
+    <div id={id} className={className}>
+      <div className="ui-error-notice-title-row">
+        <NoticeText notice={notice} />
+        <ErrorNoticeDismiss
+          dismissible={dismissible}
+          label={t("common.dismissError")}
+          onClick={() => {
+            setDismissedKey(noticeKey);
+            onDismiss?.();
+          }}
+        />
+      </div>
+      <ErrorNoticeReportAction notice={notice} noticeKey={noticeKey} failure={failure} />
+    </div>
+  );
+}
+
+function useNoticeOccurrence(error: unknown): string {
+  const instance = useId();
+  const [previous, setPrevious] = useState({ error, occurrence: 0 });
+  if (!Object.is(previous.error, error)) {
+    const occurrence = previous.occurrence + 1;
+    setPrevious({ error, occurrence });
+    return `${instance}:${occurrence}`;
+  }
+  return `${instance}:${previous.occurrence}`;
+}
+
 export function ErrorNoticeFromError({
   error,
   fallback,
@@ -98,11 +157,15 @@ export function ErrorNoticeFromError({
   onDismiss,
   dismissible,
 }: ErrorNoticeProps): ReactNode {
+  const occurrence = useNoticeOccurrence(error);
+  const notice = toUserErrorNotice(error, fallback);
   return (
     <ErrorNotice
       id={id}
       className={className}
-      notice={toUserErrorNotice(error, fallback)}
+      notice={notice}
+      noticeKey={`${occurrence}:${notice.correlationId ?? ""}`}
+      failure={() => noticeFailure(error, notice)}
       onDismiss={onDismiss}
       dismissible={dismissible}
     />

@@ -4,10 +4,22 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
+import { queryRankingTerms } from "./repoSearchRanking.js";
+import {
+  anchoredExcerptByteWindow,
+  MAX_EXCERPT_ANCHOR_CHARACTERS,
+} from "./repoSearchExcerptWindow.js";
+
 export const SEMANTIC_SEARCH_TOOL_PREFIX = "repo.semanticSearch";
 export const SEMANTIC_RRF_K = 60;
+export const DEFAULT_STREAMED_SEMANTIC_BOUNDS = Object.freeze({
+  maxDocumentBytes: 131_072,
+  maxDocuments: 32,
+});
 
 export interface SemanticSearchDocument {
+  // Source origin of a bounded fragment; provider match lines remain absolute source lines.
+  readonly startLine?: number | undefined;
   readonly scopePath: string;
   readonly text: string;
 }
@@ -32,6 +44,10 @@ export interface SemanticSearchProvider {
 export interface SemanticSearchSession {
   readonly provider: SemanticSearchProvider;
   readonly documents: SemanticSearchDocument[];
+  readonly maxDocumentBytes?: number;
+  readonly maxDocuments?: number;
+  readonly queryTerms?: readonly string[];
+  readonly documentScores: Map<string, number>;
 }
 
 export interface SemanticSearchExecutionOptions {
@@ -134,21 +150,83 @@ function validMatch(
   );
 }
 
+function semanticExcerptTerms(query: RetrievalQuery): readonly string[] {
+  const terms: string[] = [];
+  let characters = 0;
+  for (const term of queryRankingTerms(query.text)) {
+    const cost = term.length + (terms.length === 0 ? 0 : 1);
+    if (characters + cost > MAX_EXCERPT_ANCHOR_CHARACTERS) continue;
+    terms.push(term);
+    characters += cost;
+  }
+  return terms;
+}
+
 export function createSemanticSearchSession(
   provider: SemanticSearchProvider | undefined,
   query: RetrievalQuery,
+  bounds?: { readonly maxDocumentBytes: number; readonly maxDocuments: number },
 ): SemanticSearchSession | undefined {
   if (provider === undefined || query.kind === "regex" || query.kind === "file-pattern") {
     return undefined;
   }
-  return { provider, documents: [] };
+  return {
+    provider,
+    documents: [],
+    ...bounds,
+    queryTerms: semanticExcerptTerms(query),
+    documentScores: new Map(),
+  };
+}
+
+function boundedSemanticDocument(
+  session: SemanticSearchSession,
+  document: SemanticSearchDocument,
+): SemanticSearchDocument {
+  const maxBytes = Math.floor((session.maxDocumentBytes ?? 0) / (session.maxDocuments ?? 1));
+  const window = anchoredExcerptByteWindow(document.text, session.queryTerms ?? [], maxBytes, 1);
+  if (window !== undefined)
+    return { scopePath: document.scopePath, text: window.content, startLine: window.startLine };
+  const bytes = new TextEncoder().encode(document.text.slice(0, maxBytes)).subarray(0, maxBytes);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true });
+  return { ...document, text };
+}
+
+function rankedSemanticDocument(
+  session: SemanticSearchSession,
+  document: SemanticSearchDocument,
+  score: number,
+): void {
+  const scores = session.documentScores;
+  const compare = (a: SemanticSearchDocument, b: SemanticSearchDocument): number =>
+    (scores.get(b.scopePath) ?? 0) - (scores.get(a.scopePath) ?? 0) ||
+    comparePath(a.scopePath, b.scopePath);
+  scores.set(document.scopePath, score);
+  const worst = session.documents.at(-1);
+  if (
+    session.documents.length >= (session.maxDocuments ?? Infinity) &&
+    worst !== undefined &&
+    compare(document, worst) >= 0
+  ) {
+    scores.delete(document.scopePath);
+    return;
+  }
+  session.documents.push(boundedSemanticDocument(session, document));
+  session.documents.sort(compare);
+  if (session.documents.length > (session.maxDocuments ?? Infinity)) {
+    const removed = session.documents.pop();
+    if (removed !== undefined) scores.delete(removed.scopePath);
+  }
 }
 
 export function collectSemanticSearchDocument(
   session: SemanticSearchSession | undefined,
   document: SemanticSearchDocument,
+  score = 0,
 ): void {
-  session?.documents.push(document);
+  if (session === undefined) return;
+  if (session.maxDocumentBytes === undefined) session.documents.push(document);
+  else rankedSemanticDocument(session, document, score);
 }
 
 export function semanticSearchTool(providerName: string): string {
@@ -164,7 +242,7 @@ function startSemanticSearchExecution(
     signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
   const state = { timedOut: false };
   const timeout =
-    options.timeoutMs === undefined
+    options.timeoutMs === undefined || !Number.isFinite(options.timeoutMs)
       ? undefined
       : setTimeout(
           () => {

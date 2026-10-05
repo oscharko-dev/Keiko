@@ -1,11 +1,16 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
 import { runStatusLabel } from "../../../../../lib/format";
 import type { ChangedFile, RunReport } from "../../../../../lib/types";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { parseUnifiedDiff } from "./shared/diffParser";
 import { DiffFileSection } from "./shared/diffView";
 

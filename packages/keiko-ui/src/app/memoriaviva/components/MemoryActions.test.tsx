@@ -28,6 +28,15 @@ function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
 }
 
 describe("MemoryActions", () => {
+  it("exposes native labeled action grouping without user-agent padding or borders", () => {
+    render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
+    const group = screen.getByRole("group", { name: "Actions" });
+    expect(group.tagName).toBe("FIELDSET");
+    expect(group).toHaveStyle({ margin: "0px", padding: "0px" });
+    expect(group.style.border).toBe("0px");
+    expect(screen.getByRole("button", { name: /delete this memory record/i })).toBeEnabled();
+  });
+
   it("approves proposed memories from the detail action group", async () => {
     const approved = makeRecord({ status: "accepted" });
     const acceptImpl = vi.fn().mockResolvedValue({ memory: approved });

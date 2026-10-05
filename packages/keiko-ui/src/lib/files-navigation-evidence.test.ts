@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { correlationIdOf } from "./client-error-summary";
 import {
@@ -78,3 +79,96 @@ it("bounds successful read stages separately while preserving failed read correl
   expect(correlationIdOf(error)).toBe(failureMeta?.correlationId);
   expect(failureMeta?.errorEvidence.errorClass).toBe("TypeError");
 });
+
+describe("body-free source preview evidence", () => {
+  it("records admitted text bytes and editing capability without document identity or content", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    startFilesNavigationEvidence("files source preview")(
+      {
+        kind: "text",
+        sizeBytes: 4096,
+        sourceTextBytesRead: 2048,
+        canEdit: false,
+        root: "/private/customer",
+        path: "private.html",
+        content: "private body",
+      },
+      "applied",
+    );
+    expect(writer.mock.calls.at(-1)?.[1]?.stageReport).toMatchObject({
+      phase: "settled",
+      preview: { previewKind: "text", sourceTextBytesRead: 2048, canEdit: false },
+    });
+    expect(JSON.stringify(writer.mock.calls)).not.toContain("private");
+  });
+  it.each([
+    ["too_large", "too-large"],
+    ["unsupported", "unsupported"],
+  ] as const)(
+    "retains the closed %s preview reason without private response fields",
+    (reason, binaryReason) => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      startFilesNavigationEvidence("files source preview")(
+        { kind: "binary", reason, root: "/private/customer", path: "private.dat" },
+        "applied",
+      );
+      expect(writer.mock.calls.at(-1)?.[1]?.stageReport?.preview).toEqual({
+        previewKind: "binary",
+        binaryReason,
+        sourceTextBytesRead: 0,
+        canEdit: false,
+      });
+      expect(JSON.stringify(writer.mock.calls)).not.toContain("private");
+    },
+  );
+  it("does not invent read counts for a failed request", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    startFilesNavigationEvidence("files source preview")(undefined, "failed");
+    expect(writer.mock.calls.at(-1)?.[1]?.stageReport?.preview).toBeUndefined();
+  });
+});
+
+it("admits preview starts and settles within the shared read-stage allowance", () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  for (let index = 0; index < 20; index += 1)
+    startFilesNavigationEvidence("files source preview")(undefined, "cancelled");
+  expect(writer.mock.calls).toHaveLength(16);
+  expect(takeClientDiagnosticLoss()).toEqual({ postsThrottled: 24 });
+  for (let index = 0; index < writer.mock.calls.length; index += 2) {
+    const start = writer.mock.calls[index]?.[1];
+    expect(writer.mock.calls[index + 1]?.[1]).toMatchObject({
+      correlationId: start?.correlationId,
+      stageReport: { phase: "settled", navigationOutcome: "cancelled" },
+    });
+  }
+});
+
+it("does not substitute file size when an older preview lacks observed source bytes", () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  startFilesNavigationEvidence("files source preview")(
+    { kind: "text", sizeBytes: 2048, canEdit: false },
+    "applied",
+  );
+  expect(writer.mock.calls.at(-1)?.[1]?.stageReport.preview).toBeUndefined();
+});
+
+it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
+  "uses the shared source byte ceiling for observed preview bytes (%s)",
+  (sourceTextBytesRead) => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    startFilesNavigationEvidence("files source preview")(
+      { kind: "text", sourceTextBytesRead, canEdit: false },
+      "applied",
+    );
+    const preview = writer.mock.calls.at(-1)?.[1]?.stageReport.preview;
+    if (sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES)
+      expect(preview).toEqual({ previewKind: "text", sourceTextBytesRead, canEdit: false });
+    else expect(preview).toBeUndefined();
+  },
+);

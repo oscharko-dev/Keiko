@@ -53,7 +53,6 @@
       "source": "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.module.css",
       "globalSelectors": [
         ".grounded-citation-action-label",
-        ".grounded-citation-score",
         ".grounded-evidence-summary-badge",
         ".grounded-evidence-summary-badge",
         ".grounded-evidence-summary-badge",

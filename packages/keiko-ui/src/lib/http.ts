@@ -72,12 +72,19 @@ export interface BffErrorEnvelope {
   };
 }
 
+export interface BffResponseMetadata {
+  readonly headers: Headers;
+  /** Monotonic timestamp when fetch yields headers, before reading the body. */
+  readonly receivedAtMs: number;
+}
+
 export interface BffFetchOptions<T> {
   /**
    * Contract validator for the route's success body (Step-01 Git validators). When supplied the
-   * parsed 2xx body is routed through it; a failure throws `ApiError('CONTRACT_VALIDATION_FAILED')`.
+   * parsed 2xx body and actual response metadata are routed through it; a failure throws
+   * `ApiError('CONTRACT_VALIDATION_FAILED')`.
    */
-  readonly validator?: (path: string, value: unknown) => T;
+  readonly validator?: (path: string, value: unknown, response: BffResponseMetadata) => T;
   /**
    * Message used when the non-2xx body is not a parseable error envelope. Defaults to the machine
    * `HTTP <status>` string. local-knowledge-api passes a friendly message (uiux-fix F033/C064).
@@ -161,6 +168,7 @@ async function performBffFetch<T>(
     ...init,
     headers: buildBffHeaders(init, correlationId),
   });
+  const receivedAtMs = performance.now();
 
   if (!res.ok) {
     const { code, message, envelope } = await parseBffErrorBody(res, opts);
@@ -200,7 +208,7 @@ async function performBffFetch<T>(
   recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
   if (opts?.validator === undefined) return value as T;
   try {
-    return opts.validator(path, value);
+    return opts.validator(path, value, { headers: res.headers, receivedAtMs });
   } catch (error) {
     // RB-6 (#2768): a contract-validation failure is as traceable as a non-2xx — the request DID
     // reach the server and produced a server-side record under this id. Attaching it here, at the
@@ -239,6 +247,42 @@ const HTTP_STATUS_ERROR_KINDS: Readonly<Record<number, ActivityLogErrorKind>> = 
   500: "internal",
 };
 
+// Serialized/streamed notices lack an HTTP status. Classify only explicit stable codes; keep
+// previously accepted generic aliases readable in stored errors. This map never parses prose.
+const BFF_CODE_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map([
+  ["GATEWAY_TIMEOUT", "timeout"],
+  ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
+  ["REQUEST_CANCELLED", "cancelled"],
+  ["GROUNDING_SCOPE_CHANGED", "conflict"],
+  ["PAYLOAD_TOO_LARGE", "invalid-request"],
+  ["INVALID_REQUEST", "invalid-request"],
+  ["VALIDATION_FAILED", "invalid-request"],
+  ["STATE_UNAVAILABLE", "unavailable"],
+  // The model budget must change before retrying these requests; neither is a transport outage.
+  ["GATEWAY_CONTEXT_OVERFLOW", "invalid-request"],
+  ["GATEWAY_OUTPUT_EXHAUSTED", "invalid-request"],
+  ["CONVERSATION_OVERSIZED_CONTEXT", "invalid-request"],
+  ["NO_MODEL", "unavailable"],
+  ["BAD_REQUEST", "invalid-request"],
+  ["CLARIFICATION_NEEDED", "invalid-request"],
+  ["NOT_FOUND", "invalid-request"],
+  ["DENIED", "authority-denied"],
+  ["FORBIDDEN", "authority-denied"],
+  ["UNAUTHORIZED", "authority-denied"],
+  ["CONFLICT", "conflict"],
+  ["RATE_LIMITED", "rate-limited"],
+  ["CANCELLED", "cancelled"],
+  ["TIMEOUT", "timeout"],
+  ["INTERNAL", "internal"],
+  ["UNAVAILABLE", "unavailable"],
+  ["GATEWAY_UNAVAILABLE", "unavailable"],
+]);
+
+/** Classifies serialized BFF notices without guessing from their human-readable message. */
+export function bffCodeErrorKind(code: string | undefined): ActivityLogErrorKind {
+  return code === undefined ? "unknown" : (BFF_CODE_ERROR_KINDS.get(code) ?? "unknown");
+}
+
 /**
  * The closed error kind of a failed BFF request, for evidence (#3557 review): an HTTP refusal by its
  * status, a cancellation, a transport failure. Never the error's message.
@@ -248,7 +292,7 @@ export function bffRequestErrorKind(error: unknown): ActivityLogErrorKind {
     const exact = HTTP_STATUS_ERROR_KINDS[error.status];
     if (exact !== undefined) return exact;
     if (error.status >= 500) return "unavailable";
-    return error.status >= 400 ? "invalid-request" : "unknown";
+    return error.status >= 400 ? "invalid-request" : bffCodeErrorKind(error.code);
   }
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
@@ -283,7 +327,8 @@ async function repairAndReplay<T>(
   opts: BffFetchOptions<T> | undefined,
 ): Promise<T> {
   const { repairLocalCodingAppSessionWithEvidence } = await import("./coding-app-session-client");
-  const repair = await repairLocalCodingAppSessionWithEvidence();
+  const repair = await repairLocalCodingAppSessionWithEvidence(init?.signal ?? undefined);
+  init?.signal?.throwIfAborted();
   const deniedCorrelationId = denied.correlationId ?? newClientCorrelationId();
   if (!repair.repaired) {
     reportSessionRepair(

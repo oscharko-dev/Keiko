@@ -19,6 +19,8 @@ export interface AnnotatedCandidate {
 
 export interface FilterOptions {
   readonly minScore: number;
+  readonly minScoreExemptPaths?: ReadonlySet<string>;
+  readonly generatedExemptPaths?: ReadonlySet<string>;
   readonly maxKept: number;
   readonly omitGenerated: boolean;
   readonly omitNearDuplicates: boolean;
@@ -37,6 +39,14 @@ export interface FilterResult {
   readonly omitted: readonly OmittedContextEntry[];
 }
 
+function isGeneratedOmission(entry: AnnotatedCandidate, options: FilterOptions): boolean {
+  return (
+    entry.generatedHint &&
+    options.omitGenerated &&
+    options.generatedExemptPaths?.has(entry.candidate.scopePath) !== true
+  );
+}
+
 function classifyReason(
   entry: AnnotatedCandidate,
   options: FilterOptions,
@@ -45,10 +55,13 @@ function classifyReason(
   if (preset !== undefined) {
     return preset;
   }
-  if (entry.generatedHint && options.omitGenerated) {
+  if (isGeneratedOmission(entry, options)) {
     return "generated";
   }
-  if (entry.candidate.score < options.minScore) {
+  if (
+    entry.candidate.score < options.minScore &&
+    options.minScoreExemptPaths?.has(entry.candidate.scopePath) !== true
+  ) {
     return "low-relevance";
   }
   if (entry.duplicate && options.omitNearDuplicates) {

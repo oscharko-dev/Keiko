@@ -77,6 +77,8 @@ import type {
   ServerLogSink,
 } from "./server-log.js";
 import { getServerLogger, resetServerLogger, shutdownServerLogging } from "./server-logger.js";
+import { classifyLine, sufficiencyLine } from "./reader/support-analyze.js";
+import { reportsProcessEvidenceLoss } from "./reader/support-analyze-sufficiency.js";
 
 // Derived from the producer (AGENTS.md section 7): a restated release or platform rule would stay
 // green if production's rule moved and the copy did not.
@@ -2676,13 +2678,38 @@ describe("activity log retention pins", () => {
       activePinCount: 1,
       unknownSpanSegmentCount: 0,
       completeness: "partial",
-      loss: "event-dropped",
+      loss: "none",
     });
     expect((marker?.protectedSegmentCount as number) + unprotectedCount).toBe(sealed.length);
     expect(marker?.protectedPinnedBytes as number).toBeLessThanOrEqual(12 * 1024);
     expect(marker?.unprotectedSeqSpan as number).toBeGreaterThanOrEqual(
       Math.min(...spans) * Math.max(0, unprotectedCount - 1),
     );
+  });
+
+  it("reports unprotected pin evidence without claiming retained process records were dropped", () => {
+    const env = storageEnv({ KEIKO_LOG_PIN_QUOTA_BYTES: "1" });
+    writeSegments(stateDir, env, 2);
+    const before = segmentFiles(stateDir, "sealed");
+    const now = Date.now();
+    pinActivityLogWindow(
+      stateDir,
+      {
+        scope: { kind: "window", fromMs: now - 3_600_000, toMs: now + 60_000 },
+        expiresAtMs: now + 86_400_000,
+        correlationId: "pin-protection-failure",
+      },
+      env,
+    );
+    closeFileServerLogSinks();
+    const marker = linesWithOp(stateDir, "activity-log.pin.quota-exhausted")[0];
+    expect(before.every((file) => existsSync(file.path))).toBe(true);
+    expect(marker?.unprotectedSegmentCount).toBeGreaterThan(0);
+    const classified = classifyLine(JSON.stringify(marker), 0, false, {});
+    expect(classified.kind).toBe("line");
+    if (classified.kind !== "line") throw new Error("expected registered pin protection evidence");
+    expect(reportsProcessEvidenceLoss(sufficiencyLine(classified.parsed))).toBe(false);
+    expect(marker).toMatchObject({ completeness: "partial", loss: "none" });
   });
 
   it("expires a pin, releases its segments, and removes an unreadable pin record", () => {

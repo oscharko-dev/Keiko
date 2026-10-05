@@ -145,6 +145,7 @@ const JOURNEY_OBSERVATION_FIELDS = {
 
 const JOURNEY_OBSERVATION_OPERATION = defineActivityLogOperation({
   ...JOURNEY_OBSERVATION_OPERATION_BASE,
+  diagnosticWhen: [{ field: "reason", values: ["provider-unavailable"] }],
   fields: {
     ...JOURNEY_OBSERVATION_FIELDS,
   },

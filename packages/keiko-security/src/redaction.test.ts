@@ -9,6 +9,53 @@ import {
 } from "./redaction.js";
 
 describe("redact", () => {
+  it.each(["+", "-", ".", "2026-10-"])("redacts URL credentials after the %s prefix", (prefix) => {
+    const input = `${prefix}https://user:private-pass@host/path`;
+    expect(redact(input)).toBe(`${prefix}https://[REDACTED]@host/path`);
+    expect(containsCredentialShape(input)).toBe(true);
+    expect(redact(`${prefix}https://private-token@host/path`)).toBe(
+      `${prefix}https://[REDACTED]@host/path`,
+    );
+    expect(redact(`${prefix}ssh://git@host/path`)).toBe(`${prefix}ssh://git@host/path`);
+  });
+
+  it("redacts a head-truncated private key through its closing boundary", () => {
+    const ending = ["-----", "END PRIVATE KEY-----"].join("");
+    expect(redact(`TruncatedPrivateBody\n${ending}\npublic tail`)).toBe("[REDACTED]\npublic tail");
+    expect(
+      redact(`TruncatedPrivateBody\r\n${ending}\r\npublic tail`, [], {
+        preserveSourceLineBreaks: true,
+      }),
+    ).toBe("[REDACTED]\r\n\r\npublic tail");
+  });
+
+  it("redacts an unterminated private-key body rather than leaving its contents", () => {
+    const header = ["-----", "BEGIN PRIVATE KEY-----"].join("");
+    const payload = "UnfinishedPrivateBody";
+    expect(redact(`${header}\n${payload}`)).toBe("[REDACTED]");
+  });
+
+  it("preserves arbitrarily long valid schemes while removing their credentials", () => {
+    const scheme = `${"safe-".repeat(500)}transport`;
+    expect(redact(`${scheme}://user:private-pass@host/path`)).toBe(
+      `${scheme}://[REDACTED]@host/path`,
+    );
+    const prose = `${"safe-".repeat(500)}transport without authority`;
+    expect(redact(prose)).toBe(prose);
+  });
+
+  it("handles long non-URL scheme-shaped text without quadratic backtracking", () => {
+    const input = "abcd-".repeat(13_108);
+    expect(redact(input)).toBe(input);
+  });
+
+  it("keeps the full two-MiB text boundary responsive for malformed headers and non-URLs", () => {
+    const header = ["-----", "BEGIN PRIVATE KEY-----\n"].join("");
+    expect(redact(header.repeat(Math.floor((2 * 1024 * 1024) / header.length)))).toBe("[REDACTED]");
+    const nonUrl = "abcd-".repeat(Math.floor((2 * 1024 * 1024) / 5));
+    expect(redact(nonUrl)).toBe(nonUrl);
+  });
+
   it("redacts a bearer token while keeping the scheme", () => {
     const token = ["sk-", "abc123DEF456ghi789jkl012mno345"].join("");
     const result = redact(`Authorization: Bearer ${token}`);

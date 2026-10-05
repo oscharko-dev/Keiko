@@ -27,18 +27,43 @@ export interface LineMatcher {
 /** Trusted workspace callers can request literal substring matching for an exact-text query. */
 export interface LiteralQueryInterpretation {
   readonly kind: "literal";
+  readonly terms?: readonly string[] | undefined;
+}
+
+// Bound literal target metadata independently of surrounding natural-language question text.
+const MAX_LITERAL_TARGET_CHARACTERS = 4096;
+
+function boundedLiteralTargets(terms: readonly string[]): readonly string[] {
+  const unique = new Set<string>();
+  let characters = 0;
+  for (const term of terms) {
+    if (term.length === 0)
+      throw new RepoSearchInvalidQueryError("literal targets must not be empty");
+    if (unique.has(term)) continue;
+    characters += term.length + (unique.size === 0 ? 0 : 1);
+    if (characters > MAX_LITERAL_TARGET_CHARACTERS)
+      throw new RepoSearchInvalidQueryError("literal targets too long");
+    unique.add(term);
+  }
+  if (unique.size === 0) throw new RepoSearchInvalidQueryError("literal targets must not be empty");
+  return [...unique];
 }
 
 export function fingerprintFor(
   query: RetrievalQuery,
   interpretation?: LiteralQueryInterpretation,
 ): string {
+  const literalTerms =
+    interpretation?.kind === "literal"
+      ? boundedLiteralTargets(interpretation.terms ?? [query.text])
+      : undefined;
   const canonical = JSON.stringify({
     kind: query.kind,
     text: query.text,
     caseSensitive: query.caseSensitive,
     maxResults: query.maxResults,
     ...(interpretation === undefined ? {} : { interpretation: interpretation.kind }),
+    ...(interpretation?.terms === undefined ? {} : { literalTerms }),
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
@@ -716,12 +741,16 @@ function buildExactSymbolMatcher(query: RetrievalQuery): LineMatcher {
   return buildLiteralMatcher(query);
 }
 
-function buildLiteralMatcher(query: RetrievalQuery): LineMatcher {
-  const needle = query.caseSensitive ? query.text : query.text.toLowerCase();
+function buildLiteralMatcher(
+  query: RetrievalQuery,
+  terms: readonly string[] = [query.text],
+): LineMatcher {
+  const targets = boundedLiteralTargets(terms);
+  const needles = targets.map((term) => (query.caseSensitive ? term : term.toLowerCase()));
   return {
     match: (line: string): number => {
       const haystack = query.caseSensitive ? line : line.toLowerCase();
-      return haystack.includes(needle) ? 1 : 0;
+      return needles.some((needle) => haystack.includes(needle)) ? 1 : 0;
     },
   };
 }
@@ -761,9 +790,11 @@ export function buildMatcher(
   interpretation?: LiteralQueryInterpretation,
 ): LineMatcher {
   if (interpretation?.kind === "literal") {
-    if (query.kind !== "exact-symbol")
+    const namedNaturalLanguage =
+      query.kind === "natural-language" && interpretation.terms !== undefined;
+    if (query.kind !== "exact-symbol" && !namedNaturalLanguage)
       throw new RepoSearchInvalidQueryError("literal interpretation requires exact-text query");
-    return buildLiteralMatcher(query);
+    return buildLiteralMatcher(query, interpretation.terms);
   }
   if (query.kind === "natural-language") {
     return buildNaturalLanguageMatcher(query);
@@ -777,28 +808,81 @@ export function buildMatcher(
   throw new RepoSearchInvalidQueryError(`unsupported query kind: ${query.kind}`);
 }
 
-// Anchored-glob compilation for findFiles. Supports `*`, `**`, `?`, and literal characters.
-// Brace expansion and extglob patterns are intentionally not supported.
-export function compileGlob(pattern: string, caseSensitive = true): RegExp {
-  let body = "";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern.charAt(i);
-    if (ch === "*" && pattern.charAt(i + 1) === "*") {
-      body += ".*";
-      i += pattern.charAt(i + 2) === "/" ? 3 : 2;
-      continue;
-    }
-    if (ch === "*") {
-      body += "[^/]*";
-    } else if (ch === "?") {
-      body += "[^/]";
-    } else if (/[.+^${}()|[\]\\]/.test(ch)) {
-      body += `\\${ch}`;
-    } else {
-      body += ch;
-    }
-    i += 1;
+// Anchored filename patterns support `*`, `**`, `?`, and literal characters. Each input
+// code point advances a finite set of pattern states exactly once. This avoids the exponential
+// backtracking created by concatenating otherwise simple wildcard regex fragments.
+export interface CompiledFilenameGlob {
+  readonly test: (path: string) => boolean;
+}
+
+interface GlobToken {
+  readonly repeat: boolean;
+  readonly accepts: (character: string) => boolean;
+}
+
+const SEGMENT_GLOB_TOKEN: GlobToken = {
+  repeat: true,
+  accepts: (character) => character !== "/",
+};
+const RECURSIVE_GLOB_TOKEN: GlobToken = {
+  repeat: true,
+  // Preserve the previous non-dotAll `**` behavior, including valid newline-containing paths.
+  accepts: (character) => !/[\n\r\u2028\u2029]/u.test(character),
+};
+
+function singleGlobToken(character: string, caseSensitive: boolean): GlobToken {
+  if (character === "*") return SEGMENT_GLOB_TOKEN;
+  if (character === "?") return { ...SEGMENT_GLOB_TOKEN, repeat: false };
+  if (caseSensitive) return { repeat: false, accepts: (value) => value === character };
+  // A single literal preserves JavaScript Unicode simple case folding without allowing any
+  // quantifier or alternative. Locale lowercasing would change Kelvin/long-s/Deseret semantics.
+  const escaped = character.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+  const literal = new RegExp(`^${escaped}$`, "iu");
+  return { repeat: false, accepts: (value) => literal.test(value) };
+}
+
+function filenameGlobTokens(pattern: string, caseSensitive: boolean): readonly GlobToken[] {
+  const characters = Array.from(pattern);
+  const tokens: GlobToken[] = [];
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index] ?? "";
+    if (character === "*" && characters[index + 1] === "*") {
+      tokens.push(RECURSIVE_GLOB_TOKEN);
+      index += characters[index + 2] === "/" ? 2 : 1;
+    } else tokens.push(singleGlobToken(character, caseSensitive));
   }
-  return new RegExp(`^${body}$`, caseSensitive ? "u" : "iu");
+  return tokens;
+}
+
+function advanceGlobStates(
+  tokens: readonly GlobToken[],
+  states: Uint8Array,
+  character: string,
+): void {
+  let previous = states[0];
+  states[0] = 0;
+  for (const [index, token] of tokens.entries()) {
+    const current = states[index + 1];
+    states[index + 1] = Number(
+      token.repeat
+        ? states[index] === 1 || (current === 1 && token.accepts(character))
+        : previous === 1 && token.accepts(character),
+    );
+    previous = current;
+  }
+}
+
+function matchesFilenameGlob(tokens: readonly GlobToken[], path: string): boolean {
+  const states = new Uint8Array(tokens.length + 1);
+  states[0] = 1;
+  for (const [index, token] of tokens.entries()) {
+    if (token.repeat) states[index + 1] = states[index] ?? 0;
+  }
+  for (const character of path) advanceGlobStates(tokens, states, character);
+  return states[tokens.length] === 1;
+}
+
+export function compileGlob(pattern: string, caseSensitive = true): CompiledFilenameGlob {
+  const tokens = filenameGlobTokens(pattern, caseSensitive);
+  return { test: (path) => matchesFilenameGlob(tokens, path) };
 }

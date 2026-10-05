@@ -4,18 +4,46 @@ import type {
   OmittedContextEntry,
   SelectedScope,
 } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
-const MAX_WORKSPACE_CANDIDATE_FILES = 12;
+export interface ContentEvidenceIdentity {
+  readonly stableId: string;
+  readonly queryFingerprint: string;
+}
+
+export function certifiedContentPaths(
+  atoms: readonly EvidenceAtom[],
+  identities: readonly ContentEvidenceIdentity[],
+): ReadonlySet<string> {
+  const certified = new Map(
+    identities.map((identity) => [identity.stableId, identity.queryFingerprint]),
+  );
+  return new Set(
+    atoms
+      .filter(
+        (atom) =>
+          ((atom.provenance.kind === "lexical-search" &&
+            atom.provenance.tool === "repo.searchText") ||
+            (atom.provenance.kind === "file-listing" &&
+              atom.provenance.tool === "repo.findFiles")) &&
+          atom.lineRange !== undefined &&
+          certified.get(atom.stableId) === atom.provenance.queryFingerprint,
+      )
+      .map((atom) => atom.scopePath),
+  );
+}
+
 const MIN_RELATIVE_CANDIDATE_SCORE = 0.55;
-const MAX_EVIDENCE_ATOMS_PER_FILE = 12;
-const TRACE_RANGE_SLOTS_PER_FILE = 4;
-const CONTEXT_RANGE_SLOTS_PER_FILE = 2;
 
 export interface GroundedCandidateSelectionInput {
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
   readonly scopeKind: SelectedScope["kind"];
-  readonly filesReadMax: number;
+  readonly filesReadMax: number | null;
+  readonly protectedContentPaths?: ReadonlySet<string>;
+  // Recorded by explicit target/implementation ordering, never inferred from array position.
+  readonly priorityPaths?: ReadonlySet<string>;
+  readonly pathOnlyPaths?: ReadonlySet<string>;
   readonly nowMs: number;
 }
 
@@ -25,52 +53,92 @@ export interface GroundedCandidateSelection {
 }
 
 function boundedFileLimit(input: GroundedCandidateSelectionInput): number {
-  const budgetLimit = Math.max(0, Math.floor(input.filesReadMax));
-  return input.scopeKind === "files"
-    ? budgetLimit
-    : Math.min(MAX_WORKSPACE_CANDIDATE_FILES, budgetLimit);
+  return input.filesReadMax === null
+    ? input.kept.length
+    : Math.max(0, Math.floor(input.filesReadMax));
 }
 
 function selectedWorkspaceCandidates(
-  kept: readonly CandidateFile[],
+  input: GroundedCandidateSelectionInput,
   limit: number,
+  relativeFloor: number | undefined,
 ): readonly CandidateFile[] {
-  const bestScore = kept[0]?.score;
-  if (bestScore === undefined || limit === 0) return [];
-  const relativeFloor = bestScore * MIN_RELATIVE_CANDIDATE_SCORE;
-  return kept.filter((candidate) => candidate.score >= relativeFloor).slice(0, limit);
+  if (relativeFloor === undefined || limit === 0) return [];
+  const priorities: CandidateFile[] = [];
+  const evidence: CandidateFile[] = [];
+  const paths: CandidateFile[] = [];
+  const remaining: CandidateFile[] = [];
+  for (const candidate of input.kept) {
+    if (input.priorityPaths?.has(candidate.scopePath) === true) priorities.push(candidate);
+    else if (clearsRelativeFloor(candidate, input, relativeFloor)) remaining.push(candidate);
+  }
+  for (const candidate of remaining) {
+    if (input.pathOnlyPaths?.has(candidate.scopePath) === true) paths.push(candidate);
+    else evidence.push(candidate);
+  }
+  return [...priorities, ...evidence, ...paths].slice(0, limit);
+}
+
+function clearsRelativeFloor(
+  candidate: CandidateFile,
+  input: GroundedCandidateSelectionInput,
+  relativeFloor: number,
+): boolean {
+  return (
+    candidate.score >= relativeFloor ||
+    input.protectedContentPaths?.has(candidate.scopePath) === true
+  );
+}
+
+export function pathOnlyEvidencePaths(atoms: readonly EvidenceAtom[]): ReadonlySet<string> {
+  return new Set(
+    [...atomsByPath(atoms)]
+      .filter(([, entries]) =>
+        entries.every(
+          (atom) => atom.lineRange === undefined && atom.provenance.kind === "file-listing",
+        ),
+      )
+      .map(([scopePath]) => scopePath),
+  );
+}
+
+function relativeScoreFloor(input: GroundedCandidateSelectionInput): number | undefined {
+  if (input.scopeKind === "files" || input.kept.length === 0) return undefined;
+  const strongest = input.kept.reduce((score, candidate) => Math.max(score, candidate.score), 0);
+  return strongest * MIN_RELATIVE_CANDIDATE_SCORE;
 }
 
 function selectionReasonFor(
   candidate: CandidateFile,
   selectedPaths: ReadonlySet<string>,
   relativeFloor: number | undefined,
+  input: GroundedCandidateSelectionInput,
 ): OmittedContextEntry["reason"] | undefined {
   if (selectedPaths.has(candidate.scopePath)) return undefined;
-  return relativeFloor !== undefined && candidate.score < relativeFloor
+  return relativeFloor !== undefined &&
+    candidate.score < relativeFloor &&
+    input.protectedContentPaths?.has(candidate.scopePath) !== true &&
+    input.priorityPaths?.has(candidate.scopePath) !== true
     ? "low-relevance"
     : "budget-exhausted";
 }
 
 function compareOmitted(a: OmittedContextEntry, b: OmittedContextEntry): number {
-  return a.scopePath.localeCompare(b.scopePath);
+  return compareStrings(a.scopePath, b.scopePath);
 }
 
 export function selectGroundedCandidateFiles(
   input: GroundedCandidateSelectionInput,
 ): GroundedCandidateSelection {
   const limit = boundedFileLimit(input);
+  const relativeFloor = relativeScoreFloor(input);
   const selected =
     input.scopeKind === "files"
       ? input.kept.slice(0, limit)
-      : selectedWorkspaceCandidates(input.kept, limit);
+      : selectedWorkspaceCandidates(input, limit, relativeFloor);
   const selectedPaths = new Set(selected.map((candidate) => candidate.scopePath));
-  const relativeFloor =
-    input.scopeKind === "files" || input.kept[0] === undefined
-      ? undefined
-      : input.kept[0].score * MIN_RELATIVE_CANDIDATE_SCORE;
   const newlyOmitted = input.kept.flatMap((candidate) => {
-    const reason = selectionReasonFor(candidate, selectedPaths, relativeFloor);
+    const reason = selectionReasonFor(candidate, selectedPaths, relativeFloor, input);
     return reason === undefined
       ? []
       : [{ scopePath: candidate.scopePath, reason, omittedAtMs: input.nowMs }];
@@ -88,6 +156,7 @@ function atomRangeKey(atom: EvidenceAtom): string {
 
 export function tracePriority(atom: EvidenceAtom): number {
   if (atom.provenance.tool === "discovered-symbol-definition") return 2;
+  if (atom.provenance.tool === "repo.symbolFileDiscovery" && atom.lineRange !== undefined) return 2;
   if (atom.provenance.tool === "structural-edge-target") return 1;
   return 0;
 }
@@ -118,34 +187,35 @@ function compareByScore(a: EvidenceAtom, b: EvidenceAtom): number {
   return b.score - a.score || rangeSpan(b) - rangeSpan(a) || a.stableId.localeCompare(b.stableId);
 }
 
-function compareByContextRange(a: EvidenceAtom, b: EvidenceAtom): number {
-  return rangeSpan(b) - rangeSpan(a) || compareByScore(a, b);
+function withoutRedundantDiscoveryHeaders(
+  atoms: readonly EvidenceAtom[],
+  preferLocatedDefinitions: boolean,
+): readonly EvidenceAtom[] {
+  if (!preferLocatedDefinitions) return atoms;
+  const locatedQueries = new Set(
+    atoms
+      .filter((atom) => atom.lineRange !== undefined && tracePriority(atom) === 2)
+      .map((atom) => atom.provenance.queryFingerprint),
+  );
+  return atoms.filter(
+    (atom) =>
+      !(
+        atom.lineRange === undefined &&
+        atom.provenance.kind === "file-listing" &&
+        atom.provenance.tool === "repo.findFiles" &&
+        locatedQueries.has(atom.provenance.queryFingerprint)
+      ),
+  );
 }
 
-function compareByTracePriority(a: EvidenceAtom, b: EvidenceAtom): number {
-  return tracePriority(b) - tracePriority(a) || compareByScore(a, b);
-}
-
-function selectAtomsForPath(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
-  const unique = deduplicateRanges(atoms);
-  const selected = new Map<string, EvidenceAtom>();
-  for (const atom of [...unique]
-    .filter((entry) => tracePriority(entry) > 0)
-    .sort(compareByTracePriority)
-    .slice(0, TRACE_RANGE_SLOTS_PER_FILE)) {
-    selected.set(atom.stableId, atom);
-  }
-  for (const atom of [...unique]
-    .sort(compareByContextRange)
-    .slice(0, CONTEXT_RANGE_SLOTS_PER_FILE)) {
-    if (selected.size >= MAX_EVIDENCE_ATOMS_PER_FILE) break;
-    selected.set(atom.stableId, atom);
-  }
-  for (const atom of [...unique].sort(compareByScore)) {
-    if (selected.size >= MAX_EVIDENCE_ATOMS_PER_FILE) break;
-    selected.set(atom.stableId, atom);
-  }
-  return [...deduplicateRanges([...selected.values()])].sort(compareByScore);
+function selectAtomsForPath(
+  atoms: readonly EvidenceAtom[],
+  preferLocatedDefinitions: boolean,
+): readonly EvidenceAtom[] {
+  const unique = deduplicateRanges(
+    withoutRedundantDiscoveryHeaders(atoms, preferLocatedDefinitions),
+  );
+  return [...unique].sort(compareByScore);
 }
 
 function atomsByPath(atoms: readonly EvidenceAtom[]): ReadonlyMap<string, readonly EvidenceAtom[]> {
@@ -162,11 +232,13 @@ export function selectGroundedEvidenceAtoms(
   atoms: readonly EvidenceAtom[],
   selectedPaths: ReadonlySet<string>,
   _scopeId: string,
+  preferLocatedDefinitions = false,
 ): readonly EvidenceAtom[] {
   const grouped = atomsByPath(atoms);
   const selected: EvidenceAtom[] = [];
   for (const scopePath of selectedPaths) {
-    selected.push(...selectAtomsForPath(grouped.get(scopePath) ?? []));
+    for (const atom of selectAtomsForPath(grouped.get(scopePath) ?? [], preferLocatedDefinitions))
+      selected.push(atom);
   }
   return selected;
 }

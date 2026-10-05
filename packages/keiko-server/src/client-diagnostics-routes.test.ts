@@ -132,6 +132,37 @@ describe("POST /api/diagnostics/client", () => {
     resetClientDiagnosticsIngestStateForTests();
   });
 
+  it.each([
+    "scope-refusal-restored",
+    "scope-refusal-skipped-owner",
+    "scope-refusal-skipped-draft",
+    "scope-refusal-skipped-unproven",
+  ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_REFUSED_DRAFT_CANARY",
+          clientTs: CLIENT_TS,
+          composerActivity,
+          correlationId: "scope-refusal-correlation",
+        }),
+      ),
+    );
+    const event = sink.events.find((entry) => entry.op === "client.composer.activity");
+    expect(event).toMatchObject({
+      level: "info",
+      correlationId: "scope-refusal-correlation",
+      extra: { activity: composerActivity, completeness: "complete", loss: "none" },
+    });
+    expectActivityLogProof(
+      "client.composer.activity.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_REFUSED_DRAFT_CANARY");
+  });
+
   it("projects routine Composer evidence separately and keeps code failure stages reconstructible", async () => {
     const sink = captureServerLog();
     for (let index = 0; index < 30; index += 1) {
@@ -1303,6 +1334,360 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it.each([
+    "restored",
+    "owned-elsewhere",
+    "released",
+    "blocked-ambiguous",
+    "fingerprint-absent",
+    "conflict-retried",
+    "ack-missing",
+    "acknowledged",
+    "ack-invalidated",
+    "automatic-suppressed",
+    "timeout-blocked",
+    "timeout-recovered",
+    "timeout-rejected",
+    "request-superseded",
+  ])(
+    "persists the closed Files ownership decision %s as routine causal evidence",
+    async (decision) => {
+      const sink = captureServerLog();
+      const filesScopeDecision = { decision };
+      expect(
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "Keiko Files scope ownership decision.",
+              clientTs: CLIENT_TS,
+              correlationId: "ui_scope-decision-0001",
+              filesScopeDecision,
+            }),
+          ),
+        ),
+      ).toEqual({ status: 204, body: null });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find((candidate) => candidate.op === "client.files-scope.decision");
+      if (event === undefined) throw new TypeError("Missing scope ownership decision evidence");
+      const record = expectActivityLogProof(
+        "client.files-scope.decision.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(record).toMatchObject({
+        level: "info",
+        correlationId: "ui_scope-decision-0001",
+        ...filesScopeDecision,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(record).not.toHaveProperty("errorKind");
+      expect(record).not.toHaveProperty("messageDigest");
+    },
+  );
+  it.each([
+    { decision: "restored", sourceCount: 3, candidateCount: 2, bindingFingerprint: "a".repeat(64) },
+    { decision: "released", sourceCount: 0 },
+    { decision: "ack-invalidated", candidateCount: 1 },
+  ])("persists producer-defined scope fields %j", async (filesScopeDecision) => {
+    const sink = captureServerLog();
+    const response = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "Keiko Files scope ownership decision.",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_scope-fields-0001",
+          filesScopeDecision,
+        }),
+      ),
+    );
+    expect(response.status).toBe(204);
+    const event = sink.events.find((record) => record.op === "client.files-scope.decision");
+    expect(
+      expectActivityLogProof(
+        "client.files-scope.decision.line",
+        formatActivityLogProofLine(event ?? {}),
+      ),
+    ).toMatchObject(filesScopeDecision);
+  });
+  it.each([
+    { decision: "restored", sourceCount: Number.MAX_SAFE_INTEGER },
+    { decision: "restored", sourceCount: 1, candidateCount: 2 },
+    { decision: "timeout-rejected", candidateCount: 1 },
+  ])("refuses impossible scope evidence before persistence %j", async (filesScopeDecision) => {
+    const sink = captureServerLog();
+    const response = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "Keiko Files scope ownership decision.",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_scope-fields-0001",
+          filesScopeDecision,
+        }),
+      ),
+    );
+    expect(response.status).toBe(400);
+    expect(sink.events.some((record) => record.op === "client.files-scope.decision")).toBe(false);
+    expect(sink.events.some((record) => record.op === "client.diagnostic.rejected")).toBe(true);
+  });
+  it.each(["files", "local-knowledge", "git-change"])(
+    "persists the refused %s grounding action under its own correlation and blocker parent",
+    async (mutationSurface) => {
+      const sink = captureServerLog();
+      const filesScopeDecision = { decision: "timeout-rejected", mutationSurface };
+      expect(
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "Keiko grounding mutation queue decision.",
+              clientTs: CLIENT_TS,
+              correlationId: "ui_queue-decision-0001",
+              parentCorrelationId: "ui_queue-blocker-0001",
+              filesScopeDecision,
+            }),
+          ),
+        ),
+      ).toEqual({ status: 204, body: null });
+      const event = sink.events.find((record) => record.op === "client.files-scope.decision");
+      expect(
+        expectActivityLogProof(
+          "client.files-scope.decision.line",
+          formatActivityLogProofLine(event ?? {}),
+        ),
+      ).toMatchObject({
+        ...filesScopeDecision,
+        correlationId: "ui_queue-decision-0001",
+        parentCorrelationId: "ui_queue-blocker-0001",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(event?.errorKind).toBeUndefined();
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    },
+  );
+  it("persists an exact queue recovery summary without a fabricated parent", async () => {
+    const sink = captureServerLog();
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko grounding mutation queue decision.",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_queue-blocker-0001",
+            filesScopeDecision: {
+              decision: "timeout-recovered",
+              mutationSurface: "files",
+              rejectionCount: 2,
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    const event = sink.events.find((record) => record.op === "client.files-scope.decision");
+    const record = expectActivityLogProof(
+      "client.files-scope.decision.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_queue-blocker-0001",
+      decision: "timeout-recovered",
+      mutationSurface: "files",
+      rejectionCount: 2,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("parentCorrelationId");
+    expect(record).not.toHaveProperty("errorKind");
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
+  it("keeps browser-declared artifact loss separate from loss of the routine diagnostic", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "Keiko support report prepared locally.",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_server-preparation-123",
+          supportReportPreparation: {
+            reportBytes: 1024,
+            evidenceScope: "server",
+            completeness: "partial",
+            loss: "event-dropped",
+          },
+        }),
+      ),
+    );
+    const event = sink.events.find((item) => item.op === "client.support-report.prepared");
+    expect(event?.extra).toMatchObject({
+      completeness: "complete",
+      loss: "none",
+      reportCompleteness: "partial",
+      reportLoss: "event-dropped",
+    });
+    const line = formatActivityLogProofLine(event ?? {});
+    const record = expectActivityLogProof("client.support-report.prepared.line", line);
+    expect(record).toMatchObject({ evidenceScope: "server", reportBytes: 1024 });
+    expect(record).not.toHaveProperty("availabilityReason");
+    expect(analyzeLogText(line).sufficiency.status).toBe("complete");
+  });
+  it("persists local producer cause evidence joined to the failed server request and selected error", async () => {
+    const sink = captureServerLog();
+    const frames = ["dist/ui/static/_next/static/chunks/customerapikey1234.js:1:2"];
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko local support report preparation failed.",
+            clientTs: CLIENT_TS,
+            correlationId: "report-server-attempt",
+            parentCorrelationId: "original-selected-error",
+            supportReportPreparation: {
+              outcome: "failed",
+              errorKind: "internal",
+              originalErrorKind: "unavailable",
+              durationMs: 12,
+              errorEvidence: { errorClass: "TypeError", frames, causeChain: ["RangeError"] },
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    const event = sink.events.find(
+      (item) => item.op === "client.support-report.preparation-failed",
+    );
+    const line = formatActivityLogProofLine(event ?? {});
+    expect(
+      expectActivityLogProof("client.support-report.preparation-failed.line", line),
+    ).toMatchObject({
+      correlationId: "report-server-attempt",
+      parentCorrelationId: "original-selected-error",
+      preparationErrorKind: "internal",
+      originalErrorKind: "unavailable",
+      durationMs: 12,
+      errorClass: "TypeError",
+      frames: redactLogFields({ frames })?.frames,
+      causeChain: ["RangeError"],
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(line).not.toContain("customerapikey");
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
+
+  it("persists failed local preparation as routine causal evidence without inventing an artifact", async () => {
+    const sink = captureServerLog();
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko local support report preparation failed.",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_support-local-failed-0001",
+            supportReportPreparation: {
+              outcome: "failed",
+              errorKind: "unavailable",
+              durationMs: 12,
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(sink.events.some((event) => event.op === "client.support-report.prepared")).toBe(false);
+    const event = sink.events.find(
+      (item) => item.op === "client.support-report.preparation-failed",
+    );
+    const record = expectActivityLogProof(
+      "client.support-report.preparation-failed.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_support-local-failed-0001",
+      preparationErrorKind: "unavailable",
+      durationMs: 12,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("reportBytes");
+    expect(record).not.toHaveProperty("errorKind");
+    expect(record).not.toHaveProperty("messageDigest");
+    expect(analyzeLogText(formatActivityLogProofLine(event ?? {})).sufficiency.status).toBe(
+      "complete",
+    );
+  });
+
+  it.each(["service-unavailable", "client-only-selected", "correlation-unavailable"] as const)(
+    "persists local report preparation as routine evidence without inventing a failure: %s",
+    async (availabilityReason) => {
+      const sink = captureServerLog();
+      const supportReportPreparation = {
+        reportBytes: 1024,
+        evidenceScope: "client-only",
+        completeness: "complete",
+        loss: "none",
+        availabilityReason,
+      };
+      expect(
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "Keiko support report prepared locally.",
+              clientTs: CLIENT_TS,
+              correlationId: "ui_support-preparation-0001",
+              supportReportPreparation,
+            }),
+          ),
+        ),
+      ).toEqual({ status: 204, body: null });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find(
+        (candidate) => candidate.op === "client.support-report.prepared",
+      );
+      const record = expectActivityLogProof(
+        "client.support-report.prepared.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        level: "info",
+        correlationId: "ui_support-preparation-0001",
+        ...supportReportPreparation,
+      });
+      expect(record).not.toHaveProperty("errorKind");
+      expect(record).not.toHaveProperty("messageDigest");
+    },
+  );
+
+  it("persists browser report initiation without claiming an OS save or creating a failure incident", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "Keiko support download initiated.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_support-download-0001",
+      supportReportDelivery: "manual",
+    });
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.support-report.download-started",
+    );
+    const record = expectActivityLogProof(
+      "client.support-report.download-started.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_support-download-0001",
+      deliveryMode: "manual",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(record).not.toHaveProperty("reportJson");
+    expect(analyzeLogText(formatActivityLogProofLine(event ?? {})).sufficiency.status).toBe(
+      "complete",
+    );
+  });
+
   // PR #3678 review: the read-aloud preparation keeps a bracketed path and drops grounded markers;
   // its counts land on their own line under the synthesis request's correlation.
   it("persists a read-aloud preparation as client.answer.speech-prepared", async () => {
@@ -1347,7 +1732,7 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
-    for (const focus of ["trigger", "search", "option"] as const) {
+    for (const focus of ["trigger", "search", "option", "menu"] as const) {
       const sink = captureServerLog();
       const body = JSON.stringify({
         message: `[keiko] select menu dismissed by Escape (focus=${focus})`,
@@ -1361,6 +1746,11 @@ describe("POST /api/diagnostics/client", () => {
         body: null,
       });
       expect(selectDismissedEvent(sink).extra).toMatchObject({ reason: "escape", focus });
+      const record = expectActivityLogProof(
+        "client.select.dismissed.line",
+        formatActivityLogProofLine(selectDismissedEvent(sink)),
+      );
+      expect(record).toMatchObject({ reason: "escape", focus });
     }
   });
 
@@ -2453,6 +2843,57 @@ describe("reviewed navigation and render evidence", () => {
       expect(analyzeLogText(encoded).sufficiency.status).toBe("complete");
     },
   );
+  it("persists a source-preview capability with only closed counts", async () => {
+    const sink = captureServerLog();
+    const body = {
+      kind: "stage",
+      stage: "files source preview",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 2,
+      navigationOutcome: "applied",
+      preview: { previewKind: "text", sourceTextBytesRead: 2048, canEdit: false },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    expect(sink.events.find((event) => event.op === "client.stage.settled")?.extra).toMatchObject({
+      stage: "files-source-preview",
+      previewKind: "text",
+      sourceTextBytesRead: 2048,
+      canEdit: false,
+    });
+  });
+  it.each(["too-large", "unsupported"] as const)(
+    "persists binary preview reason %s without path/body fields",
+    async (binaryReason) => {
+      const sink = captureServerLog();
+      const body = {
+        kind: "stage",
+        stage: "files source preview",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        navigationOutcome: "applied",
+        preview: { previewKind: "binary", binaryReason, sourceTextBytesRead: 0, canEdit: false },
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+      expect(sink.events.find((event) => event.op === "client.stage.settled")?.extra).toMatchObject(
+        { previewKind: "binary", binaryReason, sourceTextBytesRead: 0, canEdit: false },
+      );
+      expect(sink.lines().join("")).toContain(`"binaryReason":"${binaryReason}"`);
+      const event = sink.events.find((candidate) => candidate.op === "client.stage.settled");
+      const record = expectActivityLogProof(
+        "client.stage.settled.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        binaryReason,
+        previewKind: "binary",
+        sourceTextBytesRead: 0,
+        canEdit: false,
+      });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    },
+  );
   it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
     const sink = createActivityLogSink(stateDir, { level: "debug" });
@@ -2511,6 +2952,147 @@ describe("reviewed navigation and render evidence", () => {
       const events = clientDiagnosticEvents(sink);
       expect(events.map((event) => event.level)).toEqual(["error", "warn"]);
       expect(events[0]?.extra?.renderFailure).toBe(renderFailure);
+    },
+  );
+});
+
+describe("citation activation ingestion", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+  afterEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+    resetServerLogger();
+  });
+
+  it.each([
+    { rootCount: Number.MAX_SAFE_INTEGER, correlationId: "citation-action-123", outcome: "opened" },
+    { rootCount: 2, correlationId: undefined, outcome: "opened" },
+    { rootCount: 0, correlationId: "citation-action-123", outcome: "opened" },
+  ])("refuses impossible or unjoinable activation $rootCount/$correlationId", async (input) => {
+    const sink = captureServerLog();
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private-citation-customer-canary",
+          clientTs: CLIENT_TS,
+          correlationId: input.correlationId,
+          citationActivation: {
+            reason: "absent",
+            outcome: input.outcome,
+            rootCount: input.rootCount,
+            matchCount: 0,
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect(sink.events.some((event) => event.op === "client.citation.activated")).toBe(false);
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(true);
+    expect(sink.lines().join("\n")).not.toContain("private-citation-customer-canary");
+  });
+
+  it("retains a malformed identity after the human explicitly chooses its source", async () => {
+    const sink = captureServerLog();
+    const activation = { reason: "malformed", outcome: "opened", rootCount: 1, matchCount: 0 };
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "citation action",
+              clientTs: CLIENT_TS,
+              correlationId: "human-choice-123",
+              citationActivation: activation,
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(204);
+    const event = sink.events.find((candidate) => candidate.op === "client.citation.activated");
+    expect(
+      expectActivityLogProof(
+        "client.citation.activated.line",
+        formatActivityLogProofLine(event ?? {}),
+      ),
+    ).toMatchObject({
+      ...activation,
+      correlationId: "human-choice-123",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it.each(["opened", "open-refused", "picker-opened", "picker-dismissed", "refused"])(
+    "persists %s as routine citation evidence rather than a new failure incident",
+    async (outcome) => {
+      const sink = captureServerLog();
+      const activation = { reason: "absent", outcome, rootCount: 2, matchCount: 0 };
+      const body = JSON.stringify({
+        message: "[keiko] citation activation settled",
+        clientTs: CLIENT_TS,
+        correlationId: "ui_citation-activation-0001",
+        citationActivation: activation,
+      });
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find((candidate) => candidate.op === "client.citation.activated");
+      const record = expectActivityLogProof(
+        "client.citation.activated.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        ...activation,
+        correlationId: "ui_citation-activation-0001",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(event?.level).toBe("info");
+      expect(JSON.stringify(event)).not.toContain("citation activation settled");
+    },
+  );
+});
+
+describe("actual source reveal lifecycle", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+  it.each(["applied", "unavailable", "failed"])(
+    "persists a %s reveal without claiming another read",
+    async (navigationOutcome) => {
+      const sink = captureServerLog();
+      const base = {
+        kind: "stage",
+        stage: "files source reveal",
+        ordinal: 1,
+        correlationId: "source-reveal-attempt",
+        parentCorrelationId: "source-citation-action",
+      };
+      for (const phase of ["started", "settled"]) {
+        const body = {
+          ...base,
+          phase,
+          ...(phase === "settled" ? { durationMs: 2, navigationOutcome } : {}),
+        };
+        expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(
+          204,
+        );
+      }
+      const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+      expect(events).toHaveLength(2);
+      expect(events[1]).toMatchObject({
+        correlationId: base.correlationId,
+        parentCorrelationId: base.parentCorrelationId,
+        extra: { stage: "files-source-reveal", navigationOutcome },
+      });
+      expect(events[1]?.extra).not.toHaveProperty("sourceTextBytesRead");
+      const text = sink.lines().join("");
+      expect(text).toContain('"stage":"files-source-reveal"');
+      expect(text).toContain(`"navigationOutcome":"${navigationOutcome}"`);
+      expect(analyzeLogText(text).sufficiency.status).toBe("complete");
     },
   );
 });

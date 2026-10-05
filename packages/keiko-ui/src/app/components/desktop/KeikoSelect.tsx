@@ -14,6 +14,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import type { ClientSelectDismissalFocus } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate } from "@/lib/i18n";
 import styles from "./KeikoSelect.module.css";
@@ -21,8 +22,6 @@ import { Icons } from "./Icons";
 
 const SearchIcon = Icons.search;
 import { viewportOverlayPosition } from "./viewport-overlay";
-
-type EscapeFocusLocation = "trigger" | "search" | "option";
 
 type KeikoSelectOption = {
   readonly value: string;
@@ -99,6 +98,10 @@ const OVERFLOW_TOOLTIP_DELAY_MS = 1500;
 const OVERFLOW_TOOLTIP_EDGE_OFFSET_PX = 8;
 const OVERFLOW_TOOLTIP_VERTICAL_OFFSET_PX = 6;
 const SELECT_OPEN_EVENT = "keiko:select-open";
+
+function selectPortalRoot(anchor: HTMLElement | null): HTMLElement {
+  return anchor?.closest<HTMLDialogElement>("dialog[open]") ?? document.body;
+}
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
@@ -342,7 +345,7 @@ function OverflowOptionButton({
             >
               {option.label}
             </div>,
-            document.body,
+            selectPortalRoot(optionRef.current),
           )
         : null}
     </button>
@@ -469,8 +472,10 @@ function KeikoSelectMenu({
   menuRef,
   menuTitle,
   onCommit,
+  onKeyDownCapture,
   onOptionKeyDown,
   placeholder,
+  portalRoot,
   position,
   selectedIndex,
   sections,
@@ -488,8 +493,10 @@ function KeikoSelectMenu({
   readonly menuRef: RefObject<HTMLDivElement | null>;
   readonly menuTitle: string | undefined;
   readonly onCommit: (option: FlatOption) => void;
+  readonly onKeyDownCapture: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
   readonly placeholder: string | undefined;
+  readonly portalRoot: HTMLElement;
   readonly position: MenuPosition;
   readonly selectedIndex: number;
   readonly sections: readonly KeikoSelectSection[];
@@ -500,6 +507,7 @@ function KeikoSelectMenu({
   return createPortal(
     <div
       ref={menuRef}
+      onKeyDownCapture={onKeyDownCapture}
       className={[
         "ksel-menu",
         styles.cmpViewportMenu,
@@ -555,7 +563,7 @@ function KeikoSelectMenu({
         <KeikoSelectNoMatches search={search} visible={flatOptions.length === 0} />
       </div>
     </div>,
-    document.body,
+    portalRoot,
   );
 }
 
@@ -779,7 +787,10 @@ export default function KeikoSelect({
   // surface stays open is a changed product runtime behaviour with no other trace, so every call
   // here — always a genuinely open menu, since each caller is only reachable while `open` is true —
   // reports body-free evidence of the dismissal (PR #3625 review).
-  function consumeEscape(focus: EscapeFocusLocation, event: ReactKeyboardEvent<HTMLElement>): void {
+  function consumeEscape(
+    focus: ClientSelectDismissalFocus,
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): void {
     event.preventDefault();
     event.stopPropagation();
     closeMenu();
@@ -792,10 +803,6 @@ export default function KeikoSelect({
 
   function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
     if (disabled) return;
-    if (event.key === "Escape" && open) {
-      consumeEscape("trigger", event);
-      return;
-    }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       openMenu(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex(flatOptions));
@@ -808,16 +815,24 @@ export default function KeikoSelect({
     }
   }
 
-  function onOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void {
-    if (event.key === "Escape") {
+  function captureMenuEscape(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "Escape") return;
+    const target = event.target;
+    if (target === searchRef.current) {
+      consumeEscape("search", event);
+      return;
+    }
+    if (target instanceof Element && target.closest('[role="option"]') !== null) {
       consumeEscape("option", event);
       return;
     }
+    consumeEscape("menu", event);
+  }
+
+  function onOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void {
     if (event.key === "Tab") {
-      // The options portal to document.body, outside any containing dialog. On
-      // Tab we must both close the menu AND return focus to the trigger (which
-      // lives inside the dialog) and preventDefault, otherwise focus escapes the
-      // modal's focus trap into the page behind it (mirrors Escape/commit).
+      // Consume Tab and restore the trigger so modal focus containment and the
+      // select's existing dismissal behavior remain stable (mirrors Escape/commit).
       event.preventDefault();
       closeMenu();
       triggerRef.current?.focus();
@@ -851,9 +866,7 @@ export default function KeikoSelect({
   }
 
   function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "Escape") {
-      consumeEscape("search", event);
-    } else if (event.key === "ArrowDown") {
+    if (event.key === "ArrowDown") {
       event.preventDefault();
       const firstIndex = firstEnabledIndex(flatOptions);
       setActiveIndex(firstIndex);
@@ -907,8 +920,10 @@ export default function KeikoSelect({
         menuRef={menuRef}
         menuTitle={menuTitle}
         onCommit={commit}
+        onKeyDownCapture={captureMenuEscape}
         onOptionKeyDown={onOptionKeyDown}
         placeholder={placeholder}
+        portalRoot={selectPortalRoot(triggerRef.current)}
         position={position}
         selectedIndex={selectedIndex}
         sections={visibleSections}
@@ -953,6 +968,9 @@ export default function KeikoSelect({
           else openMenu();
         }}
         onKeyDown={onTriggerKeyDown}
+        onKeyDownCapture={(event) => {
+          if (open && event.key === "Escape") consumeEscape("trigger", event);
+        }}
         role="combobox"
         style={triggerStyle}
         type="button"

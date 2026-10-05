@@ -31,6 +31,39 @@ describe("GatewaySetupDialog", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
+  it("keeps protocol pointer and keyboard selection inside the active native modal", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<GatewaySetupDialog onCancel={onCancel} />);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("open");
+    const trigger = screen.getByRole("combobox", { name: /gateway endpoint style/i });
+    await user.click(trigger);
+    const option = screen.getByRole("option", { name: "OpenAI-compatible" });
+    // JSDOM does not enforce native modal inertness; the option must belong to its dialog.
+    expect(option.closest("dialog")).toBe(dialog);
+    await user.click(option);
+    expect(trigger).toHaveTextContent("OpenAI-compatible");
+    expect(trigger).toHaveFocus();
+    await user.type(screen.getByLabelText(/api token/i), "synthetic-token");
+    expect(trigger).toHaveTextContent("OpenAI-compatible");
+    await user.click(trigger);
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(trigger).toHaveTextContent("Azure deployment path");
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    trigger.focus();
+    await user.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute("open");
+    await user.keyboard("{Escape}");
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it("announces dialog semantics, focuses the first field, traps tab focus, and closes on Escape", async () => {
     const onCancel = vi.fn();
     const user = userEvent.setup();
@@ -664,7 +697,9 @@ describe("GatewaySetupDialog", () => {
       </I18nProvider>,
     );
 
-    await userEvent.click(screen.getByText("Audio- und Digital-Twin-Einstellungen aktualisieren"));
+    await userEvent.click(
+      await screen.findByText("Audio- und Digital-Twin-Einstellungen aktualisieren"),
+    );
     await userEvent.click(
       screen.getByText(/Erweitert: natives Realtime oder separate Audio-Verbindung/i),
     );

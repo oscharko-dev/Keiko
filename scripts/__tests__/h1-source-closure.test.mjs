@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath, URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectH1OwnedSourcePaths } from "../lib/h1-source-closure.mjs";
 import { GOVERNED_TOOL_CONTRACT_PINS } from "../lib/governed-tool-contract-pins.mjs";
@@ -23,6 +24,16 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("H1 runtime source ownership", () => {
+  // Like the browser-baseline integration proof, this parses the full repository runtime closure.
+  // V8 coverage plus parallel shard load can exceed the unit-test budget; keep a bounded 60s proof.
+  it("resolves the current producer closure after retiring its separate inventory", () => {
+    const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+    const paths = collectH1OwnedSourcePaths(repositoryRoot);
+    expect(paths).toContain("packages/keiko-workspace/src/repoSearchStream.ts");
+    expect(paths).toContain("packages/keiko-workspace/src/codingRepositorySearch.ts");
+    expect(paths).not.toContain("packages/keiko-workspace/src/codingRepositorySearchInventory.ts");
+  }, 60_000);
+
   it("automatically includes new transitive value exports and terminates import cycles", () => {
     write(entry, 'import "./new-helper.js"; import type { Shape } from "./type-only.js";');
     write("packages/keiko-contracts/src/new-helper.ts", 'export * from "./new-guard.js";');

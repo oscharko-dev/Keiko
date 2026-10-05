@@ -1,5 +1,9 @@
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -43,13 +47,17 @@ type BufferedActivityLog = ReturnType<typeof createBufferedServerLogSink>;
 
 function expectSearchLifecycle(
   activityLog: BufferedActivityLog,
-  terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
+  terminalOp:
+    | "search.connected-context.completed"
+    | "search.connected-context.failed"
+    | "search.connected-context.clarification-needed",
 ): void {
   expect(activityLog.events.map((event) => event.op)).toEqual(
     terminalOp === "search.connected-context.completed"
       ? [
           "search.connected-context.started",
           "search.connected-context.completion-details",
+          "search.connected-context.source-details",
           terminalOp,
         ]
       : ["search.connected-context.started", terminalOp],
@@ -175,43 +183,47 @@ describe("grounded orchestrator denied-root activity", () => {
       },
     };
 
-    await expect(
-      retrieveConnectedContextPack(fixtureInput(selectedRoot), {
-        answerer: ANSWERER_NOT_USED,
-        activityLog,
-        correlationId: CORRELATION_ID,
-        fs,
-        detectWorkspace: (): WorkspaceInfo => {
-          detectCalls += 1;
-          return fixtureWorkspace(fixtureRoot ?? "");
-        },
-      }),
-    ).rejects.toBeInstanceOf(ClarificationNeededError);
+    const retrieval = retrieveConnectedContextPack(fixtureInput(selectedRoot), {
+      answerer: ANSWERER_NOT_USED,
+      activityLog,
+      correlationId: CORRELATION_ID,
+      fs,
+      detectWorkspace: (): WorkspaceInfo => {
+        detectCalls += 1;
+        return fixtureWorkspace(fixtureRoot ?? "");
+      },
+    });
+    await expect(retrieval).rejects.toBeInstanceOf(ClarificationNeededError);
+    await expect(retrieval).rejects.toMatchObject({ clarification: { reason: "scope-invalid" } });
 
     expect(detectCalls).toBe(0);
     expect(realPathCalls).toBe(0);
-    expectSearchLifecycle(activityLog, "search.connected-context.failed");
-    expect(activityLog.events[1]).toMatchObject({
-      errorKind: "internal",
-      extra: {
-        failureKind: "ClarificationNeededError",
-        outcome: "failed",
-        retrievalPhase: "planning",
-      },
+    expectSearchLifecycle(activityLog, "search.connected-context.clarification-needed");
+    expect(activityLog.events[1]?.extra).toMatchObject({
+      clarificationReason: "scope-invalid",
+      anchorCount: 0,
+      plannedRingCount: 0,
+      completeness: "complete",
+      loss: "none",
     });
+    expectActivityLogProof(
+      "search.connected-context.clarification-needed.line",
+      formatActivityLogProofLine(activityLog.events[1] ?? {}),
+    );
   });
 
   it("fails closed before detection when exact root admission cannot resolve the root", async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-missing-root-log-"));
     const missingRoot = join(fixtureRoot, "missing");
     const activityLog = createBufferedServerLogSink();
+    const unavailable = Object.assign(new Error("root resolution failed"), { code: "ENOENT" });
     let detectCalls = 0;
     let realPathCalls = 0;
     const fs = {
       ...nodeWorkspaceFs,
       realPath: (): string => {
         realPathCalls += 1;
-        throw new Error("root resolution failed");
+        throw unavailable;
       },
     };
 
@@ -226,7 +238,9 @@ describe("grounded orchestrator denied-root activity", () => {
           return fixtureWorkspace(missingRoot);
         },
       }),
-    ).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+    ).rejects.toSatisfy(
+      (error: unknown) => error instanceof WorkspaceNotFoundError && error.cause === unavailable,
+    );
 
     expect(realPathCalls).toBe(1);
     expect(detectCalls).toBe(0);

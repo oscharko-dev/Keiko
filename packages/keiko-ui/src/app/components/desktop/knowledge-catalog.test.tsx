@@ -10,7 +10,7 @@ import {
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
-import { translate } from "@/lib/i18n";
+import { translateOptionalWidget as translate } from "@/lib/optional-widget-i18n";
 import { recordResponseCorrelationId } from "@/lib/bff-correlation";
 import {
   fetchCapsules,

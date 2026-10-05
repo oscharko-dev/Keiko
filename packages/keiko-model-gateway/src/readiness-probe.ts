@@ -36,6 +36,7 @@ function isStrictChatShapeRejectionStatus(status: number): boolean {
 }
 
 export interface GatewayReadinessChatCompletionRequest {
+  readonly signal?: AbortSignal;
   readonly config: GatewayConfig;
   readonly provider: ModelProviderConfig;
   readonly body: Readonly<Record<string, unknown>>;
@@ -82,6 +83,7 @@ const READINESS_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "gateway.readiness.compatibility-retry",
+  diagnosticWhen: [{ field: "rejectedStatus", positive: true }],
   category: "gateway",
   owner: "keiko-model-gateway",
   emitter: "readiness-probe.logReadinessCompatibilityRetry",
@@ -139,6 +141,7 @@ const READINESS_COMPATIBILITY_RETRY_SKIPPED_OPERATION = defineActivityLogOperati
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "gateway.readiness.compatibility-retry.skipped",
+  diagnosticWhen: [{ field: "rejectedStatus", positive: true }],
   category: "gateway",
   owner: "keiko-model-gateway",
   emitter: "readiness-probe.logReadinessFieldRetrySkipped",
@@ -402,6 +405,7 @@ function dispatchReadinessChatCompletion(
     body: readinessRequestBody(request, includeUsage),
     ...(fetchImpl !== undefined ? { fetchImpl } : {}),
     timeoutMs: provider.timeoutMs,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
     ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
     ...(config.egress !== undefined ? { egress: config.egress } : {}),
     ...(request.log === undefined ? {} : { log: request.log }),

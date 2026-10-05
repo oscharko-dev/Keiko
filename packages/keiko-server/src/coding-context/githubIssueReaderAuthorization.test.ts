@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -203,6 +204,10 @@ describe("isGitHubIssueReaderAuthorized (#3385)", () => {
         formatActivityLogProofLine(events[0] ?? {}),
       );
       expect(persisted).toMatchObject({ decision, authorized });
+      const retained = observedFailureQuery(events).events.filter(
+        (entry) => entry.parsed.view.op === "coding-context.github-authorization.evaluated",
+      );
+      expect(retained).toHaveLength(decision === "store-unavailable" ? 1 : 0);
     },
   );
 

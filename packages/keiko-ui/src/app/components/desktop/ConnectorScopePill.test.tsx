@@ -223,3 +223,15 @@ describe("ConnectorScopePill", () => {
     }
   });
 });
+
+it("sends the canonical scope baseline when disconnecting from a stale tab", async () => {
+  const identity = "gsi-v1:" + "a".repeat(64);
+  const chat = makeChat({
+    groundingScopeIdentity: identity,
+    localKnowledgeScope: makeCapsule("c1"),
+  });
+  const updateScopes = vi.fn().mockResolvedValue({ chat: makeChat() } satisfies ChatResponse);
+  render(<ConnectorScopePill chat={chat} updateScopes={updateScopes} labels={LABELS} />);
+  await userEvent.setup().click(screen.getByRole("button", { name: /^Disconnect/ }));
+  await waitFor(() => expect(updateScopes).toHaveBeenCalledWith(chat.id, null, identity));
+});

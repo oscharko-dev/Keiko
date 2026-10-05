@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { deflateSync, gunzipSync, inflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as reportContracts from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   supportIncidentPrivateProjection,
   type SupportReport,
@@ -19,12 +20,13 @@ import {
   type SupportLifetimeProvenance,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  prepareUnretainedUserReportDescriptor,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
 } from "../support-incident.js";
 import { resolveSupportIncident } from "../../../keiko-cli/src/support-incident.js";
-import { executeSupportQuery } from "../../../keiko-cli/src/support-query-cli.js";
+import { executeLocalSupportQuery } from "./support-local-query.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -46,12 +48,82 @@ import {
   sealSupportReport,
   supportReportDigest,
   supportReportTimeline,
+  type AnalyzedSupportReport,
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
+import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
+import { createClientOnlySupportReport } from "./support-desktop-report.js";
 
 import { supportReportPrivacyProjection } from "./support-report-privacy.js";
 import { findSupportRegistry } from "./support-registry.js";
 import { SUPPORT_RELEASE_REGISTRY_SNAPSHOTS } from "./support-registry-history.generated.js";
+
+vi.mock("@oscharko-dev/keiko-contracts/runtime/observability", async (importOriginal) => {
+  const actual = await importOriginal<typeof reportContracts>();
+  return { ...actual, serializeSupportReport: vi.fn(actual.serializeSupportReport) };
+});
+vi.mock("./support-report-json.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./support-report-json.js")>();
+  return { ...actual, parseCanonicalSupportJson: vi.fn(actual.parseCanonicalSupportJson) };
+});
+const actualReportContracts = await vi.importActual<typeof reportContracts>(
+  "@oscharko-dev/keiko-contracts/runtime/observability",
+);
+afterEach(() => {
+  vi.mocked(parseCanonicalSupportJson).mockClear();
+  vi.mocked(reportContracts.serializeSupportReport)
+    .mockReset()
+    .mockImplementation(actualReportContracts.serializeSupportReport);
+});
+
+describe("lazy validated support analysis", () => {
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-lazy-"));
+  });
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("validates once before resolving options and preserves the synchronous result", async () => {
+    const text = serializeSupportReport(fixture().report);
+    const options = { maxTimelineRecords: 1 };
+    const expected = analyzeSupportReport(text, options);
+    vi.mocked(parseCanonicalSupportJson).mockClear();
+    const resolveOptions = vi.fn((base: AnalyzedSupportReport) => {
+      expect(base.reportDigest).toBe(expected.reportDigest);
+      expect(base).not.toHaveProperty("seed");
+      return Promise.resolve(options);
+    });
+    const result = analyzeSupportReport(text, resolveOptions);
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).resolves.toEqual(expected);
+    expect(resolveOptions).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(parseCanonicalSupportJson)
+        .mock.calls.filter(([input]) => input === text.slice(0, -1)),
+    ).toHaveLength(1);
+  });
+
+  it("rejects malformed or tampered input before consulting lazy options", async () => {
+    const report = fixture().report;
+    const text = serializeSupportReport(report);
+    const resolveOptions = vi.fn(() => Promise.resolve({}));
+    for (const input of ["not-json\n", text.replace(report.integrity.reportDigest, "0".repeat(64))])
+      await expect(analyzeSupportReport(input, resolveOptions)).rejects.toBeInstanceOf(
+        SupportReportError,
+      );
+    expect(resolveOptions).not.toHaveBeenCalled();
+  });
+
+  it("propagates an asynchronous options failure without producing an artifact", async () => {
+    const text = serializeSupportReport(fixture().report);
+    const failure = new TypeError("test resolver failure");
+    const resolveOptions = vi.fn(() => Promise.reject(failure));
+    await expect(analyzeSupportReport(text, resolveOptions)).rejects.toBe(failure);
+    expect(resolveOptions).toHaveBeenCalledTimes(1);
+  });
+});
 
 const T0 = Date.UTC(2026, 8, 30, 12);
 const CORRELATION = "support-report-fixture-0001";
@@ -85,7 +157,7 @@ function fixture(
   const incident = supportIncidentPrivateProjection(
     resolveSupportIncident(record, supportIncidentSegmentFiles(stateDir, record), stateDir),
   );
-  const { result: query } = executeSupportQuery(
+  const { result: query } = executeLocalSupportQuery(
     stateDir,
     {
       kind: "closure",
@@ -101,12 +173,184 @@ function fixture(
   return { report: buildSupportReport(incident, query), query, incident };
 }
 
+function countBoundedFixture(
+  count: number,
+  withContext = false,
+): {
+  report: SupportReport;
+  query: SupportQueryResult;
+} {
+  const process = fixtureProcess(4242, "aabbccdd");
+  const lines = withContext
+    ? [
+        fixtureLine(process, T0, { op: "process.started" }),
+        fixtureLine(process, T0 + 1, { op: "cli.lifecycle.stop-requested" }),
+        fixtureLine(process, T0 + 2, { op: "cli.lifecycle.stop-requested" }),
+      ]
+    : [];
+  lines.push(
+    ...Array.from({ length: count }, () =>
+      fixtureLine(process, T0 + 3, {
+        op: "client.diagnostic",
+        correlationId: CORRELATION,
+      }),
+    ),
+  );
+  writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), lines);
+  const { result: query } = executeLocalSupportQuery(
+    stateDir,
+    {
+      kind: "closure",
+      queryClass: "correlation",
+      roots: [CORRELATION],
+      windows: [],
+      requiredClasses: { kind: "observed" },
+      unresolved: false,
+    },
+    DEFAULT_SUPPORT_QUERY_LIMITS,
+    { trigger: "export" },
+  );
+  const incident = supportIncidentPrivateProjection(
+    resolveSelectedSupportIncident(prepareUnretainedUserReportDescriptor(CORRELATION), query),
+  );
+  return { report: buildSupportReport(incident, query), query };
+}
+
 describe("canonical body-free offline report", () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-"));
   });
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  // This checks the complete 20,000-record report boundary, not a latency budget.
+  // Linux V8 coverage takes 26.5 s with 0.5 CPU/4 GiB; hosted workers exceeded the global
+  // 15 s watchdog. Keep every record and assertion while allowing slower workers to finish.
+  it("round trips the largest admitted closure with its anchor and fitting optional context", () => {
+    const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS - 2, true);
+    // The public analyzer validates the received bytes itself. Check its actual admitted records
+    // instead of parsing the same 20,000-record artifact once more before sending it to analysis.
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(report.evidence.recordCount).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(analyzed.analysis.evidence.supportedLineCount).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(analyzed.reportDigest).toBe(report.integrity.reportDigest);
+    expect(analyzed.selection).toMatchObject({
+      requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS - 1,
+      requiredBytes: query.truncation.requiredBytes,
+      reasons: expect.arrayContaining(["context-truncated"]) as unknown,
+    });
+    expect(analyzed.selection.reasons).not.toContain("report-budget-exceeded");
+  }, 45_000);
+
+  it("exports a count requirement separately from bytes for an oversized required closure", () => {
+    const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS + 1);
+    const parsed = parseSupportReport(serializeSupportReport(report));
+    expect(parsed.evidence.recordCount).toBe(0);
+    expect(parsed.selection).toMatchObject({
+      requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS + 1,
+      requiredBytes: query.truncation.requiredBytes,
+      reasons: expect.arrayContaining(["report-budget-exceeded"]) as unknown,
+    });
+    expect(parsed.selection.requiredBytes).toBeLessThan(MAX_SUPPORT_REPORT_EVENT_BYTES);
+  });
+
+  it.each([-1, 0.5, null, "20001"])(
+    "rejects an invalid required record count %s",
+    (requiredRecordCount) => {
+      const { report } = fixture();
+      const forged = sealSupportReport(
+        report.incident,
+        // @ts-expect-error Deliberately verify rejection of non-numeric wire values.
+        { ...report.selection, requiredRecordCount },
+        report.evidence,
+      );
+      expect(() => parseSupportReport(serializeSupportReport(forged))).toThrow(
+        expect.objectContaining({ reason: "unsafe-report" }),
+      );
+    },
+  );
+
+  it("accepts older reports whose selection predates the required record count", () => {
+    const { report } = fixture();
+    const { requiredRecordCount: _count, ...selection } = report.selection;
+    const legacy = sealSupportReport(report.incident, selection, report.evidence);
+    expect(parseSupportReport(serializeSupportReport(legacy)).selection).toEqual(selection);
+  });
+
+  it("refuses client-only availability headers attached to retained server evidence", () => {
+    const limited = parseSupportReport(
+      createClientOnlySupportReport(CORRELATION, "session-unavailable").reportJson,
+    );
+    const { report, query } = fixture();
+    const forged = sealSupportReport(limited.incident, report.selection, report.evidence);
+    expect(() => parseSupportReport(serializeSupportReport(forged))).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+    expect(() => buildSupportReport(limited.incident, query)).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+  });
+
+  it("refuses a resealed client-only report with manufactured selection requirements", () => {
+    const limited = parseSupportReport(
+      createClientOnlySupportReport(CORRELATION, "service-unavailable").reportJson,
+    );
+    expect(() =>
+      parseSupportReport(
+        serializeSupportReport(
+          sealSupportReport(
+            limited.incident,
+            { ...limited.selection, requiredBytes: 1 },
+            limited.evidence,
+          ),
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ reason: "unsafe-report" }));
+  });
+
+  it("does not label retained unrelated events omitted by canonical selection as process gaps", () => {
+    const selectedSequences = new Set([1821, 1854, 1870, 1890, 1892]);
+    const { report, query } = fixture(1, {}, undefined, (process) => {
+      process.seq = 1820;
+      return Array.from({ length: 72 }, (_, index) =>
+        fixtureLine(process, T0, {
+          op: "client.diagnostic",
+          correlationId: selectedSequences.has(1821 + index)
+            ? CORRELATION
+            : `unrelated-${String(index)}`,
+        }),
+      );
+    });
+    expect(
+      query.events
+        .filter((event) => event.parsed.view.pid === 4242)
+        .map((event) => event.parsed.view.seq),
+    ).toEqual([1821, 1854, 1870, 1890, 1892, 1893]);
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(analyzed.incident.loss).toBe("none");
+    expect(analyzed.selection.status).toBe("complete");
+    expect(
+      analyzed.analysis.evidence.sequenceAnomalies.filter((anomaly) => anomaly.pid === 4242),
+    ).toEqual([]);
+    expect(analyzed.analysis.warnings).not.toContainEqual(
+      expect.stringContaining("process sequence anomaly"),
+    );
+  });
+
+  it("does not report an intentionally unselected process prefix as a canonical report anomaly", () => {
+    const { report } = fixture(1, {}, undefined, (process) => {
+      process.seq = 339;
+      return [];
+    });
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(analyzed.selection.lifetimes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ pid: 4242, start: "absent" })]),
+    );
+    expect(analyzed.analysis.timelines[0]?.lines[0]?.seq).toBe(340);
+    expect(analyzed.analysis.evidence.sequenceAnomalies).not.toContainEqual(
+      expect.objectContaining({ kind: "gap", pid: 4242, previousSeq: 0, seq: 340 }),
+    );
   });
 
   it("roundtrips a production incident and query, preserving reconstruction and unknown authenticity", () => {
@@ -354,10 +598,53 @@ describe("canonical body-free offline report", () => {
     expect(Buffer.byteLength(serializeSupportReport(reduced))).toBeLessThan(fullBytes);
     // The report-budget metric names exactly what --max-bytes would have to allow.
     expect(reduced.selection.requiredBytes).toBe(fullBytes);
+    expect(query.truncation.requiredRecordCount).toBeGreaterThan(0);
+    expect(report.selection.requiredRecordCount).toBe(query.truncation.requiredRecordCount);
+    expect(reduced.selection.requiredRecordCount).toBe(query.truncation.requiredRecordCount);
     expect(reduced.evidence.recordCount).toBe(0);
     expect(reduced.selection.status).toBe("insufficient");
     expect(reduced.selection.reasons).toContain("report-budget-exceeded");
     expect(() => buildSupportReport(incident, query, 1)).toThrow(SupportReportError);
+  });
+
+  it.each(["normal", "fallback"] as const)(
+    "serializes each actual sealed envelope once on the %s path without changing bytes",
+    (path) => {
+      const { report, incident, query } = fixture();
+      const fullText = serializeSupportReport(report);
+      const maxBytes =
+        path === "normal" ? MAX_SUPPORT_REPORT_BYTES : Buffer.byteLength(fullText) - 1;
+      const expected = serializeSupportReport(buildSupportReport(incident, query, maxBytes));
+      const serialize = vi.mocked(reportContracts.serializeSupportReport).mockClear();
+      const rebuilt = buildSupportReport(incident, query, maxBytes);
+      expect(serialize).toHaveBeenCalledTimes(path === "normal" ? 1 : 2);
+      expect(serialize.mock.results[0]).toMatchObject({ type: "return", value: fullText });
+      expect(serialize.mock.results.at(-1)).toMatchObject({ type: "return", value: expected });
+      expect(actualReportContracts.serializeSupportReport(rebuilt)).toBe(expected);
+      expect(parseSupportReport(expected)).toEqual(rebuilt);
+      expect(Buffer.byteLength(expected)).toBeLessThanOrEqual(maxBytes);
+      if (path === "fallback") {
+        expect(expected).not.toBe(fullText);
+        expect(rebuilt.selection.requiredBytes).toBe(Buffer.byteLength(fullText));
+        expect(rebuilt.selection.status).toBe("insufficient");
+        expect(rebuilt.evidence.recordCount).toBe(0);
+      }
+    },
+  );
+
+  it("self-validates the exact admitted serialized bytes and rejects tampering", () => {
+    const { report, incident, query } = fixture();
+    const tampered = serializeSupportReport(report).replace('"sha256"', '"sha512"');
+    vi.mocked(reportContracts.serializeSupportReport).mockReturnValueOnce(tampered);
+    expect(() => buildSupportReport(incident, query)).toThrow(SupportReportError);
+  });
+
+  it("rechecks the replacement envelope against the final byte limit", () => {
+    const { incident, query } = fixture();
+    const serialize = vi.mocked(reportContracts.serializeSupportReport).mockClear();
+    expect(() => buildSupportReport(incident, query, 1)).toThrow("report-budget-exceeded");
+    expect(serialize).toHaveBeenCalledTimes(2);
+    expect(serialize.mock.results[0]).not.toEqual(serialize.mock.results[1]);
   });
 });
 
@@ -734,7 +1021,7 @@ function failureFixture(parent?: string): {
       stateDir,
     ),
   );
-  const { result: query } = executeSupportQuery(
+  const { result: query } = executeLocalSupportQuery(
     stateDir,
     {
       kind: "closure",
@@ -1286,7 +1573,7 @@ describe("received-report audit hardening (#3534)", () => {
         stateDir,
       ),
     );
-    const { result: query } = executeSupportQuery(
+    const { result: query } = executeLocalSupportQuery(
       stateDir,
       {
         kind: "closure",
@@ -1333,7 +1620,7 @@ describe("received-report audit hardening (#3534)", () => {
         stateDir,
       ),
     );
-    const { result: query } = executeSupportQuery(
+    const { result: query } = executeLocalSupportQuery(
       stateDir,
       {
         kind: "closure",
@@ -1421,7 +1708,7 @@ describe("received-report audit hardening (#3534)", () => {
         stateDir,
       ),
     );
-    const { result: query } = executeSupportQuery(
+    const { result: query } = executeLocalSupportQuery(
       stateDir,
       {
         kind: "closure",

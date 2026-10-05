@@ -297,6 +297,17 @@ describe("extractDocumentContext — happy path", () => {
     expect(result.context.truncated).toBe(false);
   });
 
+  it("rejects a BOM-prefixed binary in the document probe before extraction", async () => {
+    const path = "bom-binary.txt";
+    const result = await extractDocumentContext(
+      binaryFs(`${ROOT}/${path}`, Buffer.from("\uFEFF" + "\0".repeat(5))),
+      ROOT,
+      path,
+      fullBudget(),
+    );
+    expect(result).toMatchObject({ ok: false, failure: { kind: "binary-file" } });
+  });
+
   it("extracts UTF-16LE text when a BOM is present", async () => {
     const text = "class Order {}\n";
     const fs = binaryFs(`${ROOT}/order.ts`, utf16Bytes(text, "le"));

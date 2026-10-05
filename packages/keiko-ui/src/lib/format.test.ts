@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   costClassLabel,
   formatBytes,
@@ -15,6 +15,46 @@ import {
 } from "./format";
 
 describe("format presenters", () => {
+  it("formats duration decimals using the selected locale without changing legacy presenters", () => {
+    expect(formatMs(1812, "de")).toBe("1,8 s");
+    expect(formatMs(1812, "en")).toBe("1.8 s");
+    expect(formatMs(1812)).toBe("1.8 s");
+    expect(formatMs(60000000, "de")).toBe("1000m 0s");
+  });
+
+  it.each([undefined, "en", "de"])(
+    "carries rounded durations across unit boundaries in %s",
+    (locale) => {
+      expect(formatMs(999.49, locale)).toBe("999 ms");
+      expect(formatMs(999.5, locale)).toBe(locale === "de" ? "1,0 s" : "1.0 s");
+      expect(formatMs(59_949, locale)).toBe(locale === "de" ? "59,9 s" : "59.9 s");
+      for (const ms of [59_950, 59_970, 59_999, 60_000]) {
+        expect(formatMs(ms, locale)).toBe("1m 0s");
+      }
+      expect(formatMs(119_950, locale)).toBe("2m 0s");
+    },
+  );
+
+  it.each([undefined, "en", "de"])("uses whole milliseconds in %s", (locale) => {
+    expect(formatMs(12.3456, locale)).toBe("12 ms");
+    expect(formatMs(12.5, locale)).toBe("13 ms");
+  });
+
+  it("reuses one decimal formatter for byte and duration rows", ({ onTestFinished }) => {
+    const NumberFormat = Intl.NumberFormat;
+    const construct = vi
+      .spyOn(Intl, "NumberFormat")
+      .mockImplementation(function (locales, options) {
+        return new NumberFormat(locales, options);
+      });
+    onTestFinished(() => construct.mockRestore());
+    expect(formatBytes(1536, "fr-CA")).toBe("1,5 KB");
+    expect(formatMs(1812, "fr-CA")).toBe("1,8 s");
+    expect(formatBytes(2560, "fr-CA")).toBe("2,5 KB");
+    expect(formatMs(2812, "fr-CA")).toBe("2,8 s");
+    expect(construct).toHaveBeenCalledTimes(1);
+  });
+
   it("formats byte and token counts for compact UI badges", () => {
     expect(formatBytes(999)).toBe("999 B");
     expect(formatBytes(1536)).toBe("1.5 KB");
@@ -34,7 +74,7 @@ describe("format presenters", () => {
 
   it("uses the requested locale for decimal separators", () => {
     expect(formatBytes(1536, "de-DE")).toBe("1,5 KB");
-    expect(formatBytes(1024 ** 3, "de-DE")).toBe("1 GB");
+    expect(formatBytes(1024 ** 3, "de-DE")).toBe("1,0 GB");
   });
 
   it("formats bytes with higher precision for file size chips", () => {

@@ -292,7 +292,8 @@ function repositorySearchSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.repo.search",
     alias: "keiko_repository_search",
     description:
-      "Search tracked workspace text. Choose lexical (keywords), literal (exact text), regex " +
+      "Recursively search eligible text in Git repositories and ordinary folders. " +
+      "Choose lexical (keywords), literal (exact text), regex " +
       "(bounded pattern), or symbol (exact identifier). Results contain bounded excerpts with " +
       "path and line range; use a returned path/startLine/endLine with keiko_workspace_read.",
     inputSchema: managedObjectSchema(
@@ -329,6 +330,7 @@ function repositorySearchSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-repository-search-port",
+    maxDurationMs: DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
   };
 }
 

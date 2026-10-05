@@ -4559,7 +4559,7 @@ function cacheFingerprintFor(
   return JSON.stringify({
     root: scope.workspace.root,
     scope: scope.relativePaths,
-    maxFilesScanned: limits.maxFilesScanned,
+    maxFilesScanned: limits.maxFilesScanned ?? 2048,
     maxBytesPerFileScanned: limits.maxBytesPerFileScanned,
     codeIndexMaxSourceBytes: CODE_INDEX_MAX_SOURCE_BYTES,
     candidateLimitReached,
@@ -4828,7 +4828,7 @@ export function buildCodeIntelligenceIndexFromCandidates(
   const metadataInputs = candidateSet.files.filter(
     (file) => !isIndexable(file.relativePath) && isImportResolverMetadataPath(file.relativePath),
   );
-  const fileBudget = Math.max(0, limits.maxFilesScanned);
+  const fileBudget = Math.max(0, limits.maxFilesScanned ?? 2048);
   const metadataCapacity = sourceInputs.length === 0 ? fileBudget : Math.floor(fileBudget / 2);
   const guaranteedSourceCapacity = fileBudget - metadataCapacity;
   const rankedMetadata = rankResolverMetadata(

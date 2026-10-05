@@ -316,6 +316,7 @@ const BATCH_COMPLETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-local-knowledge",
   emitter: "indexing/embedding-activity-log.emitEmbeddingActivity",
   fields: CLOSING_COMPLETED_FIELD_CONTRACTS,
+  diagnosticWhen: [{ field: "errorCount", positive: true }],
   causal: "none",
   lifecycle: "end",
   analyzerProjection: "timeline",

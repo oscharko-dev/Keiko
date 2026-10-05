@@ -59,7 +59,8 @@ import {
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -468,6 +469,29 @@ function contextOversizedMessage(error: unknown): string {
     overflow.correlationId = error.correlationId;
   }
   return formatUserError(overflow, CONTEXT_OVERSIZED_USER_MESSAGE);
+}
+
+const EXPECTED_CHAT_REFUSALS = new Set([
+  "CHAT_TURN_IN_PROGRESS",
+  "CHAT_CLOSED",
+  "GROUNDING_SCOPE_CHANGED",
+  "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+]);
+
+interface StreamFailureContext {
+  kind: "other" | "sse-error";
+  correlationId: string;
+}
+
+function retainStreamFailure(error: unknown, context: StreamFailureContext): void {
+  if (error instanceof ApiError && EXPECTED_CHAT_REFUSALS.has(error.code)) return;
+  const stalled = error instanceof ApiError && error.code === "DESKTOP_CHAT_STREAM_STALLED";
+  reportClientDiagnostic(clientErrorSummary(error), {
+    kind: context.kind,
+    correlationId: correlationIdOf(error) ?? context.correlationId,
+    errorKind: stalled ? "timeout" : bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 function errorMessage(error: unknown): string {
@@ -948,6 +972,8 @@ interface FailedSendOutcome {
   readonly permanentFailure?: true;
   readonly identityConflict?: true;
   readonly scopeChanged?: true;
+  readonly scopeChangeStatus?: number;
+  readonly correlationId?: string | undefined;
   readonly chatClosed?: true;
 }
 
@@ -2283,36 +2309,37 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
 // closing over hook state, matching the module-scope helpers above.
 function handleStreamUngroundedTransportFailure(
   caught: unknown,
+  context: StreamFailureContext,
   setError: Dispatch<SetStateAction<string | undefined>>,
   resolve: (outcome: SendAttemptOutcome) => void,
 ): void {
-  // A stalled stream leaves no server-side failure line of its own: record it body-free so the
-  // Activity Log shows why the turn stopped (field report 1.1.13).
-  if (caught instanceof ApiError && caught.code === "DESKTOP_CHAT_STREAM_STALLED") {
-    reportClientDiagnostic("[keiko] chat stream stalled: no byte within the idle limit", {
-      kind: "sse-error",
-      errorKind: "timeout",
-      correlationId: caught.correlationId,
-    });
-  }
-  setError(errorMessage(caught));
-  resolve({ status: "failed" });
+  const failure = canonicalTurnInProgressFailure(caught);
+  retainStreamFailure(caught, context);
+  if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
+  resolve(failure);
 }
 
 function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
-  if (error instanceof ApiError && error.code === "CHAT_TURN_IN_PROGRESS") {
+  if (!(error instanceof ApiError)) return { status: "failed" };
+  if (error.code === "CHAT_TURN_IN_PROGRESS") {
     return { status: "failed", canonicalTurnInProgress: true };
   }
-  if (error instanceof ApiError && error.code === "CHAT_TURN_IDEMPOTENCY_CONFLICT") {
+  if (error.code === "CHAT_TURN_IDEMPOTENCY_CONFLICT") {
     return { status: "failed", permanentFailure: true, identityConflict: true };
   }
-  if (error instanceof ApiError && error.code === "GROUNDING_SCOPE_CHANGED") {
-    return { status: "failed", permanentFailure: true, scopeChanged: true };
+  if (error.code === "GROUNDING_SCOPE_CHANGED") {
+    return {
+      status: "failed",
+      permanentFailure: true,
+      scopeChanged: true,
+      scopeChangeStatus: error.status,
+      correlationId: error.correlationId,
+    };
   }
-  if (error instanceof ApiError && error.code === "CHAT_CLOSED") {
+  if (error.code === "CHAT_CLOSED") {
     return { status: "failed", permanentFailure: true, chatClosed: true };
   }
-  return error instanceof ApiError && [400, 404, 413, 422].includes(error.status)
+  return [400, 404, 413, 422].includes(error.status)
     ? { status: "failed", permanentFailure: true }
     : { status: "failed" };
 }
@@ -2383,6 +2410,27 @@ function resolveSendMessageAdmission(input: {
   return { kind: "accepted", canonicalTarget, chat, project, content, modelId };
 }
 
+function nonRetryableFailure(userPersisted: boolean): SendMessageOutcome {
+  return userPersisted
+    ? { status: "failed", retryable: false, userPersisted: true }
+    : { status: "failed", retryable: false };
+}
+
+function terminalFailureRefusal(
+  terminal: FailedSendOutcome,
+  persistence: UserPersistenceProof,
+  canonicalTarget: boolean,
+): SendMessageOutcome | undefined {
+  if (terminal.scopeChanged === true) {
+    return nonRetryableFailure(canonicalTarget || persistence === "persisted");
+  }
+  if (!canonicalTarget) return undefined;
+  if (terminal.chatClosed === true) return { status: "failed", suspend: true };
+  return terminal.permanentFailure === true
+    ? nonRetryableFailure(persistence === "persisted")
+    : undefined;
+}
+
 function settledSendMessageOutcome(input: {
   readonly settled: SendAttemptOutcome;
   readonly terminal: SendAttemptOutcome;
@@ -2397,16 +2445,9 @@ function settledSendMessageOutcome(input: {
       ? { status: "cancelled", userPersisted, interrupted: true }
       : { status: "cancelled", userPersisted };
   }
-  const canonicalFailure =
-    settled.status === "failed" && terminal.status === "failed" && canonicalTarget !== undefined;
-  if (canonicalFailure && terminal.scopeChanged === true) {
-    return { status: "failed", retryable: false, userPersisted: true };
-  }
-  if (canonicalFailure && terminal.chatClosed === true) return { status: "failed", suspend: true };
-  if (canonicalFailure && terminal.permanentFailure === true) {
-    return persistence === "persisted"
-      ? { status: "failed", retryable: false, userPersisted: true }
-      : { status: "failed", retryable: false };
+  if (settled.status === "failed" && terminal.status === "failed") {
+    const refusal = terminalFailureRefusal(terminal, persistence, canonicalTarget !== undefined);
+    if (refusal !== undefined) return refusal;
   }
   if (settled.status === "failed" && persistence === "persisted") {
     return { status: "in-progress" };
@@ -2468,6 +2509,7 @@ interface FailedSendPresentation {
 interface CanonicalTurnReconciliation {
   readonly persistence: UserPersistenceProof;
   readonly completedAssistantMessageId?: string;
+  readonly failedCanonicalTurn?: boolean | undefined;
 }
 
 interface SendAttemptSettlementRequest {
@@ -2483,6 +2525,57 @@ interface SendAttemptSettlementRequest {
 interface SettledSendAttempt {
   readonly settled: SendAttemptOutcome;
   readonly persistence: UserPersistenceProof;
+  readonly failedCanonicalTurn?: boolean | undefined;
+}
+
+interface TypedDraftRecovery {
+  readonly failedCanonicalTurn?: boolean | undefined;
+  readonly terminal: SendAttemptOutcome;
+  readonly persistence: UserPersistenceProof;
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly signal: AbortSignal;
+  readonly draftRevision: number | undefined;
+  readonly text: string;
+}
+
+function isScopeChangeRefusal(terminal: SendAttemptOutcome): terminal is FailedSendOutcome {
+  return (
+    terminal.status === "failed" &&
+    terminal.scopeChanged === true &&
+    terminal.scopeChangeStatus === 409
+  );
+}
+
+function isRecoverableScopeRefusal(input: TypedDraftRecovery): boolean {
+  return (
+    input.terminal.status === "failed" &&
+    input.terminal.scopeChanged === true &&
+    input.terminal.scopeChangeStatus === 409 &&
+    (input.persistence === "missing" || input.failedCanonicalTurn === true)
+  );
+}
+
+async function refreshScopeRefusedChat(
+  input: TypedDraftRecovery,
+  correlationId: string,
+): Promise<Chat | undefined> {
+  try {
+    const payload = await fetchChats(input.projectPath, correlationId, input.chatId);
+    return payload.chats.find((chat) => chat.id === input.chatId);
+  } catch (error) {
+    reportClientDiagnostic("Scope-refused chat refresh failed.", {
+      correlationId,
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return undefined;
+  }
+}
+
+function clearsComposerDraft(options: SendMessageOptions | undefined): boolean {
+  return options?.text === undefined || options.clearDraftOnAdmission === true;
 }
 
 function failedSendPresentation(
@@ -2557,7 +2650,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
     ChatMessage | undefined
   >();
-  const [draft, setDraft] = useState("");
+  const [draftState, setDraftState] = useState("");
+  const draftRevisionRef = useRef(0);
+  const setDraft = useCallback((value: string): void => {
+    draftRevisionRef.current += 1;
+    setDraftState(value);
+  }, []);
   const [loading, setLoading] = useState(true);
   // Issue #152 — lifecycle is the source of truth; `sending` is derived.
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
@@ -2768,7 +2866,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const resetComposerForConversationSwitch = useCallback((): void => {
     setDraft("");
     clearPendingAttachments();
-  }, [clearPendingAttachments]);
+  }, [clearPendingAttachments, setDraft]);
 
   // Issue #148 — extract bounded text from the staged DOCUMENT attachments for the send body.
   // Images are excluded here (they stay on the metadata-only attachments path). A document with
@@ -2970,6 +3068,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ? "persisted"
           : "missing";
         const assistant = exactCanonicalAssistant(payload.messages, canonicalTurnRef);
+        const exactUser = payload.messages.find((message) =>
+          isExactCanonicalUserMessage(message, canonicalTurnRef),
+        );
+        const failedCanonicalTurn =
+          assistant === undefined &&
+          (exactUser?.turnState === "failed" || exactUser?.turnState === "cancelled");
         if (
           mountedRef.current &&
           activeChatIdRef.current === chatId &&
@@ -2995,6 +3099,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
         return {
           persistence,
+          failedCanonicalTurn,
           ...(assistant === undefined ? {} : { completedAssistantMessageId: assistant.id }),
         };
       } catch {
@@ -3484,6 +3589,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       optimisticId: string,
       signal: AbortSignal,
       resolve: (outcome: SendAttemptOutcome) => void,
+      context: StreamFailureContext,
     ): import("@/lib/api").StreamHandlers => {
       let statusFlippedToStreaming = false;
       // GEN-PERF-CHAT-007 — coalesce streamed token deltas. Each onToken appends to a buffer and
@@ -3513,6 +3619,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         rafHandle = null;
       };
       return {
+        onStarted: (correlationId): void => {
+          context.kind = "sse-error";
+          context.correlationId = correlationId;
+        },
         onToken: (text: string): void => {
           if (isSupersededOrAborted(chatId, signal)) return;
           if (!statusFlippedToStreaming) {
@@ -3575,6 +3685,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           // formatUserError can surface it as a copyable support id.
           const apiError = new ApiError(code, message, 0);
           if (correlationId !== undefined) apiError.correlationId = correlationId;
+          retainStreamFailure(apiError, { ...context, kind: "sse-error" });
           setError(errorMessage(apiError));
           removeTempMessage(tempAssistantId);
           resolve({ status: "failed" });
@@ -3635,32 +3746,38 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
       };
       return new Promise<SendAttemptOutcome>((resolve, reject) => {
+        const context: StreamFailureContext = {
+          kind: "other",
+          correlationId: request.correlationId ?? newClientCorrelationId(),
+        };
         const handlers = buildStreamHandlers(
           chat.id,
           tempAssistantId,
           optimisticId,
           signal,
           resolve,
+          context,
         );
-        sendDesktopChatStream(requestBody, signal, handlers).catch((error_: unknown): void => {
-          removeTempMessage(tempAssistantId);
-          if (error_ instanceof StreamingUnavailableError) {
-            // Pre-stream failure (e.g. STREAMING_UNSUPPORTED, or a JSON error before any SSE
-            // header). Reject so sendUngrounded falls back to the buffered path instead of
-            // surfacing a hard failure to the user.
-            reject(error_);
-          } else if (error_ instanceof DOMException && error_.name === "AbortError") {
-            resolve({ status: "cancelled" });
-          } else if (isSupersededOrAborted(chat.id, signal)) {
-            resolve({ status: "cancelled" });
-          } else {
-            // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
-            // UI does not silently swallow the failure. The server has already persisted the
-            // user message at this point; removing it here is UI-only — it reappears on reload,
-            // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
-            handleStreamUngroundedTransportFailure(error_, setError, resolve);
-          }
-        });
+        sendDesktopChatStream(requestBody, signal, handlers, context.correlationId).catch(
+          (error_: unknown): void => {
+            removeTempMessage(tempAssistantId);
+            if (error_ instanceof StreamingUnavailableError) {
+              // Only an explicit unsupported-stream capability permits buffered replay.
+              // Preserve other server refusals for canonical classification below.
+              reject(error_);
+            } else if (error_ instanceof DOMException && error_.name === "AbortError") {
+              resolve({ status: "cancelled" });
+            } else if (isSupersededOrAborted(chat.id, signal)) {
+              resolve({ status: "cancelled" });
+            } else {
+              // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
+              // UI does not silently swallow the failure. The server has already persisted the
+              // user message at this point; removing it here is UI-only — it reappears on reload,
+              // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
+              handleStreamUngroundedTransportFailure(error_, context, setError, resolve);
+            }
+          },
+        );
       });
     },
     [buildStreamHandlers, removeTempMessage],
@@ -3906,7 +4023,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         reconciliation.persistence !== "persisted" ||
         reconciliation.completedAssistantMessageId === undefined
       ) {
-        return { settled, persistence };
+        return { settled, persistence, failedCanonicalTurn: reconciliation.failedCanonicalTurn };
       }
       settled = {
         status: "completed",
@@ -3998,11 +4115,75 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // should call cancelSend.
   const cancelGrounded = cancelSend;
 
+  const clearAdmittedDraft = useCallback(
+    (
+      options: SendMessageOptions | undefined,
+      canonicalTarget: CanonicalVoiceSendTarget | undefined,
+    ): number | undefined => {
+      if (!clearsComposerDraft(options)) return undefined;
+      setDraft("");
+      return canonicalTarget === undefined ? draftRevisionRef.current : undefined;
+    },
+    [setDraft],
+  );
+
+  const ownsRefusedDraft = useCallback(
+    (input: TypedDraftRecovery): boolean =>
+      mountedRef.current &&
+      !input.signal.aborted &&
+      activeChatIdRef.current === input.chatId &&
+      activeProjectPathRef.current === input.projectPath &&
+      latestSendSignalRef.current === input.signal,
+    [],
+  );
+
+  const recoverUnsentTypedDraft = useCallback(
+    async (input: TypedDraftRecovery): Promise<void> => {
+      if (input.draftRevision === undefined || !isScopeChangeRefusal(input.terminal)) return;
+      const correlationId = input.terminal.correlationId ?? newClientCorrelationId();
+      const report = (
+        composerActivity:
+          | "scope-refusal-restored"
+          | "scope-refusal-skipped-owner"
+          | "scope-refusal-skipped-draft"
+          | "scope-refusal-skipped-unproven",
+      ): void =>
+        reportClientDiagnostic("Keiko scope-refused composer recovery.", {
+          correlationId,
+          composerActivity,
+        });
+      if (!ownsRefusedDraft(input)) {
+        report("scope-refusal-skipped-owner");
+        return;
+      }
+      if (!isRecoverableScopeRefusal(input)) {
+        report("scope-refusal-skipped-unproven");
+        return;
+      }
+      const refreshingChat = sessionStateRef.current.activeChat;
+      const refreshed = await refreshScopeRefusedChat(input, correlationId);
+      if (!ownsRefusedDraft(input)) {
+        report("scope-refusal-skipped-owner");
+        return;
+      }
+      if (refreshed !== undefined && sessionStateRef.current.activeChat === refreshingChat) {
+        notifyChatUpsert(refreshed);
+      }
+      if (draftRevisionRef.current !== input.draftRevision) {
+        report("scope-refusal-skipped-draft");
+        return;
+      }
+      setDraft(input.text);
+      report("scope-refusal-restored");
+    },
+    [setDraft, ownsRefusedDraft],
+  );
+
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
       const admission = resolveSendMessageAdmission({
         options,
-        draft,
+        draft: draftState,
         activeChat: state.activeChat,
         selectedModel: state.selectedModel,
         models: state.models,
@@ -4020,9 +4201,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Synchronously commit to "queued" so a re-entrant call in the same tick
       // hits the isInFlight guard above (AC#2).
       updateSendStatus("queued");
-      if (options?.text === undefined || options.clearDraftOnAdmission === true) {
-        setDraft("");
-      }
+      const clearedDraftRevision = clearAdmittedDraft(options, canonicalTarget);
       setError(undefined);
       // AC2 (#2670) — the queue re-attempts a retryable transport failure with the SAME optimistic
       // row, whose id reconciliation already replaced with the durable row it fetched. The id guard
@@ -4058,7 +4237,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           clientTurnId,
           ...(options?.correlationId === undefined ? {} : { correlationId: options.correlationId }),
         });
-        const { settled, persistence } = await settleSendAttempt({
+        const { settled, persistence, failedCanonicalTurn } = await settleSendAttempt({
           terminal,
           chat,
           projectPath: project.path,
@@ -4066,6 +4245,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           clientTurnId,
           signal: controller.signal,
           preserveUserOnMissing: options?.clientTurnId !== undefined,
+        });
+        await recoverUnsentTypedDraft({
+          failedCanonicalTurn,
+          terminal,
+          persistence,
+          chatId: chat.id,
+          projectPath: project.path,
+          signal: controller.signal,
+          draftRevision: clearedDraftRevision,
+          text: options?.text ?? draftState,
         });
         // Only the latest attempt owns the shared lifecycle. cancelSend leaves this attempt's signal
         // as owner until settlement; an immediate replacement installs a different signal and cannot
@@ -4099,13 +4288,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
     },
     [
-      draft,
+      draftState,
       state.activeChat,
       state.selectedModel,
       state.models,
       pendingAttachments,
+      clearAdmittedDraft,
       executeSendAttempt,
       presentCompletedSend,
+      recoverUnsentTypedDraft,
       settleSendAttempt,
       updateOwnedSendStatus,
       updateSendStatus,
@@ -4621,7 +4812,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
       noEligibleModels,
-      draft,
+      draft: draftState,
       loading,
       sending,
       sendStatus,
@@ -4675,7 +4866,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeChat,
       state.selectedModel,
       noEligibleModels,
-      draft,
+      draftState,
+      setDraft,
       loading,
       sending,
       sendStatus,

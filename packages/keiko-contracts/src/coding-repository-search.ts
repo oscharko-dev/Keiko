@@ -1,19 +1,22 @@
-import { isValidScopePath } from "./connected-context.js";
+import { isValidScopePath, type ContextCoverageTruncationReason } from "./connected-context.js";
 import { regexSafetyIssue } from "./workspace-search.js";
-import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "./workspace-contract-primitives.js";
+import {
+  MAX_RECURSIVE_TEXT_FILE_BYTES,
+  WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+} from "./workspace-contract-primitives.js";
 
 /** Handler limits; catalog identity and model-visible projection belong to #3406/#3414. */
 export const CODING_REPOSITORY_LIMITS = Object.freeze({
   queryChars: 200,
   returnedHits: 50,
-  scannedFiles: 2_000,
-  fileBytes: 512 * 1024,
-  elapsedMs: 5_000,
+  scannedFiles: null,
+  fileBytes: MAX_RECURSIVE_TEXT_FILE_BYTES,
+  elapsedMs: null,
   snippetBytes: 512,
   outputBytes: 64 * 1024,
   globs: 32,
   globChars: 200,
-  inventoryFiles: 50_000,
+  inventoryFiles: null,
   yieldEvery: 32,
 });
 
@@ -48,13 +51,19 @@ export type CodingRepositoryFailureReason =
   | "cancelled"
   | "timeout"
   | "failed";
+export const CODING_REPOSITORY_TRUNCATION_REASONS = Object.freeze([
+  "result-limit",
+  "file-limit",
+  "inventory-limit",
+  "output-limit",
+  "depth-limit",
+  "io-error",
+  "file-too-large",
+  "time-limit",
+  "unrepresentable-path",
+] as const);
 export type CodingRepositoryTruncationReason =
-  | "result-limit"
-  | "file-limit"
-  | "inventory-limit"
-  | "output-limit"
-  | "depth-limit"
-  | "file-too-large";
+  (typeof CODING_REPOSITORY_TRUNCATION_REASONS)[number];
 
 /**
  * How a search's order was produced (#3416). Body-free by construction: a ranking label, an index
@@ -98,6 +107,23 @@ export interface CodingRepositoryMetrics {
   readonly durationMs: number;
 }
 
+/** Exact producer observations, independent of the bounded sample of excluded path names. */
+export interface CodingRepositorySearchObservation {
+  readonly metrics: CodingRepositoryMetrics;
+  readonly diagnostics: {
+    readonly policyMode: "workspace-root-default" | "explicit-scope";
+    readonly lowValuePolicyApplied: boolean;
+    readonly lowValueRescueApplied: boolean;
+    readonly coverageIncomplete: boolean;
+    readonly coverageReasons: readonly ContextCoverageTruncationReason[];
+    readonly ignoredEntries: number;
+    readonly deniedEntries: number;
+    readonly binaryFilesSkipped: number;
+    readonly oversizedFilesSkipped: number;
+    readonly unreadableFilesSkipped: number;
+  };
+}
+
 export interface CodingRepositoryHit {
   readonly path: string;
   readonly startLine: number;
@@ -111,6 +137,7 @@ interface CodingRepositorySuccess {
   readonly ok: true;
   readonly metrics: CodingRepositoryMetrics;
   readonly truncationReasons: readonly CodingRepositoryTruncationReason[];
+  readonly diagnostics?: CodingRepositorySearchObservation["diagnostics"] | undefined;
 }
 
 export type CodingRepositoryResult =

@@ -37,6 +37,7 @@ export interface Connection {
   readonly boundScopeKind?: SelectedScopeKind;
   readonly boundRelativePath?: string;
   readonly boundScopeElided?: true;
+  readonly boundScopeFingerprint?: string | undefined;
   readonly boundConnectorKind?: "capsule" | "capsule-set";
   readonly boundConnectorId?: string;
   readonly boundGitChangeBaseRef?: string;

@@ -20,7 +20,7 @@
 // bypasses the `extra` redaction path entirely: this shape gate is the only thing standing
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
-import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-registry.generated.js";
+import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 import { containsAbsolutePath } from "./text-safety.js";
 
 export {
@@ -88,6 +88,7 @@ export {
   defectFingerprintPreimage,
   isDefectFingerprint,
   isSupportIncidentId,
+  isClientReportFailure,
   isSupportIncidentSurface,
   normalizeKeikoFrame,
   normalizeKeikoFrameSignature,
@@ -98,6 +99,11 @@ export {
   parseSupportIncidentRecord,
   parseSupportIncidentPrivateProjection,
   parseSupportIncidentSlotClaimFileName,
+  SUPPORT_INCIDENT_TTL_MS,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
+  SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+  supportIncidentWindow,
+  supportIncidentEffectiveExpiry,
   supportIncidentBuild,
   supportIncidentFileName,
   supportIncidentFingerprintClaimFileName,
@@ -117,6 +123,7 @@ export {
   type SupportIncidentPrivateProjection,
   type SupportIncidentPublicProjection,
   type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentSegmentReference,
   type SupportIncidentState,
   type SupportIncidentSufficiency,
@@ -488,6 +495,11 @@ export interface ActivityLogRegistryExemption {
 // must pass its expiry/scope validator; there is no second exemption file or runtime override.
 export const ACTIVITY_LOG_REGISTRY_EXEMPTIONS: readonly ActivityLogRegistryExemption[] = [];
 
+/** Closed, owner-declared facts that keep an otherwise informational event diagnostic. */
+export type ActivityLogDiagnosticCondition =
+  | { readonly field: string; readonly values: readonly string[] | readonly boolean[] }
+  | { readonly field: string; readonly positive: true };
+
 export interface ActivityLogOperationRegistration {
   readonly contractKind: "activity-log-operation";
   readonly schemaVersion: 1;
@@ -502,13 +514,10 @@ export interface ActivityLogOperationRegistration {
   readonly failureClasses: readonly string[];
   readonly proofIds: readonly string[];
   readonly releaseImpact: ActivityLogReleaseImpact;
+  readonly diagnosticWhen?: readonly ActivityLogDiagnosticCondition[];
 }
 
-const ACTIVITY_LOG_OPERATION_BY_OP: ReadonlyMap<string, ActivityLogOperationRegistration> = new Map(
-  ACTIVITY_LOG_OPERATION_REGISTRY.map(
-    (registration) => [registration.op, registration as ActivityLogOperationRegistration] as const,
-  ),
-);
+let activityLogOperationByOp: ReadonlyMap<string, ActivityLogOperationRegistration> | undefined;
 
 export interface RegisteredActivityLogEvent<
   Registration extends ActivityLogOperationRegistration = ActivityLogOperationRegistration,
@@ -826,7 +835,13 @@ function validateActivityLogFields(
 export function activityLogOperationSchema(
   op: string,
 ): ActivityLogOperationRegistration | undefined {
-  return ACTIVITY_LOG_OPERATION_BY_OP.get(op);
+  activityLogOperationByOp ??= new Map(
+    ACTIVITY_LOG_OPERATION_REGISTRY.map(
+      (registration) =>
+        [registration.op, registration as ActivityLogOperationRegistration] as const,
+    ),
+  );
+  return activityLogOperationByOp.get(op);
 }
 
 export function validateActivityLogOperationFields(
@@ -1176,6 +1191,35 @@ function sameRegistrationFields(
   });
 }
 
+function sameDiagnosticWhen(
+  left: readonly ActivityLogDiagnosticCondition[] | undefined,
+  right: readonly ActivityLogDiagnosticCondition[] | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.length === right.length &&
+    left.every((condition, index) => {
+      const other = right[index];
+      if (
+        other === undefined ||
+        !hasExactOwnKeys(condition, other) ||
+        condition.field !== other.field
+      )
+        return false;
+      if ("positive" in condition)
+        return (
+          "positive" in other &&
+          runtimeProperty(condition, "positive") === runtimeProperty(other, "positive")
+        );
+      return (
+        "values" in other &&
+        condition.values.length === other.values.length &&
+        condition.values.every((value, valueIndex) => value === other.values[valueIndex])
+      );
+    })
+  );
+}
+
 function runtimeProperty(value: object, key: PropertyKey): unknown {
   const property: unknown = Reflect.get(value, key);
   return property;
@@ -1198,6 +1242,7 @@ function registrationMatchesCanonical(
       registration.owner === canonical.owner,
       registration.emitter === canonical.emitter,
       sameRegistrationFields(registration.fields, canonical.fields),
+      sameDiagnosticWhen(registration.diagnosticWhen, canonical.diagnosticWhen),
       registration.causal === canonical.causal,
       registration.lifecycle === canonical.lifecycle,
       registration.analyzerProjection === canonical.analyzerProjection,
@@ -1284,6 +1329,64 @@ function rejectedActivityLogEvent<Registration extends ActivityLogOperationRegis
   return event as unknown as BoundActivityLogEvent<Registration>;
 }
 
+function validDiagnosticValues(contract: ActivityLogFieldContract, value: unknown): boolean {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const values: readonly unknown[] = value;
+  if (new Set(values).size !== values.length || contract.dataClass !== "closed-enum") return false;
+  if (contract.type === "boolean") return values.every((entry) => typeof entry === "boolean");
+  return (
+    contract.type === "string" &&
+    contract.values !== undefined &&
+    values.every((entry) => typeof entry === "string" && contract.values?.includes(entry))
+  );
+}
+
+function diagnosticConditionMatchesContract(
+  contract: ActivityLogFieldContract,
+  candidate: object,
+): boolean {
+  const fieldType = runtimeProperty(contract, "type");
+  if ("positive" in candidate)
+    return (
+      hasExactOwnKeys(candidate, { field: true, positive: true }) &&
+      candidate.positive === true &&
+      contract.dataClass === "count" &&
+      (fieldType === "integer" || fieldType === "number")
+    );
+  return (
+    "values" in candidate &&
+    hasExactOwnKeys(candidate, { field: true, values: true }) &&
+    validDiagnosticValues(contract, candidate.values)
+  );
+}
+
+function validDiagnosticCondition(
+  fields: Readonly<Record<string, ActivityLogFieldContract>>,
+  candidate: unknown,
+): candidate is ActivityLogDiagnosticCondition {
+  if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return false;
+  if (!("field" in candidate) || typeof candidate.field !== "string") return false;
+  if (!Object.hasOwn(fields, candidate.field)) return false;
+  const contract = fields[candidate.field];
+  return contract !== undefined && diagnosticConditionMatchesContract(contract, candidate);
+}
+
+/** Shared by operation construction and catalog validation; undefined preserves legacy schemas. */
+export function isActivityLogDiagnosticWhen(
+  fields: Readonly<Record<string, ActivityLogFieldContract>>,
+  candidate: unknown,
+): candidate is readonly ActivityLogDiagnosticCondition[] | undefined {
+  if (candidate === undefined) return true;
+  if (!Array.isArray(candidate) || candidate.length === 0) return false;
+  const conditions: readonly unknown[] = candidate;
+  const seen = new Set<string>();
+  return conditions.every((condition) => {
+    if (!validDiagnosticCondition(fields, condition) || seen.has(condition.field)) return false;
+    seen.add(condition.field);
+    return true;
+  });
+}
+
 /**
  * Declares one operation for the generated Activity Log registry. Keep the call at the production
  * emitter; the generator records that exact source site and rejects non-literal declarations.
@@ -1295,6 +1398,9 @@ export function defineActivityLogOperation<
 ): Omit<Registration, "fields"> & {
   readonly fields: ActivityLogGlobalFieldContracts & Registration["fields"];
 } {
+  if (!isActivityLogDiagnosticWhen(registration.fields, registration.diagnosticWhen)) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
   for (const [name, contract] of Object.entries(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS)) {
     const declared = registration.fields[name];
     if (
@@ -1352,3 +1458,7 @@ export function activityLogEvent<
 }
 
 export * from "./support-report.js";
+export * from "./support-report-json.js";
+export * from "./support-report-producer.js";
+
+export * from "./activity-log-label-policy.js";

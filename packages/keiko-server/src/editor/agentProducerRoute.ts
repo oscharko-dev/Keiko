@@ -143,6 +143,7 @@ const EDITOR_PRODUCER_TURN_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     advertisedToolRefLoss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "outcome", values: ["cancelled", "failed", "limit-exceeded"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

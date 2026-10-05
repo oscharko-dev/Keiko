@@ -1,6 +1,14 @@
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAiAdapter, ResponseRedactionError, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
+import { executeWithRetry } from "./resilience.js";
+import { createScriptedGatewayClock } from "./replay.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import {
   AuthenticationError,
   CancelledError,
@@ -64,6 +72,75 @@ function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
     },
   });
 }
+
+async function retryHeaderEvidence(
+  header: string | undefined,
+  httpStatus: number,
+): Promise<{ events: ModelGatewayLogEvent[]; error: RateLimitError | ProviderError }> {
+  const adapter = adapterWith(() =>
+    Promise.resolve(
+      jsonResponse(
+        {},
+        {
+          status: httpStatus,
+          ...(header === undefined ? {} : { headers: { "retry-after": header } }),
+        },
+      ),
+    ),
+  );
+  const error: unknown = await adapter.call(REQUEST, CONFIG).catch((failure: unknown) => failure);
+  if (!(error instanceof RateLimitError || error instanceof ProviderError)) {
+    throw new TypeError("Expected a typed provider rejection.");
+  }
+  const events: ModelGatewayLogEvent[] = [];
+  let calls = 0;
+  await executeWithRetry(
+    () => {
+      if (calls++ === 0) return Promise.reject(error);
+      return Promise.resolve("ok");
+    },
+    { maxRetries: 1, retryBaseDelayMs: 500 },
+    createScriptedGatewayClock(),
+    undefined,
+    () => 0,
+    { sink: { write: (event): void => void events.push(event) } },
+  );
+  return { error, events };
+}
+
+describe("Retry-After header evidence", () => {
+  it.each([
+    [undefined, "absent"],
+    ["120", "valid"],
+    ["120, 120", "unparseable"],
+    ["", "unparseable"],
+    ["invalid-private-header-canary", "unparseable"],
+    ["0", "elapsed"],
+    ["Sat, 03 Oct 2026 19:58:00 GMT", "elapsed"],
+  ] as const)("retains the closed observation for %s: %s", async (header, observation) => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-03T20:00:00Z"));
+    try {
+      for (const status of [429, 503]) {
+        const { error, events } = await retryHeaderEvidence(header, status);
+        expect(error).toMatchObject({ retryAfterHeader: observation });
+        const scheduled = events.find((event) => event.op === "gateway.retry.scheduled");
+        expect(scheduled?.extra).toMatchObject({
+          retryAfterHeader: observation,
+          httpStatus: status,
+        });
+        expect(
+          expectActivityLogProof(
+            "gateway.retry.scheduled.emitted-line",
+            formatActivityLogProofLine(scheduled ?? {}),
+          ),
+        ).toMatchObject({ retryAfterHeader: observation, httpStatus: status });
+        expect(JSON.stringify(events)).not.toContain("invalid-private-header-canary");
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
 
 function responseThatAbortsAfterChunk(chunk: string, abort: () => void): Response {
   let readCount = 0;
@@ -397,6 +474,102 @@ describe("OpenAiAdapter.call", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(RateLimitError);
       expect((error as RateLimitError).retryAfterMs).toBeNull();
+    }
+  });
+
+  it("preserves a 503 provider cooldown instead of retrying a queued request early", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(jsonResponse({}, { status: 503, headers: { "retry-after": "120" } })),
+    );
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({
+      httpStatus: 503,
+      retryAfterMs: 120_000,
+      retryable: true,
+    });
+  });
+
+  it("accepts an HTTP-date provider cooldown", async () => {
+    const now = Date.parse("2026-10-03T20:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: { "retry-after": "Sat, 03 Oct 2026 20:02:00 GMT" },
+            },
+          ),
+        ),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({ retryAfterMs: 120_000 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each(["99999999999999999999", String(Math.ceil(MAX_TIMER_DELAY_MS / 1000))])(
+    "keeps finite oversized provider cooldowns representable at the actual timer bound (%s)",
+    async (retryAfter) => {
+      const adapter = adapterWith(() =>
+        Promise.resolve(jsonResponse({}, { status: 503, headers: { "retry-after": retryAfter } })),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({
+        retryAfterMs: MAX_TIMER_DELAY_MS,
+        retryable: true,
+      });
+    },
+  );
+
+  it.each(["Saturday, 03-Oct-26 20:02:00 GMT", "Sat Oct  3 20:02:00 2026"])(
+    "interprets supported obsolete HTTP-date %s in UTC in a non-UTC process",
+    async (retryAfter) => {
+      vi.stubEnv("TZ", "Etc/GMT-2");
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-03T20:00:00Z"));
+      try {
+        const adapter = adapterWith(() =>
+          Promise.resolve(
+            jsonResponse({}, { status: 429, headers: { "retry-after": retryAfter } }),
+          ),
+        );
+        await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({
+          retryAfterMs: 120_000,
+        });
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each(["", " ", "Mon, 03 Not 2026 20:02:00 GMT", "9".repeat(400)])(
+    "rejects an empty, malformed, or overflowing Retry-After header (%#)",
+    async (retryAfter) => {
+      const adapter = adapterWith(() =>
+        Promise.resolve(jsonResponse({}, { status: 429, headers: { "retry-after": retryAfter } })),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({ retryAfterMs: null });
+    },
+  );
+
+  it("clamps a past HTTP-date provider cooldown to zero", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-03T20:00:00Z"));
+    try {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: { "retry-after": "Sat, 03 Oct 2026 19:58:00 GMT" },
+            },
+          ),
+        ),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({ retryAfterMs: 0 });
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 

@@ -48,12 +48,13 @@ interface EmbeddingContext {
   readonly localKnowledgeEmbeddingAdapter: ReturnType<
     typeof localKnowledgeEmbeddingAdapterForProvider
   >;
-  readonly repositoryPod: RepositoryPodResolution;
+  readonly repositoryPod: ResolvedRepositoryPod;
   readonly observePodRetrieval?:
     ((observation: RepositoryPodRetrievalObservation) => void) | undefined;
 }
 
 interface CandidateDocument {
+  readonly startLine: number;
   readonly scopePath: string;
   readonly sourceText: string;
   readonly order: number;
@@ -319,7 +320,12 @@ function candidateDocuments(
       break;
     }
     if (source.text.trim().length > 0) {
-      documents.push({ scopePath: source.scopePath, sourceText: source.text, order: index });
+      documents.push({
+        scopePath: source.scopePath,
+        sourceText: source.text,
+        order: index,
+        startLine: source.startLine ?? 1,
+      });
     }
   }
   return documents;
@@ -425,9 +431,13 @@ function chunkAnchoredLine(
 ): number {
   const chunkText = document.sourceText
     .split("\n")
-    .slice(range.startLine - 1, range.endLine)
+    .slice(
+      Math.max(0, range.startLine - document.startLine),
+      Math.max(0, range.endLine - document.startLine + 1),
+    )
     .join("\n");
-  const refined = range.startLine + localizeMatchLine(chunkText, queryTerms) - 1;
+  const refined =
+    Math.max(range.startLine, document.startLine) + localizeMatchLine(chunkText, queryTerms) - 1;
   return Math.max(range.startLine, Math.min(range.endLine, refined));
 }
 
@@ -569,7 +579,10 @@ function prepareSemanticSearch(
 // Repository semantic search is index-only. Missing, stale, or unreadable pod state degrades to the
 // orchestrator's lexical lane and is recorded content-free; it never embeds whole candidate files
 // at ask time.
-function observePodDegradation(ctx: EmbeddingContext, mode: string): void {
+function observePodDegradation(
+  ctx: Pick<EmbeddingContext, "observePodRetrieval">,
+  mode: string,
+): void {
   ctx.observePodRetrieval?.({
     mode,
     referenceCount: 0,
@@ -605,21 +618,13 @@ async function semanticSearch(
   const prepared = prepareSemanticSearch(ctx, request);
   if (prepared === undefined) return [];
   const { documents, signal } = prepared;
-  if (ctx.repositoryPod.kind === "failed") {
-    observePodDegradation(ctx, "pod-unavailable");
-    return [];
-  }
-  if (ctx.repositoryPod.kind === "absent") {
-    observePodDegradation(ctx, "pod-absent");
-    return [];
-  }
-  const freshDocuments = await freshPodDocuments(ctx, ctx.repositoryPod.pod, documents);
+  const freshDocuments = await freshPodDocuments(ctx, ctx.repositoryPod, documents);
   if (freshDocuments.length === 0) {
     observePodDegradation(ctx, "pod-no-fresh-candidates");
     return [];
   }
   try {
-    return await podRankedHits(ctx, ctx.repositoryPod.pod, prepared, freshDocuments);
+    return await podRankedHits(ctx, ctx.repositoryPod, prepared, freshDocuments);
   } catch {
     if (!isAborted(signal)) observePodDegradation(ctx, "pod-query-failed");
     return [];
@@ -650,6 +655,17 @@ export function configuredRepoSemanticSearchProviderFor(
     return undefined;
   }
   const fs = options.fs ?? nodeWorkspaceFs;
+  const repositoryPod = observedPodIdentity(
+    resolveRepositoryPod(options.repositoryPod, fs, provider.modelId),
+    options.observePodIdentity,
+  );
+  if (repositoryPod.kind !== "ready") {
+    observePodDegradation(
+      options,
+      repositoryPod.kind === "failed" ? "pod-unavailable" : "pod-absent",
+    );
+    return undefined;
+  }
   const ctx: EmbeddingContext = {
     fs,
     signal,
@@ -658,10 +674,7 @@ export function configuredRepoSemanticSearchProviderFor(
       Math.min(MAX_SEMANTIC_CANDIDATES, options.maxCandidates ?? MAX_SEMANTIC_CANDIDATES),
     ),
     localKnowledgeEmbeddingAdapter: localKnowledgeEmbeddingAdapterForProvider(deps, provider),
-    repositoryPod: observedPodIdentity(
-      resolveRepositoryPod(options.repositoryPod, fs, provider.modelId),
-      options.observePodIdentity,
-    ),
+    repositoryPod: repositoryPod.pod,
     ...(options.observePodRetrieval === undefined
       ? {}
       : { observePodRetrieval: options.observePodRetrieval }),

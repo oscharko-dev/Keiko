@@ -49,6 +49,22 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+`client.citation.activated` records a citation click and its source selection under the
+activation correlation. `reason` describes the source fingerprint: `matched` (one root),
+`unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
+`opened`, `open-refused`, `picker-opened`, `picker-dismissed`, or `refused`; an opened picker
+is not a successfully opened file. `rootCount` and `matchCount` explain the choice without
+recording the fingerprint, file path, source label or citation text. The registered server
+projection retains these closed fields on the existing Activity Log timeline.
+
+`chat.scope.update` records a serialized source update as `applied` or `conflict` under the
+request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
+`resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH
+validate a supplied `expectedGroundingScopeIdentity` against the current server-issued identity;
+a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description authority is
+checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
+scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
@@ -61,6 +77,12 @@ Gateway admission additionally records `imageCount`, the selected `imageAccounti
 `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+Circuit admission that cannot fit a caller's remaining budget emits `gateway.circuit.wait` with
+`budget-refused`, `remainingMs` and `delayMs`; it does not fabricate a provider attempt or retry.
+Parallel retryable responses may extend the recovery minimum of the same open outage, while probe
+ownership and later circuit generations remain protected. Unchanged admission state does not wake
+every waiting caller.
 
 On retries, `reportedPromptTokens` always describes only the current counter response and is
 absent when that response has no count. `providerPromptTokens` adds the current response-schema
@@ -84,16 +106,22 @@ to fit the model (`trimmed`) or could not fit a single one (`refused`), with the
 the prompt size and the input budget.
 `client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
 no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
-`search.citations.reconciled` records how a Knowledge Pod answer's markers met its sent references
-(`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) with the reference,
-attached, weak-overlap, grouped and dangling counts. `gateway.discovery.alias-intersection` carries
+`search.citations.reconciled` records numeric-reference and file-location reconciliation for
+Knowledge Pod, connected-folder, multi-source and hybrid answers under the request correlation.
+`citationKind` distinguishes `numeric` from `file`; hybrid answers may emit one line of each kind.
+The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) and
+reference, attached and dangling counts describe the actual reconciliation. File lines also carry
+ambiguous-marker and dropped-implicit counts. Weak-overlap and grouped-marker counts are optional:
+absence means they were not measured on that path, not zero. `gateway.discovery.alias-intersection` carries
 the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
 `gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
 `wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe
 counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
 counts: stored and projected history, knowledge-source tokens, the sent and available reference
 counts, the last knowledge request (measured and estimated), the system, summary and message shares,
-the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+the automatic-compaction trigger, and the assumed-window and pending-probe flags. Grounded
+readings also carry the conversation lane budget and unused source capacity separately; a
+conversation checkpoint is validated against that lane, not against the entire model window.
 `search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
 undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
 `hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
@@ -111,6 +139,11 @@ assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
 events. Neither path records customer diffs or generated text.
+
+Closed failure outcomes and positive failure counters that would otherwise be optional context must
+be declared with the owning operation's exact `diagnosticWhen` condition. Regression proofs exercise
+the actual producer, registered writer and incident query with zero optional context, alongside
+healthy controls; ordinary file eligibility exclusions and budget limits are not failures.
 
 All repository-add lifecycle join ids, including discarded settlements, must pass the canonical Activity Log correlation guard. Browser delivery-loss counts enter the shared ledger once after rate admission and before routine diversion. Rate-limited reports carrying loss return 429 so the browser restores their counters for later admission; their server-owned drop must not be counted again as a failed POST. Final pagehide loss reports have their own bounded server budget, independent of routine/failure traffic. Gateway streams settle circuit/spend state, close provider iterators and emit completion before yielding done, since production consumers need not advance again. Commit-draft refusals retain measured prompt bounds and generated/reused outcomes share a body-free key digest.
 Repository-add dialogs report the attempt and its live or discarded settlement using the request's
@@ -248,6 +281,14 @@ both production composition and these consumers when changing this wiring.
 ## Support reports
 
 For local defect evidence, use `keiko support export --incident <id>` or a correlation selector.
+Manual UI and CLI export remain available when all retained incident slots are occupied: the
+canonical exporter can use a transient descriptor without stealing in-flight reservations or
+widening retention. Completed candidates may roll over at byte pressure; in-flight reservations
+remain protected. Exporting stored server evidence requires an authenticated app session.
+Confirming a valid session refreshes its scoped cookies using the same bearer; it neither mints
+authority nor extends registry expiry. An unpaired or offline browser can still create and download
+a limited report from validated body-free client failure facts, without accessing stored server
+evidence.
 The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling (`--max-bytes`
 may only lower it) and explicit sufficiency. `--out` names a private directory, never a file; the
 filename always uses the fixed product/schema/incident/date class. Inclusion flags and raw-log or

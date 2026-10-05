@@ -2,9 +2,14 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
+import * as errorEvidence from "@/lib/client-error-evidence";
+import * as clientDiagnostics from "@/lib/client-diagnostics";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
   I18N_STORAGE_KEY,
@@ -12,9 +17,16 @@ import {
   loadLocaleMessages,
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
+import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
+import * as reportApi from "@/lib/support-report-api";
+import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 import { ErrorNoticeFromError } from "./ErrorNotice";
+import { formatUserError } from "./format-error";
+import styles from "./ErrorNotice.module.css";
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetSupportReportOutcomesForTests();
   window.localStorage.clear();
   resetLoadedMessageCatalogs();
 });
@@ -28,7 +40,173 @@ function renderInLocale(error: unknown, locale: "en" | "de"): ReturnType<typeof 
   );
 }
 
+function errorNoticeLayoutStyle(): HTMLStyleElement {
+  const path = ["src/app/globals.css", "packages/keiko-ui/src/app/globals.css"]
+    .map((candidate) => resolve(process.cwd(), candidate))
+    .find((candidate) => existsSync(candidate));
+  if (path === undefined) throw new Error("Missing production stylesheet");
+  const css = readFileSync(path, "utf8");
+  const start = css.indexOf(".ui-error-notice-title-row {");
+  const end = css.indexOf(".ui-error-notice-close:hover", start);
+  if (start < 0 || end < 0) throw new Error("Missing production notice layout rules");
+  const localCss = readFileSync(
+    resolve(dirname(path), "components/desktop/ErrorNotice.module.css"),
+    "utf8",
+  );
+  const style = document.createElement("style");
+  // Apply the real module rule with its loader-assigned class in the jsdom stylesheet.
+  style.textContent = css.slice(start, end) + localCss.replaceAll(".cmpText", `.${styles.cmpText}`);
+  document.head.append(style);
+  return style;
+}
+
 describe("ErrorNoticeFromError — correlation support id", () => {
+  it("prepares a direct download for the support id displayed in the chat error", async () => {
+    const report = { fileName: "report.json", reportJson: "{}" };
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    const automaticClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:report",
+      dispose: vi.fn(),
+    });
+    const error = new ApiError("CLARIFICATION_NEEDED", "Need more context", 400);
+    error.correlationId = "chat-search-failed";
+    renderInLocale(error, "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    const link = await screen.findByRole("link", { name: "Download report" });
+    expect(link).toHaveAttribute("download", report.fileName);
+    expect(link).toHaveAttribute("href", "blob:report");
+    expect(automaticClick).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith("chat-search-failed", expect.any(AbortSignal), {
+      errorKind: "invalid-request",
+      context: [],
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+    });
+  });
+
+  it("selects only the displayed client failure when no trusted Support ID exists", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:uncorrelated-report",
+      dispose: vi.fn(),
+    });
+    renderInLocale(new ApiError("GATEWAY_TIMEOUT", "Gateway timeout", 503), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(
+      undefined,
+      expect.any(AbortSignal),
+      {
+        errorKind: "unavailable",
+        context: [],
+        errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      },
+      "client-only",
+    );
+  });
+
+  it("isolates identical uncorrelated notices and disposes their own report on dismissal", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    const firstDispose = vi.fn();
+    const secondDispose = vi.fn();
+    vi.spyOn(reportApi, "createSupportReportDownload")
+      .mockReturnValueOnce({ href: "blob:first-notice", dispose: firstDispose })
+      .mockReturnValueOnce({ href: "blob:second-notice", dispose: secondDispose });
+    const first = new ApiError("GATEWAY_TIMEOUT", "Same message", 503);
+    const second = new ApiError("GATEWAY_TIMEOUT", "Same message", 503);
+    render(
+      <I18nProvider>
+        <ErrorNoticeFromError error={first} fallback="Failed" />
+        <ErrorNoticeFromError error={second} fallback="Failed" />
+      </I18nProvider>,
+    );
+    const notices = screen
+      .getAllByRole("alert")
+      .map((alert) => alert.closest<HTMLElement>(".ui-error-notice"));
+    const firstNotice = notices[0];
+    const secondNotice = notices[1];
+    expect(firstNotice).toBeDefined();
+    expect(secondNotice).toBeDefined();
+    if (firstNotice == null || secondNotice == null) throw new Error("Missing notices");
+    fireEvent.click(within(firstNotice).getByRole("button", { name: "Create error report" }));
+    await within(firstNotice).findByRole("link", { name: "Download report" });
+    expect(within(secondNotice).queryByRole("link")).not.toBeInTheDocument();
+    fireEvent.click(within(secondNotice).getByRole("button", { name: "Create error report" }));
+    expect(
+      await within(secondNotice).findByRole("link", { name: "Download report" }),
+    ).toHaveAttribute("href", "blob:second-notice");
+    expect(create).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(firstNotice).getByRole("button", { name: "Dismiss error" }));
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(secondDispose).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "href",
+      "blob:second-notice",
+    );
+  });
+
+  it("shows and prepares a new occurrence of the same uncorrelated failure after dismissal", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    const dispose = vi.fn();
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:occurrence",
+      dispose,
+    });
+    const view = renderInLocale(new ApiError("GATEWAY_TIMEOUT", "Same message", 503), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    view.rerender(
+      <I18nProvider>
+        <ErrorNoticeFromError
+          error={new ApiError("GATEWAY_TIMEOUT", "Same message", 503)}
+          fallback="Could not send message."
+        />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an uncorrelated regeneration and disposes only its prior artifact on dismissal", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValueOnce(report);
+    const dispose = vi.fn();
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:prior-notice",
+      dispose,
+    });
+    renderInLocale(new ApiError("GATEWAY_TIMEOUT", "Timeout", 503), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    let pendingSignal: AbortSignal | undefined;
+    let finish: ((value: typeof report) => void) | undefined;
+    create.mockImplementationOnce((_correlation, signal) => {
+      pendingSignal = signal;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
+    await vi.waitFor(() => {
+      expect(create).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(pendingSignal?.aborted).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+    finish?.(report);
+    await vi.waitFor(() => {
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+  });
+
   it("renders the EN support id line for an ApiError carrying a correlationId", () => {
     const error = new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503);
     error.correlationId = "req-en-000123";
@@ -83,3 +261,146 @@ describe("ErrorNoticeFromError — correlation support id", () => {
     expect(screen.getByText("Support ID: req-dismiss-000222")).toBeInTheDocument();
   });
 });
+
+it("announces error text separately from report and dismissal controls", async () => {
+  const { container } = renderInLocale(new ApiError("BAD_REQUEST", "Invalid request", 400), "en");
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent("Invalid request");
+  expect(alert.querySelector("button, a, output")).toBeNull();
+  expect(screen.getByRole("button", { name: "Create error report" })).toBeVisible();
+  expect(await axe(container)).toHaveNoViolations();
+});
+
+it("gives the text-only alert remaining row width before its sibling dismiss control", () => {
+  const style = errorNoticeLayoutStyle();
+  try {
+    renderInLocale(new ApiError("BAD_REQUEST", "Invalid request", 400), "en");
+    const alert = screen.getByRole("alert");
+    const dismiss = screen.getByRole("button", { name: "Dismiss error" });
+    const row = alert.parentElement;
+    if (row === null) throw new Error("Missing notice row");
+    expect(row).toHaveClass("ui-error-notice-title-row");
+    expect(dismiss.parentElement).toBe(row);
+    expect(window.getComputedStyle(row).display).toBe("flex");
+    expect(window.getComputedStyle(alert).flexGrow).toBe("1");
+    expect(window.getComputedStyle(alert).minWidth).toBe("0px");
+    expect(alert.querySelector("button, a, output")).toBeNull();
+    expect(row).not.toContainElement(screen.getByRole("button", { name: "Create error report" }));
+  } finally {
+    style.remove();
+  }
+});
+
+it("keeps a dismissed error hidden for the same instance but shows an equal new instance", () => {
+  const error = new Error("Same failure");
+  const view = render(<ErrorNoticeFromError error={error} fallback="Failed" />);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+  view.rerender(<ErrorNoticeFromError error={error} fallback="Failed" />);
+  expect(screen.queryByRole("alert")).toBeNull();
+  view.rerender(<ErrorNoticeFromError error={new Error("Same failure")} fallback="Failed" />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Same failure");
+});
+
+it("collects stack and cause evidence only when the user requests a report", async () => {
+  const report = await canonicalSupportReportFixture();
+  const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+  vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+    href: "blob:lazy-evidence",
+    dispose: vi.fn(),
+  });
+  const evidence = vi.spyOn(errorEvidence, "clientErrorEvidence");
+  const loss = vi.spyOn(clientDiagnostics, "recordClientDiagnosticLoss");
+  const error = Object.defineProperty(new Error("Visible failure"), "stack", {
+    get: (): never => {
+      throw new Error("private stack getter");
+    },
+  });
+  const content = (
+    <StrictMode>
+      <ErrorNoticeFromError error={error} fallback="Failed" />
+    </StrictMode>
+  );
+  const view = render(content);
+  view.rerender(
+    <StrictMode>
+      <ErrorNoticeFromError error={error} fallback="Failed again" />
+    </StrictMode>,
+  );
+  expect(evidence).not.toHaveBeenCalled();
+  expect(loss).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(evidence).toHaveBeenCalledExactlyOnceWith(error);
+  expect(create).toHaveBeenCalledOnce();
+  expect(loss).toHaveBeenCalledExactlyOnceWith("errorsSuppressed");
+});
+
+it.each([
+  ["GATEWAY_TIMEOUT", "timeout"],
+  ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
+  ["REQUEST_CANCELLED", "cancelled"],
+  ["GROUNDING_SCOPE_CHANGED", "conflict"],
+  ["PAYLOAD_TOO_LARGE", "invalid-request"],
+  ["INVALID_REQUEST", "invalid-request"],
+  ["VALIDATION_FAILED", "invalid-request"],
+  ["STATE_UNAVAILABLE", "unavailable"],
+  ["GATEWAY_CONTEXT_OVERFLOW", "invalid-request"],
+  ["GATEWAY_OUTPUT_EXHAUSTED", "invalid-request"],
+  ["CONVERSATION_OVERSIZED_CONTEXT", "invalid-request"],
+  ["NO_MODEL", "unavailable"],
+  ["RATE_LIMITED", "rate-limited"],
+  ["UNAVAILABLE", "unavailable"],
+  ["GATEWAY_UNAVAILABLE", "unavailable"],
+  ["FORBIDDEN", "authority-denied"],
+  ["NOT_FOUND", "invalid-request"],
+  ["CONFLICT", "conflict"],
+  ["INTERNAL", "internal"],
+  ["PRIVATE_CUSTOM_CODE", "unknown"],
+])(
+  "classifies the closed %s code in a serialized notice when creating its report",
+  async (code, kind) => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:serialized-failure",
+      dispose: vi.fn(),
+    });
+    const original = new ApiError(code, "Request failed", 0);
+    original.correlationId = "serialized-failure-123";
+    renderInLocale(formatUserError(original, "Request failed"), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(
+      "serialized-failure-123",
+      expect.any(AbortSignal),
+      expect.objectContaining({ errorKind: kind }),
+    );
+  },
+);
+
+it.each([
+  ["GATEWAY_TIMEOUT", "timeout"],
+  ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
+  ["GROUNDING_SCOPE_CHANGED", "conflict"],
+])(
+  "keeps a plain Error carrying the serialized %s failure attributable in the report",
+  async (code, errorKind) => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:stream-error",
+      dispose: vi.fn(),
+    });
+    const original = new ApiError(code, "Stream failed", 0);
+    original.correlationId = "actual-stream-failure";
+    const error = new Error(formatUserError(original, "Stream failed"));
+    renderInLocale(error, "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      "actual-stream-failure",
+      expect.any(AbortSignal),
+      expect.objectContaining({ errorKind }),
+    );
+  },
+);

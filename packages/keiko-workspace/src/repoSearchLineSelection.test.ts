@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_SEARCH_LIMITS } from "./repoSearch.js";
 import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contracts/connected-context";
 
 import {
@@ -9,6 +10,62 @@ import {
 } from "./repoSearchLineSelection.js";
 
 describe("collectBestLines", () => {
+  it("retains late stronger ranges within the accepted K after thousands of matches", (): void => {
+    const count = 5000;
+    const text = Array.from(
+      { length: count },
+      (_value, index) => `matched-${String(index)}\n`,
+    ).join("\n");
+    const state = {
+      truncated: false,
+      truncationReasons: new Set<ContextCoverageTruncationReason>(),
+    };
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: null, maxMatchesReturned: 17 },
+        matcher: { match: (line) => (line.startsWith("matched-") ? Number(line.slice(8)) + 1 : 0) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      state,
+    );
+    expect(best).toHaveLength(17);
+    expect(best[0]?.startLine).toBe((count - 17) * 2 + 1);
+    expect(best.at(-1)?.startLine).toBe((count - 1) * 2 + 1);
+    expect(state.truncationReasons).toEqual(new Set(["match-cap"]));
+  });
+
+  it("merges overlapping structural matches before spending retained slots", (): void => {
+    const text = [
+      "function example() {",
+      "  const matched = 1;",
+      "  return matched;",
+      "}",
+      "",
+      "matched independent value",
+    ].join("\n");
+    const state = {
+      truncated: false,
+      truncationReasons: new Set<ContextCoverageTruncationReason>(),
+    };
+    const best = collectBestLines(
+      {
+        limits: { elapsedMsMax: null, maxMatchesReturned: 2 },
+        matcher: { match: (line) => Number(line.includes("matched")) },
+        nowMs: () => 0,
+        startMs: 0,
+      },
+      text,
+      state,
+    );
+    expect(best.map((line) => [line.startLine, line.endLine])).toEqual([
+      [1, 4],
+      [6, 6],
+    ]);
+    expect(state.truncated).toBe(false);
+  });
+
   it("never returns a closed preceding brace range for a later matching line", () => {
     const text = [
       "const routes = [",
@@ -19,7 +76,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("/grounded") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -50,7 +107,7 @@ describe("collectBestLines", () => {
   ])("includes %s in the enclosing citation", (_case, text, expected) => {
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -71,7 +128,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -92,7 +149,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -116,7 +173,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("const needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -137,7 +194,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -158,7 +215,7 @@ describe("collectBestLines", () => {
       const text = ["function handler() {", `  ${statement}`, "  return needle;", "}"].join("\n");
       const best = collectBestLines(
         {
-          limits: { elapsedMsMax: 1_000 },
+          limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
           matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
           nowMs: () => 0,
           startMs: 0,
@@ -195,7 +252,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("const needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -217,7 +274,7 @@ describe("collectBestLines", () => {
       ].join("\n");
       const best = collectBestLines(
         {
-          limits: { elapsedMsMax: 1_000 },
+          limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
           matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
           nowMs: () => 0,
           startMs: 0,
@@ -240,7 +297,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -265,7 +322,7 @@ describe("collectBestLines", () => {
     ].join("\n");
     const best = collectBestLines(
       {
-        limits: { elapsedMsMax: 1_000 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
         matcher: { match: (line) => (line.includes("const needle") ? 1 : 0) },
         nowMs: () => 0,
         startMs: 0,
@@ -284,7 +341,7 @@ describe("collectBestLines", () => {
     };
     collectBestLines(
       {
-        limits: { elapsedMsMax: 1 },
+        limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1 },
         matcher: { match: () => 0 },
         nowMs: () => 2,
         startMs: 0,
@@ -305,7 +362,7 @@ describe("collectBestLines", () => {
     };
     let calls = 0;
     const runner = {
-      limits: { elapsedMsMax: 1_000 },
+      limits: { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 },
       matcher: {
         match: (): number => {
           calls += 1;

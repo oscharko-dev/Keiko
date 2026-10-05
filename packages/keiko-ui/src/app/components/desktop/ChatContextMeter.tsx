@@ -61,14 +61,20 @@ function ContextMetrics({ status }: { readonly status: ChatContextStatusWire }):
 // Input shares use the design system's categorical data colours; space that is not input (free,
 // compaction buffer, reserves) is drawn neutral or hatched, never distinguished by colour alone.
 
-function segmentLabel(t: I18nTranslate, segment: ChatContextSegmentWire): string {
+function segmentLabel(
+  t: I18nTranslate,
+  segment: ChatContextSegmentWire,
+  grounded: boolean,
+): string {
   const labels: Record<ChatContextSegmentWire["id"], string> = {
     system: t("chat.context.segment.system"),
     summary: t("chat.context.segment.summary"),
     messages: t("chat.context.segment.messages"),
     knowledge: t("chat.context.segment.knowledge"),
-    free: t("chat.context.segment.free"),
+    free: t(grounded ? "chat.context.segment.conversationFree" : "chat.context.segment.free"),
     "compaction-buffer": t("chat.context.segment.compactionBuffer"),
+    "source-capacity": t("chat.context.segment.sourceCapacity"),
+    "input-capacity-unavailable": t("chat.context.segment.inputUnavailable"),
     "output-reserve": t("chat.context.outputReserve"),
     "safety-margin": t("chat.context.safetyMargin"),
   };
@@ -138,7 +144,7 @@ function SegmentRow({
     <li className={styles.cmpLegendRow} data-segment={segment.id}>
       <span className={styles.cmpSwatch} data-segment={segment.id} aria-hidden="true" />
       <span className={styles.cmpLegendLabel}>
-        {segmentLabel(t, segment)}
+        {segmentLabel(t, segment, status.conversationInputBudgetTokens !== undefined)}
         {detail === undefined ? null : <span className={styles.cmpLegendDetail}>{detail}</span>}
       </span>
       <span className={styles.cmpLegendValue}>{segment.tokens.toLocaleString(locale)}</span>
@@ -179,8 +185,8 @@ function ContextBreakdown({
   );
 }
 
-// A provider measurement differs from Keiko's admission estimate, the unit of every share above;
-// stating both keeps the breakdown and the measured request comparable.
+// Compare the last provider measurement with that request's admission estimate.
+// The current breakdown estimates the next request separately.
 function lastRequestText(
   t: I18nTranslate,
   number: (value: number) => string,
@@ -223,7 +229,12 @@ function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): R
       )}
       {until === undefined ? null : (
         <p className={styles.cmpHelp}>
-          {t("chat.context.untilCompaction", { tokens: number(until) })}
+          {t(
+            status.conversationInputBudgetTokens === undefined
+              ? "chat.context.untilCompaction"
+              : "chat.context.untilConversationCompaction",
+            { tokens: number(until) },
+          )}
         </p>
       )}
     </>
@@ -238,6 +249,21 @@ function ContextSummary({ status }: { readonly status: ChatContextStatusWire }):
       <ContextBreakdown status={status} segments={status.segments} />
       <ContextFootnotes status={status} />
     </>
+  );
+}
+
+function DeclaredInputLimit({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const restricted = status.segments?.some(
+    (segment) => segment.id === "input-capacity-unavailable" && segment.tokens > 0,
+  );
+  return status.inputLimitTokens === undefined || restricted !== true ? null : (
+    <p className={styles.cmpHelp}>
+      {t("chat.context.declaredInputLimit", {
+        tokens: status.inputLimitTokens.toLocaleString(locale),
+      })}
+    </p>
   );
 }
 
@@ -269,10 +295,42 @@ function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }
           })}
         </p>
       )}
+      <DeclaredInputLimit status={status} />
       {status.contextWindowAssumed === true ? (
         <p className={styles.cmpHelp}>{t("chat.context.windowAssumed")}</p>
       ) : null}
     </>
+  );
+}
+
+function AutomaticCompactionNote({
+  status,
+}: {
+  readonly status: ChatContextStatusWire | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const tokens = status?.conversationInputBudgetTokens;
+  return (
+    <p className={styles.cmpHelp}>
+      {t(tokens === undefined ? "chat.context.automatic" : "chat.context.automaticGrounded", {
+        tokens: tokens?.toLocaleString(locale) ?? "",
+      })}
+    </p>
+  );
+}
+
+function SourcesPolicyNote({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const tokens = status.conversationInputBudgetTokens;
+  return (
+    <p className={styles.cmpHelp}>
+      {t(
+        tokens === undefined ? "chat.context.sourcesPolicy" : "chat.context.sourcesPolicyGrounded",
+        { tokens: tokens?.toLocaleString(locale) ?? "" },
+      )}
+    </p>
   );
 }
 
@@ -286,10 +344,10 @@ function ContextDetails(props: ChatContextMeterProps): ReactNode {
         <ContextSummary status={props.status} />
       )}
       <p className={styles.cmpHelp}>{t("chat.context.estimate")}</p>
-      <p className={styles.cmpHelp}>{t("chat.context.automatic")}</p>
+      <AutomaticCompactionNote status={props.status} />
       <p className={styles.cmpHelp}>{t("chat.context.retained")}</p>
       {props.status?.knowledgeSources === undefined ? null : (
-        <p className={styles.cmpHelp}>{t("chat.context.sourcesPolicy")}</p>
+        <SourcesPolicyNote status={props.status} />
       )}
       {props.error ? (
         <p>

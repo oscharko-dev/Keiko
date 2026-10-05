@@ -45,6 +45,34 @@ function summary(
 }
 
 describe("ContextStatusPanel", () => {
+  it("counts only rendered lanes and does not call instructions and tasks sources", () => {
+    const counts = {
+      ...laneCounts(0),
+      "system-contract": 1,
+      "user-task": 1,
+      "repo-evidence": 7,
+      "future-unrecognized-lane": 1,
+    };
+    const { container } = render(
+      <ContextStatusPanel contextSummary={summary({ laneCounts: counts })} />,
+    );
+    expect(container.querySelector(".grounded-evidence-summary-meta")).toHaveTextContent(
+      "Context lanes: 3",
+    );
+    expect(container.textContent).not.toContain("Source groups");
+  });
+
+  it("identifies source-context estimates and names the repository excerpt count", () => {
+    const counts = laneCounts(0);
+    counts["repo-evidence"] = 5;
+    const { container } = render(
+      <ContextStatusPanel contextSummary={summary({ laneCounts: counts })} />,
+    );
+    expect(container.textContent).toContain("Source context");
+    expect(container.textContent).toContain("Repository excerpts");
+    expect(container.textContent).toContain("Context lanes: 1");
+  });
+
   it("renders null when contextSummary is undefined (legacy / non-profiled turn)", () => {
     const { container } = render(<ContextStatusPanel contextSummary={undefined} />);
     expect(container.querySelector(".ctx-status")).toBeNull();
@@ -81,11 +109,11 @@ describe("ContextStatusPanel", () => {
     expect(summaryEl).toHaveClass("grounded-evidence-summary");
     expect(summaryEl).toHaveAttribute("aria-label", "Context assembly details");
     expect(summaryEl).toHaveAttribute("title", expect.stringContaining(DEFAULT_TOKEN_ESTIMATOR_ID));
-    expect(title).toHaveTextContent("Context");
-    expect(meta).toHaveTextContent("34.0k est. assembled tokens");
+    expect(title).toHaveTextContent("Source context");
+    expect(meta).toHaveTextContent("34.0k est. source tokens");
     expect(meta).toHaveTextContent("Moderate pressure");
-    expect(meta).toHaveTextContent("2 lanes");
-    expect(meta).toHaveTextContent("Compaction active");
+    expect(meta).toHaveTextContent("Context lanes: 2");
+    expect(meta).toHaveTextContent("Conversation history compaction used");
   });
 
   it("renders the token total, pressure label, and compaction status as aggregate rows", () => {
@@ -97,19 +125,19 @@ describe("ContextStatusPanel", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Estimator");
     expect(text).toContain(DEFAULT_TOKEN_ESTIMATOR_ID);
-    expect(text).toContain("Assembled estimate");
+    expect(text).toContain("Selected source-excerpt estimate");
     expect(text).toContain("34.0k tok");
     expect(text).toContain("Budget pressure");
     expect(text).toContain("Moderate");
-    expect(text).toContain("Compaction");
-    expect(text).toContain("Compaction active");
+    expect(text).toContain("Conversation history compaction");
+    expect(text).toContain("Conversation history compaction used");
   });
 
   it("shows Inactive when compaction did not fire", () => {
     const { container } = render(
       <ContextStatusPanel contextSummary={summary({ compactionActive: false })} />,
     );
-    expect(container.textContent).toContain("Compaction inactive");
+    expect(container.textContent).toContain("No conversation history compaction");
   });
 
   it("renders only lanes with a count > 0, humanized, with the integer count", () => {
@@ -122,10 +150,10 @@ describe("ContextStatusPanel", () => {
     const dts = Array.from(container.querySelectorAll(".grounded-context-pack-dt")).map(
       (dt) => dt.textContent,
     );
-    expect(dts).toContain("repo evidence");
-    expect(dts).toContain("system contract");
+    expect(dts).toContain("Repository excerpts");
+    expect(dts).toContain("System instructions");
     // Zero-count lanes are omitted.
-    expect(dts).not.toContain("working memory");
+    expect(dts).not.toContain("Working memory");
     const text = container.textContent ?? "";
     expect(text).toContain("7");
     expect(text).toContain("1");

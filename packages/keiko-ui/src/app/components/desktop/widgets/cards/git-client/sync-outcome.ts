@@ -1,5 +1,10 @@
 "use client";
 
+import type {
+  OptionalWidgetTranslate as I18nTranslate,
+  WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
+
 // Presentation of a SETTLED sync/push result: severity + human message.
 //
 // A settled response is not a success. The Git window used to format every settled response with the
@@ -13,8 +18,6 @@
 //      never prints provider text — the server's rejection/recovery vocabulary is closed and each
 //      member maps to a catalog key.
 
-import type { I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
 import type { GitSyncOutcome } from "@/lib/types";
 import type { GitDeliveryMutationStatus } from "@/lib/api";
 import { isGitDeliveryRecoveryActionHint } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";

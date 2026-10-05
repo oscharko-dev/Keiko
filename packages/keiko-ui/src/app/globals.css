@@ -11431,16 +11431,6 @@ html[data-keiko-gateway-setup-open="true"] {
   cursor: default;
   max-width: 100%;
 }
-/* Epic #177 audit: citation score, uncertainty, and meta lines all read meaningful values
-   (score number, uncertainty claim, omitted-count). --fg-faint = 2.34:1 and --ink-muted =
-   3.89:1 on --card → both fail WCAG 1.4.3 (4.5:1). Align with the labels pattern documented
-   at .grounded-context-pack-headline below: use --fg (16.96:1). Size/weight/italic keep the
-   visual hierarchy intact. */
-.grounded-citation-score {
-  margin-left: 6px;
-  color: var(--text-primary);
-  font-size: 10px;
-}
 /* Issue #1285 — distinguishes a document-evidence citation (DOCX/XLSX/PDF extracted text) from a
    code/text citation with a small leading format badge. */
 .grounded-citation-doc-badge {

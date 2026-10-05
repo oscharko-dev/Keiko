@@ -1,3 +1,4 @@
+import { LEGACY_CONNECTED_SEARCH_ABSTENTION } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { describe, expect, it } from "vitest";
 import {
   CITATION_FINDING_LIST_MAX,
@@ -5,6 +6,7 @@ import {
   citationMarkerIndices,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type {
   ConnectedContextPack,
   ContextExcerpt,
@@ -15,7 +17,6 @@ import { attachCitationsToAnswer } from "@oscharko-dev/keiko-local-knowledge";
 import {
   DEFAULT_ENTAILMENT_OPTIONS,
   ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
-  GROUNDED_NO_EVIDENCE_ANSWER,
   NUMERIC_EVIDENCE_FRAMING_CHARS,
   buildPackCitationIndex,
   buildPackExcerptTextResolver,
@@ -124,6 +125,424 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it.each([
+    "listens on 127.0.0.1:1983",
+    "api.example.com:8080",
+    "gear ratio 3.5 : 1",
+    "Version 2.0: 5 new features",
+    "package.json: 2 scripts",
+    "`utils.ts`: 3 helpers",
+    "`127.0.0.1:1983`",
+    "`api.example.com:8080`",
+  ])("does not turn ordinary prose into a source claim: %s", (answer) => {
+    expect(parseInlineCitations(answer)).toEqual([]);
+    expect(reconcileInlineCitations(answer, buildPackCitationIndex([])).unsupported).toEqual([]);
+    expect(segmentCitedClaims(answer)).toEqual([]);
+  });
+
+  it.each([
+    "| src/a.ts:12, src/b.ts:30 |",
+    "| src/a.ts:12; src/b.ts:30 |",
+    "| a.html : 12, b.html : 30 |",
+  ])("keeps each table location separate: %s", (answer) => {
+    const paths = answer.includes("html") ? ["a.html", "b.html"] : ["src/a.ts", "src/b.ts"];
+    const index = buildPackCitationIndex([
+      packWith(
+        paths.map((scopePath, i) => ({
+          scopePath,
+          excerpts: [excerpt(scopePath, i === 0 ? 12 : 30, i === 0 ? 12 : 30)],
+        })),
+      ),
+    ]);
+    expect(parseInlineCitations(answer)).toMatchObject([
+      { scopePath: paths[0], lineRange: { startLine: 12, endLine: 12 } },
+      { scopePath: paths[1], lineRange: { startLine: 30, endLine: 30 } },
+    ]);
+    expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(paths);
+    expect(reconcileInlineCitations(answer, index).unsupported).toEqual([]);
+    expect(segmentCitedClaims(answer)[0]?.citations).toHaveLength(2);
+  });
+
+  it.each(["Defined in", "See"])("keeps table prose outside the path: %s", (prefix) => {
+    expect(parseInlineCitations(`| ${prefix} src/a.ts:12 |`)).toMatchObject([
+      { scopePath: "src/a.ts", lineRange: { startLine: 12, endLine: 12 } },
+    ]);
+  });
+
+  it.each(["implements the scheduler", "实现了调度器", "5 workers use this"])(
+    "retains a genuine compact location followed by prose: %s",
+    (prose) => {
+      const answer = `src/main.ts:5 ${prose}`;
+      const index = buildPackCitationIndex([
+        packWith([{ scopePath: "src/main.ts", excerpts: [excerpt("src/main.ts", 5, 5)] }]),
+      ]);
+      expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/main.ts" }]);
+      expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(["src/main.ts"]);
+      expect(parseInlineCitations("src/main.ts:5implements")).toEqual([]);
+    },
+  );
+
+  it.each([
+    "src/ghost.ts:5",
+    "`src/ghost.ts:5`",
+    "| src/ghost.ts : 5 |",
+    "src/ghost.ts: 5",
+    "ghost.ts:5",
+  ])("reports a fabricated implicit source instead of silently dropping it: %s", (answer) => {
+    const result = reconcileInlineCitations(answer, buildPackCitationIndex([]));
+    expect(result.unsupported).toMatchObject([
+      { scopePath: answer.includes("src/") ? "src/ghost.ts" : "ghost.ts" },
+    ]);
+    expect(result.citedScopePaths.size).toBe(0);
+  });
+
+  it.each(["src/shared.ts:5", "`src/shared.ts:5`", "| src/shared.ts:5 |"])(
+    "reports source ambiguity for an unqualified implicit location: %s",
+    (answer) => {
+      const pack = packWith([
+        { scopePath: "src/shared.ts", excerpts: [excerpt("src/shared.ts", 1, 10)] },
+      ]);
+      const result = reconcileInlineCitations(answer, buildPackCitationIndex([pack, pack]));
+      expect(result.unsupported).toMatchObject([{ scopePath: "src/shared.ts" }]);
+      expect(result.citedScopePaths.size).toBe(0);
+    },
+  );
+
+  it.each(["处定义", "で定義", "implements", "𐐀suffix", "5 workers"])(
+    "uses the closing code delimiter before adjacent prose: %s",
+    (suffix) => {
+      expect(parseInlineCitations(`\`src/main.ts:5\`${suffix}`)).toMatchObject([
+        { scopePath: "src/main.ts", lineRange: { startLine: 5, endLine: 5 } },
+      ]);
+    },
+  );
+
+  it("reports unsupported precision on a known implicit path without judging it", async () => {
+    const answer = "Known source src/main.ts:5. Unread source src/main.ts:999.";
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "src/main.ts", excerpts: [excerpt("src/main.ts", 5, 5)] }]),
+    ]);
+    const membership = reconcileInlineCitations(answer, index);
+    expect(membership.unsupported).toMatchObject([
+      { scopePath: "src/main.ts", lineRange: { startLine: 999, endLine: 999 } },
+    ]);
+    const judged: string[] = [];
+    const judge: EntailmentJudge = {
+      judge: (input) => {
+        judged.push(input.claimText);
+        return Promise.resolve("supported");
+      },
+    };
+    const result = await reconcileClaimEntailment(answer, membership, () => "actual line 5", judge);
+    expect(result.judgedClaims).toBe(1);
+    expect(judged).toEqual(["Known source src/main.ts:5."]);
+  });
+
+  it("keeps a source-extension location unsupported until actual excerpts establish membership", () => {
+    const answer = "Next.js:3000";
+    expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "Next.js" }]);
+    expect(reconcileInlineCitations(answer, buildPackCitationIndex([]))).toMatchObject({
+      unsupported: [{ scopePath: "Next.js" }],
+    });
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "Next.js", excerpts: [excerpt("Next.js", 3000, 3000)] }]),
+    ]);
+    expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(["Next.js"]);
+    expect(
+      reconcileInlineCitations("[Next.js:3000]", buildPackCitationIndex([])).unsupported,
+    ).toHaveLength(1);
+  });
+
+  it("never sends an unresolved implicit location to the entailment judge", async () => {
+    const answer = "Next.js:3000";
+    let calls = 0;
+    const judge: EntailmentJudge = {
+      judge: () => {
+        calls += 1;
+        return Promise.resolve("supported");
+      },
+    };
+    const emptyIndex = buildPackCitationIndex([]);
+    const result = await reconcileClaimEntailment(
+      answer,
+      reconcileInlineCitations(answer, emptyIndex),
+      () => "irrelevant text",
+      judge,
+    );
+    expect(result.judgedClaims).toBe(0);
+    expect(result.unavailableClaims).toBe(0);
+    expect(calls).toBe(0);
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "Next.js", excerpts: [excerpt("Next.js", 3000, 3000)] }]),
+    ]);
+    const supported = await reconcileClaimEntailment(
+      answer,
+      reconcileInlineCitations(answer, index),
+      () => "actual excerpt",
+      judge,
+    );
+    expect(supported.judgedClaims).toBe(1);
+    expect(supported.unentailed).toEqual([]);
+    expect(calls).toBe(1);
+  });
+
+  it("preserves explicit uncommon filenames and unsupported exact locations", () => {
+    const answer = "[release.123:2] [api.example.com:8080] [src/custom.opaque:3]";
+    expect(parseInlineCitations(answer).map((item) => item.scopePath)).toEqual([
+      "release.123",
+      "api.example.com",
+      "src/custom.opaque",
+    ]);
+    expect(reconcileInlineCitations(answer, buildPackCitationIndex([])).unsupported).toHaveLength(
+      3,
+    );
+  });
+
+  it.each(["src/\u202efile.ts:1", "src/part\tfile.ts:1", "../src/file.ts:1", "/src/file.ts:1"])(
+    "never recovers a suffix from an invalid table path: %s",
+    (token) => {
+      expect(parseInlineCitations(`| ${token} |`)).toEqual([]);
+    },
+  );
+
+  it("preserves an unambiguous spaced or comma filename in a single table location", () => {
+    expect(
+      parseInlineCitations("| 文書/運転 手順.html : 182 | | src/with,comma.ts:5 |"),
+    ).toMatchObject([
+      { scopePath: "文書/運転 手順.html", lineRange: { startLine: 182, endLine: 182 } },
+      { scopePath: "src/with,comma.ts", lineRange: { startLine: 5, endLine: 5 } },
+    ]);
+  });
+
+  it.each([false, true])(
+    "associates spaced table source lines with each factual claim (code=%s)",
+    (code) => {
+      const paths = ["chapters/conveyor.html", "chapters/calibration.html", "文書/運転 手順.html"];
+      const rows = paths.map((path, index) => {
+        const ref = `${path}\u202f:\u202f182`;
+        return `| Machine ${String(index)} | ${String(1193 + index)} hours | ${code ? "`" + ref + "`" : ref} |`;
+      });
+      const answer = ["| Machine | Interval | Source |", "|---|---|---|", ...rows].join("\n");
+      const index = buildPackCitationIndex([
+        packWith(
+          paths.map((scopePath) => ({
+            scopePath,
+            excerpts: [excerpt(scopePath, 182, 182)],
+          })),
+        ),
+      ]);
+      expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(paths);
+      expect(segmentCitedClaims(answer)).toHaveLength(3);
+      expect(segmentCitedClaims(answer)[0]).toMatchObject({
+        citations: [{ scopePath: paths[0], lineRange: { startLine: 182, endLine: 182 } }],
+      });
+      expect(
+        reconcileInlineCitations(
+          "missing.html\u202f:\u202f182, chapters/conveyor.html\u202f:\u202f183",
+          index,
+        ).unsupported,
+      ).toHaveLength(2);
+    },
+  );
+
+  it("associates an adjacent outside-code line with the exact wrapped path", () => {
+    const path = "文書/運転 手順.html";
+    const answer = `Service interval1193 hours \`${path}\`\u202f:\u202f182.`;
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: path, excerpts: [excerpt(path, 182, 182)] }]),
+    ]);
+    expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual([path]);
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { citations: [{ scopePath: path, lineRange: { startLine: 182, endLine: 182 } }] },
+    ]);
+    expect(parseInlineCitations(`\`${path}\`\n :182`)).toEqual([]);
+  });
+
+  it("keeps spaced location grammar within a single actual reference", () => {
+    expect(
+      parseInlineCitations(
+        "foo[0] and [docs/a.html : 182](https://example.test) and [docs/a.html : 182][guide]",
+      ),
+    ).toEqual([]);
+    expect(
+      parseInlineCitations("docs/a.html\n : 182\n`const path = [0]`\n```\ndocs/a.html : 182\n```"),
+    ).toEqual([]);
+    expect(parseInlineCitations("docs/a.html : 182 - wrong")).toEqual([]);
+    expect(
+      reconcileInlineCitations(
+        "[docs/a.html : 182 - wrong] [../docs/a.html : 182]",
+        buildPackCitationIndex([
+          packWith([{ scopePath: "docs/a.html", excerpts: [excerpt("docs/a.html", 182, 182)] }]),
+        ]),
+      ).unsupported,
+    ).toHaveLength(1);
+  });
+
+  it("does not let a stray opening bracket consume the next source citation", () => {
+    const answer = "xs[0 is read, see [src/a.ts:3].";
+    expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/a.ts" }]);
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { claimText: "xs[0 is read, see .", citations: [{ scopePath: "src/a.ts" }] },
+    ]);
+  });
+
+  it("reconciles every adjacent source citation including an unsupported first path", () => {
+    const answer = "X is defined in [fake/path.ts:1][src/real.ts:2].";
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "src/real.ts", excerpts: [excerpt("src/real.ts", 2, 2)] }]),
+    ]);
+    expect(parseInlineCitations(answer).map((citation) => citation.scopePath)).toEqual([
+      "fake/path.ts",
+      "src/real.ts",
+    ]);
+    expect(reconcileInlineCitations(answer, index).unsupported).toMatchObject([
+      { scopePath: "fake/path.ts" },
+    ]);
+  });
+
+  it("keeps actual reference links excluded beside adjacent numeric citation markers", () => {
+    expect(parseInlineCitations("See [src/a.ts:3][repository docs].")).toEqual([]);
+    expect(parseInlineCitations("See [src/a.ts:3](https://example.test).")).toEqual([]);
+    expect(parseInlineCitations("See [src/a.ts:3][1].")).toMatchObject([{ scopePath: "src/a.ts" }]);
+  });
+  it.each(["-", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"])(
+    "parses numeric line ranges with the typographic separator %s without changing paths",
+    (separator) => {
+      expect(parseInlineCitations(`[src/domain/shipping.ts:1${separator}6]`)).toMatchObject([
+        { scopePath: "src/domain/shipping.ts", lineRange: { startLine: 1, endLine: 6 } },
+      ]);
+      expect(parseInlineCitations(`[src/part\u2011name.ts:1${separator}2]`)).toMatchObject([
+        { scopePath: "src/part\u2011name.ts", lineRange: { startLine: 1, endLine: 2 } },
+      ]);
+    },
+  );
+
+  it("reconciles actual non-breaking-hyphen citations against unchanged source windows", () => {
+    const index = buildPackCitationIndex([
+      packWith([
+        {
+          scopePath: "src/domain/shipping.ts",
+          excerpts: [excerpt("src/domain/shipping.ts", 1, 6)],
+        },
+        { scopePath: "README.md", excerpts: [excerpt("README.md", 1, 5)] },
+        {
+          scopePath: "handbook/services/parcel.html",
+          excerpts: [excerpt("handbook/services/parcel.html", 1, 2)],
+        },
+      ]),
+    ]);
+    const answer =
+      "Price [src/domain/shipping.ts:1\u20116]. Weight [README.md:1\u20115]. Collection [handbook/services/parcel.html:1\u20112].";
+    const result = reconcileInlineCitations(answer, index);
+    expect(result.unsupported).toEqual([]);
+    expect([...result.citedScopePaths]).toEqual([
+      "src/domain/shipping.ts",
+      "README.md",
+      "handbook/services/parcel.html",
+    ]);
+    expect(
+      parseInlineCitations(
+        "[src/a.ts:0\u20112] [src/a.ts:9\u20112] [src/a.ts:1\u20119007199254740992]",
+      ),
+    ).toEqual([]);
+    expect(
+      reconcileInlineCitations("[src/domain/shipping.ts:1\u20117] [missing.ts:1\u20112]", index)
+        .unsupported,
+    ).toHaveLength(2);
+  });
+
+  it("keeps native typographic citations outside actual source lines unsupported", () => {
+    const index = buildPackCitationIndex([
+      packWith([
+        {
+          scopePath: "src/domain/shipping.ts",
+          excerpts: [excerpt("src/domain/shipping.ts", 1, 6)],
+        },
+        { scopePath: "README.md", excerpts: [excerpt("README.md", 1, 4)] },
+        {
+          scopePath: "handbook/services/parcel.html",
+          excerpts: [excerpt("handbook/services/parcel.html", 1, 1)],
+        },
+      ]),
+    ]);
+    const result = reconcileInlineCitations(
+      "Price [src/domain/shipping.ts:1\u20116]. Weight [README.md:1\u20115]. Collection [handbook/services/parcel.html:1\u20112].",
+      index,
+    );
+    expect([...result.citedScopePaths]).toEqual(["src/domain/shipping.ts"]);
+    expect(result.unsupported.map((citation) => citation.scopePath)).toEqual([
+      "README.md",
+      "handbook/services/parcel.html",
+    ]);
+  });
+  it("accepts a maximum portable path with qualified safe-integer line references", () => {
+    const path = `${"d/".repeat((WORKSPACE_PORTABLE_PATH_MAX_BYTES - 12) / 2)}manuals.html`;
+    const lastLine = Number.MAX_SAFE_INTEGER;
+    expect(
+      parseInlineCitations(`[source:1|${path}:${String(lastLine)}-${String(lastLine)}]`),
+    ).toMatchObject([
+      { sourceId: "1", scopePath: path, lineRange: { startLine: lastLine, endLine: lastLine } },
+    ]);
+  });
+
+  it("bounds hostile unterminated citation markers without suppressing a later valid source", () => {
+    const answer = `${"[".repeat(64_000)}\nSee [src/manual.html:1-2].`;
+    expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/manual.html" }]);
+    expect(stripInlineCitations(answer)).toBe(`${"[".repeat(64_000)}\nSee .`);
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { citations: [{ scopePath: "src/manual.html" }] },
+    ]);
+  });
+
+  it("reconciles a deep manual citation through the same portable path contract as source reads", () => {
+    const path = `${Array.from({ length: 120 }, (_, i) => `d${String(i).padStart(3, "0")}`).join("/")}/manual.html`;
+    const answer = `DeepManualProbe is 1440 hours [${path}:1-2].`;
+    expect(parseInlineCitations(answer)).toMatchObject([
+      { scopePath: path, lineRange: { startLine: 1, endLine: 2 } },
+    ]);
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: path, excerpts: [excerpt(path, 1, 2)] }]),
+    ]);
+    const result = reconcileInlineCitations(answer, index);
+    expect([...result.citedScopePaths]).toEqual([path]);
+    expect(result.unsupported).toEqual([]);
+    expect(stripInlineCitations(answer)).toBe("DeepManualProbe is 1440 hours .");
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { claimText: "DeepManualProbe is 1440 hours .", citations: [{ scopePath: path }] },
+    ]);
+  });
+
+  it("keeps deep citation escape, control, and oversized path guards", () => {
+    const deep = "nested/".repeat(100);
+    for (const path of [
+      `/${deep}manual.html`,
+      `C:/${deep}manual.html`,
+      `../${deep}manual.html`,
+      `${deep}\0manual.html`,
+      `${"nested/".repeat(1000)}manual.html`,
+      `${"日本語/".repeat(500)}manual.html`,
+    ])
+      expect(parseInlineCitations(`[${path}:1-2]`)).toEqual([]);
+  });
+
+  it("ignores proposed code arrays and example references inside Markdown code", () => {
+    const answer = [
+      "Example: `[missing.ts:2]`.",
+      "```ts",
+      "expect(createBulkQuote([1, 1.01])).toBe('Quote: 10.25 EUR');",
+      "expect(() => createBulkQuote([Number.NaN])).toThrow(RangeError);",
+      "expect(() => createBulkQuote([30.01])).toThrow(RangeError);",
+      "// [missing.ts:4]",
+      "```",
+      "Actual source: [src/services/createQuote.ts:1-7].",
+      "Unsupported prose source: [missing.ts:9].",
+    ].join("\n");
+    expect(parseInlineCitations(answer).map((citation) => citation.raw)).toEqual([
+      "src/services/createQuote.ts:1-7",
+      "missing.ts:9",
+    ]);
+  });
+
   it("extracts [path:line-range] markers and dedupes", () => {
     const cites = parseInlineCitations(
       "The route is defined in [src/http/routes.ts:10-20] and again [src/http/routes.ts:10-20].",
@@ -500,10 +919,10 @@ describe("packHasUsableEvidence / packsHaveUsableEvidence", () => {
   });
 });
 
-describe("GROUNDED_NO_EVIDENCE_ANSWER", () => {
+describe("LEGACY_CONNECTED_SEARCH_ABSTENTION", () => {
   it("is a safe, source-neutral abstention message", () => {
-    expect(GROUNDED_NO_EVIDENCE_ANSWER.toLowerCase()).toContain("could not find");
-    expect(GROUNDED_NO_EVIDENCE_ANSWER).not.toContain("/");
+    expect(LEGACY_CONNECTED_SEARCH_ABSTENTION.toLowerCase()).toContain("could not find");
+    expect(LEGACY_CONNECTED_SEARCH_ABSTENTION).not.toContain("/");
   });
 });
 
@@ -913,6 +1332,20 @@ describe("splitClaimSpans", () => {
 });
 
 describe("stripInlineCitations", () => {
+  it.each(["foo[0]", "arr[i]", "values[1, 2]"])(
+    "preserves inline code %s while judging the surrounding cited claim",
+    (code) => {
+      const prose = `Use \`${code}\` for the first element`;
+      expect(stripInlineCitations(`${prose} [src/a.ts:3].`)).toBe(`${prose} .`);
+      expect(segmentCitedClaims(`${prose} [src/a.ts:3].`)).toMatchObject([
+        { claimText: `${prose} .`, citations: [{ scopePath: "src/a.ts" }] },
+      ]);
+      expect(segmentCitedClaims(`${prose} [src/a.ts:3].`)[0]).not.toHaveProperty("hidesProse");
+      expect(segmentNumericCitedClaims(`${prose} [1].`)).toEqual([
+        { claimText: `${prose} .`, markers: [1] },
+      ]);
+    },
+  );
   it("removes citation brackets and collapses whitespace", () => {
     expect(stripInlineCitations("Login validates in [src/auth/login.ts:10-20] the session.")).toBe(
       "Login validates in the session.",
@@ -927,6 +1360,15 @@ describe("stripInlineCitations", () => {
 });
 
 describe("segmentCitedClaims", () => {
+  it.each(["```", "~~~"])("keeps %s code fences out of cited claim segmentation", (fence) => {
+    const code = [fence + "ts", "const values = [1];", "// [src/a.ts:3]", fence].join("\n");
+    const pathClaims = segmentCitedClaims(`${code}\nThe retention is 30 days [src/a.ts:1-20].`);
+    const numericClaims = segmentNumericCitedClaims(`${code}\nThe retention is 30 days [1].`);
+    expect(pathClaims).toHaveLength(1);
+    expect(pathClaims[0]?.claimText).toBe("The retention is 30 days .");
+    expect(numericClaims).toEqual([{ claimText: "The retention is 30 days .", markers: [1] }]);
+  });
+
   it("returns only spans that carry a citation, with brackets stripped from the claim text", () => {
     const claims = segmentCitedClaims(
       "The service authenticates users. Login validates in [src/auth/login.ts:10-20].",
@@ -998,6 +1440,18 @@ describe("reconcileClaimEntailment", () => {
       packWith([{ scopePath: "src/a.ts", excerpts: [excerptWith("src/a.ts", 1, 20, content)] }]),
     ]);
   }
+
+  it("judges only the prose claim outside a multiline code fence", async () => {
+    const result = await reconcileClaimEntailment(
+      "```ts\n// [src/a.ts:3]\nconst values = [1];\n```\nThe retention is 30 days [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      judgeFixturePack("The retention is 30 days."),
+      scriptedJudge(),
+    );
+    expect(result.judgedClaims).toBe(1);
+    expect(result.unentailed).toEqual([]);
+    expect(result.unavailableClaims).toBe(0);
+  });
 
   it("flags a claim whose in-pack (membership-valid) excerpt does NOT support it", async () => {
     // The citation passes membership (it IS in the pack) but the excerpt contradicts the claim —

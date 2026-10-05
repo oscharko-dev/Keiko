@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -20,14 +21,86 @@ import type { ChatSessionApi } from "./hooks/useChatSession";
 
 type ContextSession = Pick<
   ChatSessionApi,
-  "activeChat" | "selectedModel" | "messages" | "sending" | "regeneratingMessageId" | "loading"
+  | "activeChat"
+  | "selectedModel"
+  | "messages"
+  | "sending"
+  | "regeneratingMessageId"
+  | "loading"
+  | "models"
 >;
 
 interface ContextState {
   readonly key: string;
+  readonly compactionAuthorityKey?: string | undefined;
   readonly status?: ChatContextStatusWire | undefined;
   readonly compacting: boolean;
   readonly error: boolean;
+}
+
+interface PendingContextRequest {
+  readonly controller: AbortController;
+  readonly authorityKey: string;
+  readonly compact: boolean;
+}
+
+interface ContextRequestRef {
+  current: PendingContextRequest | null;
+}
+
+function selectedModelContextGeometry(session: ContextSession): readonly unknown[] {
+  const model = session.models.find((candidate) => candidate.id === session.selectedModel);
+  if (model === undefined) return [];
+  const accounting = model.tokenAccounting;
+  return [
+    model.contextWindow,
+    model.maxInputTokens,
+    model.maxOutputTokens,
+    model.contextWindowAssumed,
+    model.contextWindowReported,
+    accounting?.source,
+    accounting?.counterId,
+    accounting?.scaleMilli,
+    accounting?.offsetTokens,
+  ];
+}
+
+function legacyScopeGeometry(session: ContextSession): readonly unknown[] {
+  const chat = session.activeChat;
+  return [
+    chat?.connectedScopes ?? chat?.connectedScope,
+    chat?.localKnowledgeScopes ?? chat?.localKnowledgeScope,
+    chat?.gitChangeScopes,
+  ];
+}
+
+function contextAuthorityKey(session: ContextSession): string {
+  const chat = session.activeChat;
+  return JSON.stringify([
+    chat?.id,
+    chat?.projectPath,
+    session.selectedModel,
+    chat?.groundingScopeIdentity ?? legacyScopeGeometry(session),
+  ]);
+}
+
+function cancelContextRefresh(controller: ContextRequestRef, authorityKey: string): void {
+  const pending = controller.current;
+  if (pending?.compact === true && pending.authorityKey === authorityKey) return;
+  pending?.controller.abort();
+  controller.current = null;
+}
+
+function useContextRequestRef(): ContextRequestRef {
+  const controller = useRef<PendingContextRequest | null>(null);
+  useEffect(
+    () => (): void => {
+      controller.current?.controller.abort();
+      controller.current = null;
+    },
+    [],
+  );
+  return controller;
 }
 
 function useChatContext(session: ContextSession): {
@@ -39,29 +112,41 @@ function useChatContext(session: ContextSession): {
   const chatId = session.activeChat?.id;
   const projectPath = session.activeChat?.projectPath;
   const modelId = session.selectedModel;
-  const key = JSON.stringify([chatId, projectPath, modelId]);
+  const authorityKey = contextAuthorityKey(session);
+  const key = JSON.stringify([authorityKey, selectedModelContextGeometry(session)]);
   const busy = session.sending || session.regeneratingMessageId !== undefined;
-  const historyKey = JSON.stringify(session.messages.map((message) => message.id));
+  const historyKey = useHistoryKey(session.messages);
   const [state, setState] = useState<ContextState>({ key, compacting: false, error: false });
   const [revision, setRevision] = useState(0);
-  const controller = useRef<AbortController | null>(null);
+  const controller = useContextRequestRef();
+  const currentAuthority = useRef(authorityKey);
+  currentAuthority.current = authorityKey;
   const currentStatus = useRef(state.status);
   currentStatus.current = state.status;
-  const refresh = useContextRefresh(chatId, projectPath, modelId, key, controller, setState);
+  const refresh = useContextRefresh(
+    chatId,
+    projectPath,
+    modelId,
+    key,
+    authorityKey,
+    controller,
+    setState,
+  );
+  const compacting = state.compacting && state.compactionAuthorityKey === authorityKey;
+  const staleCompaction = state.key !== key && compacting;
   useEffect(() => {
     if (session.loading) return;
     const cancel = pollPendingContext(refresh, busy, currentStatus.current?.estimatedInputTokens);
     return (): void => {
       cancel();
-      controller.current?.abort();
-      controller.current = null;
+      cancelContextRefresh(controller, currentAuthority.current);
     };
-  }, [refresh, busy, session.loading, historyKey, revision]);
+  }, [refresh, busy, session.loading, historyKey, revision, staleCompaction, controller]);
   return {
-    state: state.key === key ? state : { key, compacting: false, error: false },
+    state: state.key === key ? state : { key, compacting, error: false },
     busy,
     compact: (): void => {
-      if (!busy && !state.compacting) void refresh(true);
+      if (!busy && !compacting) void refresh(true);
     },
     retry: (): void => {
       setRevision((value) => value + 1);
@@ -69,26 +154,31 @@ function useChatContext(session: ContextSession): {
   };
 }
 
+function useHistoryKey(messages: ContextSession["messages"]): string {
+  return useMemo(() => JSON.stringify(messages.map((message) => message.id)), [messages]);
+}
+
 function useContextRefresh(
   chatId: string | undefined,
   projectPath: string | undefined,
   modelId: string | undefined,
   key: string,
-  controller: { current: AbortController | null },
+  authorityKey: string,
+  controller: ContextRequestRef,
   setState: Dispatch<SetStateAction<ContextState>>,
 ): (compact: boolean) => Promise<ChatContextStatusWire | undefined> {
   return useCallback(
     async (compact: boolean): Promise<ChatContextStatusWire | undefined> => {
       if (controller.current !== null) {
         if (!compact) return undefined;
-        controller.current.abort();
+        controller.current.controller.abort();
         controller.current = null;
       }
       if (chatId === undefined || projectPath === undefined || modelId === undefined)
         return undefined;
       const request = new AbortController();
-      controller.current = request;
-      if (compact) setState((previous) => pendingContextState(previous, key, compact));
+      controller.current = { controller: request, authorityKey, compact };
+      if (compact) setState((previous) => pendingContextState(previous, key, authorityKey));
       const call = compact ? compactChatContext : fetchChatContextStatus;
       try {
         return await settleContextRequest(
@@ -99,10 +189,10 @@ function useContextRefresh(
           compact,
         );
       } finally {
-        if (controller.current === request) controller.current = null;
+        if (controller.current?.controller === request) controller.current = null;
       }
     },
-    [chatId, projectPath, modelId, key, controller, setState],
+    [chatId, projectPath, modelId, key, authorityKey, controller, setState],
   );
 }
 
@@ -195,12 +285,13 @@ function pollPendingContext(
 function pendingContextState(
   previous: ContextState,
   key: string,
-  compacting: boolean,
+  compactionAuthorityKey: string,
 ): ContextState {
   return {
     key,
     status: previous.key === key ? previous.status : undefined,
-    compacting,
+    compacting: true,
+    compactionAuthorityKey,
     error: false,
   };
 }

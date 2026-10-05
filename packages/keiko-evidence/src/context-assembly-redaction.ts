@@ -35,6 +35,7 @@ function redactProfile(profile: ContextProfile, redact: Redactor): ContextProfil
   return {
     schemaVersion: profile.schemaVersion,
     maxInputTokens: profile.maxInputTokens,
+    ...(profile.inputTokenLimit === undefined ? {} : { inputTokenLimit: profile.inputTokenLimit }),
     reservedOutputTokens: profile.reservedOutputTokens,
     safetyMarginTokens: profile.safetyMarginTokens,
     effectiveInputBudget: profile.effectiveInputBudget,

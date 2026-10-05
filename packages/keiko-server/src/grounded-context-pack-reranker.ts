@@ -1,8 +1,9 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import type {
-  CandidateFile,
-  EvidenceAtom,
-  RetrievalQuery,
+import {
+  DEFAULT_EXPLORATION_BUDGET,
+  type CandidateFile,
+  type EvidenceAtom,
+  type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
 import type { RerankerExecutionContext, RerankerSeam } from "@oscharko-dev/keiko-workflows";
@@ -74,10 +75,43 @@ function executionSignal(
   return context?.signal ?? configuredSignal;
 }
 
+interface CandidateBatchInput {
+  readonly deps: UiHandlerDeps;
+  readonly modelId: string;
+  readonly query: string;
+  readonly candidates: readonly CandidateFile[];
+  readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
+  readonly topK: number;
+  readonly byteBudget: number;
+}
+
+function candidateBatch(input: CandidateBatchInput): ReadonlyMap<CandidateFile, string> {
+  const documents = new Map<CandidateFile, string>();
+  if (!Number.isSafeInteger(input.byteBudget) || input.byteBudget < 0) return documents;
+  let bytes = Buffer.byteLength(
+    JSON.stringify({
+      model: input.modelId,
+      query: input.query,
+      documents: [],
+      top_n: Math.min(input.topK, input.candidates.length),
+    }),
+    "utf8",
+  );
+  for (const candidate of input.candidates) {
+    const document = candidateDocument(input.deps, candidate, input.atomsByPath);
+    const added = Buffer.byteLength(JSON.stringify(document), "utf8") + Number(documents.size > 0);
+    if (bytes + added > input.byteBudget) break;
+    documents.set(candidate, document);
+    bytes += added;
+  }
+  return documents;
+}
+
 export function configuredContextPackRerankerFor(
   deps: UiHandlerDeps,
   query: RetrievalQuery,
   signal: AbortSignal | undefined,
+  byteBudget = DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
 ): RerankerSeam | undefined {
   const gatewayConfig = currentGatewayConfig(deps);
   const reranker = gatewayConfig?.reranker;
@@ -89,13 +123,24 @@ export function configuredContextPackRerankerFor(
     isAvailable: () => Promise.resolve({ available: true, modelLabel: reranker.modelId }),
     rerank: async (candidates, atomsByPath, topK, context): Promise<readonly CandidateFile[]> => {
       const requestSignal = executionSignal(signal, context);
+      const batch = candidateBatch({
+        deps,
+        modelId: reranker.modelId,
+        query: query.text,
+        candidates,
+        atomsByPath,
+        topK,
+        byteBudget,
+      });
       const result = await rerankSelection({
         deps,
         gatewayConfig,
         query: query.text,
         candidates,
-        documentFor: (candidate) => candidateDocument(deps, candidate, atomsByPath),
-        topN: topK,
+        providerCandidates: [...batch.keys()],
+        preserveUnsubmittedCandidates: true,
+        documentFor: (candidate) => batch.get(candidate) ?? "",
+        topN: Math.min(topK, batch.size),
         ...(requestSignal === undefined ? {} : { signal: requestSignal }),
         ...(context?.timeoutMs === undefined ? {} : { timeoutMs: context.timeoutMs }),
         applyScore: withRerankerSignal,

@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type {
@@ -1187,7 +1188,61 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     // One alert is shown at a time: the retryable failure must not be swallowed by the condition.
-    expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+    expect(
+      within(alert).queryByRole("button", { name: "Create error report" }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    "",
+    "bad correlation id",
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    "123-45-6789",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c2lnbmF0dXJl",
+  ])("keeps unattributed reporting available for refresh id %s", (correlationId) => {
+    const base = liveState();
+    renderWorkbench(
+      liveState({
+        workspace: {
+          ...base.workspace,
+          status: "error",
+          error: {
+            code: "TASK_WORKSPACE_UNAVAILABLE",
+            message: "unavailable",
+            retryable: true,
+            correlationId,
+          },
+        },
+      }),
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+    expect(
+      within(alert).queryByRole("button", { name: "Create error report" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a safe originating support id available for error-specific reporting", () => {
+    const base = liveState();
+    renderWorkbench(
+      liveState({
+        workspace: {
+          ...base.workspace,
+          status: "error",
+          error: {
+            code: "TASK_WORKSPACE_UNAVAILABLE",
+            message: "unavailable",
+            retryable: true,
+            correlationId: "aa318591-f552-4c0c-919e-0e9357b50491",
+          },
+        },
+      }),
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+    expect(within(alert).getByRole("button", { name: "Create error report" })).toBeInTheDocument();
   });
 
   it("keeps the unpaired browser state out of the standing workbench banner", (): void => {

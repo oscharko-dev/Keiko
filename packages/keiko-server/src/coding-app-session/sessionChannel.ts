@@ -18,7 +18,7 @@ import {
   isWellFormedSessionPairingAttestation,
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
-import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
+import type { AppSession, SessionMint, SessionRegistry } from "./sessionRegistry.js";
 import {
   contentFreeErrorClass,
   type ServerDiagnosticSink,
@@ -39,13 +39,19 @@ export interface CodingAppSessionContentSource {
 }
 
 export type CodingAppSessionPairResult =
-  { readonly paired: true; readonly cookieToken: string } | { readonly paired: false };
+  | {
+      readonly paired: true;
+      readonly cookieToken: string;
+      readonly capacityDecision?: SessionMint["capacityDecision"];
+    }
+  | { readonly paired: false };
 
 export type CodingAppSessionRotateResult =
   { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
 
 export type CodingAppSessionEnsureResult =
-  { readonly status: "active" } | { readonly status: "unavailable" };
+  | { readonly status: "active"; readonly maxAgeSeconds: number }
+  | { readonly status: "unavailable" };
 
 export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
@@ -65,6 +71,9 @@ export interface CodingAppSessionChannel {
    * successful verification refreshes the session's inactivity window.
    */
   readonly verifySession: (cookieToken: string | undefined) => AppSession | undefined;
+  /** Explicit request activity protects only idle expiry and returns idempotent cleanup. */
+  readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
+  readonly inspectOperationCount?: (cookieToken: string | undefined) => number | undefined;
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
@@ -352,16 +361,17 @@ function pairSession(
   const decision = pairingPort.attest(attestation);
   if (decision.outcome !== "approved") return { paired: false };
   const mint = registry.mint(decision.principalLabel);
-  return { paired: true, cookieToken: mint.cookieToken };
+  return { paired: true, cookieToken: mint.cookieToken, capacityDecision: mint.capacityDecision };
 }
 
 function ensureLocalSession(
   registry: SessionRegistry,
   cookieToken: string | undefined,
 ): CodingAppSessionEnsureResult {
-  return registry.verify(cookieToken) === undefined
+  const remainingMs = registry.verifyForCookieRepair(cookieToken);
+  return remainingMs === undefined || remainingMs < 1_000
     ? { status: "unavailable" }
-    : { status: "active" };
+    : { status: "active", maxAgeSeconds: Math.floor(remainingMs / 1000) };
 }
 
 export function createCodingAppSessionChannel(
@@ -397,6 +407,10 @@ export function createCodingAppSessionChannel(
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
+    inspectOperationCount: (cookieToken: string | undefined): number | undefined =>
+      registry.inspectOperationCount(cookieToken),
+    beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
+      registry.beginOperation(cookieToken),
     subscribe: (cookieToken, listener, options) =>
       subscribeToContent(
         registry,

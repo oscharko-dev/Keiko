@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -28,9 +29,23 @@ import {
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { I18N_STORAGE_KEY, I18nProvider, translate, type I18nTranslate } from "@/lib/i18n";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import {
+  translateOptionalWidget as translate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
   Chat,
@@ -41,7 +56,7 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { ApiError, fetchChats, fetchFilesSearch, updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
@@ -53,6 +68,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     fetchFilesSearch: vi.fn(),
+    fetchChats: vi.fn(),
     updateChat: vi.fn(),
   };
 });
@@ -228,6 +244,7 @@ beforeEach(() => {
     scannedFileCount: 0,
   });
   updateChatMock.mockReset();
+  vi.mocked(fetchChats).mockReset();
 });
 
 function makeCapsuleId(value: string): KnowledgeCapsuleId {
@@ -321,7 +338,110 @@ async function findRepositoryResultOption(name: string): Promise<HTMLButtonEleme
   return screen.findByRole("button", { name });
 }
 
+function repositoryTestContextSummary(): ReturnType<typeof buildGroundedAnswerContextPackSummary> {
+  return buildGroundedAnswerContextPackSummary(
+    {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      stableId: "navigation-fixture",
+      emittedAtMs: 1,
+      ledgerRef: undefined,
+      scope: {
+        schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+        scopeId: "navigation",
+        workspaceRoot: "/ManualA",
+        kind: "workspace-root",
+        relativePaths: [],
+        conversationId: "chat-1",
+        connectedAtMs: 1,
+      },
+      query: {
+        kind: "natural-language",
+        text: "Sources",
+        caseSensitive: true,
+        maxResults: 2,
+        emittedAtMs: 1,
+      },
+      budget: DEFAULT_EXPLORATION_BUDGET,
+      usage: {
+        searchCalls: 0,
+        filesRead: 0,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 0,
+        rerankCalls: 0,
+      },
+      files: [],
+      omitted: [],
+      uncertainty: [],
+    },
+    2,
+    1,
+  );
+}
+
 describe("ChatWindow cancel button", () => {
+  it.each([
+    { roots: ["/ManualA", "/ManualB"], expectedRoot: "/ManualB", legacy: false },
+    { roots: ["/ManualA", "/ManualA/sub"], expectedRoot: "/ManualA", legacy: false },
+    { roots: ["/proj"], expectedRoot: "/proj", legacy: true },
+  ])(
+    "preserves canonical citation roots for $roots (legacy: $legacy)",
+    ({ roots, expectedRoot, legacy }) => {
+      const scopes = roots.map((root) => ({
+        root,
+        kind: "directory" as const,
+        relativePaths: ["src"],
+        connectedAtMs: 1,
+      }));
+      const groundedAnswer: GroundedAnswer = {
+        groundingKind: "connected-context",
+        userMessageId: "m1",
+        assistantMessageId: "m2",
+        content: "Grounded saved answer",
+        uncertainty: [],
+        omittedCount: 0,
+        elapsedMs: 1,
+        contextPack: repositoryTestContextSummary(),
+        citations: scopes.map((scope) => ({
+          scopePath: "src/foo.ts",
+          stableId: scope.root,
+          score: 1,
+          lineRange: { startLine: 1, endLine: 2 },
+          source: scope.root.slice(1),
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        })),
+      };
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+      renderWindow(
+        makeSession({
+          activeChat: makeChat({
+            connectedScopes: legacy ? scopes.map(({ root: _root, ...scope }) => scope) : scopes,
+          }),
+          activeProject: makeProject("/DifferentActiveProject"),
+          messages: [
+            makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+          ],
+        }),
+        { openEditorFile },
+      );
+      const summary = document.querySelector("details.grounded-evidence-disclosure summary");
+      if (summary === null) throw new TypeError("Missing grounded evidence disclosure");
+      fireEvent.click(summary);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Open ${legacy ? "" : `${expectedRoot.slice(1)} · `}src/foo.ts at lines 1-2 in editor`,
+        }),
+      );
+      expect(openEditorFile).toHaveBeenCalledWith({
+        root: expectedRoot,
+        path: "src/foo.ts",
+        lineStart: 1,
+        lineEnd: 2,
+      });
+    },
+  );
+
   it("renders regenerate on the latest ungrounded assistant response", async () => {
     const regenerateMessage = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
@@ -360,6 +480,83 @@ describe("ChatWindow cancel button", () => {
 
     await user.click(screen.getByRole("button", { name: /regenerate response/i }));
     expect(regenerateMessage).toHaveBeenCalledWith("a1");
+  });
+
+  it.each(["completed", "reloaded"])(
+    "does not offer plain regeneration for a %s grounded answer",
+    (state) => {
+      const regenerateMessage = vi.fn();
+      const groundedAnswer = copyTestGroundedAnswer("Grounded answer", 1);
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          messages: [
+            makeMessage({ id: "m1", content: "Question" }),
+            makeMessage({
+              id: "m2",
+              role: "assistant",
+              content: groundedAnswer.content,
+              timestamp: 2,
+              groundedAnswer,
+            }),
+          ],
+          latestGrounded: state === "completed" ? groundedAnswer : undefined,
+          regenerateMessage,
+        }),
+      );
+      expect(screen.getByText("Grounded answer")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copy answer" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
+      expect(regenerateMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not offer plain regeneration after connecting sources to a plain chat", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScope: {
+            kind: "files",
+            relativePaths: ["src/a.ts"],
+            connectedAtMs: 1,
+          },
+        }),
+        messages: [
+          makeMessage({ content: "Question" }),
+          makeMessage({ id: "a1", role: "assistant", content: "Plain answer", timestamp: 2 }),
+        ],
+      }),
+    );
+    expect(screen.getByText("Plain answer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
+  });
+
+  it("does not offer plain regeneration while inspecting an older grounded response version", async () => {
+    const user = userEvent.setup();
+    const groundedAnswer = copyTestGroundedAnswer("Current grounded answer", 1);
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({ id: "m1", content: "Question" }),
+          makeMessage({
+            id: "m2",
+            role: "assistant",
+            content: groundedAnswer.content,
+            timestamp: 20,
+            groundedAnswer,
+            responseVersion: 2,
+            responseVersions: [
+              { version: 1, content: "Original answer", timestamp: 10 },
+              { version: 2, content: groundedAnswer.content, timestamp: 20 },
+            ],
+          }),
+        ],
+      }),
+    );
+    await user.selectOptions(screen.getByRole("combobox", { name: "Response version" }), "1");
+    expect(screen.getByText("Original answer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
   });
 
   it("lets the user inspect preserved assistant response versions", async () => {
@@ -1051,6 +1248,7 @@ describe("ChatWindow repository file focus picker", () => {
       makeSession({
         activeChat: makeChat({
           projectPath: "/repo",
+          groundingScopeIdentity: "gsi-v1:" + "a".repeat(64),
           connectedScopes: [existingScope],
           connectedScope: existingScope,
         }),
@@ -1081,6 +1279,7 @@ describe("ChatWindow repository file focus picker", () => {
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        expectedGroundingScopeIdentity: "gsi-v1:" + "a".repeat(64),
         connectedScopes: [
           expect.objectContaining({
             kind: "files",
@@ -2344,6 +2543,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat({
+          groundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
           connectedScopes: [
             { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
           ],
@@ -2359,11 +2559,54 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        expectedGroundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
         connectedScopes: null,
         localKnowledgeScopes: null,
       });
     });
     expect(replaceChat).toHaveBeenCalledWith(updated);
+    confirmSpy.mockRestore();
+  });
+
+  it("refreshes a conflicting source clear without replaying the previously confirmed deletion", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const original = makeChat({
+      groundingScopeIdentity: "gsi-v1:" + "a".repeat(64),
+      connectedScopes: [
+        { kind: "workspace-root", root: "/original", relativePaths: [], connectedAtMs: 1 },
+      ],
+    });
+    const current = makeChat({
+      groundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
+      connectedScopes: [
+        {
+          kind: "workspace-root",
+          root: "/added-in-another-tab",
+          relativePaths: [],
+          connectedAtMs: 2,
+        },
+      ],
+    });
+    vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [current] });
+    updateChatMock.mockRejectedValueOnce(
+      new ApiError(
+        "GROUNDING_SCOPE_CHANGED",
+        "The connected sources changed before this update could run.",
+        409,
+      ),
+    );
+    renderWindow(makeSession({ activeChat: original, replaceChat }));
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
+    await waitFor(() => {
+      expect(replaceChat).toHaveBeenCalledWith(current);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The connected sources changed in the meantime.",
+      );
+    });
+    expect(updateChatMock).toHaveBeenCalledTimes(1);
+    expect(fetchChats).toHaveBeenCalledWith(original.projectPath, expect.any(String), original.id);
     confirmSpy.mockRestore();
   });
 
@@ -3888,7 +4131,10 @@ describe("ChatWindow message copy", () => {
   // PR #3678 review: every copy leaves body-free evidence — outcome, grounded flag and the marker
   // groups removed and kept — and a failed copy its error kind; never the copied text.
   it("reports each copy's outcome and marker counts without the copied text", async () => {
-    const reports: { readonly message: string; readonly meta: unknown }[] = [];
+    const reports: {
+      readonly message: string;
+      readonly meta: ClientDiagnosticMeta | undefined;
+    }[] = [];
     setClientDiagnosticWriter((message, meta) => {
       reports.push({ message, meta });
     });
@@ -3943,6 +4189,7 @@ describe("ChatWindow message copy", () => {
       }),
     ]);
     expect(JSON.stringify(copyReports)).not.toContain("Paris");
+    await expectDiagnosticWireAccepted(copyReports);
     resetClientDiagnosticWriter();
     if (clipboardDescriptor !== undefined) {
       Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
@@ -4432,7 +4679,7 @@ describe("ChatWindow message copy", () => {
     });
   });
 
-  it("prefers nested chat repository roots over linked parent folder roots", async () => {
+  it("asks for the source of unqualified references when ancestor and descendant are connected", async () => {
     const user = userEvent.setup();
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     renderWindow(
@@ -4478,7 +4725,11 @@ describe("ChatWindow message copy", () => {
       }),
     );
 
-    expect(screen.queryByRole("dialog", { name: "Select repository source" })).toBeNull();
+    expect(openEditorFile).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: /^Select repository source:/ })).toHaveLength(2);
+    await user.click(
+      screen.getByRole("button", { name: "Select repository source: Keiko · Projects/Keiko" }),
+    );
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/Users/dev/Projects/Keiko",
       path: "packages/keiko-editor/src/range.ts",
@@ -4569,10 +4820,10 @@ describe("ChatWindow message copy", () => {
     await user.click(
       screen.getByRole("button", { name: "Open src/context.ts at line 12 in editor" }),
     );
-    const picker = screen.getByRole("dialog", { name: "Select repository source" });
-    expect(picker).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "repo-b" }));
+    expect(
+      screen.getByRole("button", { name: "Select repository source: repo-a" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select repository source: repo-b" }));
 
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/repo-b",

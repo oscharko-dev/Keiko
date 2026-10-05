@@ -3,7 +3,7 @@
 // uncertainty markers, editable/read-only role assignment, the empty-atom corner, and
 // contract-level validity of the produced pack.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -16,7 +16,7 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { assembleContextPack, type AssembleInput } from "./assemble.js";
+import { assembleContextPack, contextPackIndexKey, type AssembleInput } from "./assemble.js";
 import { createMicroIndex } from "./microIndex.js";
 import type { RerankerSeam } from "./reranker.js";
 
@@ -88,7 +88,175 @@ function baseInput(): AssembleInput {
   };
 }
 
+function largeCacheInput(): AssembleInput {
+  const paths = Array.from({ length: 4000 }, (_, index) => `facts/entry-${String(index)}.ts`);
+  return {
+    ...baseInput(),
+    scope: { ...scope(), kind: "workspace-root", relativePaths: [] },
+    atoms: paths.map((path, index) => atom(path, `atom-${String(index)}`)),
+    ranked: paths.map((path) => candidate(path, 0.7)),
+    excerpts: new Map(paths.map((path) => [path, `export const fact = "${"x".repeat(8192)}";`])),
+  };
+}
+
 describe("assembleContextPack", () => {
+  it.each([false, true])(
+    "discloses unavailable atom ranges within a retained file (surrounding=%s)",
+    async (includeSurroundingContext) => {
+      const input: AssembleInput = {
+        ...baseInput(),
+        atoms: [
+          atom("a.ts", "available", { startLine: 1, endLine: 1 }),
+          atom("a.ts", "unavailable", { startLine: 7, endLine: 7 }),
+        ],
+        ranked: [candidate("a.ts", 0.9)],
+        excerpts: new Map([["a.ts", { startLine: 1, endLine: 1, content: "available" }]]),
+      };
+      const { pack } = await assembleContextPack(input, {
+        nowMs: fixedNow,
+        includeSurroundingContext,
+      });
+      expect(pack.files).toHaveLength(1);
+      expect(
+        pack.uncertainty.some(
+          (marker) =>
+            marker.kind === "scope-incomplete" &&
+            marker.claim.includes("1 cited ranges unavailable"),
+        ),
+      ).toBe(true);
+      expect(validateConnectedContextPack(pack).ok).toBe(true);
+    },
+  );
+
+  it("merges intersecting source windows without charging shared lines twice", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [
+        atom("a.ts", "first", { startLine: 10, endLine: 10 }),
+        atom("a.ts", "second", { startLine: 13, endLine: 13 }),
+      ],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            { startLine: 9, endLine: 12, content: "nine\nten\neleven\ntwelve" },
+            { startLine: 11, endLine: 14, content: "eleven\ntwelve\nthirteen\nfourteen" },
+          ],
+        ],
+      ]),
+    };
+    const { pack } = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+    });
+    expect(pack.files[0]?.excerpts).toHaveLength(1);
+    expect(pack.files[0]?.excerpts[0]?.content).toBe(
+      "nine\nten\neleven\ntwelve\nthirteen\nfourteen",
+    );
+    expect(pack.usage.excerptBytes).toBe(
+      Buffer.byteLength("nine\nten\neleven\ntwelve\nthirteen\nfourteen"),
+    );
+    expect(validateConnectedContextPack(pack).ok).toBe(true);
+  });
+
+  it("keeps distinct structural edge identities when rebinding source ranges", async () => {
+    const edgeAtoms = (["import", "call"] as const).map((kind) => ({
+      ...atom("a.ts", kind, { startLine: 1, endLine: 1 }),
+      edge: {
+        kind,
+        source: { scopePath: "a.ts" },
+        target: { scopePath: "b.ts" },
+        confidence: "resolved" as const,
+      },
+    }));
+    const { pack } = await assembleContextPack(
+      { ...baseInput(), atoms: edgeAtoms, ranked: [candidate("a.ts", 0.9)] },
+      { nowMs: fixedNow, includeSurroundingContext: true },
+    );
+    const excerpts = pack.files[0]?.excerpts ?? [];
+    expect(excerpts.map((excerpt) => excerpt.atom.edge?.kind)).toEqual(["import", "call"]);
+    expect(new Set(excerpts.map((excerpt) => excerpt.atom.stableId)).size).toBe(2);
+    expect(validateConnectedContextPack(pack).ok).toBe(true);
+  });
+
+  it("avoids enumerating unused excerpt content without an index while preserving the indexed pack", async () => {
+    const input = largeCacheInput();
+    const enumerate = vi.spyOn(input.excerpts, "entries");
+    const uncached = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(validateConnectedContextPack(uncached.pack)).toEqual({ ok: true });
+    expect(uncached.pack.files.length).toBeGreaterThan(0);
+    expect(uncached.pack.omitted.length).toBeGreaterThan(0);
+    expect(enumerate).not.toHaveBeenCalled();
+    const index = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const indexed = await assembleContextPack(input, { nowMs: fixedNow, microIndex: index });
+    expect(enumerate).toHaveBeenCalledOnce();
+    expect(indexed.pack).toEqual(uncached.pack);
+    expect(indexed.fromIndex).toBe(false);
+    const hit = await assembleContextPack(input, { nowMs: fixedNow, microIndex: index });
+    expect(hit.fromIndex).toBe(true);
+    expect(hit.pack).toBe(indexed.pack);
+    enumerate.mockRestore();
+  });
+
+  it("preserves separately identified partial windows on the same real source line", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "atom-a", { startLine: 1, endLine: 1 })],
+      ranked: [candidate("a.ts", 1)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            { startLine: 1, endLine: 1, content: "StartAnchor=17", identity: "start-window" },
+            { startLine: 1, endLine: 1, content: "EndAnchor=43", identity: "end-window" },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      includeSurroundingContext: true,
+      nowMs: fixedNow,
+    });
+    const excerpts = result.pack.files[0]?.excerpts ?? [];
+    expect(excerpts.map((excerpt) => excerpt.content)).toEqual(["StartAnchor=17", "EndAnchor=43"]);
+    expect(new Set(excerpts.map((excerpt) => excerpt.atom.stableId)).size).toBe(2);
+    expect(
+      excerpts.every(
+        (excerpt) =>
+          excerpt.atom.lineRange?.startLine === 1 && excerpt.atom.lineRange.endLine === 1,
+      ),
+    ).toBe(true);
+    expect(result.pack.usage.filesRead).toBe(1);
+    expect(result.pack.usage.excerptBytes).toBe(
+      excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+    );
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("preserves legacy first-window selection when same-line windows have no identities", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "atom-a", { startLine: 1, endLine: 1 })],
+      ranked: [candidate("a.ts", 1)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            { startLine: 1, endLine: 1, content: "first legacy window" },
+            { startLine: 1, endLine: 1, content: "second legacy window" },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      includeSurroundingContext: true,
+      nowMs: fixedNow,
+    });
+    expect(result.pack.files[0]?.excerpts.map((excerpt) => excerpt.content)).toEqual([
+      "first legacy window",
+    ]);
+  });
   it("produces a deterministic stable ID for the same input", async () => {
     const r1 = await assembleContextPack(baseInput(), { nowMs: fixedNow });
     const r2 = await assembleContextPack(baseInput(), { nowMs: fixedNow });
@@ -104,6 +272,38 @@ describe("assembleContextPack", () => {
     expect(r1.fromIndex).toBe(false);
     expect(r2.fromIndex).toBe(true);
     expect(r2.pack).toBe(r1.pack);
+  });
+
+  it("does not reuse stale uncertainty when supplied file-state identity is unchanged", async () => {
+    const microIndex = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const base = { ...baseInput(), cacheIdentity: ["same-file-state"] };
+    await assembleContextPack(base, { nowMs: fixedNow, microIndex });
+    const marker = {
+      kind: "scope-incomplete" as const,
+      claim: "one metadata directory unavailable",
+      impactedAtomIds: [],
+      emittedAtMs: FIXED_NOW,
+    };
+    const marked = {
+      ...base,
+      initialUncertainty: [marker],
+    };
+    const result = await assembleContextPack(marked, { nowMs: fixedNow, microIndex });
+    expect(result.fromIndex).toBe(false);
+    expect(result.pack.uncertainty).toContainEqual(marker);
+    const refreshed = await assembleContextPack(
+      {
+        ...marked,
+        initialUncertainty: [
+          {
+            ...marker,
+            emittedAtMs: FIXED_NOW + 1000,
+          },
+        ],
+      },
+      { nowMs: fixedNow, microIndex },
+    );
+    expect(refreshed.fromIndex).toBe(true);
   });
 
   it("respects a reranker that reverses the candidate order when budget allows", async () => {
@@ -150,16 +350,67 @@ describe("assembleContextPack", () => {
       ...baseInput(),
       budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 5 },
     };
+    const get = vi.spyOn(input.excerpts, "get");
     const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(get.mock.calls.map(([path]) => path)).toEqual(["a.ts"]);
     const clipped = result.pack.uncertainty.find((u) => u.kind === "budget-clipped");
     expect(clipped).toBeDefined();
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
     // The first candidate exceeds 5 bytes, so processing stops immediately and the second
     // file is never added.
     expect(result.pack.files).toHaveLength(0);
-    // Exactly one budget-exhausted omission: the clip must BREAK the candidate loop, so the
-    // second candidate is never processed (and never recorded) at all.
-    expect(result.pack.omitted.filter((o) => o.reason === "budget-exhausted")).toHaveLength(1);
+    // Processing still stops on the first clip; every known unselected candidate is accounted
+    // for without reading or assembling its excerpt.
+    expect(result.pack.omitted.filter((o) => o.reason === "budget-exhausted")).toHaveLength(2);
+  });
+
+  it("accounts for every known ranked omission without accessing later excerpt content", async () => {
+    const paths = Array.from(
+      { length: 20 },
+      (_value, index) => `src/file-${String(index).padStart(2, "0")}.ts`,
+    );
+    const excerpts = new Map(paths.map((path) => [path, `module ${path}`]));
+    const get = vi.spyOn(excerpts, "get");
+    const result = await assembleContextPack(
+      {
+        ...baseInput(),
+        scope: { ...scope(), kind: "workspace-root", relativePaths: [] },
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 100 },
+        atoms: paths.map((path, index) => atom(path, `atom-${String(index)}`)),
+        ranked: paths.map((path) => candidate(path, 0.9)),
+        excerpts,
+      },
+      { nowMs: fixedNow },
+    );
+    expect(result.pack.files).toHaveLength(4);
+    expect(result.pack.omitted).toHaveLength(16);
+    expect(result.pack.omitted.every((entry) => entry.reason === "budget-exhausted")).toBe(true);
+    expect(result.pack.usage.excerptBytes).toBe(84);
+    expect(result.pack.usage.filesRead).toBe(4);
+    expect(get).toHaveBeenCalledTimes(5);
+    expect(get.mock.calls.map(([path]) => path)).toEqual(paths.slice(0, 5));
+    expect(
+      result.pack.uncertainty.filter((marker) => marker.kind === "budget-clipped"),
+    ).toHaveLength(1);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("preserves pre-marked omission reasons and canonical identity after a budget stop", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 5 },
+      ranked: [candidate("a.ts", 0.9), { ...candidate("b.ts", 0.5), omitted: "generated" }],
+      omittedFromRanking: [
+        { scopePath: "b.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW - 1 },
+      ],
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(result.pack.files).toEqual([]);
+    expect(result.pack.omitted).toEqual([
+      { scopePath: "b.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+      { scopePath: "a.ts", reason: "budget-exhausted", omittedAtMs: FIXED_NOW },
+    ]);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("starts from caller-supplied usage and skips reranking when that budget is already spent", async () => {
@@ -193,16 +444,33 @@ describe("assembleContextPack", () => {
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
-  it("emits a no-evidence marker when an excerpt is missing for a candidate path", async () => {
+  it("reports a missing excerpt as partial scope when another file supplies evidence", async () => {
     const input: AssembleInput = {
       ...baseInput(),
       excerpts: new Map([["a.ts", "export const a = 1;"]]),
     };
     const result = await assembleContextPack(input, { nowMs: fixedNow });
-    const missing = result.pack.uncertainty.find((u) => u.kind === "no-evidence");
+    const missing = result.pack.uncertainty.find((u) => u.kind === "scope-incomplete");
     expect(missing).toBeDefined();
-    expect(missing?.claim).toContain("b.ts");
+    expect(missing?.claim).toContain("1 candidate excerpts unavailable");
+    expect(result.pack.omitted).toContainEqual({
+      scopePath: "b.ts",
+      reason: "tool-unavailable",
+      omittedAtMs: FIXED_NOW,
+    });
     expect(result.pack.files.map((f) => f.scopePath)).toEqual(["a.ts"]);
+    expect(result.pack.uncertainty.some((u) => u.kind === "no-evidence")).toBe(false);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("reports no evidence when none of the candidate excerpts can be read", async () => {
+    const result = await assembleContextPack(
+      { ...baseInput(), excerpts: new Map() },
+      { nowMs: fixedNow },
+    );
+    expect(result.pack.files).toHaveLength(0);
+    expect(result.pack.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("assigns editable role to listed paths and read-only to others", async () => {
@@ -232,6 +500,22 @@ describe("assembleContextPack", () => {
     expect(
       result.pack.omitted.some((o) => o.scopePath === "a.ts" && o.reason === "generated"),
     ).toBe(true);
+  });
+
+  it("merges ranking and assembly omissions once per path with the actual assembly reason", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      ranked: [{ ...candidate("a.ts", 0.9), omitted: "generated" }, candidate("b.ts", 0.8)],
+      omittedFromRanking: [
+        { scopePath: "a.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW - 1 },
+        { scopePath: "a.ts", reason: "near-duplicate", omittedAtMs: FIXED_NOW - 1 },
+      ],
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(result.pack.omitted).toEqual([
+      { scopePath: "a.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+    ]);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("micro-index key is sensitive to budget so cached packs cannot violate a new budget", async () => {
@@ -283,6 +567,7 @@ describe("assembleContextPack", () => {
   it("stable ID ignores volatile emitted timestamps", async () => {
     const first: AssembleInput = {
       ...baseInput(),
+      scope: { ...scope(), relativePaths: ["a.ts", "b.ts", "skipped.ts"] },
       query: { ...query(), emittedAtMs: FIXED_NOW },
       atoms: baseInput().atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW })),
       omittedFromRanking: [
@@ -417,7 +702,11 @@ describe("assembleContextPack", () => {
     const inputOmitted: OmittedContextEntry[] = [
       { scopePath: "skipped.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW - 1 },
     ];
-    const input: AssembleInput = { ...baseInput(), omittedFromRanking: inputOmitted };
+    const input: AssembleInput = {
+      ...baseInput(),
+      scope: { ...scope(), relativePaths: ["a.ts", "b.ts", "skipped.ts"] },
+      omittedFromRanking: inputOmitted,
+    };
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     expect(result.pack.omitted).toEqual(
       expect.arrayContaining([
@@ -468,5 +757,75 @@ describe("assembleContextPack", () => {
     expect(excerpts?.map((excerpt) => excerpt.content)).toEqual(["first target", "second target"]);
     expect(result.pack.usage.excerptBytes).toBe("first targetsecond target".length);
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+  it("retains requested read-window context with exact source lines", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "target", { startLine: 10, endLine: 10 })],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            {
+              startLine: 9,
+              endLine: 12,
+              content: "context before\nfirst target\nfunction body\nreturn result",
+            },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+    });
+    expect(result.pack.files[0]?.excerpts[0]?.content).toBe(
+      "context before\nfirst target\nfunction body\nreturn result",
+    );
+    expect(result.pack.files[0]?.excerpts[0]?.atom.lineRange).toEqual({
+      startLine: 9,
+      endLine: 12,
+    });
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("binds listing evidence to the lines actually sent and bounds compacted ranges", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "listing", undefined)],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([["a.ts", [{ startLine: 1, endLine: 3, content: "one\ntwo\nthree" }]]]),
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+      maxBytesPerExcerpt: 7,
+    });
+    expect(result.pack.files[0]?.excerpts[0]?.content).toBe("one\ntwo");
+    expect(result.pack.files[0]?.excerpts[0]?.atom.lineRange).toEqual({ startLine: 1, endLine: 2 });
+  });
+
+  it("does not duplicate overlapping match windows in surrounding context mode", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [
+        atom("a.ts", "first", { startLine: 10, endLine: 10 }),
+        atom("a.ts", "second", { startLine: 12, endLine: 12 }),
+      ],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        ["a.ts", [{ startLine: 9, endLine: 12, content: "before\nfirst\nbetween\nsecond" }]],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+    });
+    expect(result.pack.files[0]?.excerpts).toHaveLength(1);
+    expect(result.pack.usage.excerptBytes).toBe("before\nfirst\nbetween\nsecond".length);
+    expect(contextPackIndexKey(input, { includeSurroundingContext: true })).not.toBe(
+      contextPackIndexKey(input, { includeSurroundingContext: false }),
+    );
   });
 });

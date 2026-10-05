@@ -113,16 +113,23 @@ are swept on a background interval and before reuse, and evicted indexes are cle
 ## Per-answer transparency
 
 Every grounded answer in the Conversation Center displays a "Context inspection summary"
-region underneath the citations. It reads:
+region underneath the citations. An illustrative reading is:
 
 ```
-Scope: 2 files in files (deadbeef)
-Searched: 3× / 16   Read: 5 / 32 files   Bytes: 12,400 / 131,072 B
-Input: 8 / 16   Output: 3 / 8   Rerank: 2 / 8
-Time: 1,812 / 30,000 ms   Query: natural-language
+Scope: Connected folder
+Searched: 3× / 16   Read: 5 files   Bytes: 12,400 / 131,072 B
+Input: 1,552 / 116,000 tokens   Output: 338 / 8,000 tokens   Rerank: 0 / 1
+Time: 1,812 ms (no default search deadline)   Query: natural-language
 Omitted: 2 candidates (ignored: 1, denied: 1)
 View connected-context audit evidence
 ```
+
+`filesReadMax` and `elapsedMsMax` are nullable in the wire budget. `null` means the
+search has no default file-count or elapsed-time cutoff, so the UI omits a numeric
+cap for those dimensions. Explicit finite caller budgets remain enforced and shown.
+The example's model token budgets depend on the selected deployment; they are not
+fixed product-wide limits. Cancellation, source-byte budgets and model context
+fitting remain independent of corpus traversal.
 
 The values are counts and enums from the `GroundedAnswerContextPackSummary` wire shape
 (see [packages/keiko-contracts/src/bff-wire.ts](../packages/keiko-contracts/src/bff-wire.ts)).

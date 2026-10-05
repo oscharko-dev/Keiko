@@ -52,8 +52,20 @@ import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { canonicalChatTurnGroundingScopeIdentity } from "./chat-turn-identity.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+
+function deferredActivity(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
+}
 // A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
 const BREAKER_CHAT_DIGEST = modelIdEvidence("breaker-chat").modelIdDigest;
 describe("Git change Chat mode selection", () => {
@@ -159,7 +171,9 @@ describe("parseExpectedGroundingScopeIdentity", (): void => {
 });
 
 function requestContext(body: Record<string, unknown>, correlationId?: string): RouteContext {
-  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body), "utf8")]), {
+    headers: {},
+  });
   const res = {
     destroyed: false,
     closed: false,
@@ -908,6 +922,149 @@ describe("desktopChatErrorResult gateway diagnostic symmetry", () => {
   });
 });
 
+describe("explicit session activity on regeneration", () => {
+  it("protects an admitted pending regeneration and releases on cancellation", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const entered = deferredActivity();
+    const finish = deferredActivity();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const minted = registry.mint("regeneration-test");
+    const channel = createCodingAppSessionChannel({ registry });
+    const model: ModelPort = {
+      call: async (request) => {
+        entered.resolve();
+        await finish.promise;
+        return {
+          modelId: request.modelId,
+          content: "regenerated",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "regeneration-test",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        };
+      },
+    };
+    try {
+      const user = fixture.deps.store.createMessage({
+        chatId: fixture.chatId,
+        role: "user",
+        content: "question",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const assistant = fixture.deps.store.createMessage({
+        ...user,
+        role: "assistant",
+        content: "old answer",
+        timestamp: 2,
+      });
+      const request = requestContext(
+        {
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          modelId: "breaker-chat",
+          assistantMessageId: assistant.id,
+        },
+        "regeneration-session-test",
+      );
+      request.req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}` };
+      const outcome = handleRegenerateDesktopChat(request, {
+        ...fixture.deps,
+        codingAppSessionChannel: channel,
+        modelPortFactory: () => model,
+      });
+      await entered.promise;
+      clock = 31 * 60_000;
+      const activeDuringWait = registry.inspect(minted.cookieToken);
+      request.req.emit("aborted");
+      finish.resolve();
+      expect((await outcome).status).toBe(499);
+      expect(activeDuringWait).toBeDefined();
+      clock += 31 * 60_000;
+      expect(registry.inspect(minted.cookieToken)).toBeUndefined();
+    } finally {
+      finish.resolve();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+  it("protects admitted Git-description work and releases before an uncooperative gateway completes", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const entered = deferredActivity();
+    const finish = deferredActivity();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const minted = registry.mint("description-test");
+    const channel = createCodingAppSessionChannel({ registry });
+    try {
+      const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
+      fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
+      const generation = description.deps.prDescriptionGeneration;
+      if (generation === undefined) throw new TypeError("Expected description generation fixture");
+      const generationDeps: UiHandlerDeps = {
+        ...fixture.deps,
+        ...description.deps,
+        codingAppSessionChannel: channel,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        mintDescriptionAuthority: vi.fn(),
+        gitChangeDescriptionAuthorityPort: {
+          current: (scope) => ({
+            scope,
+            effectiveMode: "governed-assist",
+            expiresAt: "2100-01-01T00:00:00.000Z",
+          }),
+        },
+        prDescriptionGeneration: {
+          ...generation,
+          gateway: {
+            ...generation.gateway,
+            chat: async (request) => {
+              entered.resolve();
+              await finish.promise;
+              return generation.gateway.chat(request);
+            },
+          },
+        },
+      };
+      const request = requestContext(
+        {
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          modelId: "breaker-chat",
+          content: "Refine the description.",
+          memory: { enabled: false, budgetTokens: 0, mode: "supervised-coding", context: {} },
+        },
+        "description-session-test",
+      );
+      request.req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}` };
+      const outcome = handleSendDesktopChat(request, generationDeps);
+      await entered.promise;
+      clock = 31 * 60_000;
+      const authorityDuringWork = registry.inspect(minted.cookieToken);
+      request.req.emit("aborted");
+      expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+      finish.resolve();
+      expect((await outcome).status).toBe(499);
+      expect(authorityDuringWork).toBeDefined();
+      clock += 31 * 60_000;
+      expect(registry.inspect(minted.cookieToken)).toBeUndefined();
+    } finally {
+      finish.resolve();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+});
+
 // Issue #3400 (epic #3384, contract correction 4) — a Chat turn on a git-change-connected chat
 // must re-derive the server-minted description authority before any snapshot content reaches the
 // Model Gateway. Before this admission gate existed, a chat carrying `gitChangeScopes` sent its
@@ -940,6 +1097,106 @@ describe("git-change description-authority admission (#3400)", () => {
       ],
     });
   }
+
+  it("refuses a stale source identity before persisting a Git description turn", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const original = fixture.deps.store.findChatById(fixture.chatId);
+      if (original === undefined) throw new TypeError("Missing fixture chat");
+      const expectedGroundingScopeIdentity = canonicalChatTurnGroundingScopeIdentity(original);
+      const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
+      fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
+      const result = await handleSendDesktopChat(
+        requestContext(
+          {
+            chatId: fixture.chatId,
+            projectPath: fixture.projectPath,
+            content: "refine description",
+            expectedGroundingScopeIdentity,
+            memory: { enabled: false, budgetTokens: 0, mode: "supervised-coding", context: {} },
+          },
+          "stale-git-description",
+        ),
+        {
+          ...fixture.deps,
+          ...description.deps,
+          codingRuntimeDeploymentCeiling: "autonomous-delivery",
+          mintDescriptionAuthority: vi.fn(),
+          gitChangeDescriptionAuthorityPort: {
+            current: (scope) => ({
+              scope,
+              effectiveMode: "supervised-coding",
+              expiresAt: "9999-12-31T23:59:59.999Z",
+            }),
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+      });
+      expect(fixture.deps.store.listMessages(fixture.chatId)).toEqual([]);
+      const rejection = sink.events.find((event) => event.op === "chat.send.rejected");
+      expect(rejection?.correlationId).toBe("stale-git-description");
+      expect(rejection?.extra?.reason).toBe("grounding-scope");
+    } finally {
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("refuses plain regeneration on a Git-scoped chat before any model call", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const call = vi.fn<ModelPort["call"]>().mockResolvedValue({
+      modelId: "breaker-chat",
+      content: "would bypass authority",
+      toolCalls: [],
+      structuredOutput: null,
+      finishReason: "stop",
+      usage: {
+        requestId: "unexpected-git-regeneration",
+        promptTokens: 1,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "low",
+      },
+    });
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const user = fixture.deps.store.createMessage({
+        chatId: fixture.chatId,
+        role: "user",
+        content: "question",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const assistant = fixture.deps.store.createMessage({
+        ...user,
+        role: "assistant",
+        content: "answer",
+        timestamp: 2,
+      });
+      const result = await handleRegenerateDesktopChat(
+        requestContext({
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          assistantMessageId: assistant.id,
+        }),
+        { ...fixture.deps, modelPortFactory: () => ({ call }) },
+      );
+      expect(result).toMatchObject({ status: 409, body: { error: { code: "NOT_APPLIABLE" } } });
+      expect(call).not.toHaveBeenCalled();
+      expect(fixture.deps.store.listMessages(fixture.chatId)).toHaveLength(2);
+    } finally {
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
 
   it("denies the turn before any network call when no description authority port is wired", async () => {
     const fixture = await createGatewayBreakerFixture();

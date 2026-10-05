@@ -373,6 +373,7 @@ describe("FilesWidget", () => {
         "/repo space",
         "package.json",
         expect.any(String),
+        expect.any(AbortSignal),
       ),
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
@@ -1273,7 +1274,9 @@ describe("FilesWidget", () => {
         stageReport: { stage: "files directory load", phase: "settled" },
       });
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-      expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal));
+      await waitFor(() =>
+        expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal)),
+      );
       expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer body");
     } finally {
       resetClientDiagnosticWriter();
@@ -2510,7 +2513,9 @@ describe("FilePreview", () => {
           expect.objectContaining({ correlationId, errorEvidence: expect.any(Object) }),
         );
         await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
-        expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal));
+        await waitFor(() =>
+          expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal)),
+        );
         expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer body");
       } finally {
         resetClientDiagnosticWriter();
@@ -2580,7 +2585,11 @@ describe("FilePreview", () => {
 
     await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(previewRegion).toHaveTextContent("new value"));
-    expect(screen.getByRole("status")).toHaveTextContent("Reloaded");
+    const refreshStatus = screen.getByText("Reloaded", {
+      selector: "output[data-state='refreshed']",
+    });
+    expect(screen.getAllByRole("status")).toContain(refreshStatus);
+    expect(refreshStatus).toHaveAttribute("aria-live", "polite");
     expect(previewRegion).not.toHaveTextContent("old value");
   });
 

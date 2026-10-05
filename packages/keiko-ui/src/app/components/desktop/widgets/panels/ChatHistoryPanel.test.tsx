@@ -703,8 +703,8 @@ describe("ChatHistoryPanel", () => {
 // I18nProvider locally instead. The context's exposed locale starts on English and only flips to the
 // stored "de" once I18nProvider's `ready`/`catalogReady` effect settles (see
 // packages/keiko-ui/src/lib/i18n.test.tsx's "keeps locale ... until German is ready" pin for the same
-// two-phase transition), so every test below waits on document.documentElement.lang before
-// interacting — the same signal I18nProvider's own effect updates once it is truly on German.
+// two-phase transition). The panel's optional catalog loads separately, so each test also waits
+// for the actual localized control before interacting; the document language alone is insufficient.
 describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
   function renderGermanPanel(session: ChatSessionApi = makeSession()): void {
     render(
@@ -717,6 +717,8 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
   }
 
   beforeEach(() => {
+    vi.mocked(updateChat).mockReset();
+    vi.mocked(deleteChat).mockReset();
     window.localStorage.setItem("keiko.locale", "de");
   });
 
@@ -735,7 +737,7 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     // and the VISIBLE button copy (t("chat.history.action.renameLabel")) are both German now — a
     // sighted user and a screen-reader user see/hear the same language (WCAG 2.5.3 Label in
     // Name), so this asserts both rather than only the accessible name the query happens to match.
-    const renameButton = screen.getByRole("button", { name: /umbenennen/i });
+    const renameButton = await screen.findByRole("button", { name: /umbenennen/i });
     expect(renameButton).toHaveTextContent("Umbenennen");
     await user.click(renameButton);
     const renameInput = screen.getByDisplayValue("Sprint triage");
@@ -756,7 +758,7 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     renderGermanPanel();
     await waitFor(() => expect(document.documentElement.lang).toBe("de"));
 
-    await user.click(screen.getByRole("button", { name: /umbenennen/i }));
+    await user.click(await screen.findByRole("button", { name: /umbenennen/i }));
     const renameInput = screen.getByDisplayValue("Sprint triage");
     await user.clear(renameInput);
     await user.type(renameInput, "New title");
@@ -773,7 +775,7 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     renderGermanPanel();
     await waitFor(() => expect(document.documentElement.lang).toBe("de"));
 
-    await user.click(screen.getByRole("button", { name: "Sprint triage löschen" }));
+    await user.click(await screen.findByRole("button", { name: "Sprint triage löschen" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Löschen fehlgeschlagen: disk busy");
@@ -789,7 +791,7 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     // #2906 round 3: the "Active"/"Deleted" tab labels now route through t("chat.history.tab.*"),
     // so their accessible name (there is no separate aria-label — the visible text IS the name) is
     // German too. Assert both the query match and the visible text explicitly.
-    const deletedTab = screen.getByRole("tab", { name: /gelöscht/i });
+    const deletedTab = await screen.findByRole("tab", { name: /gelöscht/i });
     expect(deletedTab).toHaveTextContent("Gelöscht");
     await user.click(deletedTab);
     await user.click(screen.getByRole("button", { name: /wiederherstellen/i }));

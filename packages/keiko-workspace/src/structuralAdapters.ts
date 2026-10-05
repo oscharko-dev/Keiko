@@ -189,7 +189,7 @@ async function awaitStructuralStage<T>(
 }
 
 function createStructuralRunnerExecution(
-  elapsedMsMax: number,
+  elapsedMsMax: number | null,
   nowMs: () => number,
   signal: AbortSignal | undefined,
   deadlineAtMs: number | undefined,
@@ -208,7 +208,7 @@ function createStructuralRunnerExecution(
   const remainingMs = control.deadlineAtMs - control.nowMs();
   if (remainingMs <= 0) deadlineController.abort();
   const timeout =
-    remainingMs <= 0
+    remainingMs <= 0 || !Number.isFinite(remainingMs)
       ? undefined
       : setTimeout(
           () => {

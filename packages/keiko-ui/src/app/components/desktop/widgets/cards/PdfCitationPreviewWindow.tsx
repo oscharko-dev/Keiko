@@ -1,6 +1,11 @@
 "use client";
 
 import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
+import {
   type PdfCitationPreviewOpenResponse,
   type PdfCitationPreviewReasonCode,
 } from "@oscharko-dev/keiko-contracts";
@@ -22,7 +27,7 @@ import {
   openPdfCitationPreviewSession,
   pdfCitationPreviewDocumentUrl,
 } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { Icons } from "../../Icons";
 import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
 import type { AppWindow } from "../../windows/types";
@@ -621,6 +626,7 @@ export function PdfCitationPreviewWindow({
     return `${origin.chatId}:${origin.assistantMessageId}:${origin.marker}:${citationContext.activeStableId}`;
   }, [citationContext]);
 
+  const fallbackDocumentLabel = t("pdfCitationPreviewWindow.documentLabelFallback");
   const display = useMemo((): Pick<
     PdfCitationPreviewSafeWindowCfg,
     "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
@@ -633,7 +639,7 @@ export function PdfCitationPreviewWindow({
       documentLabel:
         readOptionalString(cfg.documentLabel) ??
         sessionEntry?.display.documentLabel ??
-        t("pdfCitationPreviewWindow.documentLabelFallback"),
+        fallbackDocumentLabel,
       anchorQuality:
         activeCitation?.display.anchorQuality ?? sessionEntry?.display.anchorQuality ?? "page-only",
       ...(sourceLabel === undefined ? {} : { sourceLabel }),
@@ -646,8 +652,8 @@ export function PdfCitationPreviewWindow({
     cfg.pageLabel,
     cfg.pageNumber,
     cfg.sourceLabel,
+    fallbackDocumentLabel,
     sessionEntry,
-    t,
   ]);
 
   const zoomMode = readZoomMode(cfg.zoomMode);

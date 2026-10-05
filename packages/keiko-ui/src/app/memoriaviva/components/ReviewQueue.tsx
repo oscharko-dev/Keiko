@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #211 — MemoriaViva review queue: proposed, conflicted, and stale records needing action.
 //
 // WCAG: role="status" aria-live="polite" on the count badge.
@@ -23,7 +28,7 @@ import {
   rejectMemoryProposal,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { formatError } from "./format-error";
 

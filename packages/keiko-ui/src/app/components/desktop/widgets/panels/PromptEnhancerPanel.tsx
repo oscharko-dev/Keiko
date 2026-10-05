@@ -9,7 +9,7 @@
 // optional model runs only as a bounded enhancement/refinement step through the Model Gateway (AC3). No
 // secret, raw private log, or hidden system prompt is shown (the server redacts on the wire, AC4).
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, enhancePrompt, fetchModels } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -687,9 +687,9 @@ export function PromptEnhancerPanel({
     [],
   );
 
-  const groundingContext = useMemo(
-    () => summarizeConnectedContext({ connectedRoot, connectedFilePath, connectedRoots }, t),
-    [connectedRoot, connectedFilePath, connectedRoots, t],
+  const groundingContext = summarizeConnectedContext(
+    { connectedRoot, connectedFilePath, connectedRoots },
+    t,
   );
 
   useEffect(() => {

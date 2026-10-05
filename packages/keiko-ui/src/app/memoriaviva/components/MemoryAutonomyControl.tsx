@@ -1,9 +1,14 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 import { useId, type ReactNode } from "react";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import styles from "./memory-autonomy-control.module.css";
 
 const MODE_KEYS = {

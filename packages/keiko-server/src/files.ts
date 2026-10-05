@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Read-only filesystem browser for the desktop Files widget. The browser receives
 // preview or editor content; every request is contained inside a selected root after
 // realpath resolution.
@@ -43,6 +44,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type {
   FilesContentResponse as FilesContentWireResponse,
+  FilesPreviewResponse as FilesPreviewWireResponse,
   FilesEntryKind,
   FilesSymlinkTargetKind,
   FilesTreeEntry,
@@ -63,6 +65,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
 import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
@@ -136,23 +139,7 @@ interface FilesPreviewBase {
   readonly symlink: boolean;
 }
 
-export type FilesPreviewResponse =
-  | (FilesPreviewBase & {
-      readonly kind: "text";
-      readonly content: string;
-      readonly truncated: boolean;
-      readonly maxBytes: number;
-    })
-  | (FilesPreviewBase & {
-      readonly kind: "image";
-      readonly url: string;
-      readonly maxBytes: number;
-    })
-  | (FilesPreviewBase & {
-      readonly kind: "binary";
-      readonly reason: "unsupported" | "too_large";
-      readonly maxBytes?: number | undefined;
-    });
+export type FilesPreviewResponse = FilesPreviewWireResponse;
 
 export type FilesContentResponse = FilesContentWireResponse;
 
@@ -1499,9 +1486,13 @@ function isKnownTextExtension(extension: string | null): boolean {
   return extension !== null && TEXT_EXTENSIONS.has(extension);
 }
 
-function decodeUtf8(buffer: Buffer): string | null {
+function decodeUtf8(buffer: Buffer, incompletePrefix = false): string | null {
   try {
-    return UTF8_DECODER.decode(buffer);
+    // A bounded prefix can end inside a valid sequence. A fresh streaming decoder holds only
+    // that incomplete tail while still rejecting malformed bytes already present in the prefix.
+    return incompletePrefix
+      ? new TextDecoder("utf-8", { fatal: true }).decode(buffer, { stream: true })
+      : UTF8_DECODER.decode(buffer);
   } catch {
     return null;
   }
@@ -1517,16 +1508,19 @@ function decodedTextLooksPrintable(decoded: string): boolean {
   return printable / decoded.length > 0.85;
 }
 
-function isLikelyUtf8Text(buffer: Buffer): boolean {
-  if (buffer.includes(0)) return false;
-  const decoded = decodeUtf8(buffer);
-  return decoded !== null && decodedTextLooksPrintable(decoded);
-}
-
-function isEditableUtf8File(extension: string | null, buffer: Buffer): boolean {
-  const decoded = decodeUtf8(buffer);
+function isEditableUtf8File(
+  extension: string | null,
+  buffer: Buffer,
+  scopePath: string,
+  incompletePrefix = false,
+): boolean {
+  const decoded = decodeUtf8(buffer, incompletePrefix);
   if (decoded === null || buffer.includes(0)) return false;
-  return isKnownTextExtension(extension) || isLikelyUtf8Text(buffer);
+  const source = decodeTextFileBytes(buffer, { scopePath, allowIncompleteTail: incompletePrefix });
+  return (
+    source?.encoding === "utf-8" &&
+    (isKnownTextExtension(extension) || decodedTextLooksPrintable(decoded))
+  );
 }
 
 async function readPrefix(
@@ -1581,7 +1575,10 @@ async function readContainedBytes(
   const boundedRead = fs.readFileBytes;
   if (boundedRead === undefined) return readPrefix(targetPath, maxBytes);
   const bytes = await boundedRead.call(fs, targetPath, maxBytes, "allow", identity);
-  return { buffer: Buffer.from(bytes), truncated: identity.size > maxBytes };
+  return {
+    buffer: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+    truncated: identity.size > maxBytes,
+  };
 }
 
 // Same-shape convenience for the (majority) call sites that have no retry loop of their own: a
@@ -1690,28 +1687,60 @@ function imagePreview(target: ResolvedTarget, base: FilesPreviewBase): FilesPrev
   };
 }
 
+interface DecodedPreview {
+  readonly buffer: Buffer;
+  readonly truncated: boolean;
+  readonly decoded: NonNullable<ReturnType<typeof decodeTextFileBytes>>;
+}
+
+async function readTextPreview(
+  target: ResolvedTarget,
+  maxBytes: number,
+): Promise<DecodedPreview | undefined> {
+  const prefix = await readContainedPrefixOrStale(target.path, target.fs, target.identity, 4096);
+  const prefixText = decodeTextFileBytes(prefix.buffer, {
+    scopePath: target.relativePath,
+    allowIncompleteTail: prefix.truncated,
+  });
+  if (prefixText === undefined) return undefined;
+  if (!prefix.truncated) return { ...prefix, decoded: prefixText };
+  const bytes = await readContainedPrefixOrStale(target.path, target.fs, target.identity, maxBytes);
+  const decoded = decodeTextFileBytes(bytes.buffer, {
+    scopePath: target.relativePath,
+    allowIncompleteTail: bytes.truncated,
+  });
+  return decoded === undefined ? undefined : { ...bytes, decoded };
+}
+
 async function textPreview(
   target: ResolvedTarget,
   base: FilesPreviewBase,
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
-  const prefix = await readContainedPrefixOrStale(
-    target.path,
-    target.fs,
-    target.identity,
-    MAX_TEXT_PREVIEW_BYTES,
-  );
-  const content = decodeUtf8(prefix.buffer);
-  if (content === null || prefix.buffer.includes(0)) {
-    return { ...base, kind: "binary", reason: "unsupported" };
-  }
-  const redacted = redactor(content);
+  const maxBytes =
+    target.stats.size > MAX_RECURSIVE_TEXT_FILE_BYTES
+      ? MAX_TEXT_PREVIEW_BYTES
+      : MAX_RECURSIVE_TEXT_FILE_BYTES;
+  const preview = await readTextPreview(target, maxBytes);
+  if (preview === undefined) return { ...base, kind: "binary", reason: "unsupported" };
+  const { decoded, buffer, truncated } = preview;
+  const redacted = redactor(decoded.text);
   return {
     ...base,
     kind: "text",
-    content: typeof redacted === "string" ? redacted : content,
-    truncated: prefix.truncated,
-    maxBytes: MAX_TEXT_PREVIEW_BYTES,
+    content: typeof redacted === "string" ? redacted : decoded.text,
+    sourceTextBytesRead: buffer.length,
+    truncated,
+    maxBytes,
+    canEdit:
+      decoded.encoding === "utf-8" &&
+      target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
+      isEditableUtf8File(
+        base.extension,
+        buffer.subarray(0, 4096),
+        target.relativePath,
+        buffer.length > 4096,
+      ),
   };
 }
 
@@ -1889,7 +1918,7 @@ export async function readFilesContent(
     target.identity,
     Math.min(target.stats.size, 4096),
   );
-  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer, target.relativePath, prefix.truncated)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   return editableTextContent(target);
@@ -2085,7 +2114,9 @@ async function writeResolvedFilesContent(args: {
     args.target.identity,
     Math.min(args.target.stats.size, 4096),
   );
-  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
+  if (
+    !isEditableUtf8File(base.extension, prefix.buffer, args.target.relativePath, prefix.truncated)
+  ) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
@@ -2725,16 +2756,7 @@ export async function readFilesPreview(
   }
   const base = basePreview(target);
   if (isImageExtension(base.extension)) return imagePreview(target, base);
-  const prefix = await readContainedPrefixOrStale(
-    target.path,
-    target.fs,
-    target.identity,
-    Math.min(target.stats.size, 4096),
-  );
-  if (isEditableUtf8File(base.extension, prefix.buffer)) {
-    return textPreview(target, base, redactor);
-  }
-  return { ...base, kind: "binary", reason: "unsupported" };
+  return textPreview(target, base, redactor);
 }
 
 export async function handleFilesTree(

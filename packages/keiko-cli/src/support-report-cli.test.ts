@@ -1,3 +1,7 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+} from "../../../tests/support/activity-log-test-support.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -19,13 +23,15 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { inflateSync } from "node:zlib";
+import { gzipSync, inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
+import { closeFileServerLogSinks, listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
+import * as reportReader from "@oscharko-dev/keiko-activity-log/reader";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   analyzeLogText,
   analyzeSupportReport,
+  createDesktopSupportReport,
   findTimeline,
   parseSupportReport,
   renderHumanAllTimelines,
@@ -72,6 +78,15 @@ import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening
 import { emitSupportReportFailed } from "./support-report-evidence.js";
 import { defaultUiDataDir } from "./state-paths.js";
 
+vi.mock("@oscharko-dev/keiko-activity-log/reader", async (importOriginal) => {
+  const actual = await importOriginal<typeof reportReader>();
+  return {
+    ...actual,
+    analyzeSupportReport: vi.fn(actual.analyzeSupportReport),
+    prepareSupportReportSeed: vi.fn(actual.prepareSupportReportSeed),
+  };
+});
+
 const CORRELATION = "support-report-cli-0001";
 let root: string;
 let stateDir: string;
@@ -94,6 +109,36 @@ function capture(): { io: CliIo; output: string[]; errors: string[] } {
     errors,
   };
 }
+function expectCapacityExportEvidence(reportJson: string): void {
+  const report = parseSupportReport(reportJson);
+  const rejected = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "support.incident.rejected",
+  ).map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(rejected).toContainEqual(
+    expect.objectContaining({
+      correlationId: CORRELATION,
+      rejectionReason: "quota-exhausted",
+      completeness: "partial",
+      loss: "event-dropped",
+    }),
+  );
+  const completed = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "support.report.completed",
+  ).at(-1);
+  const line = expectActivityLogProof("support.report.completed.report-lifecycle", completed ?? "");
+  expect(line).toMatchObject({
+    surface: "export",
+    selectedCorrelationId: CORRELATION,
+    incidentId: report.incident.incidentId,
+    incidentTrigger: report.incident.trigger,
+    reportDigest: report.integrity.reportDigest,
+    retentionDisposition: "transient",
+  });
+  expect(line).not.toHaveProperty("pinDisposition");
+}
+
 function seed(): void {
   const process = fixtureProcess(4242, "aabbccdd");
   const now = Date.now();
@@ -101,7 +146,7 @@ function seed(): void {
     fixtureLine(process, now, { op: "client.diagnostic", correlationId: CORRELATION }),
   ]);
 }
-function seedGatewayFailure(ageMs = 0): void {
+function seedGatewayFailure(ageMs = 0, level: "warn" | "info" = "warn"): void {
   rmSync(join(stateDir, "logs"), { recursive: true });
   const process = fixtureProcess(4242, "aabbccdd");
   const now = Date.now() - ageMs;
@@ -121,6 +166,7 @@ function seedGatewayFailure(ageMs = 0): void {
     }),
     fixtureLine(process, now + 1, {
       op: "gateway.chat.failed",
+      level, // Production gateway.logCallFailed uses warn; info is a negative attribution control.
       correlationId: CORRELATION,
       errorKind: "timeout",
       fields: {
@@ -178,12 +224,15 @@ async function analyze(
 function sha256Of(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
-async function runExport(out: string): Promise<{ code: number } & ReturnType<typeof capture>> {
+async function runExport(
+  out: string,
+  env: Readonly<Record<string, string | undefined>> = {},
+): Promise<{ code: number } & ReturnType<typeof capture>> {
   const result = capture();
   const code = await runSupportCli(
     ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION, "--out", out],
     result.io,
-    {},
+    env,
     { cwd: root, controlActivityStateDir: controlStateDir },
   );
   return { code, ...result };
@@ -291,6 +340,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   closeFileServerLogSinks();
   rmSync(root, { recursive: true, force: true });
 });
@@ -307,6 +357,246 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 describe("support report CLI and private publication", () => {
+  it("reuses the incident seed and leaves unnecessary lifecycle validators unloaded", async () => {
+    seedGatewayFailure();
+    await exportReport();
+    const expected = analyzedReport().artifact;
+    vi.mocked(reportReader.prepareSupportReportSeed).mockClear();
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const result = await analyze(["--seed", "--json"]);
+    expect(result.code, result.errors.join("")).toBe(0);
+    expect(JSON.parse(result.output.join(""))).toEqual({ ...expected, fixtureWritten: false });
+    expect(reportReader.prepareSupportReportSeed).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("analyzes once when actual tool lifecycle options are needed", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "coding-repository-handler.started",
+        correlationId: CORRELATION,
+      }),
+    ]);
+    await exportReport();
+    const { validateToolLifecycleEvent, redactLogFields } = await lazyModules.loadToolLifecycle();
+    const expected = analyzeSupportReport(readSupportReportFile(path), {
+      toolLifecycleValidator: validateToolLifecycleEvent,
+      toolDiagnosticRedactor: redactLogFields,
+    });
+    vi.mocked(reportReader.analyzeSupportReport).mockClear();
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const result = await analyze(["--json"]);
+    expect(result.code, result.errors.join("")).toBe(0);
+    expect(JSON.parse(result.output.join(""))).toEqual(expected);
+    expect(reportReader.analyzeSupportReport).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid report bytes without loading tool lifecycle dependencies", async () => {
+    writeFileSync(path, "not-json\n", { mode: 0o600 });
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const result = await analyze(["--json"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("describes the actual empty bounded manual selection instead of an unbudgeted second window", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, now, 1),
+      Array.from({ length: 4100 }, (_, index) =>
+        fixtureLine(process, now, {
+          op: "client.diagnostic",
+          correlationId: `manual-required-${String(index)}`,
+        }),
+      ),
+    );
+    const destination = join(root, "bounded-manual-window");
+    const captured = capture();
+    expect(
+      await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", destination],
+        captured.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      ),
+    ).toBe(0);
+    const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new TypeError("Missing bounded report");
+    const report = parseSupportReport(readSupportReportFile(join(destination, filename)));
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("report-budget-exceeded");
+    expect(report.evidence.recordCount).toBe(0);
+    expect(report.incident.lineCount).toBe(0);
+    expect(report.incident.sufficiencyStatus).toBe("insufficient");
+  });
+  it.each([false, true])(
+    "keeps CLI and desktop failure identity equal at full quota=%s",
+    async (full) => {
+      rmSync(join(stateDir, "logs"), { recursive: true });
+      const process = fixtureProcess(4242, "aabbccdd");
+      const now = Date.now();
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+        fixtureLine(process, now, {
+          op: "client.diagnostic",
+          correlationId: CORRELATION,
+          level: "error",
+          errorKind: "timeout",
+          fields: { frames: ["packages/keiko-server/dist/chat-stream-handlers.js:42:7"] },
+        }),
+      ]);
+      if (full) {
+        vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+        occupySupportIncidentRetentionForTests(stateDir);
+      }
+      const desktop = parseSupportReport(
+        createDesktopSupportReport(stateDir, CORRELATION).reportJson,
+      );
+      await exportReport(join(root, "identity-report"));
+      const cli = parseSupportReport(readSupportReportFile(path));
+      expect(cli.incident).toMatchObject({
+        trigger: "registered-failure",
+        op: desktop.incident.op,
+        errorKind: desktop.incident.errorKind,
+        defectFingerprint: desktop.incident.defectFingerprint,
+        fingerprintAlgorithm: desktop.incident.fingerprintAlgorithm,
+        frameCount: desktop.incident.frameCount,
+      });
+      expect(
+        analyzeSupportReport(readSupportReportFile(path))
+          .analysis.timelines.flatMap((timeline) => timeline.lines)
+          .some((line) => line.errorKind === "timeout"),
+      ).toBe(true);
+    },
+  );
+
+  it("exports an honest manual window at a full candidate quota without a selector", async () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const destination = join(root, "manual-quota-report");
+    const captured = capture();
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", destination],
+      captured.io,
+      { KEIKO_LOG_RETENTION_BYTES: "65536" },
+      { cwd: root, controlActivityStateDir: controlStateDir },
+    );
+    expect(code).toBe(0);
+    const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new TypeError("Missing manual quota report");
+    const reportJson = readSupportReportFile(join(destination, filename));
+    const analyzed = analyzeSupportReport(reportJson);
+    expect(analyzed.selection.status).toBe("complete");
+    expect(
+      analyzed.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "client.diagnostic"),
+    ).toBe(true);
+    expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+      retainedIds,
+    );
+    expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+  });
+
+  it("exports an explicitly selected readable failure when candidate storage is unavailable", async () => {
+    seedGatewayFailure();
+    writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+    const exported = await runExport(join(root, "unavailable-candidate-store"));
+    expect(exported.code).toBe(0);
+    const file = readdirSync(join(root, "unavailable-candidate-store")).find((entry) =>
+      entry.endsWith(".json"),
+    );
+    if (file === undefined) throw new TypeError("Missing exported report");
+    const report = parseSupportReport(
+      readSupportReportFile(join(root, "unavailable-candidate-store", file)),
+    );
+    expect(report.incident.trigger).toBe("registered-failure");
+    expect(report.incident.op).toBe("gateway.chat.failed");
+    expect(report.evidence.recordCount).toBeGreaterThan(0);
+  });
+
+  it("does not attribute an info-only gateway record as a failure when candidate storage is unavailable", async () => {
+    seedGatewayFailure(0, "info");
+    writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+    const destination = join(root, "unavailable-store-info-control");
+    expect((await runExport(destination)).code).toBe(0);
+    const file = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (file === undefined) throw new TypeError("Missing exported info-control report");
+    const text = readSupportReportFile(join(destination, file));
+    expect(parseSupportReport(text).incident).toMatchObject({
+      trigger: "user-report",
+      op: "unattributed",
+      errorKind: "unknown",
+      frameCount: 0,
+    });
+    expect(
+      analyzeSupportReport(text).analysis.timelines.flatMap((timeline) => timeline.lines),
+    ).toContainEqual(
+      expect.objectContaining({ op: "gateway.chat.failed", level: "info", errorKind: "timeout" }),
+    );
+  });
+
+  it.each(["--correlation-id", "--incident", "--defect-fingerprint"] as const)(
+    "refuses an unknown %s without selecting another failure when candidate storage is unavailable",
+    async (selector) => {
+      writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+      const output = join(root, "refused-unavailable-store");
+      const result = capture();
+      const code = await runSupportCli(
+        [
+          "export",
+          "--state-dir",
+          stateDir,
+          selector,
+          selector === "--correlation-id"
+            ? "unknown-correlation"
+            : "a".repeat(selector === "--incident" ? 32 : 64),
+          "--out",
+          output,
+        ],
+        result.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      );
+      expect(code).toBe(1);
+      expect(existsSync(output) ? readdirSync(output) : []).toEqual([]);
+    },
+  );
+
+  it("exports the selected retained evidence at a full candidate quota without a browser session", async () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const destination = join(root, "quota-report");
+    const exported = await runExport(destination, { KEIKO_LOG_RETENTION_BYTES: "65536" });
+    expect(exported.code).toBe(0);
+    const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new TypeError("Missing quota report");
+    const reportJson = readSupportReportFile(join(destination, filename));
+    expect(
+      analyzeSupportReport(reportJson)
+        .analysis.timelines.flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "client.diagnostic"),
+    ).toBe(true);
+    expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+      retainedIds,
+    );
+    expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+    expectCapacityExportEvidence(reportJson);
+  });
+
   it("assesses a historical selected correlation closure rather than the export-time window", async () => {
     seedGatewayFailure(75 * 60_000);
     await exportReport();
@@ -424,8 +714,12 @@ describe("support report CLI and private publication", () => {
     if (parentRef === undefined || childRef === undefined)
       throw new TypeError("missing exported parent/child references");
     for (const selected of [parentRef, childRef]) {
+      vi.mocked(reportReader.prepareSupportReportSeed).mockClear();
       const result = await analyze(["--seed", "--json", "--correlation-id", selected]);
       expect(result.code, result.errors.join("")).toBe(0);
+      expect(reportReader.prepareSupportReportSeed).toHaveBeenCalledTimes(
+        selected === parentRef ? 0 : 1,
+      );
     }
     const completions = persistedActivityLogLines(
       readPersistedActivityLog(controlStateDir),
@@ -544,6 +838,11 @@ describe("support report CLI and private publication", () => {
       surface: "export",
       reportBytes: bytes.length,
       reportDigest: parseSupportReport(bytes.toString()).integrity.reportDigest,
+      incidentId: parseSupportReport(bytes.toString()).incident.incidentId,
+      incidentTrigger: parseSupportReport(bytes.toString()).incident.trigger,
+      selectedCorrelationId: CORRELATION,
+      retentionDisposition: "stored",
+      pinDisposition: parseSupportReport(bytes.toString()).incident.pin.status,
       sufficiency: "complete",
       sufficiencyReasons: [],
       completeness: "complete",
@@ -578,7 +877,7 @@ describe("support report CLI and private publication", () => {
       completeness: "complete",
       loss: "none",
     });
-    const trace = await expectActivityLogScenario("runtime-packages.dependency-failure", {
+    const trace = await expectActivityLogScenario("runtime-packages.rejection", {
       stateDir: controlStateDir,
       startedAtMs,
       expectedOps: ["support.report.started", "support.report.failed"],
@@ -659,6 +958,29 @@ describe("support report CLI and private publication", () => {
         chmodSync(path, 0o644);
       }
       expect(() => readSupportReportFile(path)).toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "explains how to analyze a public-permission browser download without changing it",
+    async () => {
+      await exportReport();
+      const original = readSupportReportFile(path);
+      path = join(root, "download.json.gz");
+      const bytes = gzipSync(original);
+      writeFileSync(path, bytes, { mode: 0o644 });
+      chmodSync(path, 0o644);
+      const result = await analyze(["--json"]);
+      expect(result.code).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toBe(
+        "keiko support: permission-unsafe\n" +
+          "Analyze a copy owned by your account in a private directory. On macOS/Linux, " +
+          "use chmod 700 on that directory and chmod 600 on the copied report, then retry.\n",
+      );
+      expect(readFileSync(path)).toEqual(bytes);
+      expect(statSync(path).mode & 0o777).toBe(0o644);
+      expectFailureEvidence(controlStateDir, "analyze", "unsafe-target");
     },
   );
 

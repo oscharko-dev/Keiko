@@ -11,6 +11,8 @@ import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gatew
 // updates the in-memory runtime config without exposing credentials back to the browser.
 
 import { randomUUID } from "node:crypto";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import { createRequestCancellation } from "./request-cancellation.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import {
@@ -65,6 +67,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   GatewayModelUnsupportedReason,
+  ActivityLogErrorKind,
   GatewaySetupAuditRecord,
   GatewaySetupOutcomeKind,
   GatewaySetupTargetClass,
@@ -150,6 +153,8 @@ const MISTRAL_TOOL_CALLING_LIMITATION =
 // exact value instead of restating it (Issue #144 precedent — see `MAX_DISCOVERED_MODELS`).
 export const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 120_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+const DISCOVERY_TIMEOUT_MS = 30_000;
+const DISCOVERY_FALLBACK_RESERVE_MS = 5_000;
 // The whole discovery smoke ROUND's own patience budget — distinct from the per-candidate ceiling
 // above. Past this deadline no further candidate probe is even started: the remaining candidates
 // are retained unverified without being called, so a large discovery batch of temporarily-transient
@@ -211,6 +216,144 @@ const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
   proofIds: ["gateway.voice.setup.resolved.line"],
   releaseImpact: "minor",
 });
+const DISCOVERY_ROUTE_OUTCOME_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: [
+    "not-attempted",
+    "available",
+    "timeout",
+    "http-error",
+    "unusable",
+    "transport-error",
+    "cancelled",
+    "failed",
+  ],
+} as const;
+
+type DiscoveryRouteOutcome = (typeof DISCOVERY_ROUTE_OUTCOME_FIELD.values)[number];
+interface SetupDiscoveryTrace {
+  discoverySource: "custom" | "model-info" | "model-group-info" | "model-list";
+  modelInfoOutcome: DiscoveryRouteOutcome;
+  modelGroupInfoOutcome: DiscoveryRouteOutcome;
+  modelListOutcome: DiscoveryRouteOutcome;
+}
+
+function createSetupDiscoveryTrace(): SetupDiscoveryTrace {
+  return {
+    discoverySource: "custom",
+    modelInfoOutcome: "not-attempted",
+    modelGroupInfoOutcome: "not-attempted",
+    modelListOutcome: "not-attempted",
+  };
+}
+
+const GATEWAY_SETUP_METADATA_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.setup.metadata.resolved",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.logSetupMetadataOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["available", "unavailable", "cancelled", "failed"],
+    },
+    discoverySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["custom", "model-info", "model-group-info", "model-list"],
+    },
+    modelInfoOutcome: DISCOVERY_ROUTE_OUTCOME_FIELD,
+    modelGroupInfoOutcome: DISCOVERY_ROUTE_OUTCOME_FIELD,
+    modelListOutcome: DISCOVERY_ROUTE_OUTCOME_FIELD,
+    elapsedMs: { type: "integer", dataClass: "duration", required: true },
+    selectedModelCount: { type: "integer", dataClass: "count", required: false },
+    metadataEnrichedModelCount: { type: "integer", dataClass: "count", required: false },
+    roleMismatchModelCount: { type: "integer", dataClass: "count", required: false },
+    notDiscoveredModelCount: { type: "integer", dataClass: "count", required: false },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+      maxLength: 512,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+      maxLength: 128,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-setup-metadata"],
+  proofIds: ["gateway.setup.metadata.resolved.line"],
+  releaseImpact: "patch",
+});
+
+interface SetupMetadataSelectionCounts {
+  readonly selectedModelCount: number;
+  readonly metadataEnrichedModelCount: number;
+  readonly roleMismatchModelCount: number;
+  readonly notDiscoveredModelCount: number;
+}
+
+interface SetupMetadataFailure {
+  readonly errorKind: ActivityLogErrorKind;
+  readonly evidence: {
+    readonly httpStatus?: number;
+    readonly frames: readonly string[];
+    readonly causeChain: readonly string[];
+  };
+}
+
+type SetupMetadataOutcome =
+  | { readonly outcome: "available"; readonly selectionCounts?: SetupMetadataSelectionCounts }
+  | {
+      readonly outcome: "unavailable" | "cancelled" | "failed";
+      readonly selectionCounts?: Pick<SetupMetadataSelectionCounts, "selectedModelCount">;
+      readonly failure: SetupMetadataFailure;
+    };
+
+function logSetupMetadataOutcome(
+  input: SetupMetadataOutcome,
+  trace: SetupDiscoveryTrace,
+  startedAt: number,
+  correlationId: string | undefined,
+): void {
+  const failure = input.outcome === "available" ? undefined : input.failure;
+  processServerLogSink().write(
+    activityLogEvent(
+      GATEWAY_SETUP_METADATA_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(failure === undefined ? {} : { errorKind: failure.errorKind }),
+      },
+      {
+        outcome: input.outcome,
+        ...trace,
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        completeness: "complete",
+        loss: "none",
+        ...input.selectionCounts,
+        ...failure?.evidence,
+      },
+    ),
+  );
+}
+
 const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
 const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
@@ -230,7 +373,10 @@ type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayEmbeddingProbe = NonNullable<UiHandlerDeps["gatewayEmbeddingProbe"]>;
 /** Runs the live two-document rerank probe against the reranker the given config names. */
 type GatewayRerankerProbe = (config: GatewayConfig) => Promise<boolean>;
-type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type InjectedGatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type GatewayModelDiscovery = (
+  ...args: [...Parameters<InjectedGatewayModelDiscovery>, trace: SetupDiscoveryTrace]
+) => ReturnType<InjectedGatewayModelDiscovery>;
 type FigmaCredentialTester = NonNullable<UiHandlerDeps["figmaCredentialTester"]>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 type SetupParseResult<T> =
@@ -564,6 +710,9 @@ function discoveredCapabilityFields(
   // Keiko's forced tool call. Keep it out of toolCalling: only the live probe can enable tools.
   return {
     ...(discovered?.contextWindow === undefined ? {} : { contextWindow: discovered.contextWindow }),
+    ...(discovered?.maxInputTokens === undefined
+      ? {}
+      : { maxInputTokens: discovered.maxInputTokens }),
     ...(discovered?.maxOutputTokens === undefined
       ? {}
       : { maxOutputTokens: discovered.maxOutputTokens }),
@@ -595,6 +744,20 @@ function workflowCapabilityFields(
   };
 }
 
+function declaresContextWindow(discovered: GatewayDiscoveredModelMetadata | undefined): boolean {
+  return discovered?.contextWindow !== undefined && discovered.contextWindowUndeclared !== true;
+}
+
+// Only declared context geometry replaces a stored optional input ceiling; a degraded list preserves it.
+function refreshedSetupCapability(
+  existing: ModelCapability | undefined,
+  discovered: GatewayDiscoveredModelMetadata | undefined,
+): ModelCapability | undefined {
+  if (existing === undefined || !declaresContextWindow(discovered)) return existing;
+  const { maxInputTokens, ...retained } = existing;
+  return retained;
+}
+
 function createDefaultSetupCapability(
   modelId: string,
   baseUrl: string,
@@ -619,8 +782,11 @@ function createDefaultSetupCapability(
   // fields (contextWindow, maxOutputTokens) belong to the wrong kind — a chat capability with an
   // embedding's contextWindow: 0 fails config-parse under KEIKO-0520. Treat existing as absent
   // when its kind no longer matches so the flow restarts from baseCapability's defaults.
-  const existing = rawExisting?.kind === baseCapability.kind ? rawExisting : undefined;
   const discovered = options.modelMetadata?.[modelId];
+  const existing = refreshedSetupCapability(
+    rawExisting?.kind === baseCapability.kind ? rawExisting : undefined,
+    discovered,
+  );
   const capability: ModelCapability = withContextWindowProvenance(existing, discovered, {
     ...baseCapability,
     // The endpoint-move restriction is PRESERVE semantics: a fresh replacement deliberately
@@ -658,9 +824,7 @@ function withContextWindowProvenance(
   capability: ModelCapability,
 ): ModelCapability {
   const measured = withoutAssumedContextWindow(capability);
-  const declared =
-    discovered?.contextWindow !== undefined && discovered.contextWindowUndeclared !== true;
-  if (capability.kind !== "chat" || declared) return measured;
+  if (capability.kind !== "chat" || declaresContextWindow(discovered)) return measured;
   if (existing === undefined || existing.contextWindowAssumed === true) {
     return { ...measured, contextWindowAssumed: true };
   }
@@ -905,30 +1069,25 @@ function reasoningEffortsFromDiscoveryRecords(
     : undefined;
 }
 
-// Declared context-window fields in order of authority; the first one a deployment declares wins.
-// LiteLLM `/model/info` publishes `max_input_tokens`, a vLLM `/v1/models` entry publishes
-// `max_model_len`, and OpenAI-compatible proxies in the field use `context_length` or
-// `context_window`. Reading only the first left every model of a vLLM-fronted gateway with an
-// undeclared window (customer report on 1.1.13: a `hosted_vllm` model planned as a 4,096-token
-// model failed every grounded question).
+// Explicit total-window declarations are distinct from LiteLLM's prompt-input ceiling.
+// All declarations of the same constraint intersect; replicas cannot widen a smaller bound.
 const DECLARED_CONTEXT_WINDOW_FIELDS: readonly string[] = [
-  "max_input_tokens",
   "max_model_len",
   "context_length",
   "context_window",
 ];
 
 function declaredContextWindow(records: readonly Record<string, unknown>[]): number | undefined {
-  for (const field of DECLARED_CONTEXT_WINDOW_FIELDS) {
-    const declared = numberFieldFromRecords(records, [field]);
-    if (declared !== undefined) return declared;
-  }
-  return undefined;
+  return (
+    numberFieldFromRecords(records, DECLARED_CONTEXT_WINDOW_FIELDS) ??
+    numberFieldFromRecords(records, ["max_input_tokens"])
+  );
 }
 
 function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
   const records = discoveryRecords(item);
   const contextWindow = declaredContextWindow(records);
+  const maxInputTokens = numberFieldFromRecords(records, ["max_input_tokens"]);
   const maxOutputTokens = numberFieldFromRecords(records, ["max_output_tokens", "max_tokens"]);
   const toolCalling = optionalBooleanFieldFromRecords(records, [
     "supports_function_calling",
@@ -942,6 +1101,7 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
   const chatModeDeclared = declaresChatCompatibleMode(mode);
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxInputTokens === undefined ? {} : { maxInputTokens }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(toolCalling === undefined ? {} : { toolCalling }),
     ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
@@ -1661,6 +1821,7 @@ function intersectDeploymentMetadata(
 ): GatewayDiscoveredModelMetadata {
   return {
     ...intersectContextWindow(left, right),
+    ...intersectInputLimit(left, right),
     ...commonTokenCounter(left, right),
     maxOutputTokens: Math.min(left.maxOutputTokens ?? 0, right.maxOutputTokens ?? 0),
     toolCalling: left.toolCalling === true && right.toolCalling === true,
@@ -1669,6 +1830,16 @@ function intersectDeploymentMetadata(
       ? { chatModeDeclared: true }
       : {}),
   };
+}
+
+function intersectInputLimit(
+  left: GatewayDiscoveredModelMetadata,
+  right: GatewayDiscoveredModelMetadata,
+): Pick<GatewayDiscoveredModelMetadata, "maxInputTokens"> {
+  const limits = [left.maxInputTokens, right.maxInputTokens].filter(
+    (limit): limit is number => limit !== undefined,
+  );
+  return limits.length === 0 ? {} : { maxInputTokens: Math.min(...limits) };
 }
 
 function intersectContextWindow(
@@ -1806,25 +1977,45 @@ async function fetchDiscoveryJson(
   apiKey: string,
   apiKeyHeaderName: string,
   egress?: GatewayEgressConfig,
+  signal: AbortSignal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
 ): Promise<unknown> {
-  const response = await gatewayFetch(url, {
-    method: "GET",
-    headers: apiKeyHeaders(apiKey, apiKeyHeaderName),
-    signal: AbortSignal.timeout(30_000),
-    ...(egress !== undefined ? { egress } : {}),
-  });
+  signal.throwIfAborted();
+  const response = await fetchDiscoveryResponse(url, apiKey, apiKeyHeaderName, egress, signal);
   if (!response.ok) {
-    // The classifier (`setupCandidateError` via `setupHttpStatus`) reads the status as an error
-    // property; carrying it only inside the message left a 401/403 discovery — a wrong or
-    // model-restricted proxy key — as the generic body-free 502 (LiteLLM production audit).
-    throw Object.assign(new Error(`model discovery returned HTTP ${String(response.status)}`), {
+    throw Object.assign(new Error("model discovery returned an error status"), {
       httpStatus: response.status,
     });
   }
   try {
     return await readJsonCapped(response);
   } catch {
-    throw new Error("model discovery response was not readable JSON");
+    signal.throwIfAborted();
+    throw discoveryTerminal(
+      "model discovery response was not readable JSON",
+      "DISCOVERY_INVALID_RESPONSE",
+    );
+  }
+}
+
+async function fetchDiscoveryResponse(
+  url: string,
+  apiKey: string,
+  apiKeyHeaderName: string,
+  egress: GatewayEgressConfig | undefined,
+  signal: AbortSignal,
+): Promise<Response> {
+  try {
+    return await gatewayFetch(url, {
+      method: "GET",
+      headers: apiKeyHeaders(apiKey, apiKeyHeaderName),
+      signal,
+      ...(egress !== undefined ? { egress } : {}),
+    });
+  } catch (cause) {
+    signal.throwIfAborted();
+    if (cause instanceof TypeError)
+      throw new Error("Model metadata transport was unavailable.", { cause });
+    throw cause;
   }
 }
 
@@ -1849,15 +2040,34 @@ async function discoverLiteLlmModelInfo(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName: string,
-  egress?: GatewayEgressConfig,
-  correlationId?: string,
+  egress: GatewayEgressConfig | undefined,
+  correlationId: string | undefined,
+  {
+    signal,
+    deadlineAt,
+    trace,
+  }: {
+    readonly signal: AbortSignal;
+    readonly deadlineAt: number;
+    readonly trace: SetupDiscoveryTrace;
+  },
 ): Promise<GatewayDiscoveredModels | undefined> {
-  for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
+  const endpoints = modelInfoEndpointCandidates(baseUrl);
+  for (const [index, endpoint] of endpoints.entries()) {
+    trace.discoverySource = index === 0 ? "model-info" : "model-group-info";
+    const outcomeKey = index === 0 ? "modelInfoOutcome" : "modelGroupInfoOutcome";
     try {
       const discovered = parseModelDiscovery(
-        await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress),
+        await fetchDiscoveryJson(
+          endpoint,
+          apiKey,
+          apiKeyHeaderName,
+          egress,
+          discoveryManagementSignal(signal, deadlineAt, endpoints.length - index),
+        ),
         correlationId,
       );
+      trace[outcomeKey] = "available";
       return {
         ...discovered,
         modelMetadata: Object.fromEntries(
@@ -1868,33 +2078,68 @@ async function discoverLiteLlmModelInfo(
         ),
       };
     } catch (cause) {
+      trace[outcomeKey] = discoveryRouteOutcome(cause, signal);
+      signal.throwIfAborted();
+      if (discoveryProgrammingFailure(cause)) throw cause;
       if (modelInfoAnswerIsUnusable(cause) && cause instanceof Error) throw cause;
     }
   }
   return undefined;
 }
 
+// Let the primary management route use the shared budget while retaining a short fallback window.
+function discoveryManagementSignal(
+  signal: AbortSignal,
+  deadlineAt: number,
+  routesLeft: number,
+): AbortSignal {
+  signal.throwIfAborted();
+  const remaining = Math.max(1, deadlineAt - Date.now());
+  return AbortSignal.any([
+    signal,
+    AbortSignal.timeout(Math.max(1, remaining - routesLeft * DISCOVERY_FALLBACK_RESERVE_MS)),
+  ]);
+}
+
 async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
-  apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
-  egress?: GatewayEgressConfig,
-  correlationId?: string,
+  requestedApiKeyHeaderName: string | undefined,
+  egress: GatewayEgressConfig | undefined,
+  correlationId: string | undefined,
+  trace: SetupDiscoveryTrace,
+  callerSignal?: AbortSignal,
 ): Promise<GatewayDiscoveredModels> {
+  const apiKeyHeaderName = requestedApiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  // One existing discovery budget covers the management fallbacks and model list together.
+  const deadlineAt = Date.now() + DISCOVERY_TIMEOUT_MS;
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+    ...(callerSignal === undefined ? [] : [callerSignal]),
+  ]);
   const litellmModels = await discoverLiteLlmModelInfo(
     baseUrl,
     apiKey,
     apiKeyHeaderName,
     egress,
     correlationId,
+    { signal, deadlineAt, trace },
   );
   if (litellmModels !== undefined) {
     return litellmModels;
   }
-  return parseModelDiscovery(
-    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress),
-    correlationId,
-  );
+  trace.discoverySource = "model-list";
+  try {
+    const discovered = parseModelDiscovery(
+      await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress, signal),
+      correlationId,
+    );
+    trace.modelListOutcome = "available";
+    return discovered;
+  } catch (cause) {
+    trace.modelListOutcome = discoveryRouteOutcome(cause, signal);
+    throw cause;
+  }
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
@@ -2128,9 +2373,11 @@ async function runBoundedWorkers<T>(
   items: readonly T[],
   concurrency: number,
   process: (item: T, index: number) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let next = 0;
   async function worker(): Promise<void> {
+    signal?.throwIfAborted();
     const index = next;
     next += 1;
     if (index >= items.length) return;
@@ -2149,20 +2396,23 @@ async function passingCandidates(
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
   failures?: ProbeFailureEvidence[],
+  signal?: AbortSignal,
 ): Promise<readonly string[]> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   async function worker(modelId: string, index: number): Promise<void> {
     try {
       await probe(modelId);
+      signal?.throwIfAborted();
       tested[index] = modelId;
     } catch (error) {
+      signal?.throwIfAborted();
       // Probe rejection is the documented signal that this candidate is not
       // chat-callable. We drop it silently so healthy peers still surface — capturing only
       // the classification code/status as evidence for the all-rejected aggregate.
       failures?.push({ code: setupErrorCode(error), httpStatus: setupHttpStatus(error) });
     }
   }
-  await runBoundedWorkers(candidates, concurrency, worker);
+  await runBoundedWorkers(candidates, concurrency, worker, signal);
   return tested.filter((modelId): modelId is string => modelId !== undefined);
 }
 
@@ -2302,6 +2552,7 @@ export async function admitChatSmokeCandidates(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
   now: () => number = Date.now,
+  signal?: AbortSignal,
 ): Promise<ChatSmokeAdmission> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   const accumulators: ChatSmokeAccumulators = {
@@ -2311,19 +2562,26 @@ export async function admitChatSmokeCandidates(
     skippedByDeadline: [],
   };
   const roundDeadlineAt = now() + CHAT_SMOKE_ROUND_DEADLINE_MS;
-  await runBoundedWorkers(candidates, concurrency, async (modelId, index) => {
-    if (now() >= roundDeadlineAt) {
-      accumulators.unverifiedKept.push(modelId);
-      accumulators.skippedByDeadline.push(modelId);
-      return;
-    }
-    try {
-      await probe(modelId);
-      tested[index] = modelId;
-    } catch (error) {
-      recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
-    }
-  });
+  await runBoundedWorkers(
+    candidates,
+    concurrency,
+    async (modelId, index) => {
+      if (now() >= roundDeadlineAt) {
+        accumulators.unverifiedKept.push(modelId);
+        accumulators.skippedByDeadline.push(modelId);
+        return;
+      }
+      try {
+        await probe(modelId);
+        signal?.throwIfAborted();
+        tested[index] = modelId;
+      } catch (error) {
+        signal?.throwIfAborted();
+        recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
+      }
+    },
+    signal,
+  );
   return {
     tested: tested.filter((modelId): modelId is string => modelId !== undefined),
     ...accumulators,
@@ -2339,6 +2597,7 @@ async function verifyTestedChatCandidates(
   testedModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<Pick<GatewaySetupTestResult, "responseFormatModelIds" | "toolCallingObservations">> {
   const responseFormatModelIds = await passingCandidates(
     testedModelIds,
@@ -2346,12 +2605,15 @@ async function verifyTestedChatCandidates(
       const response = await gateway.chat({
         ...buildQiJudgePreflightRequest(modelId),
         logContext: { correlationId },
+        cancellationSignal: candidateSmokeCancellationSignal(config, modelId, signal),
       });
       if (tryParseJudgeVerdict(response.content) === null) {
         throw new Error("response format unsupported");
       }
     },
     SETUP_SMOKE_CONCURRENCY,
+    undefined,
+    signal,
   );
   // Both probe rounds independently use the endpoint-wide concurrency budget. Keep them
   // sequential so setup never doubles the operator-approved in-flight request ceiling.
@@ -2360,6 +2622,7 @@ async function verifyTestedChatCandidates(
     testedModelIds,
     correlationId,
     deps,
+    signal,
   );
   return { responseFormatModelIds, toolCallingObservations };
 }
@@ -2372,8 +2635,13 @@ async function verifyTestedChatCandidates(
 // `DEPLOYMENT_SMOKE_TIMEOUT_MS` for a manually entered deployment) rather than a hardcoded literal,
 // so both smoke paths stay bounded at the timeout each already advertises; the discovery constant
 // is only the defensive fallback for a candidate somehow missing its own provider entry.
-function candidateSmokeCancellationSignal(config: GatewayConfig, modelId: string): AbortSignal {
-  return AbortSignal.timeout(candidateSmokeDeadlineMs(config, modelId));
+function candidateSmokeCancellationSignal(
+  config: GatewayConfig,
+  modelId: string,
+  signal?: AbortSignal,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(candidateSmokeDeadlineMs(config, modelId));
+  return signal === undefined ? deadline : AbortSignal.any([deadline, signal]);
 }
 
 // Never below the discovery smoke floor: a manually entered deployment keeps its shorter configured
@@ -2391,6 +2659,7 @@ function chatSmokeProbe(
   gateway: Gateway,
   config: GatewayConfig,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): (modelId: string) => Promise<void> {
   return async (modelId) => {
     await gateway.chat({
@@ -2400,7 +2669,7 @@ function chatSmokeProbe(
         { role: "user", content: "Reply with exactly: OK" },
       ],
       logContext: { correlationId },
-      cancellationSignal: candidateSmokeCancellationSignal(config, modelId),
+      cancellationSignal: candidateSmokeCancellationSignal(config, modelId, signal),
     });
   };
 }
@@ -2410,6 +2679,7 @@ async function defaultGatewaySetupTester(
   candidateModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<GatewaySetupTestResult> {
   // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
   // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
@@ -2420,10 +2690,12 @@ async function defaultGatewaySetupTester(
   });
   const chatSmoke = await admitChatSmokeCandidates(
     candidateModelIds,
-    chatSmokeProbe(gateway, config, correlationId),
+    chatSmokeProbe(gateway, config, correlationId, signal),
     SETUP_SMOKE_CONCURRENCY,
     deps,
     correlationId,
+    Date.now,
+    signal,
   );
   // Nothing was verified: the historic "no discovered model accepted the chat-completions smoke
   // test" case, thrown exactly as `smokeTestCandidates` always did — even when some candidates were
@@ -2442,6 +2714,7 @@ async function defaultGatewaySetupTester(
     testedModelIds,
     correlationId,
     deps,
+    signal,
   );
   return {
     testedModelIds,
@@ -2486,42 +2759,51 @@ async function setupToolCallingObservations(
   testedModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<readonly GatewaySetupToolCallingObservation[]> {
   const checkedAt = new Date().toISOString();
   const observations = new Array<GatewaySetupToolCallingObservation>(testedModelIds.length);
-  await runBoundedWorkers(testedModelIds, SETUP_SMOKE_CONCURRENCY, async (modelId, index) => {
-    const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-    // A model without a provider stays unverified; that conclusion takes the same log line below
-    // as every probe result instead of being recorded silently.
-    const probeStatus =
-      provider === undefined
-        ? "unverified"
-        : await probeGatewayToolCalling(
-            config,
-            provider,
-            undefined,
-            (error) => {
-              reportSetupVerificationFailure(
-                deps,
-                error,
-                correlationId,
-                "gateway.setup.tool-calling-probe",
-              );
-            },
-            {
-              env: deps.env,
-              capability: findConfiguredCapability(config, modelId),
-              correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-            },
-          );
-    // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
-    // nothing about the model either way and must never be stored or logged as a verdict: the
-    // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
-    // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
-    const status = probeStatus === "transient" ? "unverified" : probeStatus;
-    observations[index] = { modelId, status, checkedAt };
-    logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
-  });
+  await runBoundedWorkers(
+    testedModelIds,
+    SETUP_SMOKE_CONCURRENCY,
+    async (modelId, index) => {
+      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+      // A model without a provider stays unverified; that conclusion takes the same log line below
+      // as every probe result instead of being recorded silently.
+      const probeStatus =
+        provider === undefined
+          ? "unverified"
+          : await probeGatewayToolCalling(
+              config,
+              provider,
+              undefined,
+              (error) => {
+                signal?.throwIfAborted();
+                reportSetupVerificationFailure(
+                  deps,
+                  error,
+                  correlationId,
+                  "gateway.setup.tool-calling-probe",
+                );
+              },
+              {
+                env: deps.env,
+                capability: findConfiguredCapability(config, modelId),
+                correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+              },
+              signal,
+            );
+      // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
+      // nothing about the model either way and must never be stored or logged as a verdict: the
+      // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
+      // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
+      signal?.throwIfAborted();
+      const status = probeStatus === "transient" ? "unverified" : probeStatus;
+      observations[index] = { modelId, status, checkedAt };
+      logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
+    },
+    signal,
+  );
   return observations;
 }
 
@@ -2542,7 +2824,9 @@ async function embedOnceForProbe(
   modelId: string,
   env: EnvSource,
   correlationId: string,
+  signal?: AbortSignal,
 ): Promise<OpenAIEmbeddingOutcome> {
+  signal?.throwIfAborted();
   const reservation = reserveGatewaySpendForAttempt(
     env,
     findConfiguredCapability(config, modelId),
@@ -2566,6 +2850,7 @@ async function embedOnceForProbe(
       modelId,
       input: EMBEDDING_PROBE_INPUT,
       timeoutMs: provider.timeoutMs,
+      ...(signal === undefined ? {} : { signal }),
       // The probe exists because an embedding model used to be persisted on a classification alone.
       // The sink is what turns a rejected probe into a line naming the status and the error kind,
       // rather than a model that silently fails to make the candidate list.
@@ -2593,16 +2878,21 @@ export async function defaultGatewayEmbeddingProbe(
   candidateModelIds: readonly string[],
   env: EnvSource,
   correlationId: string,
+  signal?: AbortSignal,
 ): Promise<readonly string[]> {
   return passingCandidates(
     candidateModelIds,
     async (modelId) => {
       const provider = config.providers.find((entry) => entry.modelId === modelId);
       if (provider === undefined) throw new Error("embedding candidate has no provider entry");
-      let outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
+      let outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId, signal);
+      signal?.throwIfAborted();
       if (!outcome.ok && RETRYABLE_PROBE_KINDS.has(outcome.kind)) {
-        await new Promise((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS));
-        outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
+        await awaitSetupOperation(
+          new Promise<void>((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS)),
+          signal,
+        );
+        outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId, signal);
       }
       // The per-model verdict is what the operator acts on, and it travels in
       // droppedEmbeddingModelIds / unverifiedEmbeddingModelIds. passingCandidates drops the
@@ -2612,12 +2902,15 @@ export async function defaultGatewayEmbeddingProbe(
       }
     },
     SETUP_SMOKE_CONCURRENCY,
+    undefined,
+    signal,
   );
 }
 
 function gatewayEmbeddingProbe(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewayEmbeddingProbe {
   const override = deps.gatewayEmbeddingProbe;
   if (override !== undefined) return override;
@@ -2627,6 +2920,7 @@ function gatewayEmbeddingProbe(
       candidateModelIds,
       deps.env,
       correlationId ?? UNKNOWN_CORRELATION_ID,
+      signal,
     );
 }
 
@@ -2650,9 +2944,11 @@ const DEFAULT_RERANKER_TIMEOUT_MS = 120_000;
 function gatewayRerankerProbe(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewayRerankerProbe {
   let budgetEndsAt: number | undefined;
   return async (config) => {
+    signal?.throwIfAborted();
     budgetEndsAt ??= Date.now() + RERANKER_SETUP_TOTAL_BUDGET_MS;
     const remainingMs = budgetEndsAt - Date.now();
     if (remainingMs <= 0) return false;
@@ -2661,10 +2957,14 @@ function gatewayRerankerProbe(
         deps,
         config,
         correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        signal: AbortSignal.timeout(Math.min(RERANKER_SETUP_PROBE_DEADLINE_MS, remainingMs)),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(Math.min(RERANKER_SETUP_PROBE_DEADLINE_MS, remainingMs)),
+          ...(signal === undefined ? [] : [signal]),
+        ]),
       });
       return rerankerProbePassed(selection);
     } catch (error) {
+      signal?.throwIfAborted();
       reportSetupVerificationFailure(deps, error, correlationId, "gateway.setup.reranker-probe");
       return false;
     }
@@ -2678,11 +2978,12 @@ function gatewayRerankerProbe(
 function gatewaySetupTester(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewaySetupTester {
   const override = deps.gatewaySetupTester;
   if (override !== undefined) return override;
   return (config, candidateModelIds) =>
-    defaultGatewaySetupTester(config, candidateModelIds, correlationId, deps);
+    defaultGatewaySetupTester(config, candidateModelIds, correlationId, deps, signal);
 }
 
 const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
@@ -2757,6 +3058,7 @@ function persistGatewayConfig(
 }
 
 interface SetupRequest {
+  readonly signal?: AbortSignal;
   readonly correlationId: string | undefined;
   readonly preserveExisting: boolean;
   readonly baseUrl: string;
@@ -5053,6 +5355,7 @@ interface VerifiedSetup {
 }
 
 interface SetupVerificationInput {
+  readonly signal?: AbortSignal;
   readonly embeddingProbe: GatewayEmbeddingProbe;
   readonly rerankerProbe: GatewayRerankerProbe;
   readonly preserveExisting: boolean;
@@ -5309,7 +5612,7 @@ async function candidateModelIdsForSetup(
   validationConfig: GatewayConfig,
 ): Promise<SetupCandidateModels> {
   if (input.deploymentNames.length > 0) {
-    return candidateModelsFromDeploymentNames(input.deploymentNames, {
+    const selected = candidateModelsFromDeploymentNames(input.deploymentNames, {
       storedEmbeddingModelIds: input.storedEmbeddingModelIds,
       submittedEmbeddingModelIds: input.submittedEmbeddingModelIds,
       restoredVerbatimModelIds: [
@@ -5320,19 +5623,221 @@ async function candidateModelIdsForSetup(
         ...input.storedVoiceModelIds,
       ],
     });
+    return enrichSelectedDeploymentMetadata(input, validationConfig, selected);
   }
-  return withStoredEmbeddingOrder(
-    normalizeDiscoveryResult(
-      await input.discovery(
+  return withStoredEmbeddingOrder(await discoverSetupModels(input, validationConfig), input.stored);
+}
+
+async function awaitSetupOperation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return operation;
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = (): void => {
+      reject(new DOMException("Gateway setup cancelled.", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function discoveryProgrammingFailure(cause: unknown): boolean {
+  return (
+    cause instanceof TypeError || cause instanceof ReferenceError || cause instanceof RangeError
+  );
+}
+
+function discoveryHttpStatus(cause: unknown): number | undefined {
+  const value =
+    cause !== null && typeof cause === "object" && "httpStatus" in cause
+      ? cause.httpStatus
+      : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined;
+}
+
+function discoveryTimedOut(cause: unknown): boolean {
+  return (
+    (cause instanceof Error && cause.name === "TimeoutError") ||
+    (cause instanceof GatewayError && cause.code === ERROR_CODES.TIMEOUT)
+  );
+}
+
+function discoveryAnswerIsUnusable(cause: unknown): boolean {
+  if (cause === null || typeof cause !== "object" || !("discoveryCode" in cause)) return false;
+  return (
+    cause.discoveryCode === "DISCOVERY_EMPTY" ||
+    cause.discoveryCode === "DISCOVERY_ALL_ENTRIES_UNSUPPORTED" ||
+    cause.discoveryCode === "DISCOVERY_INVALID_RESPONSE"
+  );
+}
+
+function discoveryRouteOutcome(cause: unknown, signal: AbortSignal): DiscoveryRouteOutcome {
+  if (discoveryTimedOut(cause)) return "timeout";
+  if (signal.aborted) return "cancelled";
+  if (discoveryHttpStatus(cause) !== undefined) return "http-error";
+  if (discoveryAnswerIsUnusable(cause)) return "unusable";
+  return discoveryProgrammingFailure(cause) ? "failed" : "transport-error";
+}
+
+function discoveryFailureKind(cause: unknown, status: number | undefined): ActivityLogErrorKind {
+  if (discoveryAnswerIsUnusable(cause)) return "validation-failed";
+  if (status === 401 || status === 403) return "permission-denied";
+  if (status === 429) return "rate-limited";
+  if (discoveryTimedOut(cause)) return "timeout";
+  return discoveryProgrammingFailure(cause) ? "internal" : "unavailable";
+}
+
+function discoveryFailureDetail(cause: unknown, cancelled: boolean): SetupMetadataFailure {
+  const httpStatus = discoveryHttpStatus(cause);
+  return {
+    errorKind: cancelled ? "cancelled" : discoveryFailureKind(cause, httpStatus),
+    evidence: {
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+      frames: keikoStackFrames(cause),
+      causeChain: causeChain(cause),
+    },
+  };
+}
+
+function metadataFailureOutcome(
+  cause: unknown,
+  signal: AbortSignal | undefined,
+): "cancelled" | "failed" | "unavailable" {
+  if (signal?.aborted === true) return "cancelled";
+  return discoveryProgrammingFailure(cause) ? "failed" : "unavailable";
+}
+
+async function discoverSetupModels(
+  input: SetupVerificationInput,
+  validationConfig: GatewayConfig,
+  selected?: SetupCandidateModels,
+): Promise<SetupCandidateModels> {
+  const startedAt = Date.now();
+  const trace = createSetupDiscoveryTrace();
+  const selectedModelCount = selectedModelCountOf(selected);
+  try {
+    input.signal?.throwIfAborted();
+    const result = await awaitSetupOperation(
+      input.discovery(
         input.baseUrl,
         input.apiKey,
         input.apiKeyHeaderName,
         validationConfig.egress,
         input.correlationId,
+        trace,
       ),
-    ),
-    input.stored,
+      input.signal,
+    );
+    input.signal?.throwIfAborted();
+    const normalized = normalizeDiscoveryResult(result);
+    logSetupMetadataOutcome(
+      {
+        outcome: "available",
+        ...(selected === undefined
+          ? {}
+          : { selectionCounts: selectedMetadataCounts(selected, normalized) }),
+      },
+      trace,
+      startedAt,
+      input.correlationId,
+    );
+    return normalized;
+  } catch (cause) {
+    const outcome = metadataFailureOutcome(cause, input.signal);
+    logSetupMetadataOutcome(
+      {
+        outcome,
+        ...(selectedModelCount === undefined ? {} : { selectionCounts: { selectedModelCount } }),
+        failure: discoveryFailureDetail(cause, outcome === "cancelled"),
+      },
+      trace,
+      startedAt,
+      input.correlationId,
+    );
+    throw cause;
+  }
+}
+
+function selectedDeploymentMetadata(
+  selected: SetupCandidateModels,
+  discovered: SetupCandidateModels,
+): Readonly<Record<string, GatewayDiscoveredModelMetadata>> {
+  const chat = new Set(discovered.chatModelIds);
+  const embedding = new Set(discovered.embeddingModelIds);
+  const compatible = [
+    ...selected.chatModelIds.filter((id) => chat.has(id)),
+    ...selected.embeddingModelIds.filter((id) => embedding.has(id)),
+  ];
+  return Object.fromEntries(
+    compatible.flatMap((id) => {
+      const metadata = discovered.modelMetadata[id];
+      return metadata === undefined ? [] : [[id, metadata]];
+    }),
   );
+}
+
+function selectedModelCountOf(selected: SetupCandidateModels): number;
+function selectedModelCountOf(selected: SetupCandidateModels | undefined): number | undefined;
+function selectedModelCountOf(selected: SetupCandidateModels | undefined): number | undefined {
+  return selected === undefined
+    ? undefined
+    : selected.chatModelIds.length + selected.embeddingModelIds.length;
+}
+
+function selectedMetadataCounts(
+  selected: SetupCandidateModels,
+  discovered: SetupCandidateModels,
+): SetupMetadataSelectionCounts {
+  const allDiscovered = new Set(discovered.modelIds);
+  let metadataEnrichedModelCount = 0;
+  let roleMismatchModelCount = 0;
+  let notDiscoveredModelCount = 0;
+  const groups = [
+    [selected.chatModelIds, discovered.chatModelIds],
+    [selected.embeddingModelIds, discovered.embeddingModelIds],
+  ] as const;
+  for (const [selectedIds, discoveredIds] of groups) {
+    const compatible = new Set(discoveredIds);
+    for (const id of selectedIds) {
+      if (!allDiscovered.has(id)) notDiscoveredModelCount++;
+      else if (!compatible.has(id)) roleMismatchModelCount++;
+      else if (Object.keys(discovered.modelMetadata[id] ?? {}).length > 0)
+        metadataEnrichedModelCount++;
+    }
+  }
+  return {
+    selectedModelCount: selectedModelCountOf(selected),
+    metadataEnrichedModelCount,
+    roleMismatchModelCount,
+    notDiscoveredModelCount,
+  };
+}
+
+async function enrichSelectedDeploymentMetadata(
+  input: SetupVerificationInput,
+  validationConfig: GatewayConfig,
+  selected: SetupCandidateModels,
+): Promise<SetupCandidateModels> {
+  try {
+    const discovered = await discoverSetupModels(input, validationConfig, selected);
+    reportDiscoveryTruncation(input.diagnostics, input.correlationId, discovered);
+    return { ...selected, modelMetadata: selectedDeploymentMetadata(selected, discovered) };
+  } catch (cause) {
+    input.signal?.throwIfAborted();
+    if (discoveryProgrammingFailure(cause)) throw cause;
+    // Explicit deployments remain usable on gateways without a discovery endpoint. Their
+    // existing smoke probes validate credentials and callable roles; discovery cannot add ids.
+    return selected;
+  }
 }
 
 function finalRawConfigForSetup(
@@ -6153,6 +6658,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   reportLoopbackTargetAccepted(input.diagnostics, input.correlationId, input.baseUrl);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
+  input.signal?.throwIfAborted();
   reportDiscoveryTruncation(input.diagnostics, input.correlationId, candidateModels);
   const smokeTimeoutMs =
     input.deploymentNames.length > 0
@@ -6164,6 +6670,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     embeddingProbeConfigFor(input, candidateModels, smokeTimeoutMs, candidateConfig),
     candidateModels.embeddingModelIds,
   );
+  input.signal?.throwIfAborted();
   const rerankerAdmission = await admitRerankerCandidates(
     input,
     validationConfig,
@@ -6181,6 +6688,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     admittedModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
+  input.signal?.throwIfAborted();
   const chatAdmission = await admitChatCandidatesOrDefer(
     input,
     candidateModels,
@@ -6206,7 +6714,9 @@ function verifiedSetupFromChatAdmission(
   chatAdmission: ChatAdmission,
 ): VerifiedSetup {
   const { testResult } = chatAdmission;
-  assertImageInputModelsWereTested(input.imageInputModelIds, chatAdmission.configuredModelIds);
+  if (input.imageInputModelIdsProvided) {
+    assertImageInputModelsWereTested(input.imageInputModelIds, chatAdmission.configuredModelIds);
+  }
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
     testResult,
@@ -6721,7 +7231,9 @@ async function trySetupCandidate(
   seams: SetupSeams,
   current: GatewayConfig | undefined,
 ): Promise<RouteResult> {
+  request.signal?.throwIfAborted();
   const verified = await verifySetupCandidate({
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
     embeddingProbe: seams.embeddingProbe,
     rerankerProbe: seams.rerankerProbe,
     preserveExisting: request.preserveExisting,
@@ -6755,6 +7267,7 @@ async function trySetupCandidate(
     diagnostics: deps.diagnostics,
     correlationId: request.correlationId,
   });
+  request.signal?.throwIfAborted();
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
   return finalizeVerifiedCandidate(verified, current, deps, gatewayConfig, request);
@@ -7062,6 +7575,7 @@ async function verifyAndSaveExistingConfigUpdate(
   if (figmaFailure !== undefined) {
     return figmaFailure;
   }
+  request.signal?.throwIfAborted();
   return saveExistingConfigUpdate(request, current, deps, gatewayConfig);
 }
 
@@ -7088,10 +7602,13 @@ async function verifyAndSaveGatewaySetup(
   gatewayConfig: RuntimeGatewayConfig,
 ): Promise<RouteResult> {
   const seams: SetupSeams = {
-    tester: gatewaySetupTester(deps, request.correlationId),
-    embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId),
-    rerankerProbe: gatewayRerankerProbe(deps, request.correlationId),
-    discovery: deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery,
+    tester: gatewaySetupTester(deps, request.correlationId, request.signal),
+    embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId, request.signal),
+    rerankerProbe: gatewayRerankerProbe(deps, request.correlationId, request.signal),
+    discovery:
+      deps.gatewayModelDiscovery ??
+      ((...args): Promise<GatewayModelDiscoveryOutput> =>
+        defaultGatewayModelDiscovery(...args, request.signal)),
   };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
   if (figmaFailure !== undefined) {
@@ -7151,6 +7668,7 @@ async function attemptSetupCandidates(
       const result = await trySetupCandidate(baseUrl, request, deps, gatewayConfig, seams, current);
       return { failures, result };
     } catch (error) {
+      if (request.signal?.aborted === true) return { failures: [...failures, { baseUrl, error }] };
       reportSetupVerificationFailure(
         deps,
         originalSetupVerificationError(error),
@@ -7164,6 +7682,7 @@ async function attemptSetupCandidates(
           ? { resumeTemporaryAdmission: error.resume }
           : {}),
       });
+      if (discoveryProgrammingFailure(error)) return { failures };
     }
   }
   return { failures };
@@ -7176,6 +7695,8 @@ function temporaryAdmissionOrFailure(
   gatewayConfig: RuntimeGatewayConfig,
   current: GatewayConfig | undefined,
 ): RouteResult {
+  if (request.signal?.aborted === true)
+    return setupFailureResult(candidateFailureMessages(failures), request.correlationId);
   const temporary = failures.find(
     (failure) =>
       temporaryGatewaySetupFailure(failure.error) && failure.resumeTemporaryAdmission !== undefined,
@@ -7232,10 +7753,21 @@ export async function handleGatewaySetup(
   if ("status" in request) {
     return request;
   }
-  if (!request.verifyGateway && current !== undefined) {
-    return verifyAndSaveExistingConfigUpdate(request, current, deps, gatewayConfig);
+  const cancellation = createRequestCancellation(ctx, "Gateway setup client disconnected.");
+  const cancellableRequest = { ...request, signal: cancellation.signal };
+  try {
+    if (!request.verifyGateway && current !== undefined) {
+      return await verifyAndSaveExistingConfigUpdate(
+        cancellableRequest,
+        current,
+        deps,
+        gatewayConfig,
+      );
+    }
+    return await verifyAndSaveGatewaySetup(cancellableRequest, current, deps, gatewayConfig);
+  } finally {
+    cancellation.dispose();
   }
-  return verifyAndSaveGatewaySetup(request, current, deps, gatewayConfig);
 }
 
 const VERIFIED_CAPABILITY_FIELDS = new Set<keyof VerifiedModelCapabilityFields>([

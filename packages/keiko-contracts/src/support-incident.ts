@@ -1,3 +1,7 @@
+import {
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
+  type SupportReportAvailabilityReason,
+} from "./support-report-policy.js";
 // The canonical, body-free SupportIncident contract (#3533).
 //
 // A SupportIncident is a local control and selection artifact over the one logical Activity Log —
@@ -44,6 +48,7 @@
 
 import { parseActivityLogSegmentId, ACTIVITY_LOG_PIN_ID_PATTERN } from "./activity-log-files.js";
 import { isClientDefectContext, normalizeClientDefectFrames } from "./client-defect-signature.js";
+import { isClientErrorEvidence, type ClientErrorEvidence } from "./diagnostics.js";
 export { clientDefectContext } from "./client-defect-signature.js";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -68,6 +73,25 @@ import {
   type DiagnosticSufficiencyReason,
   type DiagnosticSufficiencyStatus,
 } from "./observability.js";
+
+export const SUPPORT_INCIDENT_TTL_MS = 24 * 60 * 60_000;
+export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * 60_000;
+export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * 60_000;
+
+/** Current retention deadline; historical records keep their original serialized expiry. */
+export function supportIncidentEffectiveExpiry(
+  record: Pick<SupportIncidentDescriptorRecord, "createdAtMs" | "expiresAtMs">,
+): number {
+  return Math.min(record.expiresAtMs, record.createdAtMs + SUPPORT_INCIDENT_TTL_MS);
+}
+
+export function supportIncidentWindow(nowMs: number): SupportIncidentWindow {
+  return {
+    fromMs: Math.max(0, nowMs - SUPPORT_INCIDENT_WINDOW_BEFORE_MS),
+    incidentAtMs: nowMs,
+    toMs: nowMs + SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+  };
+}
 
 export const SUPPORT_INCIDENT_SCHEMA_VERSION = 1;
 export const DEFECT_FINGERPRINT_ALGORITHM_VERSION = 1;
@@ -109,18 +133,11 @@ export const MAX_SUPPORT_INCIDENT_RECORD_BYTES = 4096;
 
 const INCIDENT_FILE_PATTERN = /^incident-([a-f0-9]{32})\.json$/u;
 const FINGERPRINT_CLAIM_FILE_PATTERN = /^fingerprint-([a-f0-9]{64})\.claim$/u;
-const SLOT_CLAIM_FILE_PATTERN = /^slot-(\d{2})\.claim$/u;
+const SLOT_CLAIM_FILE_PATTERN = /^slot-(\d{2,16})\.claim$/u;
 const OPERATION_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*$/u;
 const MAX_OPERATION_LENGTH = 96;
 
-/**
- * The bounded pool of quota-slot claim files (#3533 review 4050606506): `slot-00.claim` through
- * `slot-<N-1>.claim`. Every candidate -- automatic or user-initiated -- atomically claims exactly
- * one slot (exclusive-create, content the owning incidentId) before its record is written, so the
- * store's total-count quota (`MAX_SUPPORT_INCIDENTS` in keiko-server) holds across processes with
- * no read-then-write race. keiko-server imports this constant rather than repeating the number, so
- * the two can never drift apart.
- */
+/** Legacy compatibility value; runtime reservations derive from the governing byte policy. */
 export const SUPPORT_INCIDENT_SLOT_COUNT = 32;
 
 export function supportIncidentFileName(incidentId: string): string {
@@ -131,7 +148,7 @@ export function supportIncidentFileName(incidentId: string): string {
 }
 
 export function supportIncidentSlotClaimFileName(slotIndex: number): string {
-  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= SUPPORT_INCIDENT_SLOT_COUNT) {
+  if (!Number.isSafeInteger(slotIndex) || slotIndex < 0) {
     throw new RangeError("invalid SupportIncident quota slot index");
   }
   return `slot-${String(slotIndex).padStart(2, "0")}.claim`;
@@ -142,7 +159,9 @@ export function parseSupportIncidentSlotClaimFileName(name: string): number | un
   const match = SLOT_CLAIM_FILE_PATTERN.exec(name);
   if (match === null) return undefined;
   const slotIndex = Number(match[1]);
-  return slotIndex < SUPPORT_INCIDENT_SLOT_COUNT ? slotIndex : undefined;
+  return Number.isSafeInteger(slotIndex) && supportIncidentSlotClaimFileName(slotIndex) === name
+    ? slotIndex
+    : undefined;
 }
 
 /**
@@ -532,7 +551,7 @@ function validRecordHeader(value: PlainObject): boolean {
     isOneOf(SUPPORT_INCIDENT_TRIGGERS, value.trigger) &&
     isOneOf(SUPPORT_INCIDENT_STATES, value.state) &&
     isCount(value.slotIndex) &&
-    value.slotIndex < SUPPORT_INCIDENT_SLOT_COUNT &&
+    Number.isSafeInteger(value.slotIndex) &&
     isEpochMs(value.createdAtMs) &&
     isEpochMs(value.expiresAtMs) &&
     value.expiresAtMs > value.createdAtMs
@@ -598,8 +617,11 @@ export interface SupportIncidentSufficiency {
   readonly coverage: SupportIncidentCoverage;
 }
 
+/** Report preparation carries no ownership claim when the bounded candidate store is full. */
+export type SupportIncidentDescriptorRecord = Omit<SupportIncidentRecord, "slotIndex">;
+
 /** The canonical resolved descriptor every manual exit derives from. */
-export interface SupportIncident extends SupportIncidentRecord {
+export interface SupportIncident extends SupportIncidentDescriptorRecord {
   readonly evidence: SupportIncidentEvidence;
   readonly sufficiency: SupportIncidentSufficiency;
 }
@@ -628,6 +650,17 @@ export interface SupportIncidentPublicProjection {
 
 /** The richer, still body-free private-report projection: the public fields plus analysis inputs. */
 export interface SupportIncidentPrivateProjection extends SupportIncidentPublicProjection {
+  /** Unverified, closed browser availability facts; never registered server failure evidence. */
+  readonly clientReport?: {
+    readonly serverEvidence: "unavailable";
+    readonly availabilityReason: SupportReportAvailabilityReason;
+    /** Browser-observed facts, never a claim of registered server evidence. */
+    readonly failure?: {
+      readonly errorEvidence?: ClientErrorEvidence;
+      readonly errorKind: ActivityLogErrorKind;
+      readonly context: readonly string[];
+    };
+  };
   readonly state: SupportIncidentState;
   readonly frameCount: number;
   readonly build: SupportIncidentBuild;
@@ -684,7 +717,7 @@ export function supportIncidentPrivateProjection(
     sufficiencyReasons: [...incident.sufficiency.reasons],
     coverage: { ...incident.sufficiency.coverage },
     createdAtMs: incident.createdAtMs,
-    expiresAtMs: incident.expiresAtMs,
+    expiresAtMs: supportIncidentEffectiveExpiry(incident),
   };
 }
 
@@ -806,13 +839,86 @@ function validProjectionEvidence(value: PlainObject): boolean {
   );
 }
 
+function clientOnlyProjection(value: PlainObject): boolean {
+  return (
+    clientOnlyManualHeader(value) &&
+    value.frameCount === 0 &&
+    value.lineCount === 0 &&
+    Array.isArray(value.segments) &&
+    value.segments.length === 0 &&
+    value.sufficiencyStatus === "insufficient" &&
+    isPlainObject(value.coverage) &&
+    Object.values(value.coverage).every((count) => count === 0)
+  );
+}
+
+function clientOnlyManualHeader(value: PlainObject): boolean {
+  return (
+    value.trigger === "user-report" &&
+    value.op === SUPPORT_INCIDENT_UNATTRIBUTED &&
+    value.surface === SUPPORT_INCIDENT_UNATTRIBUTED &&
+    value.errorKind === UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT.errorKind
+  );
+}
+
+function definedOptionalProjectionField(value: PlainObject, key: string): boolean {
+  return !Object.hasOwn(value, key) || value[key] !== undefined;
+}
+
+function validClientReportErrorEvidence(value: PlainObject): boolean {
+  if (!definedOptionalProjectionField(value, "errorEvidence")) return false;
+  const evidence = value.errorEvidence;
+  return (
+    evidence === undefined ||
+    (isPlainObject(evidence) &&
+      hasOnlyKeys(evidence, ["errorClass", "frames", "causeChain"]) &&
+      isClientErrorEvidence(evidence))
+  );
+}
+
+/** Closed browser failure facts; neither messages nor raw stack content cross this boundary. */
+export function isClientReportFailure(
+  value: unknown,
+): value is NonNullable<SupportIncidentPrivateProjection["clientReport"]>["failure"] {
+  if (value === undefined) return true;
+  if (!isPlainObject(value) || !hasOnlyKeys(value, ["errorKind", "context"], ["errorEvidence"]))
+    return false;
+  if (!validClientReportErrorEvidence(value)) return false;
+  if (
+    !Array.isArray(value.context) ||
+    !value.context.every((token: unknown): token is string => typeof token === "string") ||
+    !isClientDefectContext(value.context)
+  )
+    return false;
+  return isActivityLogErrorKind(value.errorKind);
+}
+
+function validClientReport(value: unknown, projection: PlainObject): boolean {
+  return (
+    (value === undefined && !Object.hasOwn(projection, "clientReport")) ||
+    (isPlainObject(value) &&
+      hasOnlyKeys(value, ["serverEvidence", "availabilityReason"], ["failure"]) &&
+      definedOptionalProjectionField(value, "failure") &&
+      isClientReportFailure(value.failure) &&
+      value.serverEvidence === "unavailable" &&
+      clientOnlyProjection(projection) &&
+      isOneOf(SUPPORT_REPORT_AVAILABILITY_REASONS, value.availabilityReason))
+  );
+}
+
 /** Shared closed validator for the private projection crossing the offline support boundary. */
 export function parseSupportIncidentPrivateProjection(
   value: unknown,
 ): SupportIncidentPrivateProjection | undefined {
-  if (!isPlainObject(value) || !hasOnlyKeys(value, PRIVATE_PROJECTION_KEYS)) return undefined;
+  if (!isPlainObject(value) || !hasOnlyKeys(value, PRIVATE_PROJECTION_KEYS, ["clientReport"]))
+    return undefined;
   const record = projectionRecord(value);
-  if (record === undefined || !validProjectionEvidence(value)) return undefined;
+  if (
+    record === undefined ||
+    !validProjectionEvidence(value) ||
+    !validClientReport(value.clientReport, value)
+  )
+    return undefined;
   if (
     diagnosticSufficiencyStatus(value.sufficiencyReasons as DiagnosticSufficiencyReason[]) !==
     value.sufficiencyStatus

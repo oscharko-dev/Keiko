@@ -21,7 +21,10 @@ import {
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfile,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
@@ -42,6 +45,7 @@ import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolC
 import {
   CircuitBreaker,
   type CircuitBreakerAdmission,
+  type RetryConfig,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
@@ -414,6 +418,7 @@ const GATEWAY_STREAM_ABANDONED_OPERATION = defineActivityLogOperation({
       values: ["consumer-stopped-iterating"],
     },
   },
+  diagnosticWhen: [{ field: "reason", values: ["consumer-stopped-iterating"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -490,6 +495,9 @@ const GATEWAY_CHAT_COMPLETED_OPERATION = defineActivityLogOperation({
       required: true,
     },
   },
+  diagnosticWhen: [
+    { field: "finishReason", values: ["length", "content_filter", "error", "cancelled"] },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -615,6 +623,7 @@ function recordProviderFailure(
 ): void {
   admission.settle(
     providerAdmitted && !isNonProviderFault(error) ? "failure" : "non-provider-fault",
+    error,
   );
 }
 
@@ -635,9 +644,23 @@ interface PreparedStream {
   readonly promptAdmission: GatewayPromptAdmission;
 }
 
+function streamStartupRetryConfig(
+  state: PreparedStream,
+  admission: () => CircuitBreakerAdmission,
+  remainingMs: number,
+): RetryConfig {
+  return {
+    ...providerRetryConfig(state.route.provider),
+    jitterProviderCooldown: true,
+    maxRetries: state.admission.halfOpen ? 0 : state.route.provider.maxRetries,
+    shouldRetry: (error): boolean =>
+      !admission().halfOpen && !(error instanceof GatewayToolCatalogError),
+    timeoutMs: remainingMs,
+  };
+}
+
 interface BufferedChatAttempt {
   readonly route: RoutedCall;
-  readonly breaker: CircuitBreaker;
   readonly adapter: ProviderAdapter;
   readonly originalRequest: GatewayCallRequest;
   readonly promptAdmission: GatewayPromptAdmission;
@@ -647,6 +670,26 @@ interface BufferedChatAttempt {
     attemptNumber: number;
     repair?: GatewayToolCatalogError["repair"];
   };
+}
+
+function admissionBudget(
+  provider: ModelProviderConfig,
+  bounds: StreamReadBounds | undefined,
+  remainingMs: number | undefined,
+): number {
+  return remainingMs ?? bounds?.budgetMs ?? provider.timeoutMs;
+}
+
+function clippedStreamBounds(
+  bounds: StreamReadBounds | undefined,
+  remainingMs: number,
+): StreamReadBounds | undefined {
+  return bounds === undefined
+    ? undefined
+    : {
+        budgetMs: Math.min(bounds.budgetMs, remainingMs),
+        silenceMs: Math.min(bounds.silenceMs, remainingMs),
+      };
 }
 
 // Whether a buffered call reads each attempt's answer over the provider's stream (ADR-0003): the
@@ -938,7 +981,6 @@ export class Gateway {
     const adapter = this.adapterFor(requestId, route, ids.correlationId);
     const attempt: BufferedChatAttempt = {
       route,
-      breaker: this.breakerFor(route.provider),
       adapter,
       originalRequest: request,
       promptAdmission: this.promptAdmission(route, ids),
@@ -956,7 +998,7 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        providerRetryConfig(route.provider),
+        { ...providerRetryConfig(route.provider), jitterProviderCooldown: true },
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -982,6 +1024,7 @@ export class Gateway {
     attempt: BufferedChatAttempt,
     attemptTimeoutMs: number | undefined,
     remainingBudgetMs: number | undefined,
+    previousError?: Error,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
     const provider = {
@@ -989,7 +1032,13 @@ export class Gateway {
       ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
     };
     try {
-      return await this.invoke(attempt, provider, streamedReadBounds(attempt, remainingBudgetMs));
+      return await this.invoke(
+        attempt,
+        provider,
+        streamedReadBounds(attempt, remainingBudgetMs),
+        remainingBudgetMs,
+        previousError,
+      );
     } catch (error) {
       if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
         attempt.state.repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
@@ -1032,10 +1081,10 @@ export class Gateway {
       }),
       maxOutputTokens,
       safetyMarginTokens: profile.safetyMarginTokens,
-      maxPromptTokens: Math.max(
-        0,
-        profile.maxInputTokens - maxOutputTokens - profile.safetyMarginTokens,
-      ),
+      maxPromptTokens: deriveContextProfile({
+        ...profile,
+        reservedOutputTokens: maxOutputTokens,
+      }).effectiveInputBudget,
     });
   }
 
@@ -1076,10 +1125,8 @@ export class Gateway {
   // retry would replay already-emitted tokens and is never permitted. An adapter without a
   // streaming variant falls back to a single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
-    const { route, ids, start, elapsed, adapter, admission, promptAdmission, prepared } =
-      this.prepareStream(request);
-    request = prepared;
-    const usesNativeStream = adapter.callStream !== undefined;
+    const state = await this.prepareStream(request);
+    const { route, ids, start, elapsed, admission } = state;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -1089,15 +1136,7 @@ export class Gateway {
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
-      this.logCallStarted(ids, route, true, request.reasoningEffort, usesNativeStream);
-      for await (const chunk of this.streamFrom(
-        adapter,
-        request,
-        route,
-        ids,
-        admission,
-        promptAdmission,
-      )) {
+      for await (const chunk of this.streamFrom(state)) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
         if (chunk.type === "done") {
@@ -1138,14 +1177,21 @@ export class Gateway {
     }
   }
 
-  private prepareStream(request: GatewayCallRequest): PreparedStream {
+  private async prepareStream(request: GatewayCallRequest): Promise<PreparedStream> {
     const route = this.routeForCall(request);
     const prepared = this.prepareRequest(request, route.capability);
     const ids = callIds(randomUUID(), prepared);
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
-    const admission = this.breakerFor(route.provider).assertAllowed(ids.correlationId);
+    this.logCallStarted(
+      ids,
+      route,
+      true,
+      prepared.reasoningEffort,
+      adapter.callStream !== undefined,
+    );
+    const { admission } = await this.initialStreamAdmission(route, prepared, ids, elapsed);
     return {
       route,
       prepared,
@@ -1156,6 +1202,26 @@ export class Gateway {
       admission,
       promptAdmission: this.promptAdmission(route, ids),
     };
+  }
+
+  private async initialStreamAdmission(
+    route: RoutedCall,
+    request: GatewayCallRequest,
+    ids: CallIds,
+    elapsed: () => number,
+  ): ReturnType<CircuitBreaker["waitForAdmission"]> {
+    try {
+      return await this.providerAdmission(
+        route.provider,
+        request,
+        ids.correlationId,
+        streamRequestBudgetMs(route.provider),
+      );
+    } catch (error) {
+      attachGatewayRequestId(error, ids.requestId);
+      this.logStreamFailed(ids, route, 0, elapsed(), error);
+      throw error;
+    }
   }
 
   private failStream(
@@ -1382,21 +1448,37 @@ export class Gateway {
     );
   }
 
-  private async *streamFrom(
-    adapter: ProviderAdapter,
-    request: GatewayCallRequest,
-    route: RoutedCall,
-    ids: CallIds,
-    initialAdmission: CircuitBreakerAdmission,
-    promptAdmission: GatewayPromptAdmission,
-  ): AsyncGenerator<GatewayStreamChunk> {
-    const breaker = this.breakerFor(route.provider);
-    const maxRetries = initialAdmission.halfOpen ? 0 : route.provider.maxRetries;
+  private async openRetriedStream(state: PreparedStream): Promise<{
+    first: GatewayStreamChunk;
+    iterator: AsyncGenerator<GatewayStreamChunk>;
+  }> {
+    const {
+      adapter,
+      prepared: request,
+      route,
+      ids,
+      admission: initialAdmission,
+      promptAdmission,
+    } = state;
+    const remainingBudgetMs = Math.max(
+      0,
+      streamRequestBudgetMs(route.provider) - (this.clock.now() - state.start),
+    );
     let admission = initialAdmission;
     let attempt = 0;
-    const opened = await executeWithRetry(
-      async (_attemptMs, remainingMs) => {
-        if (attempt++ > 0) admission = breaker.assertAllowed(ids.correlationId);
+    return executeWithRetry(
+      async (_attemptMs, remainingMs, previousError) => {
+        if (attempt++ > 0) {
+          const allowed = await this.providerAdmission(
+            route.provider,
+            request,
+            ids.correlationId,
+            remainingMs ?? remainingBudgetMs,
+            previousError,
+          );
+          admission = allowed.admission;
+          remainingMs = allowed.remainingMs;
+        }
         return this.openStreamAttempt(
           adapter,
           request,
@@ -1407,19 +1489,17 @@ export class Gateway {
           promptAdmission,
         );
       },
-      {
-        ...providerRetryConfig(route.provider),
-        maxRetries,
-        // A catalog rejection needs an explicit repair, not replay of the same streamed request.
-        shouldRetry: (error): boolean =>
-          !admission.halfOpen && !(error instanceof GatewayToolCatalogError),
-        timeoutMs: streamRequestBudgetMs(route.provider),
-      },
+      // A catalog rejection needs an explicit repair, not replay of the same streamed request.
+      streamStartupRetryConfig(state, () => admission, remainingBudgetMs),
       this.clock,
       request.cancellationSignal,
       this.random,
       { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
     );
+  }
+
+  private async *streamFrom(state: PreparedStream): AsyncGenerator<GatewayStreamChunk> {
+    const opened = await this.openRetriedStream(state);
     try {
       yield opened.first;
       yield* opened.iterator;
@@ -1597,11 +1677,21 @@ export class Gateway {
     attempt: BufferedChatAttempt,
     provider: ModelProviderConfig,
     bounds?: StreamReadBounds,
+    remainingBudgetMs?: number,
+    previousError?: Error,
   ): Promise<NormalizedResponse> {
-    const { breaker, adapter, correlationId } = attempt;
+    const { adapter, correlationId } = attempt;
     const { capability } = attempt.route;
     const request = attempt.state.request;
-    const admission = breaker.assertAllowed(correlationId);
+    const { admission, remainingMs } = await this.providerAdmission(
+      provider,
+      request,
+      correlationId,
+      admissionBudget(provider, bounds, remainingBudgetMs),
+      previousError,
+    );
+    provider = { ...provider, timeoutMs: Math.min(provider.timeoutMs, remainingMs) };
+    bounds = clippedStreamBounds(bounds, remainingMs);
     let reservation: GatewaySpendReservation | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;
@@ -1630,6 +1720,22 @@ export class Gateway {
       admission.settle("non-provider-fault");
       reservation?.settle(usage);
     }
+  }
+
+  private providerAdmission(
+    provider: ModelProviderConfig,
+    request: GatewayCallRequest,
+    correlationId: string,
+    remainingMs: number,
+    previousError?: Error,
+  ): ReturnType<CircuitBreaker["waitForAdmission"]> {
+    return this.breakerFor(provider).waitForAdmission({
+      remainingMs,
+      previousError,
+      signal: request.cancellationSignal,
+      correlationId,
+      jitterMs: (): number => Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
+    });
   }
 
   // Fail-closed routing. Each of the three refusals is a DIFFERENT operator problem — an unknown

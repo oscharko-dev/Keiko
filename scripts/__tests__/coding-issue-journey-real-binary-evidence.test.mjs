@@ -73,6 +73,13 @@ function artifact() {
 }
 
 describe("real-binary #3390 evidence", () => {
+  it("validates the actual input-ceiling bounded production geometry", () => {
+    const value = artifact();
+    value.limits = limits({ ...ADMISSION, inputTokenLimit: 16_000 });
+    expect(value.limits.inputTokens).toBe(16_000);
+    expect(realBinaryScenarioArtifactErrors(value)).toEqual([]);
+  });
+
   it("accepts only the closed body-free projection of a complete real-binary run", () => {
     expect(realBinaryScenarioArtifactErrors(artifact())).toEqual([]);
     const alternateAdmission = { ...ADMISSION, maxRequestBytes: ADMISSION.maxRequestBytes - 1_024 };

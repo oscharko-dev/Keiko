@@ -9,14 +9,28 @@
 // package's already-bounded WorkspaceFs port. Path validation is enforced by every composed
 // layer at its own boundary, so this file does not re-validate scope paths.
 
+import {
+  directoryCleanupTracker,
+  observeDirectoryIteration,
+} from "./grounded-directory-iteration.js";
+import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import {
+  createSymbolReadFailureObserver,
+  type SymbolReadFailureObserver,
+} from "./grounded-symbol-diagnostics.js";
+import { mergeOverviewListing } from "./grounded-overview-fallback.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   isValidScopePath,
   type CandidateFile,
+  type CandidateOmissionReason,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
   type ContextPackDiagnostics,
@@ -46,8 +60,14 @@ import {
   canContinue,
   complete,
   contextPackIndexKey,
+  extractAnchors,
+  DEFAULT_FILTER_OPTIONS,
   planAndGovern,
   rankCandidates,
+  isDirectEvidenceLookup,
+  requiresRelationshipOrHistoryRings,
+  resolveQueryTargetDecision,
+  type QueryTargetDecision,
   type ClarificationPrompt,
   type ClarificationReason,
   type ExcerptWindow,
@@ -65,10 +85,13 @@ import {
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
   PathDeniedError,
+  PathEscapeError,
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
   detectWorkspaceAt,
+  decodeTextFileBytes,
   endpointContractAdapter,
+  findFiles,
   gitHistoryAdapter,
   isCanonicalMetadataFile,
   isEcosystemSourceFile,
@@ -100,6 +123,9 @@ import {
   createEcosystemStructureAdapters,
   importGraphAdapter,
   runStructuralAdapters,
+  repositorySourceLines,
+  structuralLineLooksLikeSymbolDefinition,
+  type RepositorySourceLine,
   type StructuralAdapterRequestContext,
   type StructuralRequestContextDiagnostics,
   type StructuralAdapterRegistry,
@@ -107,6 +133,13 @@ import {
   testSourcePairingAdapter,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
+import { iterateSequentialResults, mapWithConcurrency } from "./bounded-concurrency.js";
+import {
+  BoundedMetadataPaths,
+  MetadataRetention,
+  type MetadataRetentionObservation,
+} from "./grounded-metadata-retention.js";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
@@ -122,13 +155,12 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import {
-  GROUNDED_NO_EVIDENCE_ANSWER,
+  connectedSearchNoEvidenceAnswer,
   buildPackCitationIndex,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   noEvidenceMarker,
   packHasUsableEvidence,
-  reconcileInlineCitations,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
@@ -147,12 +179,19 @@ import {
   type DocumentEvidenceResult,
 } from "./grounded-document-evidence.js";
 import {
+  certifiedContentPaths,
+  type ContentEvidenceIdentity,
   selectGroundedCandidateFiles,
+  pathOnlyEvidencePaths,
   selectGroundedEvidenceAtoms,
   tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
-import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
+import { KnownFitScopeContext, type ScopeContextObservation } from "./grounded-scope-context.js";
+import {
+  attachContextBudgetDiagnostics,
+  deriveGroundedContextAssembly,
+} from "./grounded-context-diagnostics.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import {
   createServerLogger,
@@ -163,10 +202,18 @@ import {
   type ServerLogger,
   type ServerLogSink,
 } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  contentFreeErrorClass,
+  safeProperty,
+  keikoStackFrames,
+} from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
-import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
+import {
+  resolveRecordedWorkspaceRoot,
+  isExpectedWorkspaceRootFailure,
+} from "./workspace-root-denial-log.js";
 
 const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -202,10 +249,12 @@ const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
     maxResults: { type: "integer", dataClass: "count", required: false },
     searchCallsMax: { type: "integer", dataClass: "count", required: false },
     filesReadMax: { type: "integer", dataClass: "count", required: false },
+    filesReadBounded: { type: "boolean", dataClass: "closed-enum", required: true },
     excerptBytesMax: { type: "integer", dataClass: "count", required: false },
     modelInputTokensMax: { type: "integer", dataClass: "count", required: false },
     modelOutputTokensMax: { type: "integer", dataClass: "count", required: false },
     elapsedMsMax: { type: "integer", dataClass: "duration", required: false },
+    elapsedMsBounded: { type: "boolean", dataClass: "closed-enum", required: true },
     rerankCallsMax: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -234,15 +283,101 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       required: true,
       values: ["complete", "unavailable"],
     },
+    retrievalIntent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "project-metadata",
+        "repository-overview",
+        "targeted-code-search",
+        "diagnostic-search",
+        "clarification-needed",
+      ],
+    },
+    retrievalTargetDecision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["literal-search", "direct-fact", "contextual"],
+    },
+    retrievalTargetCount: { type: "integer", dataClass: "count", required: false },
+    retrievalAnchorCount: { type: "integer", dataClass: "count", required: false },
     plannedRingCount: { type: "integer", dataClass: "count", required: false },
+    executedRingKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["lexical", "structural", "git-history"],
+    },
+    skippedRingKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["lexical", "structural", "git-history"],
+    },
+    stoppedRingKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["lexical", "structural", "git-history"],
+    },
+    augmentationDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-reached", "used", "skipped"],
+    },
+    ringSkipReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 5,
+      values: [
+        "no-git-metadata",
+        "ordinary-document",
+        "literal-absence",
+        "complete-exact-lookup",
+        "verified-target-context",
+      ],
+    },
+    augmentationSkipped: { type: "boolean", dataClass: "closed-enum", required: false },
+    augmentationSkipReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "no-git-metadata",
+        "ordinary-document",
+        "literal-absence",
+        "complete-exact-lookup",
+        "verified-target-context",
+        "budget-exhausted",
+      ],
+    },
     usageSearchCalls: { type: "integer", dataClass: "count", required: false },
     usageFilesRead: { type: "integer", dataClass: "count", required: false },
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
+    excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
+    excerptReadWindowCount: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
     usageRerankCalls: { type: "integer", dataClass: "count", required: false },
     selectedFileCount: { type: "integer", dataClass: "count", required: false },
+    scopeContextSelectedFileCount: { type: "integer", dataClass: "count", required: false },
+    contextSelectedExcerptCount: { type: "integer", dataClass: "count", required: false },
+    contextSelectedExcerptEstimatedTokens: { type: "integer", dataClass: "count", required: false },
+    contextBudgetPressure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["low", "moderate", "high", "exceeded"],
+    },
+    contextRecencyLayoutApplied: { type: "boolean", dataClass: "closed-enum", required: false },
     omittedCount: { type: "integer", dataClass: "count", required: false },
     uncertaintyCount: { type: "integer", dataClass: "count", required: false },
     scopeIncompleteUncertaintyCount: { type: "integer", dataClass: "count", required: false },
@@ -260,8 +395,16 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 5,
-      values: ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"],
+      maxItems: 7,
+      values: [
+        "aborted",
+        "file-cap",
+        "match-cap",
+        "timeout",
+        "depth-pruned",
+        "io-error",
+        "unrepresentable-path",
+      ],
     },
     coverageFilesDiscovered: { type: "integer", dataClass: "count", required: false },
     coverageFilesScanned: { type: "integer", dataClass: "count", required: false },
@@ -279,6 +422,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "activityDetailStatus", values: ["unavailable"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -303,6 +447,26 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       required: true,
       values: ["complete", "unavailable"],
     },
+    excerptOmittedRangeCount: { type: "integer", dataClass: "count", required: false },
+    excerptTruncatedWindowCount: { type: "integer", dataClass: "count", required: false },
+    excerptUnreadFileCount: { type: "integer", dataClass: "count", required: false },
+    excerptStopReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["file-grant", "byte-grant", "deadline"],
+    },
+    scopeContextState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["applied", "empty", "overflow", "incomplete-traversal", "gate-refused"],
+    },
+    scopeContextObservedFileCount: { type: "integer", dataClass: "count", required: false },
+    scopeContextRetainedFileCount: { type: "integer", dataClass: "count", required: false },
+    scopeContextChargedBytes: { type: "integer", dataClass: "count", required: false },
+    scopeContextCapacityBytes: { type: "integer", dataClass: "count", required: false },
     structuralContextCount: { type: "integer", dataClass: "count", required: false },
     structuralCandidateInventoryBuildCount: {
       type: "integer",
@@ -330,6 +494,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       values: [
         "not-evaluated",
         "unused",
+        "live-scan",
         "live-fallback",
         "persistent-cold",
         "persistent-warm",
@@ -357,6 +522,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     indexSearchCount: { type: "integer", dataClass: "count", required: false },
     indexReportCount: { type: "integer", dataClass: "count", required: false },
     indexFallbackSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexBypassedSearchCount: { type: "integer", dataClass: "count", required: false },
     indexLoadFailures: { type: "integer", dataClass: "count", required: false },
     indexSaveFailures: { type: "integer", dataClass: "count", required: false },
     workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: false },
@@ -369,11 +535,178 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "activityDetailStatus", values: ["unavailable"] }],
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
   proofIds: ["search.connected-context.completion-details.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.source-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.sourceDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
+    unrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
+    reusedEvidenceAtomCount: { type: "integer", dataClass: "count", required: false },
+    semanticProviderDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"],
+    },
+    semanticProviderCallCount: { type: "integer", dataClass: "count", required: false },
+    overviewListingFallback: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "not-needed", "used", "skipped-budget", "skipped-stopped"],
+    },
+    semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
+    primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
+    metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
+    metadataObservedCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
+    metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
+    metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
+    omittedDetailRetainedCount: { type: "integer", dataClass: "count", required: false },
+    omittedDetailsClipped: { type: "boolean", dataClass: "closed-enum", required: false },
+    omittedOutsideScopeCount: { type: "integer", dataClass: "count", required: false },
+    omittedBinaryCount: { type: "integer", dataClass: "count", required: false },
+    omittedGeneratedCount: { type: "integer", dataClass: "count", required: false },
+    omittedIgnoredCount: { type: "integer", dataClass: "count", required: false },
+    omittedSizeExceededCount: { type: "integer", dataClass: "count", required: false },
+    omittedNearDuplicateCount: { type: "integer", dataClass: "count", required: false },
+    omittedLowRelevanceCount: { type: "integer", dataClass: "count", required: false },
+    omittedRedactedOnlyCount: { type: "integer", dataClass: "count", required: false },
+    omittedBudgetExhaustedCount: { type: "integer", dataClass: "count", required: false },
+    omittedToolUnavailableCount: { type: "integer", dataClass: "count", required: false },
+    omittedUnsupportedFormatCount: { type: "integer", dataClass: "count", required: false },
+    omittedNoTextLayerCount: { type: "integer", dataClass: "count", required: false },
+    omittedMalformedDocumentCount: { type: "integer", dataClass: "count", required: false },
+    omittedEncryptedDocumentCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  diagnosticWhen: [
+    { field: "activityDetailStatus", values: ["unavailable"] },
+    { field: "semanticRejectedAtomCount", positive: true },
+    { field: "unrepresentablePathCount", positive: true },
+    { field: "metadataUnavailableInspectionCount", positive: true },
+  ],
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.source-details.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_METADATA_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.metadata-unavailable",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.metadataUnavailable",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    scopePathDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "permission-denied",
+        "filesystem-unavailable",
+        "containment-denied",
+        "directory-changed",
+        "streaming-unavailable",
+        "deadline",
+        "unexpected",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.metadata-unavailable.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_CLARIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.clarification-needed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.clarification",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    clarificationReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-anchors", "too-generic", "scope-empty", "scope-invalid"],
+    },
+    retrievalIntent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "project-metadata",
+        "repository-overview",
+        "targeted-code-search",
+        "diagnostic-search",
+        "clarification-needed",
+      ],
+    },
+    directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: true },
+    anchorCount: { type: "integer", dataClass: "count", required: true },
+    plannedRingCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.clarification-needed.line"],
   releaseImpact: "patch",
 });
 
@@ -413,6 +746,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
         "ring-retrieval",
         "pack-assembly",
         "empty-pack-assembly",
+        "directory-cleanup",
       ],
     },
     plannedRingCount: { type: "integer", dataClass: "count", required: true },
@@ -439,6 +773,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
       values: [
         "not-evaluated",
         "unused",
+        "live-scan",
         "live-fallback",
         "persistent-cold",
         "persistent-warm",
@@ -466,6 +801,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
     indexSearchCount: { type: "integer", dataClass: "count", required: true },
     indexReportCount: { type: "integer", dataClass: "count", required: true },
     indexFallbackSearchCount: { type: "integer", dataClass: "count", required: true },
+    indexBypassedSearchCount: { type: "integer", dataClass: "count", required: true },
     indexLoadFailures: { type: "integer", dataClass: "count", required: true },
     indexSaveFailures: { type: "integer", dataClass: "count", required: true },
     workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: true },
@@ -475,6 +811,21 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
     workspaceIoExistsCalls: { type: "integer", dataClass: "count", required: true },
     workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: true },
     workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: true },
+    directoryCleanupPendingCount: { type: "integer", dataClass: "count", required: false },
+    secondaryFailureCount: { type: "integer", dataClass: "count", required: false },
+    secondaryFailureKinds: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 16,
+    },
+    primaryFailureScopeDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
     frames: {
       type: "string-array",
       dataClass: "safe-platform-class",
@@ -515,6 +866,8 @@ export interface OrchestratorInput {
   // separately assembled answer question (for example with governed memory context) so personal
   // context can inform generation without changing repository retrieval decisions.
   readonly answerQuestion?: string | undefined;
+  /** Current user wording, before retrieval continuity or answer-only memory is appended. */
+  readonly currentQuestion?: string | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly workspaceRoot: string;
   // Request-scoped filesystem authority for the exact canonical root. Ordinary callers omit it;
@@ -558,8 +911,8 @@ export interface OrchestratorDeps {
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
   // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
   readonly contextProfile?: ContextProfile | undefined;
-  // Issue #1736 — optional production index provider. Tests and unsupported runtime dirs omit it;
-  // the lexical ring falls back to bounded live scans.
+  // Issue #1736 — optional production index provider for compatible finite searches. Uncapped
+  // searches deliberately use live traversal without consulting this finite index.
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
@@ -632,9 +985,41 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+type SemanticProviderDisposition =
+  "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected";
+type OverviewListingFallback =
+  "not-evaluated" | "not-needed" | "used" | "skipped-budget" | "skipped-stopped";
+interface SourceDecisionObservation {
+  overviewListingFallback: OverviewListingFallback;
+  semanticProviderDisposition: SemanticProviderDisposition;
+  semanticProviderCallCount: number;
+  semanticRejectedAtomCount: number;
+  primaryContentPathCount: number;
+}
+
+function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
+  return {
+    overviewListingFallback: "not-evaluated",
+    semanticProviderDisposition: disposition,
+    semanticProviderCallCount: 0,
+    semanticRejectedAtomCount: 0,
+    primaryContentPathCount: 0,
+  };
+}
+
 interface SearchInputs {
+  readonly observeSourceDecision: (observation: SourceDecisionObservation) => void;
+  readonly discoverDefinitions: (
+    governor: GovernorState,
+    evidence: RingEvidenceAccumulator,
+  ) => Promise<DefinitionDiscoveryExecution>;
+  readonly scopeContextBytesMax: number;
+  readonly observeScopeContext?: ((observation: ScopeContextObservation) => void) | undefined;
+  readonly tryReserveAdditionalSearchCall?: (() => boolean) | undefined;
+  readonly hasGitMetadata: boolean;
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
+  readonly targetDecision: QueryTargetDecision;
   readonly anchors: readonly SearchAnchor[];
   readonly retrievalIntent: RetrievalIntent;
   readonly fs: WorkspaceFs;
@@ -662,6 +1047,7 @@ type WorkspaceIndexProviderStatus = "not-evaluated" | "available" | "unavailable
 type WorkspaceIndexSearchMode =
   | "not-evaluated"
   | "unused"
+  | "live-scan"
   | "live-fallback"
   | "persistent-cold"
   | "persistent-warm"
@@ -680,6 +1066,7 @@ interface WorkspaceIndexActivityDiagnostics extends WorkspaceIndexPreparationRep
   readonly searchCount: number;
   readonly reportCount: number;
   readonly fallbackSearchCount: number;
+  readonly bypassedSearchCount: number;
   readonly loadAttempts: number;
   readonly loadHits: number;
   readonly loadMisses: number;
@@ -701,6 +1088,7 @@ interface MutableWorkspaceIndexActivityCounters {
   searchCount: number;
   reportCount: number;
   fallbackSearchCount: number;
+  bypassedSearchCount: number;
   loadAttempts: number;
   loadHits: number;
   loadMisses: number;
@@ -733,6 +1121,7 @@ type MutableWorkspaceIoActivityCounters = {
 interface WorkspaceIoActivity {
   readonly fs: WorkspaceFs;
   readonly diagnostics: () => WorkspaceIoActivityDiagnostics;
+  readonly pendingCleanupCount: () => number;
 }
 
 function searchLimitsKey(limits: SearchLimits): string {
@@ -777,6 +1166,7 @@ function emptyWorkspaceIndexActivityCounters(): MutableWorkspaceIndexActivityCou
     searchCount: 0,
     reportCount: 0,
     fallbackSearchCount: 0,
+    bypassedSearchCount: 0,
     loadAttempts: 0,
     loadHits: 0,
     loadMisses: 0,
@@ -804,7 +1194,9 @@ function addWorkspaceIndexResult(
   counters.searchCount += 1;
   const report = result.workspaceIndex;
   if (report === undefined) {
-    if (!stoppedBeforeWorkspaceScan(result)) counters.fallbackSearchCount += 1;
+    if (stoppedBeforeWorkspaceScan(result)) return;
+    if (result.coverage.limits.maxFilesScanned === null) counters.bypassedSearchCount += 1;
+    else counters.fallbackSearchCount += 1;
     return;
   }
   counters.reportCount += 1;
@@ -826,15 +1218,20 @@ function workspaceIndexPersistenceSucceeded(
   return counters.loadHits > 0 || counters.saveSuccesses > 0;
 }
 
+function unindexedWorkspaceSearchMode(
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndexSearchMode {
+  if (counters.fallbackSearchCount > 0) return "live-fallback";
+  return counters.bypassedSearchCount > 0 ? "live-scan" : "unused";
+}
+
 function workspaceIndexSearchMode(
   providerStatus: WorkspaceIndexProviderStatus,
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndexSearchMode {
   if (providerStatus === "not-evaluated") return "not-evaluated";
   if (counters.searchCount === 0) return "unused";
-  if (counters.reportCount === 0) {
-    return counters.fallbackSearchCount > 0 ? "live-fallback" : "unused";
-  }
+  if (counters.reportCount === 0) return unindexedWorkspaceSearchMode(counters);
   const reconciled = counters.staleRecords + counters.deletedEntries + counters.droppedRecords > 0;
   const persistent = workspaceIndexPersistenceSucceeded(providerStatus, counters);
   if (reconciled) return persistent ? "persistent-reconciled" : "request-local-reconciled";
@@ -865,7 +1262,10 @@ function workspaceIndexActivityDiagnostics(
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndexActivityDiagnostics {
   return {
-    providerStatus,
+    providerStatus:
+      counters.reportCount + counters.loadAttempts + counters.saveAttempts > 0
+        ? providerStatus
+        : "not-evaluated",
     searchMode: workspaceIndexSearchMode(providerStatus, counters),
     loadStatus: workspaceIndexLoadStatus(counters),
     saveStatus: workspaceIndexSaveStatus(counters),
@@ -930,6 +1330,7 @@ function observedStructuralContext(
     importGraph: context.importGraph.bind(context),
     endpointContractGraph: context.endpointContractGraph.bind(context),
     findFiles: context.findFiles.bind(context),
+    findFilesBatch: context.findFilesBatch.bind(context),
     searchText: async (
       query,
       limits,
@@ -974,6 +1375,8 @@ function createStructuralRequestContextPool(
 }
 
 interface RingResult {
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
   readonly uncertainty: readonly UncertaintyMarker[];
@@ -1008,6 +1411,33 @@ function toPackDiagnostics(result: Awaited<ReturnType<typeof searchText>>): Cont
   };
 }
 
+function onlyRetainedMatchesLimited(coverage: ContextCoverageDiagnostics): boolean {
+  return (
+    coverage.reasons.length === 1 &&
+    coverage.reasons[0] === "match-cap" &&
+    coverage.filesScanned === coverage.filesAfterPolicy &&
+    coverage.depthPrunedByDiscovery === 0 &&
+    coverage.maxFilesPrunedByDiscovery === 0
+  );
+}
+
+function discoveryCoverageMarker(
+  subject: string,
+  coverage: ContextCoverageDiagnostics,
+  details: string,
+  nowMs: number,
+): UncertaintyMarker {
+  const retainedMatchesLimited = onlyRetainedMatchesLimited(coverage);
+  return {
+    kind: retainedMatchesLimited ? "budget-clipped" : "scope-incomplete",
+    claim: retainedMatchesLimited
+      ? `${subject}: all eligible files were searched; additional matching results were omitted from retained evidence (${details}); missing retained evidence does not prove a file or fact absent`
+      : `${subject} coverage was incomplete (${details}); relevant files may be missing from the context pack`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1030,17 +1460,11 @@ function coverageUncertainty(
           `low-value-rescue-scanned ${String(coverage.lowValueRescueFilesScanned ?? 0)}`,
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
+          `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
-  return [
-    {
-      kind: "scope-incomplete",
-      claim: `repository search coverage was incomplete (${details}); relevant files may be missing from the context pack`,
-      impactedAtomIds: [],
-      emittedAtMs: nowMs,
-    },
-  ];
+  return [discoveryCoverageMarker("repository search", coverage, details, nowMs)];
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
@@ -1069,11 +1493,11 @@ function usageDelta(overrides: Partial<ExplorationUsage> = {}): ExplorationUsage
 function clampUsageToBudget(usage: ExplorationUsage, budget: ExplorationBudget): ExplorationUsage {
   return {
     searchCalls: Math.min(usage.searchCalls, budget.searchCallsMax),
-    filesRead: Math.min(usage.filesRead, budget.filesReadMax),
+    filesRead: Math.min(usage.filesRead, budget.filesReadMax ?? Number.POSITIVE_INFINITY),
     excerptBytes: Math.min(usage.excerptBytes, budget.excerptBytesMax),
     modelInputTokens: Math.min(usage.modelInputTokens, budget.modelInputTokensMax),
     modelOutputTokens: Math.min(usage.modelOutputTokens, budget.modelOutputTokensMax),
-    elapsedMs: Math.min(usage.elapsedMs, budget.elapsedMsMax),
+    elapsedMs: Math.min(usage.elapsedMs, budget.elapsedMsMax ?? Number.POSITIVE_INFINITY),
     rerankCalls: Math.min(usage.rerankCalls, budget.rerankCallsMax),
   };
 }
@@ -1114,7 +1538,7 @@ function toolUnavailable(claim: string, nowMs: number): UncertaintyMarker {
 
 function readBudgetStopReason(budget: ExplorationBudget): string | undefined {
   const exhausted = [
-    ...(budget.filesReadMax <= 0 ? ["filesRead"] : []),
+    ...(budget.filesReadMax !== null && budget.filesReadMax <= 0 ? ["filesRead"] : []),
     ...(budget.excerptBytesMax <= 0 ? ["excerptBytes"] : []),
   ];
   if (exhausted.length === 0) {
@@ -1471,33 +1895,408 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
   readonly kind: "structural" | "git-history";
 };
 
-async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
-  const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
-  const query =
-    definitionSymbol === undefined
-      ? inputs.query
-      : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
-  const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
+function primaryLexicalAnchors(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  retrievalIntent: RetrievalIntent,
+  decision = resolveQueryTargetDecision(query, anchors),
+): readonly SearchAnchor[] {
+  if (query.kind !== "natural-language" || retrievalIntent === "repository-overview") return [];
+  if (
+    decision.kind === "contextual" &&
+    (retrievalIntent === "diagnostic-search" ||
+      requiresRelationshipOrHistoryRings(query) ||
+      anchors.some(
+        (anchor) =>
+          anchor.kind === "path" ||
+          (anchor.kind === "identifier" && /(?:Test|Tests|Spec)$/iu.test(anchor.term)),
+      ))
+  )
+    return [];
+  const sourceTerms = originalQueryAnchorTerms(query);
+  return decision.targets.filter(
+    (anchor) => anchor.kind === "quoted" || sourceTerms.has(anchor.term),
+  );
+}
+
+function originalQueryAnchorTerms(query: RetrievalQuery): ReadonlySet<string> {
+  const originalText = query.text.toLowerCase();
+  const words = query.text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_.$-]+/u)
+    .map(trimAnchorEdgeDots);
+  // Preserve punctuation inside code quotes only when it occurs in the original text. Canonical
+  // technical routing aliases cannot create an exact literal absent from the human's query.
+  const original = extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors;
+  return new Set([
+    ...words,
+    ...original
+      .filter((anchor) => anchor.kind === "identifier" && originalText.includes(anchor.term))
+      .map((anchor) => anchor.term),
+  ]);
+}
+
+function trimAnchorEdgeDots(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === ".") start += 1;
+  while (start < end && value[end - 1] === ".") end -= 1;
+  return value.slice(start, end);
+}
+
+function lexicalSourceSpellings(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): readonly string[] {
+  if (!query.caseSensitive || query.kind !== "natural-language") {
+    return anchors.map((anchor) => anchor.term);
+  }
+  const selected = new Set(anchors.map((anchor) => anchor.term));
+  return extractAnchors({
+    text: query.text,
+    maxAnchors: query.text.length,
+    caseSensitive: true,
+  })
+    .anchors.filter((anchor) => selected.has(anchor.term.toLowerCase()))
+    .map((anchor) => anchor.term);
+}
+
+function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
+  const anchors = primaryLexicalAnchors(
+    inputs.query,
+    inputs.anchors,
+    inputs.retrievalIntent,
+    inputs.targetDecision,
+  );
+  return lexicalSourceSpellings(inputs.query, anchors);
+}
+
+function lexicalDefinitionSymbol(inputs: SearchInputs): string | undefined {
+  const symbol = inputs.targetDecision.definitionSymbol;
+  if (symbol === undefined || !inputs.query.caseSensitive) return symbol;
+  const spellings = lexicalSourceSpellings(
+    inputs.query,
+    inputs.targetDecision.targets.filter((anchor) => anchor.term === symbol),
+  );
+  return spellings.length === 1 ? spellings[0] : undefined;
+}
+
+function primaryContentPaths(rings: RingRunSummary): ReadonlySet<string> {
+  // Capture provenance directly at the lexical producer, before later augmentation adds atoms.
+  return certifiedContentPaths(rings.atoms, rings.primaryContentIdentities ?? []);
+}
+
+function certifiedLexicalContent(
+  result: SearchResult,
+  inputs: SearchInputs,
+): readonly ContentEvidenceIdentity[] {
+  const literal =
+    !requiresRelationshipOrHistoryRings(inputs.query) &&
+    (anchoredLexicalTargets(inputs).length > 0 ||
+      inputs.targetDecision.definitionSymbol !== undefined ||
+      inputs.query.kind === "exact-symbol");
+  return result.atoms
+    .filter(
+      (atom) =>
+        ((literal &&
+          atom.provenance.kind === "lexical-search" &&
+          atom.provenance.tool === "repo.searchText") ||
+          (atom.provenance.kind === "file-listing" && atom.provenance.tool === "repo.findFiles")) &&
+        atom.lineRange !== undefined,
+    )
+    .map((atom) => ({
+      stableId: atom.stableId,
+      queryFingerprint: atom.provenance.queryFingerprint,
+    }));
+}
+
+function primaryRankingAnchors(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+): readonly SearchAnchor[] {
+  const anchors = [
+    ...new Map(
+      [...plan.anchors, ...(plan.targetDecision?.targets ?? [])].map((anchor) => [
+        `${anchor.kind}:${anchor.term}`,
+        anchor,
+      ]),
+    ).values(),
+  ];
+  const targets = new Set(
+    primaryLexicalAnchors(input.query, anchors, plan.retrievalIntent, plan.targetDecision).map(
+      (anchor) => anchor.term,
+    ),
+  );
+  return targets.size === 0 || requiresRelationshipOrHistoryRings(input.query)
+    ? anchors
+    : anchors.filter(
+        (anchor) =>
+          targets.has(anchor.term) || anchor.kind !== "literal" || !/^\d+$/u.test(anchor.term),
+      );
+}
+
+function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
+  if (inputs.targetDecision.kind === "contextual") return inputs.repoSemanticSearchProvider;
+  if (
+    inputs.targetDecision.kind === "literal-search" ||
+    inputs.targetDecision.definitionSymbol !== undefined ||
+    isDirectEvidenceLookup(inputs.query, inputs.anchors, inputs.targetDecision)
+  )
+    return undefined;
+  return inputs.targetDecision.targets.some((anchor) => anchor.kind === "quoted")
+    ? undefined
+    : inputs.repoSemanticSearchProvider;
+}
+
+function lexicalSearchOptions(inputs: SearchInputs): {
+  fs: WorkspaceFs;
+  nowMs: () => number;
+  deadlineAtMs: number;
+  searchHints: { retrievalIntent: RetrievalIntent; allowSourceInspection: boolean };
+  signal?: AbortSignal;
+} {
+  return {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     deadlineAtMs: inputs.deadlineAtMs,
-    searchHints: { retrievalIntent: inputs.retrievalIntent },
+    searchHints: { retrievalIntent: inputs.retrievalIntent, allowSourceInspection: true },
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+  };
+}
+
+interface ContextSearchResult extends SearchResult {
+  readonly sourceDecision?: SourceDecisionObservation | undefined;
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+}
+
+function lexicalQuery(
+  inputs: SearchInputs,
+  terms: readonly string[],
+  symbol: string | undefined,
+): RetrievalQuery {
+  if (symbol !== undefined) return { ...inputs.query, kind: "exact-symbol", text: symbol };
+  return {
+    ...inputs.query,
+    text:
+      terms.length === 0 || inputs.targetDecision.kind === "contextual"
+        ? inputs.query.text
+        : terms.join(" "),
+  };
+}
+
+function observedLexicalSemanticProvider(
+  inputs: SearchInputs,
+  observation: SourceDecisionObservation,
+): SemanticSearchProvider | undefined {
+  const provider = lexicalSemanticProvider(inputs);
+  if (provider === undefined) {
+    observation.semanticProviderDisposition =
+      inputs.repoSemanticSearchProvider === undefined ? "unavailable" : "suppressed";
+    return undefined;
+  }
+  return {
+    name: provider.name,
+    search: (request): ReturnType<SemanticSearchProvider["search"]> => {
+      observation.semanticProviderDisposition = "used";
+      observation.semanticProviderCallCount += 1;
+      return provider.search(request);
+    },
+  };
+}
+
+async function searchLexicalTerms(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): Promise<ContextSearchResult> {
+  const options = lexicalSearchOptions(inputs);
+  const definitionSymbol = lexicalDefinitionSymbol(inputs);
+  const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
+  const query = lexicalQuery(inputs, terms, definitionSymbol);
+  const sourceDecision = emptySourceDecision("not-used");
+  const semanticSearchProvider = observedLexicalSemanticProvider(inputs, sourceDecision);
+  const context = knownFitContextFor(inputs);
+  const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
+    ...options,
+    ...(context === undefined ? {} : { onEligibleTextFile: context.observe }),
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
-    ...(definitionSymbol === undefined && inputs.repoSemanticSearchProvider !== undefined
-      ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
+    ...(terms.length === 0 ? {} : { queryInterpretation: { kind: "literal" as const, terms } }),
+    ...(semanticSearchProvider === undefined ? {} : { semanticSearchProvider }),
+  });
+  const readable = allowsReadableScopeContext(result.coverage);
+  recordScopeContextObservation(inputs, context, readable);
+  if (context === undefined || !readable) return { ...result, sourceDecision };
+  return {
+    ...result,
+    sourceDecision,
+    knownFitFileBytes: context.fileBytes(),
+    atoms: [...result.atoms, ...context.atoms()],
+  };
+}
+
+function allowsReadableScopeContext(coverage: SearchResult["coverage"]): boolean {
+  // Read failures leave these observed files individually verified. Keep that bounded readable
+  // subset while preserving incomplete coverage; interrupted traversal cannot qualify it.
+  return (
+    !coverage.incomplete ||
+    (coverage.reasons.length > 0 &&
+      coverage.reasons.every((reason) => reason === "io-error" || reason === "match-cap"))
+  );
+}
+
+function recordScopeContextObservation(
+  inputs: SearchInputs,
+  context: KnownFitScopeContext | undefined,
+  readable: boolean,
+): void {
+  const observation = context?.observation() ?? {
+    state: "gate-refused",
+    observedFileCount: 0,
+    retainedFileCount: 0,
+    chargedBytes: 0,
+    capacityBytes: inputs.scopeContextBytesMax,
+  };
+  inputs.observeScopeContext?.({
+    ...observation,
+    ...(!readable && context !== undefined && observation.state !== "overflow"
+      ? { state: "incomplete-traversal", retainedFileCount: 0 }
       : {}),
   });
+}
+
+function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
+  return inputs.query.kind === "natural-language" &&
+    inputs.targetDecision.kind !== "literal-search" &&
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(inputs.query) &&
+    !inputs.anchors.some((anchor) => anchor.kind !== "literal")
+    ? new KnownFitScopeContext(
+        inputs.scopeContextBytesMax,
+        inputs.searchScope.scopeId,
+        projectMetadataQueryFingerprint(inputs.query),
+        inputs.nowMs(),
+      )
+    : undefined;
+}
+
+async function lexicalRingSearch(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): Promise<ContextSearchResult> {
+  const result = await searchLexicalTerms(ring, inputs);
+  const decision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
+  decision.overviewListingFallback = overviewListingDecision(result, inputs);
+  if (decision.overviewListingFallback !== "used") return { ...result, sourceDecision: decision };
+  const listing = await findFiles(
+    inputs.searchScope,
+    { ...inputs.query, kind: "file-pattern", text: "**/*" },
+    ring.searchLimits,
+    lexicalSearchOptions(inputs),
+  );
+  return {
+    ...mergeOverviewListing(result, listing),
+    sourceDecision: decision,
+  };
+}
+
+function overviewListingDecision(
+  result: ContextSearchResult,
+  inputs: SearchInputs,
+): OverviewListingFallback {
+  if (inputs.retrievalIntent !== "repository-overview" || result.atoms.length > 0)
+    return "not-needed";
+  throwIfCancelled(inputs.signal);
+  if (
+    inputs.nowMs() >= inputs.deadlineAtMs ||
+    result.coverage.reasons.some((reason) => reason === "timeout" || reason === "aborted")
+  )
+    return "skipped-stopped";
+  return inputs.tryReserveAdditionalSearchCall?.() === true ? "used" : "skipped-budget";
+}
+
+function withoutNamedSemanticSubstitution(
+  result: ContextSearchResult,
+  inputs: SearchInputs,
+): ContextSearchResult {
+  if (
+    inputs.targetDecision.kind === "contextual" ||
+    requiresRelationshipOrHistoryRings(inputs.query) ||
+    anchoredLexicalTargets(inputs).length === 0 ||
+    certifiedLexicalContent(result, inputs).length > 0 ||
+    result.atoms.length === 0
+  )
+    return result;
+  if (result.sourceDecision !== undefined) {
+    const rejected = result.atoms.filter((atom) =>
+      atom.provenance.tool.startsWith("repo.semanticSearch:"),
+    ).length;
+    result.sourceDecision.semanticRejectedAtomCount += rejected;
+    if (rejected > 0) result.sourceDecision.semanticProviderDisposition = "rejected";
+  }
+  // An approximate concept match cannot stand in for a missing named literal. Corpus failures
+  // and result truncation remain intact; only the unrelated semantic replacement is rejected.
+  return {
+    ...result,
+    atoms: [],
+    candidates: result.candidates.filter((candidate) => candidate.omitted !== undefined),
+    diagnostics:
+      result.diagnostics === undefined
+        ? undefined
+        : { ...result.diagnostics, rankedCandidates: [] },
+    coverage: { ...result.coverage, matchesReturned: 0 },
+  };
+}
+
+async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
+  const result = withoutNamedSemanticSubstitution(await lexicalRingSearch(ring, inputs), inputs);
+  const primaryContentIdentities = certifiedLexicalContent(result, inputs);
+  const sourceDecision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
+  sourceDecision.primaryContentPathCount = certifiedContentPaths(
+    result.atoms,
+    primaryContentIdentities,
+  ).size;
+  inputs.observeSourceDecision(sourceDecision);
   inputs.workspaceIndexActivity.recordSearchResult(result);
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
+    knownFitFileBytes: result.knownFitFileBytes,
     atoms: result.atoms,
+    primaryContentIdentities,
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
-    uncertainty: coverageUncertainty(result, inputs.nowMs()),
+    uncertainty: [
+      ...coverageUncertainty(result, inputs.nowMs()),
+      ...missingPrimaryContextMarker(result, inputs),
+      ...(sourceDecision.overviewListingFallback === "skipped-budget"
+        ? [budgetClipped("budget-exhausted on searchCalls", inputs.nowMs())]
+        : []),
+    ],
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
     diagnostics: toPackDiagnostics(result),
   };
+}
+
+function missingPrimaryContextMarker(
+  result: ContextSearchResult,
+  inputs: SearchInputs,
+): readonly UncertaintyMarker[] {
+  if (
+    inputs.targetDecision.kind !== "contextual" ||
+    anchoredLexicalTargets(inputs).length === 0 ||
+    !result.atoms.some((atom) => atom.provenance.tool.startsWith("repo.semanticSearch:")) ||
+    result.atoms.some(
+      (atom) => atom.provenance.tool === "repo.searchText" && atom.lineRange !== undefined,
+    )
+  )
+    return [];
+  return [
+    {
+      kind: "low-confidence",
+      claim:
+        "No verified exact content match for the requested target; retained semantic evidence provides related context only.",
+      impactedAtomIds: [],
+      emittedAtMs: inputs.nowMs(),
+    },
+  ];
 }
 
 function registryForRing(ring: NonLexicalRing): StructuralAdapterRegistry {
@@ -1526,16 +2325,40 @@ async function runAdapterQueries(
   requestContext: StructuralAdapterRequestContext | undefined,
 ): Promise<readonly RunRingStructuralResult[]> {
   if (inputs.nowMs() >= inputs.deadlineAtMs) return [];
-  return Promise.all(
-    queries.map((query) =>
-      runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
-        nowMs: inputs.nowMs,
-        deadlineAtMs: inputs.deadlineAtMs,
-        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-        ...(requestContext === undefined ? {} : { requestContext }),
-      }),
-    ),
+  const controller = new AbortController();
+  const signal = parallelStageSignal(controller, inputs.signal);
+  const pending = queries.map((query) =>
+    runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
+      nowMs: inputs.nowMs,
+      deadlineAtMs: inputs.deadlineAtMs,
+      signal,
+      ...(requestContext === undefined ? {} : { requestContext }),
+    }),
   );
+  return settleParallelStage(Promise.all(pending), pending, controller);
+}
+
+function parallelStageSignal(
+  controller: AbortController,
+  parent: AbortSignal | undefined,
+): AbortSignal {
+  return parent === undefined ? controller.signal : AbortSignal.any([parent, controller.signal]);
+}
+
+async function settleParallelStage<T>(
+  result: Promise<T>,
+  pending: readonly Promise<unknown>[],
+  controller: AbortController,
+): Promise<T> {
+  try {
+    return await result;
+  } catch (error) {
+    // Cancel stage siblings without aborting the caller's authority. Wait for admitted resources
+    // to close before exposing the original failure or allowing a retry to start another walk.
+    controller.abort();
+    await Promise.allSettled(pending);
+    throw error;
+  }
 }
 
 async function runNonLexicalAdapters(
@@ -1633,8 +2456,8 @@ function nonLexicalAtoms(
 }
 
 async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Promise<RingResult> {
+  const startedAtMs = inputs.nowMs();
   const allResults = await runNonLexicalAdapters(ring, inputs);
-  const elapsedMs = allResults.reduce((sum, result) => sum + result.elapsedMs, 0);
   const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
   const merged = mergeAtomsByStableId(allResults, cap);
   const git = await gitFileAtomsForRing(ring, inputs, cap);
@@ -1651,7 +2474,8 @@ async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Pr
     atoms,
     omitted: [],
     uncertainty,
-    usage: usageDelta({ elapsedMs: elapsedMs + git.elapsedMs }),
+    // Adapters run concurrently: their duration sum would double-charge the same wall time.
+    usage: usageDelta({ elapsedMs: Math.max(0, Math.floor(inputs.nowMs() - startedAtMs)) }),
   };
 }
 
@@ -1662,7 +2486,30 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
   return runNonLexicalRing(ring as NonLexicalRing, inputs);
 }
 
+type RingSkipReason =
+  | "no-git-metadata"
+  | "ordinary-document"
+  | "literal-absence"
+  | "complete-exact-lookup"
+  | "verified-target-context";
+interface RingDecisionAudit {
+  readonly executedRingKinds: RetrievalRing["kind"][];
+  readonly skippedRingKinds: RetrievalRing["kind"][];
+  readonly stoppedRingKinds: RetrievalRing["kind"][];
+  readonly ringSkipReasons: RingSkipReason[];
+  augmentationDisposition: "not-reached" | "used" | "skipped";
+  augmentationSkipped: boolean;
+  augmentationSkipReason?: RingSkipReason | "budget-exhausted";
+}
+
 interface RingRunSummary {
+  readonly reusedEvidenceAtomCount?: number | undefined;
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
+  readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
+  readonly verifiedDefinitionContext?: boolean | undefined;
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly decisions?: RingDecisionAudit | undefined;
+  readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
   readonly governor: GovernorState;
@@ -1767,6 +2614,7 @@ function initialBlockedRingSummary(
     atoms: [],
     omitted: [],
     governor: complete(governor),
+    decisions: newRingDecisions(governor.plan.rings),
     uncertainty: [budgetClipped(reason, inputs.nowMs())],
   };
 }
@@ -1778,12 +2626,269 @@ function elapsedDeadlineStop(
   if (inputs.nowMs() < inputs.deadlineAtMs) return undefined;
   const remainingElapsedMs = Math.max(
     0,
-    governor.plan.budget.elapsedMsMax - governor.usage.elapsedMs,
+    (governor.plan.budget.elapsedMsMax ?? Number.POSITIVE_INFINITY) - governor.usage.elapsedMs,
   );
   return {
     governor: applyUsage(governor, usageDelta({ elapsedMs: remainingElapsedMs })),
     marker: budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()),
   };
+}
+
+const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
+
+function isCompleteExactLiteralLookup(
+  query: RetrievalQuery,
+  diagnostics: ContextPackDiagnostics | undefined,
+  decision: QueryTargetDecision,
+): boolean {
+  const coverage = diagnostics?.coverage;
+  return (
+    decision.kind === "literal-search" &&
+    coverage?.incomplete === false &&
+    coverage.matchesReturned > 0 &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    !requiresNamedDiscovery(decision)
+  );
+}
+
+function isOrdinaryDocumentLookup(
+  query: RetrievalQuery,
+  hasGitMetadata: boolean,
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  const candidates = diagnostics?.rankedCandidates ?? [];
+  return (
+    !hasGitMetadata &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    candidates.length > 0 &&
+    candidates.every((candidate) => DOCUMENT_EVIDENCE_PATH_RE.test(candidate.scopePath))
+  );
+}
+
+function isOrdinaryLiteralAbsence(
+  query: RetrievalQuery,
+  hasGitMetadata: boolean,
+  anchors: readonly SearchAnchor[],
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  const coverage = diagnostics?.coverage;
+  const literalTarget = anchors.some(
+    (anchor) =>
+      anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
+  );
+  return (
+    !hasGitMetadata &&
+    literalTarget &&
+    coverage?.incomplete === false &&
+    coverage.matchesReturned === 0 &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    directDefinitionSymbol(query, anchors) === undefined
+  );
+}
+
+function lookupAugmentationSkipReason(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  hasGitMetadata: boolean,
+  diagnostics: ContextPackDiagnostics | undefined,
+  decision: QueryTargetDecision,
+): RingSkipReason | undefined {
+  if (decision.kind === "contextual") return undefined;
+  if (isCompleteExactLiteralLookup(query, diagnostics, decision)) return "complete-exact-lookup";
+  if (isOrdinaryDocumentLookup(query, hasGitMetadata, diagnostics)) return "ordinary-document";
+  if (isOrdinaryLiteralAbsence(query, hasGitMetadata, anchors, diagnostics))
+    return "literal-absence";
+  return undefined;
+}
+
+function optionalRingSkipReason(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+): RingSkipReason | undefined {
+  if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
+  if (evidence.verifiedDefinitionContext === true) return "verified-target-context";
+  if (
+    hasVerifiedTargetContext(inputs.query, inputs.targetDecision, inputs.retrievalIntent, evidence)
+  )
+    return "verified-target-context";
+  if (
+    inputs.targetDecision.kind !== "contextual" &&
+    isCompleteExactLiteralLookup(inputs.query, evidence.diagnostics, inputs.targetDecision)
+  )
+    return "complete-exact-lookup";
+  if (ring.kind === "git-history") return inputs.hasGitMetadata ? undefined : "no-git-metadata";
+  return lookupAugmentationSkipReason(
+    inputs.query,
+    inputs.anchors,
+    inputs.hasGitMetadata,
+    evidence.diagnostics,
+    inputs.targetDecision,
+  );
+}
+
+function hasVerifiedTargetContext(
+  query: RetrievalQuery,
+  decision: QueryTargetDecision,
+  intent: RetrievalIntent,
+  evidence: Pick<RingRunSummary, "atoms" | "primaryContentIdentities" | "diagnostics">,
+): boolean {
+  // The full contextual lexical/semantic request already ran. One certified target proves
+  // presence only; it does not certify an answer or the completeness of contextual dimensions.
+  return (
+    decision.kind === "contextual" &&
+    decision.targets.length === 1 &&
+    !requiresNamedDiscovery(decision) &&
+    intent !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    evidence.diagnostics?.coverage?.incomplete === false &&
+    certifiedContentPaths(evidence.atoms, evidence.primaryContentIdentities ?? []).size > 0
+  );
+}
+
+function requiresNamedDiscovery(decision: QueryTargetDecision): boolean {
+  return (
+    decision.definitionRequested ||
+    decision.targets.some((target) => DOCUMENT_REFERENCE_ANCHOR_RE.test(target.term))
+  );
+}
+
+function reserveAvailableRing(
+  governor: GovernorState,
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): RingReservation {
+  return elapsedDeadlineStop(governor, inputs) ?? reserveRingSearchCalls(governor, ring, inputs);
+}
+
+function lexicalContentIdentities(
+  result: RingResult,
+  previous: readonly ContentEvidenceIdentity[],
+): readonly ContentEvidenceIdentity[] {
+  return result.primaryContentIdentities ?? previous;
+}
+
+function skipPlannedRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+  decisions: RingDecisionAudit,
+): boolean {
+  const reason = optionalRingSkipReason(ring, inputs, evidence);
+  if (reason === undefined) return false;
+  decisions.skippedRingKinds.push(ring.kind);
+  if (!decisions.ringSkipReasons.includes(reason)) decisions.ringSkipReasons.push(reason);
+  return true;
+}
+
+interface ExecutedRing {
+  governor: GovernorState;
+  result: RingResult;
+  marker?: undefined;
+}
+interface StoppedRing {
+  governor: GovernorState;
+  marker: UncertaintyMarker;
+  result?: undefined;
+}
+async function runReservedRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  current: GovernorState,
+  decisions: RingDecisionAudit,
+): Promise<ExecutedRing | StoppedRing> {
+  const reservation = reserveAvailableRing(current, ring, inputs);
+  if (reservation.marker !== undefined)
+    return { governor: reservation.governor, marker: reservation.marker };
+  let governor = reservation.governor;
+  decisions.executedRingKinds.push(ring.kind);
+  const result = await runRing(ring, {
+    ...inputs,
+    tryReserveAdditionalSearchCall: (): boolean => {
+      if (governor.usage.searchCalls >= governor.plan.budget.searchCallsMax) return false;
+      governor = applyUsage(governor, usageDelta({ searchCalls: 1 }));
+      return true;
+    },
+  });
+  return { governor, result };
+}
+
+interface RingEvidenceAccumulator {
+  reusedEvidenceAtomCount?: number;
+  symbolDiscovery?: SymbolDiscoveryResult;
+  verifiedDefinitionContext?: boolean;
+  knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  atoms: EvidenceAtom[];
+  omitted: OmittedContextEntry[];
+  uncertainty: UncertaintyMarker[];
+  diagnostics: ContextPackDiagnostics | undefined;
+  primaryContentIdentities: readonly ContentEvidenceIdentity[];
+}
+function newRingEvidence(): RingEvidenceAccumulator {
+  return {
+    atoms: [],
+    omitted: [],
+    uncertainty: [],
+    diagnostics: undefined,
+    primaryContentIdentities: [],
+  };
+}
+function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResult): void {
+  evidence.knownFitFileBytes ??= result.knownFitFileBytes;
+  evidence.diagnostics ??= result.diagnostics;
+  evidence.primaryContentIdentities = lexicalContentIdentities(
+    result,
+    evidence.primaryContentIdentities,
+  );
+  for (const atom of result.atoms) evidence.atoms.push(atom);
+  for (const omission of result.omitted) evidence.omitted.push(omission);
+  for (const marker of result.uncertainty) evidence.uncertainty.push(marker);
+}
+function newRingDecisions(stopped: readonly RetrievalRing[] = []): RingDecisionAudit {
+  return {
+    executedRingKinds: [],
+    skippedRingKinds: [],
+    stoppedRingKinds: stopped.map((ring) => ring.kind),
+    ringSkipReasons: [],
+    augmentationDisposition: "not-reached",
+    augmentationSkipped: false,
+  };
+}
+
+function recordStoppedRings(rings: readonly RetrievalRing[], decisions: RingDecisionAudit): void {
+  for (const ring of rings) {
+    if (
+      !decisions.executedRingKinds.includes(ring.kind) &&
+      !decisions.skippedRingKinds.includes(ring.kind)
+    )
+      decisions.stoppedRingKinds.push(ring.kind);
+  }
+}
+
+function declarationCoverageAllowsVerification(
+  coverage: ContextCoverageDiagnostics | undefined,
+): boolean {
+  return (
+    coverage !== undefined &&
+    coverage.filesScanned === coverage.filesAfterPolicy &&
+    (!coverage.incomplete || onlyRetainedMatchesLimited(coverage)) &&
+    coverage.reasons.every((reason) => reason === "match-cap")
+  );
+}
+
+function shouldDiscoverDefinitionsBeforeGraphs(
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+): boolean {
+  return (
+    evidence.symbolDiscovery === undefined &&
+    inputs.targetDecision.kind === "contextual" &&
+    inputs.targetDecision.definitionRequested &&
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(inputs.query) &&
+    declarationCoverageAllowsVerification(evidence.diagnostics?.coverage) &&
+    certifiedContentPaths(evidence.atoms, evidence.primaryContentIdentities).size > 0
+  );
 }
 
 async function runAllRings(
@@ -1793,41 +2898,34 @@ async function runAllRings(
 ): Promise<RingRunSummary> {
   const blocked = initialBlockedRingSummary(initialGovernor, inputs);
   if (blocked !== undefined) return blocked;
-  const atoms: EvidenceAtom[] = [];
-  const omitted: OmittedContextEntry[] = [];
-  const uncertainty: UncertaintyMarker[] = [];
-  // Ring order is fixed by the plan, so capturing the first lexical ring's diagnostics is
-  // deterministic. (There is normally exactly one lexical ring.)
-  let diagnostics: ContextPackDiagnostics | undefined;
+  const evidence = newRingEvidence();
   let governor = initialGovernor;
+  const decisions = newRingDecisions();
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
+    governor = await discoverRequiredDefinitionsForRing(ring, inputs, evidence, governor);
+    if (skipPlannedRing(ring, inputs, evidence, decisions)) {
+      governor = advanceRing(governor);
+      continue;
+    }
     if (!canContinue(governor)) {
       break;
     }
-    const deadlineStop = elapsedDeadlineStop(governor, inputs);
-    if (deadlineStop !== undefined) {
-      governor = deadlineStop.governor;
-      uncertainty.push(deadlineStop.marker);
+    const execution = await runReservedRing(ring, inputs, governor, decisions);
+    governor = execution.governor;
+    if (execution.marker !== undefined) {
+      evidence.uncertainty.push(execution.marker);
       break;
     }
-    const reservation = reserveRingSearchCalls(governor, ring, inputs);
-    governor = reservation.governor;
-    if (reservation.marker !== undefined) {
-      uncertainty.push(reservation.marker);
-      break;
-    }
-    const result = await runRing(ring, inputs);
+    const result = execution.result;
     throwIfCancelled(inputs.signal);
-    // First lexical ring wins (??= never overwrites once set); ring order is plan-fixed.
-    diagnostics ??= result.diagnostics;
+    appendRingEvidence(evidence, result);
     const afterRing = applyUsage(governor, result.usage);
-    atoms.push(...result.atoms);
-    omitted.push(...result.omitted);
-    uncertainty.push(...result.uncertainty);
     if (afterRing.status === "budget-exhausted") {
       governor = afterRing;
-      uncertainty.push(budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()));
+      evidence.uncertainty.push(
+        budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()),
+      );
       break;
     }
     governor = advanceRing(afterRing);
@@ -1835,10 +2933,34 @@ async function runAllRings(
   if (governor.status === "running") {
     governor = complete(governor);
   }
-  return { atoms, omitted, governor, uncertainty, diagnostics };
+  recordStoppedRings(rings, decisions);
+  return { ...evidence, governor, decisions };
+}
+
+async function discoverRequiredDefinitionsForRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+  governor: GovernorState,
+): Promise<GovernorState> {
+  if (ring.kind === "lexical" || !shouldDiscoverDefinitionsBeforeGraphs(inputs, evidence))
+    return governor;
+  const discovery = await inputs.discoverDefinitions(governor, evidence);
+  throwIfCancelled(inputs.signal);
+  evidence.symbolDiscovery = discovery.evidence;
+  evidence.verifiedDefinitionContext = discovery.verified;
+  const previousCount = evidence.atoms.length;
+  const seen = new Set(evidence.atoms.map((atom) => atom.stableId));
+  for (const atom of discovery.evidence.atoms) pushUniqueAtom(evidence.atoms, seen, atom);
+  evidence.reusedEvidenceAtomCount =
+    discovery.evidence.atoms.length - (evidence.atoms.length - previousCount);
+  for (const marker of discovery.evidence.uncertainty) evidence.uncertainty.push(marker);
+  return discovery.governor;
 }
 
 export interface ExcerptInputs {
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly anchors?: readonly string[] | undefined;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
   readonly budget: ExplorationBudget;
@@ -1849,7 +2971,21 @@ export interface ExcerptInputs {
   readonly deadlineAtMs: number;
 }
 
+type ExcerptStopReason = "file-grant" | "byte-grant" | "deadline";
+interface ExcerptReadObservation {
+  readonly omittedRangeCount: number;
+  readonly truncatedWindowCount: number;
+  readonly unreadFileCount: number;
+  readonly stopReasons: readonly ExcerptStopReason[];
+  readonly readBudgetBlocked: boolean;
+}
+
 export interface ExcerptReadSummary {
+  readonly observation?: ExcerptReadObservation | undefined;
+  readonly omitted?: readonly OmittedContextEntry[] | undefined;
+  readonly byteBudgetOmittedPaths?: readonly string[] | undefined;
+  readonly readWindowCount?: number | undefined;
+  readonly anchoredWindowCount?: number | undefined;
   readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
   readonly uncertainty: readonly UncertaintyMarker[];
   // True when the absolute deadline stopped excerpt reading — either a read observed it after
@@ -1861,6 +2997,7 @@ export interface ExcerptReadSummary {
 type PackCacheIdentity = readonly string[];
 
 interface CandidateOrdering {
+  readonly priorityPaths?: ReadonlySet<string>;
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
 }
@@ -1871,9 +3008,9 @@ interface LineWindow {
 }
 
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
+const MAX_EXCERPT_WINDOW_BYTES = 8192;
 const SINGLE_LINE_EXCERPT_CONTEXT_LINES = 3;
 const DISCOVERED_DEFINITION_CONTEXT_AFTER = 24;
-const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
 const PROJECT_METADATA_QUERY_TERMS = [
   "abhängigkeit",
   "abhängigkeiten",
@@ -1943,9 +3080,7 @@ const REPOSITORY_OVERVIEW_FILENAMES = [
   "docs/adr/README.md",
 ] as const;
 const WORKSPACE_PACKAGE_DIRS = ["packages", "apps", "services", "libs"] as const;
-const MAX_WORKSPACE_MANIFESTS = 24;
-const WORKSPACE_MANIFEST_BYTES_MAX = 1_048_576;
-const WORKSPACE_PATTERN_COUNT_MAX = 32;
+const WORKSPACE_MANIFEST_BYTES_MAX = DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned;
 const WORKSPACE_PATTERN_CHARS_MAX = 1_024;
 const SYMBOL_FILE_EXTENSIONS = [
   "cs",
@@ -1977,22 +3112,18 @@ const SYMBOL_FILE_EXTENSIONS = [
   "vue",
 ] as const;
 const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
-// Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
-// on a large customer repo can never trigger an unbounded number of full-file reads even if many
-// files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
-const MAX_SYMBOL_LINE_READS = 64;
 const SYMBOL_FILE_MATCHES_MAX = 96;
 const DOCUMENT_REFERENCE_MATCHES_MAX = 8;
 const MAX_DOCUMENT_REFERENCE_ANCHORS = 4;
 const DOCUMENT_REFERENCE_ANCHOR_RE = /^(?:adr|rfc)-\d{3,6}$/u;
 const SYMBOL_FILE_SEARCH_LIMITS = {
-  maxFilesScanned: 10_000,
+  maxFilesScanned: null,
   maxMatchesReturned: SYMBOL_FILE_MATCHES_MAX,
   maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
   elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
 } as const;
 const DOCUMENT_REFERENCE_SEARCH_LIMITS = {
-  maxFilesScanned: 10_000,
+  maxFilesScanned: null,
   maxMatchesReturned: DOCUMENT_REFERENCE_MATCHES_MAX,
   maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
   elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
@@ -2015,7 +3146,7 @@ function basename(scopePath: string): string {
 }
 
 function compareByScopePath(a: OmittedContextEntry, b: OmittedContextEntry): number {
-  return a.scopePath.localeCompare(b.scopePath);
+  return compareStrings(a.scopePath, b.scopePath);
 }
 
 function isKeikoEvidenceArtifact(scopePath: string): boolean {
@@ -2104,7 +3235,6 @@ type MetadataCoverageIssue =
   | "workspace-manifest-byte-limit"
   | "workspace-manifest-read-unavailable"
   | "workspace-manifest-shape-unsupported"
-  | "workspace-pattern-count-limit"
   | "workspace-pattern-length-limit"
   | "workspace-pattern-shape-unsupported";
 
@@ -2121,18 +3251,18 @@ function descriptorReadExceededLimit(error: unknown): boolean {
   return isRecord(error) && error.reason === "too-large";
 }
 
-function readBoundedWorkspaceManifest(
+async function readBoundedWorkspaceManifest(
   fs: WorkspaceFs,
   absolutePath: string,
   cache?: FileExistenceCache,
-): string | undefined {
+): Promise<string | undefined> {
   try {
     const stat = fs.stat(absolutePath);
     if (!stat.isFile || stat.size > WORKSPACE_MANIFEST_BYTES_MAX) {
       recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
       return undefined;
     }
-    const boundedRead = fs.readFileUtf8SameDescriptor;
+    const boundedRead = fs.readFileBytes;
     // ADR-0005 D1: a bounded lane, or no advisory metadata at all. Falling back to the unbounded
     // `readFileUtf8` and checking the cap afterwards materializes the entire file first, so the cap
     // stops bounding anything — the exact class this PR removed from the workspace read lanes.
@@ -2140,10 +3270,24 @@ function readBoundedWorkspaceManifest(
       recordMetadataCoverageIssue(cache, "workspace-manifest-read-unavailable");
       return undefined;
     }
-    const read = boundedRead(absolutePath, WORKSPACE_MANIFEST_BYTES_MAX, "reject", stat);
-    return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
-      ? read.rawText
-      : undefined;
+    const bytes = await boundedRead.call(
+      fs,
+      absolutePath,
+      WORKSPACE_MANIFEST_BYTES_MAX,
+      "reject",
+      stat,
+    );
+    if (
+      bytes.length !== stat.size ||
+      !isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+    ) {
+      recordMetadataCoverageIssue(cache, "workspace-manifest-read-unavailable");
+      return undefined;
+    }
+    const decoded = decodeTextFileBytes(bytes);
+    if (decoded === undefined)
+      recordMetadataCoverageIssue(cache, "workspace-manifest-shape-unsupported");
+    return decoded?.text;
   } catch (error) {
     rethrowMetadataCancellation(error);
     recordMetadataCoverageIssue(
@@ -2176,13 +3320,8 @@ function boundedWorkspacePatterns(
   entries: readonly unknown[],
   cache?: FileExistenceCache,
 ): readonly string[] {
-  recordMetadataCoverageIssue(
-    cache,
-    "workspace-pattern-count-limit",
-    Math.max(0, entries.length - WORKSPACE_PATTERN_COUNT_MAX),
-  );
   const patterns: string[] = [];
-  for (const entry of entries.slice(0, WORKSPACE_PATTERN_COUNT_MAX)) {
+  for (const entry of entries) {
     if (typeof entry !== "string") {
       recordMetadataCoverageIssue(cache, "workspace-pattern-shape-unsupported");
     } else if (entry.length > WORKSPACE_PATTERN_CHARS_MAX) {
@@ -2194,12 +3333,12 @@ function boundedWorkspacePatterns(
   return patterns;
 }
 
-function readWorkspacePatterns(
+async function readWorkspacePatterns(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
-): readonly string[] {
+): Promise<readonly string[]> {
   if (!metadataTraversalCanContinue(control)) return [];
   if (!fileExistsInSearchScope(searchScope, fs, "package.json", existsCache)) {
     return [];
@@ -2211,7 +3350,7 @@ function readWorkspacePatterns(
       recordMetadataCoverageIssue(existsCache, "workspace-manifest-read-unavailable");
       return [];
     }
-    rawText = readBoundedWorkspaceManifest(fs, contained.path, existsCache);
+    rawText = await readBoundedWorkspaceManifest(fs, contained.path, existsCache);
   } catch (error) {
     rethrowMetadataCancellation(error);
     recordMetadataCoverageIssue(existsCache, "workspace-manifest-read-unavailable");
@@ -2263,10 +3402,72 @@ interface BoundedDirectoryRead {
   readonly status: BoundedDirectoryReadStatus;
 }
 
+type MetadataFailureObserver = (error: unknown, scopePath: string) => void;
+
 interface MetadataTraversalControl {
+  readonly recordUnavailable?: MetadataFailureObserver | undefined;
   readonly signal: AbortSignal | undefined;
   readonly nowMs: () => number;
   readonly deadlineAtMs: number;
+}
+
+type MetadataUnavailableReason =
+  | "permission-denied"
+  | "filesystem-unavailable"
+  | "containment-denied"
+  | "directory-changed"
+  | "streaming-unavailable"
+  | "deadline"
+  | "unexpected";
+
+class MetadataDirectoryUnavailableError extends Error {
+  public constructor(public readonly reason: MetadataUnavailableReason) {
+    super("metadata directory inspection unavailable");
+    this.name = "MetadataDirectoryUnavailableError";
+  }
+}
+
+function metadataUnavailableReason(error: unknown): MetadataUnavailableReason {
+  if (error instanceof MetadataDirectoryUnavailableError) return error.reason;
+  if (isMetadataTraversalDeadline(error)) return "deadline";
+  if (error instanceof PathEscapeError || error instanceof PathDeniedError)
+    return "containment-denied";
+  if (safeProperty(error, "reason") === "directory-membership-changed") return "directory-changed";
+  const code = errorKindOf(error);
+  if (code === "EACCES" || code === "EPERM") return "permission-denied";
+  return isExpectedWorkspaceRootFailure(error) ? "filesystem-unavailable" : "unexpected";
+}
+
+function metadataUnavailableErrorKind(reason: MetadataUnavailableReason): ActivityLogErrorKind {
+  if (reason === "deadline") return "timeout";
+  if (reason === "containment-denied" || reason === "permission-denied") return "permission-denied";
+  return reason === "unexpected" ? "internal" : "unavailable";
+}
+
+function metadataUnavailableEvent(
+  error: unknown,
+  scopePath: string,
+  identity: ConnectedContextActivityIdentity,
+  correlationId: string,
+): ServerLogEvent {
+  const reason = metadataUnavailableReason(error);
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  return activityLogEvent(
+    SEARCH_METADATA_UNAVAILABLE_OPERATION,
+    { correlationId, errorKind: metadataUnavailableErrorKind(reason) },
+    {
+      scopeIdentitySha256: identity.scopeIdentitySha256,
+      queryIdentitySha256: identity.queryIdentitySha256,
+      scopePathDigest: createHash("sha256").update(scopePath).digest("hex"),
+      reason,
+      failureKind: connectedContextFailureKind(error),
+      ...(frames.length === 0 ? {} : { frames }),
+      ...(causes.length === 0 ? {} : { causeChain: causes }),
+      completeness: "partial",
+      loss: "none",
+    },
+  );
 }
 
 class MetadataTraversalDeadlineError extends Error {
@@ -2304,9 +3505,11 @@ function metadataTraversalOperation<T>(control: MetadataTraversalControl, run: (
 
 function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl): WorkspaceFs {
   const descriptorRead = fs.readFileUtf8SameDescriptor;
+  const byteRead = fs.readFileBytes;
   const canonicalRoot = fs.canonicalWorkspaceRoot;
   const run = <T>(operation: () => T): T => metadataTraversalOperation(control, operation);
   return preserveOwnedRootAuthority(fs, {
+    ...(fs.iterateDirectory === undefined ? {} : { iterateDirectory: fs.iterateDirectory }),
     readFileUtf8: (path): string => run(() => fs.readFileUtf8(path)),
     stat: (path): WorkspaceStat => run(() => fs.stat(path)),
     readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
@@ -2323,6 +3526,21 @@ function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl)
             expected: WorkspaceStat,
           ): WorkspaceDescriptorUtf8Read =>
             run(() => descriptorRead.call(fs, path, maxBytes, hardLinkPolicy, expected)),
+        }),
+    ...(byteRead === undefined
+      ? {}
+      : {
+          readFileBytes: async (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<Uint8Array> => {
+            assertMetadataTraversalActive(control);
+            const bytes = await byteRead.call(fs, path, maxBytes, hardLinkPolicy, expected);
+            assertMetadataTraversalActive(control);
+            return bytes;
+          },
         }),
     ...(canonicalRoot === undefined
       ? {}
@@ -2398,37 +3616,160 @@ function safeReadDir(
   }
 }
 
-// Bound on how many service subdirectories under a `dir/*` pattern are scanned, so a monorepo with
-// thousands of packages cannot trigger an unbounded directory fan-out (the per-result cap in the
-// caller is MAX_WORKSPACE_MANIFESTS; this caps the WORK, not just the output).
-const MAX_MONOREPO_SERVICE_DIRS = 96;
+function metadataDirectoryPath(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+): string | undefined {
+  if (scopePath.length > 0 && !isValidScopePath(scopePath, { mustBeRelative: true }))
+    throw new MetadataDirectoryUnavailableError("containment-denied");
+  const root = searchScope.workspace.root;
+  const absolute = resolveWithinWorkspace(root, scopePath);
+  const contained = containedRealPathInfo(fs, root, absolute);
+  if (!isCanonicalAllowedContainedPath(contained, root, scopePath)) {
+    if (isAllowedContainedPathParent(contained, root, scopePath) && !fs.exists(absolute))
+      return undefined;
+    throw new MetadataDirectoryUnavailableError("containment-denied");
+  }
+  const stat = fs.stat(contained.path);
+  if (stat.isSymbolicLink) throw new MetadataDirectoryUnavailableError("containment-denied");
+  return stat.isDirectory ? contained.path : undefined;
+}
 
-// Canonical project manifests of ANY ecosystem present directly inside `dir` (one bounded readDir,
-// realpath-contained, no symlink following). Replaces the prior package.json-only probe so a
-// polyglot monorepo surfaces service-local pom.xml / go.mod / Cargo.toml / *.csproj, not just
-// JS packages. isDenied is applied even though the registry is deny-clean (defence in depth), and
-// the result is sorted for deterministic evidence ordering.
-function canonicalManifestScopePathsInDir(
+function recordUnavailableMetadataDirectory(
+  error: unknown,
+  scopePath: string,
+  control: MetadataTraversalControl,
+  cache: FileExistenceCache | undefined,
+): void {
+  if (cache !== undefined) cache.unavailableDirectoryInspections += 1;
+  control.recordUnavailable?.(error, scopePath);
+}
+
+async function visitMetadataDirectory(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+  control: MetadataTraversalControl,
+  cache: FileExistenceCache | undefined,
+  visit: (entry: WorkspaceDirEntry) => void | Promise<void>,
+): Promise<boolean> {
+  try {
+    assertMetadataTraversalActive(control);
+    const path = metadataDirectoryPath(searchScope, fs, scopePath);
+    if (path === undefined) return true;
+    const iterate = fs.iterateDirectory;
+    if (iterate === undefined) throw new MetadataDirectoryUnavailableError("streaming-unavailable");
+    for await (const entry of iterate.call(fs, path)) {
+      assertMetadataTraversalActive(control);
+      await visit(entry);
+    }
+    assertMetadataTraversalActive(control);
+    if (metadataDirectoryPath(searchScope, fs, scopePath) !== path)
+      throw new MetadataDirectoryUnavailableError("directory-changed");
+    return true;
+  } catch (error) {
+    rethrowMetadataCancellation(error);
+    recordUnavailableMetadataDirectory(error, scopePath, control, cache);
+    return false;
+  }
+}
+
+async function canonicalManifestScopePathsInDir(
   dir: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
-  maxEntries: number,
+  maxResults: number,
+  control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
-): readonly string[] {
-  return cachedDirectoryEntries(searchScope, fs, dir, maxEntries, existsCache)
-    .entries.filter((entry) => !entry.isDirectory && !entry.isSymbolicLink)
-    .map((entry) => joinScopePath(dir, entry.name))
-    .filter((scopePath) => isCanonicalMetadataFile(scopePath) && !isDenied(scopePath))
-    .sort((a, b) => a.localeCompare(b));
+  policy: { readonly cacheAbsentNames?: boolean; readonly rememberDirectory?: boolean } = {},
+): Promise<readonly string[]> {
+  if (!beginMetadataDirectory(existsCache, dir, policy.rememberDirectory !== false)) return [];
+  const paths = new BoundedMetadataPaths(maxResults);
+  const present = new Set<string>();
+  const complete = await visitMetadataDirectory(
+    searchScope,
+    fs,
+    dir,
+    control,
+    existsCache,
+    (entry): void => {
+      if (entry.isSymbolicLink || !entry.isFile) return;
+      if (policy.cacheAbsentNames === true && PROJECT_METADATA_FILENAMES.includes(entry.name))
+        present.add(entry.name);
+      const path = joinScopePath(dir, entry.name);
+      retainCanonicalMetadataPath(path, searchScope, fs, paths, existsCache);
+    },
+  );
+  if (complete && policy.cacheAbsentNames === true)
+    cacheAbsentMetadataNames(existsCache, dir, present);
+  return paths.sorted();
 }
 
-function expandWorkspacePattern(
+function beginMetadataDirectory(
+  cache: FileExistenceCache | undefined,
+  dir: string,
+  remember: boolean,
+): boolean {
+  if (cache === undefined) return true;
+  if (cache.metadataDirectories.has(dir)) return false;
+  if (remember && cache.metadataWildcardBases.has(dirname(dir))) return false;
+  if (remember) cache.metadataDirectories.add(dir);
+  return true;
+}
+
+function cacheAbsentMetadataNames(
+  cache: FileExistenceCache | undefined,
+  dir: string,
+  present: ReadonlySet<string>,
+): void {
+  if (cache === undefined) return;
+  for (const name of PROJECT_METADATA_FILENAMES)
+    if (!present.has(name)) cache.files.set(joinScopePath(dir, name), false);
+}
+
+function isAdmittedMetadataPath(
+  path: string,
+  scope: SearchScope,
+  cache: FileExistenceCache | undefined,
+): boolean {
+  if (!isValidScopePath(path, { mustBeRelative: true }) || isDenied(path)) return false;
+  if (scope.relativePaths.length === 0) return true;
+  const selected = cache?.metadataScopePaths ?? new Set(scope.relativePaths);
+  let ancestor = path;
+  for (;;) {
+    if (selected.has(ancestor)) return true;
+    const separator = ancestor.lastIndexOf("/");
+    if (separator < 0) return false;
+    ancestor = ancestor.slice(0, separator);
+  }
+}
+
+function retainCanonicalMetadataPath(
+  path: string,
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  paths: BoundedMetadataPaths,
+  cache: FileExistenceCache | undefined,
+): void {
+  if (
+    !isCanonicalMetadataFile(path) ||
+    !isAdmittedMetadataPath(path, scope, cache) ||
+    !fileExistsByContainedStat(scope, fs, path)
+  )
+    return;
+  cache?.metadataRetention?.observe(path);
+  paths.retain(path);
+}
+
+async function expandWorkspacePattern(
   pattern: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
+): Promise<readonly string[]> {
   if (!metadataTraversalCanContinue(control)) return [];
   const normalized = normalizeWorkspacePattern(pattern);
   if (normalized === undefined) {
@@ -2439,13 +3780,7 @@ function expandWorkspacePattern(
     const dir = normalized.endsWith("/package.json")
       ? normalized.slice(0, -"/package.json".length)
       : normalized;
-    return canonicalManifestScopePathsInDir(
-      dir,
-      searchScope,
-      fs,
-      MAX_WORKSPACE_MANIFESTS,
-      existsCache,
-    );
+    return canonicalManifestScopePathsInDir(dir, searchScope, fs, maxResults, control, existsCache);
   }
   if (!normalized.endsWith("/*") || normalized.slice(0, -2).includes("*")) {
     recordMetadataCoverageIssue(existsCache, "workspace-pattern-shape-unsupported");
@@ -2456,84 +3791,73 @@ function expandWorkspacePattern(
     searchScope,
     fs,
     control,
+    maxResults,
     existsCache,
   );
 }
 
-function workspacePatternServiceManifests(
+async function workspacePatternServiceManifests(
   base: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
-  if (!metadataTraversalCanContinue(control)) return [];
-  const serviceNames = cachedDirectoryEntries(
+): Promise<readonly string[]> {
+  if (existsCache?.metadataWildcardBases.has(base) === true) return [];
+  existsCache?.metadataWildcardBases.add(base);
+  const manifests = new BoundedMetadataPaths(maxResults);
+  await visitMetadataDirectory(
     searchScope,
     fs,
     base,
-    MAX_MONOREPO_SERVICE_DIRS,
+    control,
     existsCache,
-  )
-    .entries.filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b))
-    .slice(0, MAX_MONOREPO_SERVICE_DIRS);
-  const manifests: string[] = [];
-  for (const name of serviceNames) {
-    if (!metadataTraversalCanContinue(control)) break;
-    const remaining = MAX_WORKSPACE_MANIFESTS - manifests.length;
-    if (remaining <= 0) break;
-    manifests.push(
-      ...canonicalManifestScopePathsInDir(
-        joinScopePath(base, name),
+    async (entry): Promise<void> => {
+      if (!entry.isDirectory || entry.isSymbolicLink) return;
+      const dir = joinScopePath(base, entry.name);
+      if (!isValidScopePath(dir, { mustBeRelative: true }) || isDenied(dir)) return;
+      for (const path of await canonicalManifestScopePathsInDir(
+        dir,
         searchScope,
         fs,
-        remaining,
+        maxResults,
+        control,
         existsCache,
-      ),
-    );
-  }
-  return manifests;
+        { rememberDirectory: false },
+      ))
+        manifests.retain(path);
+    },
+  );
+  return manifests.sorted();
 }
 
-function workspacePackageManifestPaths(
+async function workspacePackageManifestPaths(
   input: OrchestratorInput,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
-  if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) {
-    return [];
-  }
+): Promise<readonly string[]> {
+  if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) return [];
   if (!metadataTraversalCanContinue(control)) return [];
-  const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs, control, existsCache));
-  for (const dir of WORKSPACE_PACKAGE_DIRS) {
-    patterns.add(`${dir}/*`);
-  }
-  const paths: string[] = [];
-  const seen = new Set<string>();
-  for (const pattern of [...patterns].sort((a, b) => a.localeCompare(b))) {
+  const patterns = new Set<string>(
+    await readWorkspacePatterns(searchScope, fs, control, existsCache),
+  );
+  for (const dir of WORKSPACE_PACKAGE_DIRS) patterns.add(`${dir}/*`);
+  const paths = new BoundedMetadataPaths(maxResults);
+  for await (const expanded of iterateSequentialResults(
+    [...patterns].sort(compareStrings),
+    (pattern) =>
+      metadataTraversalCanContinue(control)
+        ? expandWorkspacePattern(pattern, searchScope, fs, control, maxResults, existsCache)
+        : Promise.resolve([]),
+  )) {
+    for (const path of expanded) paths.retain(path);
     if (!metadataTraversalCanContinue(control)) break;
-    for (const scopePath of expandWorkspacePattern(
-      pattern,
-      searchScope,
-      fs,
-      control,
-      existsCache,
-    )) {
-      if (seen.has(scopePath)) {
-        continue;
-      }
-      seen.add(scopePath);
-      paths.push(scopePath);
-      if (paths.length >= MAX_WORKSPACE_MANIFESTS) {
-        return paths;
-      }
-    }
   }
-  return paths;
+  return paths.sorted();
 }
 
 function metadataAtom(
@@ -2617,33 +3941,21 @@ function documentReferenceAnchorTerms(plan: ExplorationPlan): readonly string[] 
     .slice(0, MAX_DOCUMENT_REFERENCE_ANCHORS);
 }
 
-function documentReferenceQuery(input: OrchestratorInput, term: string): RetrievalQuery {
-  return {
-    kind: "file-pattern",
-    text: `**${term}*`,
-    caseSensitive: false,
-    maxResults: DOCUMENT_REFERENCE_MATCHES_MAX,
-    emittedAtMs: input.query.emittedAtMs,
-  };
-}
-
 function documentReferenceCoverageMarker(
   term: string,
   coverage: ContextCoverageDiagnostics,
   nowMs: () => number,
 ): UncertaintyMarker | undefined {
   if (!coverage.incomplete) return undefined;
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Document reference discovery for "${term}" was incomplete: ` +
-      `reasons=${coverage.reasons.join(",")}; ` +
+  return discoveryCoverageMarker(
+    `Document reference discovery for "${term}"`,
+    coverage,
+    `reasons=${coverage.reasons.join(",")}; ` +
       `filesScanned=${String(coverage.filesScanned)}, ` +
       `filesSkipped=${String(coverage.filesSkipped)}, ` +
-      `matchesReturned=${String(coverage.matchesReturned)}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
+      `matchesReturned=${String(coverage.matchesReturned)}`,
+    nowMs(),
+  );
 }
 
 function reserveAugmentationSearchTerms(
@@ -2651,43 +3963,59 @@ function reserveAugmentationSearchTerms(
   signal: AbortSignal | undefined,
   budget: AugmentationBudgetMeter,
 ): readonly string[] {
-  const reserved: string[] = [];
-  for (const term of terms) {
-    throwIfCancelled(signal);
-    if (!budget.tryReserveSearchCall()) break;
-    reserved.push(term);
-  }
-  return reserved;
+  throwIfCancelled(signal);
+  return terms.length > 0 && budget.tryReserveSearchCall() ? terms : [];
 }
 
-async function documentReferenceAtoms(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  requestContext: StructuralAdapterRequestContext,
-  budget: AugmentationBudgetMeter,
-): Promise<DeterministicContextEvidence> {
-  const terms = reserveAugmentationSearchTerms(documentReferenceAnchorTerms(plan), signal, budget);
-  const results = await Promise.all(
-    terms.map(async (term) => {
-      throwIfCancelled(signal);
-      const result = await requestContext.findFiles(
-        documentReferenceQuery(input, term),
-        DOCUMENT_REFERENCE_SEARCH_LIMITS,
-        {
-          ...(signal === undefined ? {} : { signal }),
-          searchHints: { retrievalIntent: plan.retrievalIntent },
-        },
-      );
-      return { term, result };
-    }),
+type FilenameSearchRequest = Parameters<
+  StructuralAdapterRequestContext["findFilesBatch"]
+>[0][number];
+interface FilenameSearchTarget {
+  readonly kind: "symbol" | "document";
+  readonly terms: readonly string[];
+  readonly request: FilenameSearchRequest;
+}
+
+function filenameSearchTargets(
+  inputs: DeterministicContextInputs,
+): readonly FilenameSearchTarget[] {
+  const { input, plan, signal, budget } = inputs;
+  const symbols = reserveAugmentationSearchTerms(symbolFileAnchorTerms(plan), signal, budget);
+  const documents = reserveAugmentationSearchTerms(
+    documentReferenceAnchorTerms(plan),
+    signal,
+    budget,
   );
-  const markers = results.flatMap(({ term, result }) => {
-    const marker = documentReferenceCoverageMarker(term, result.coverage, nowMs);
-    return marker === undefined ? [] : [marker];
-  });
-  return { atoms: results.flatMap(({ result }) => result.atoms), uncertainty: markers };
+  const targets: FilenameSearchTarget[] = [];
+  if (symbols.length > 0)
+    targets.push({
+      kind: "symbol",
+      terms: symbols,
+      request: {
+        query: symbolFileQuery(input, "**/*"),
+        limits: SYMBOL_FILE_SEARCH_LIMITS,
+        filePatternGroups: {
+          patterns: symbols.map((term) => `**/${term}.*`),
+          maxMatchesPerPattern: SYMBOL_FILE_MATCHES_MAX,
+        },
+      },
+    });
+  if (documents.length > 0) {
+    const maxMatches = DOCUMENT_REFERENCE_MATCHES_MAX * documents.length;
+    targets.push({
+      kind: "document",
+      terms: documents,
+      request: {
+        query: { ...symbolFileQuery(input, "**/*"), maxResults: maxMatches },
+        limits: { ...DOCUMENT_REFERENCE_SEARCH_LIMITS, maxMatchesReturned: maxMatches },
+        filePatternGroups: {
+          patterns: documents.map((term) => `**${term}*`),
+          maxMatchesPerPattern: DOCUMENT_REFERENCE_MATCHES_MAX,
+        },
+      },
+    });
+  }
+  return targets;
 }
 
 // eslint-disable-next-line complexity -- Guard chain keeps symbol-anchor filtering explicit.
@@ -2700,11 +4028,15 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
   }
   const terms: string[] = [];
   const seen = new Set<string>();
-  for (const anchor of plan.anchors) {
+  for (const anchor of [...(plan.targetDecision?.targets ?? []), ...plan.anchors]) {
     if ((anchor.kind !== "identifier" && anchor.kind !== "quoted") || anchor.weight < 0.7) {
       continue;
     }
-    if (!/^[a-z_$][a-z0-9_$-]+$/u.test(anchor.term) || anchor.term.includes(".")) {
+    if (
+      !/^[a-z_$][a-z0-9_$-]+$/u.test(anchor.term) ||
+      anchor.term.includes(".") ||
+      DOCUMENT_REFERENCE_ANCHOR_RE.test(anchor.term)
+    ) {
       continue;
     }
     if (!seen.has(anchor.term)) {
@@ -2718,34 +4050,6 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
   return terms;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-}
-
-function symbolDefinitionPatterns(term: string): readonly RegExp[] {
-  const escaped = escapeRegex(term);
-  return [
-    new RegExp(String.raw`\b(?:export\s+)?(?:async\s+)?function\s+${escaped}\b`, "iu"),
-    new RegExp(String.raw`\b(?:export\s+)?(?:class|interface|type|enum)\s+${escaped}\b`, "iu"),
-    new RegExp(String.raw`\b(?:export\s+)?(?:const|let|var)\s+${escaped}\b`, "iu"),
-    new RegExp(
-      String.raw`\b(?:public\s+|private\s+|protected\s+|abstract\s+|final\s+|data\s+)*(?:class|interface|record|enum)\s+${escaped}\b`,
-      "iu",
-    ),
-    new RegExp(
-      String.raw`\b(?:public\s+|private\s+|protected\s+|static\s+|final\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+${escaped}\s*\(`,
-      "iu",
-    ),
-    new RegExp(String.raw`\b(?:def|func|fn|fun)\s+${escaped}\s*\(`, "iu"),
-    new RegExp(String.raw`\btype\s+${escaped}\s+(?:struct|interface)\b`, "iu"),
-    new RegExp(String.raw`\b(?:struct|trait|enum|class)\s+${escaped}\b`, "iu"),
-  ];
-}
-
-function lineDefinesSymbol(line: string, patterns: readonly RegExp[]): boolean {
-  return patterns.some((pattern) => pattern.test(line));
-}
-
 interface SymbolLineScanControl {
   readonly signal: AbortSignal | undefined;
   readonly nowMs: () => number;
@@ -2755,10 +4059,22 @@ interface SymbolLineScanControl {
 interface SymbolLineLookupResult {
   readonly lineNumber: number | undefined;
   readonly deadlineReached: boolean;
+  readonly definitionMatch?: true;
 }
 
 function symbolLineDeadlineReached(control: SymbolLineScanControl): boolean {
   return control.nowMs() >= control.deadlineMs;
+}
+
+function sourceLineDefinesSymbol(
+  sourceLines: readonly RepositorySourceLine[] | undefined,
+  lineNumber: number,
+  term: string,
+): boolean {
+  const structural = sourceLines?.[lineNumber - 1]?.structural;
+  return (
+    structural !== undefined && structuralLineLooksLikeSymbolDefinition(structural, term, false)
+  );
 }
 
 // Exported only for deterministic cancellation/deadline regression coverage; this file is not a
@@ -2768,9 +4084,9 @@ export function scanFirstSymbolLine(
   rawText: string,
   term: string,
   control: SymbolLineScanControl,
+  sourceLines?: readonly RepositorySourceLine[],
 ): SymbolLineLookupResult {
   const loweredTerm = term.toLowerCase();
-  const definitionPatterns = symbolDefinitionPatterns(term);
   let firstOccurrence: number | undefined;
   let lineNumber = 1;
   let start = 0;
@@ -2781,8 +4097,8 @@ export function scanFirstSymbolLine(
     }
     const newline = rawText.indexOf("\n", start);
     const line = rawText.slice(start, newline < 0 ? rawText.length : newline);
-    if (lineDefinesSymbol(line, definitionPatterns)) {
-      return { lineNumber, deadlineReached: false };
+    if (sourceLineDefinesSymbol(sourceLines, lineNumber, term)) {
+      return { lineNumber, deadlineReached: false, definitionMatch: true };
     }
     if (firstOccurrence === undefined && line.toLowerCase().includes(loweredTerm)) {
       firstOccurrence = lineNumber;
@@ -2809,30 +4125,31 @@ function boundedSymbolFileText(fs: WorkspaceFs, absolutePath: string): string | 
     : undefined;
 }
 
-function firstSymbolLine(
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
+function symbolLinesForPath(
+  inputs: PrioritizedSymbolInputs,
   scopePath: string,
-  term: string,
+  terms: readonly string[],
   control: SymbolLineScanControl,
-): SymbolLineLookupResult {
+): ReadonlyMap<string, SymbolLineLookupResult> {
   throwIfCancelled(control.signal);
-  if (symbolLineDeadlineReached(control)) {
-    return { lineNumber: undefined, deadlineReached: true };
-  }
+  if (symbolLineDeadlineReached(control)) return new Map();
   try {
-    const contained = canonicalContainedSearchPath(searchScope, fs, scopePath);
-    if (contained === undefined) return { lineNumber: undefined, deadlineReached: false };
+    const contained = canonicalContainedSearchPath(inputs.searchScope, inputs.fs, scopePath);
     throwIfCancelled(control.signal);
-    if (symbolLineDeadlineReached(control)) {
-      return { lineNumber: undefined, deadlineReached: true };
-    }
-    const rawText = boundedSymbolFileText(fs, contained.path);
-    if (rawText === undefined) return { lineNumber: undefined, deadlineReached: false };
-    return scanFirstSymbolLine(rawText, term, control);
+    if (symbolLineDeadlineReached(control)) return new Map();
+    const text =
+      contained === undefined ? undefined : boundedSymbolFileText(inputs.fs, contained.path);
+    if (text === undefined) return new Map();
+    throwIfCancelled(control.signal);
+    if (symbolLineDeadlineReached(control)) return new Map();
+    const sourceLines = repositorySourceLines(text, scopePath);
+    return new Map(
+      terms.map((term) => [term, scanFirstSymbolLine(text, term, control, sourceLines)]),
+    );
   } catch (error) {
     if (error instanceof CancelledError) throw error;
-    return { lineNumber: undefined, deadlineReached: false };
+    inputs.recordSymbolReadFailure(error, scopePath);
+    return new Map();
   }
 }
 
@@ -2842,8 +4159,10 @@ function symbolLineAtom(
   lineNumber: number,
   queryFingerprint: string,
   nowMs: () => number,
+  definitionMatch = false,
 ): EvidenceAtom {
   const lineRange = { startLine: lineNumber, endLine: lineNumber };
+  const tool = definitionMatch ? "discovered-symbol-definition" : "repo.symbolFileDiscovery";
   return {
     schemaVersion: scope.schemaVersion,
     stableId: evidenceAtomStableId({
@@ -2851,7 +4170,7 @@ function symbolLineAtom(
       scopePath,
       lineRange,
       provenanceKind: "lexical-search",
-      provenanceTool: "repo.symbolFileDiscovery",
+      provenanceTool: tool,
       queryFingerprint,
     }),
     scopePath,
@@ -2859,7 +4178,7 @@ function symbolLineAtom(
     score: 1,
     provenance: {
       kind: "lexical-search",
-      tool: "repo.symbolFileDiscovery",
+      tool,
       queryFingerprint,
     },
     redactionState: "redacted",
@@ -2876,13 +4195,13 @@ function scopePathExtension(scopePath: string): string {
 
 // True when `scopePath` is a `<term>.<code-extension>` definition file. The single-walk symbol glob
 // `**/term.*` also matches multi-dot names like `term.test.tsx` (which the prior per-extension globs
-// did not), so this restores the exact contract: keep only paths ending in `term.<ext>` for a code
+// did not), so this restores the exact contract: keep only basenames equal to `term.<ext>` for a code
 // extension — the implementation file, not its co-named spec/story. Exported for direct testing.
 export function isSymbolDefinitionPath(scopePath: string, term: string): boolean {
   const extension = scopePathExtension(scopePath);
   return (
     (SYMBOL_FILE_EXTENSION_SET.has(extension) || isEcosystemSourceFile(scopePath)) &&
-    scopePath.toLowerCase().endsWith(`${term.toLowerCase()}.${extension}`)
+    basename(scopePath).toLowerCase() === `${term.toLowerCase()}.${extension}`
   );
 }
 
@@ -2895,6 +4214,9 @@ interface SymbolDefinitionMatch {
 interface SymbolDiscoveryResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
+  readonly verifiedTerms?: ReadonlySet<string>;
+  readonly observedTerms?: ReadonlySet<string>;
+  readonly complete?: boolean;
 }
 
 function symbolCoverageIncomplete(
@@ -2905,20 +4227,18 @@ function symbolCoverageIncomplete(
   if (coverage?.incomplete !== true) {
     return undefined;
   }
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Symbol file discovery for "${term}" was incomplete: ` +
-      `reasons=${coverage.reasons.join(",")}; ` +
+  return discoveryCoverageMarker(
+    `Symbol file discovery for "${term}"`,
+    coverage,
+    `reasons=${coverage.reasons.join(",")}; ` +
       `filesScanned=${String(coverage.filesScanned)}, ` +
       `filesSkipped=${String(coverage.filesSkipped)}, ` +
       `matchesReturned=${String(coverage.matchesReturned)}, ` +
       `limits=maxFilesScanned:${String(coverage.limits.maxFilesScanned)},` +
       `maxMatchesReturned:${String(coverage.limits.maxMatchesReturned)},` +
-      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
+      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}`,
+    nowMs(),
+  );
 }
 
 function symbolDefinitionPriority(scopePath: string, term: string): number {
@@ -2939,25 +4259,6 @@ function compareSymbolMatches(a: SymbolDefinitionMatch, b: SymbolDefinitionMatch
   return a.atom.scopePath.localeCompare(b.atom.scopePath);
 }
 
-function symbolLineReadOverflow(
-  overflowCount: number,
-  terms: readonly string[],
-  nowMs: () => number,
-): UncertaintyMarker | undefined {
-  if (overflowCount === 0) {
-    return undefined;
-  }
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Symbol line lookup skipped ${String(overflowCount)} definition file(s) after ` +
-      `${String(MAX_SYMBOL_LINE_READS)} prioritized line reads; ` +
-      `file-level symbol matches remain available for terms=${terms.join(",")}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
-}
-
 function symbolLineDeadlineMarker(
   skippedCount: number,
   nowMs: () => number,
@@ -2973,70 +4274,61 @@ function symbolLineDeadlineMarker(
   };
 }
 
-// Walk the tree ONCE for `**/term.*` and keep only `term.<code-ext>` definition files. The single
-// walk replaces the prior
-// per-extension globs (up to 27 redundant full-tree walks per question, ~4.7s on a 3.5k-file repo).
-async function symbolDefinitionMatchesForTerm(
-  term: string,
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  requestContext: StructuralAdapterRequestContext,
-): Promise<{
+interface SymbolFilenameMatches {
+  readonly terms: readonly string[];
   readonly matches: readonly SymbolDefinitionMatch[];
   readonly uncertainty: readonly UncertaintyMarker[];
-}> {
-  const result = await requestContext.findFiles(
-    symbolFileQuery(input, `**/${term}.*`),
-    SYMBOL_FILE_SEARCH_LIMITS,
-    {
-      ...(signal === undefined ? {} : { signal }),
-      searchHints: { retrievalIntent: plan.retrievalIntent },
-    },
-  );
-  const matches: SymbolDefinitionMatch[] = [];
-  for (const atom of result.atoms) {
-    if (!isSymbolDefinitionPath(atom.scopePath, term)) {
-      continue;
-    }
-    matches.push({
-      atom,
-      term,
-      priority: symbolDefinitionPriority(atom.scopePath, term),
-    });
-  }
-  const marker = symbolCoverageIncomplete(term, result.coverage, nowMs);
-  return { matches, uncertainty: marker === undefined ? [] : [marker] };
 }
 
-async function collectSymbolDefinitionMatches(
+function symbolFilenameMatches(
   terms: readonly string[],
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
+  result: SearchResult,
   nowMs: () => number,
-  signal: AbortSignal | undefined,
-  requestContext: StructuralAdapterRequestContext,
-  budget: AugmentationBudgetMeter,
-): Promise<{
-  readonly matches: readonly SymbolDefinitionMatch[];
-  readonly uncertainty: readonly UncertaintyMarker[];
-}> {
-  const reservedTerms = reserveAugmentationSearchTerms(terms, signal, budget);
-  const results = await Promise.all(
-    reservedTerms.map((term) => {
-      throwIfCancelled(signal);
-      return symbolDefinitionMatchesForTerm(term, input, plan, nowMs, signal, requestContext);
-    }),
-  );
+): SymbolFilenameMatches {
   const matches: SymbolDefinitionMatch[] = [];
-  const uncertainty: UncertaintyMarker[] = [];
-  for (const result of results) {
-    throwIfCancelled(signal);
-    matches.push(...result.matches);
-    uncertainty.push(...result.uncertainty);
+  for (const atom of result.atoms) {
+    for (const term of terms) {
+      if (isSymbolDefinitionPath(atom.scopePath, term)) {
+        matches.push({ atom, term, priority: symbolDefinitionPriority(atom.scopePath, term) });
+      }
+    }
   }
-  return { matches, uncertainty };
+  const marker = symbolCoverageIncomplete(terms.join(", "), result.coverage, nowMs);
+  return { terms, matches, uncertainty: marker === undefined ? [] : [marker] };
+}
+
+async function collectFilenameMatches(
+  inputs: DeterministicContextInputs,
+  requestContext: StructuralAdapterRequestContext,
+): Promise<{
+  readonly symbols: SymbolFilenameMatches;
+  readonly documents: DeterministicContextEvidence;
+}> {
+  const targets = filenameSearchTargets(inputs);
+  const results = await requestContext.findFilesBatch(
+    targets.map((target) => target.request),
+    {
+      signal: inputs.signal,
+      searchHints: { retrievalIntent: inputs.plan.retrievalIntent },
+    },
+  );
+  let symbols: SymbolFilenameMatches = { terms: [], matches: [], uncertainty: [] };
+  let documents: DeterministicContextEvidence = { atoms: [], uncertainty: [] };
+  for (const [index, target] of targets.entries()) {
+    const result = results[index];
+    if (result === undefined) throw new TypeError("Missing filename search result.");
+    if (target.kind === "symbol")
+      symbols = symbolFilenameMatches(target.terms, result, inputs.nowMs);
+    else {
+      const marker = documentReferenceCoverageMarker(
+        target.terms.join(", "),
+        result.coverage,
+        inputs.nowMs,
+      );
+      documents = { atoms: result.atoms, uncertainty: marker === undefined ? [] : [marker] };
+    }
+  }
+  return { symbols, documents };
 }
 
 function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: EvidenceAtom): void {
@@ -3048,6 +4340,7 @@ function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: Evidence
 }
 
 interface PrioritizedSymbolInputs {
+  readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly input: OrchestratorInput;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
@@ -3064,18 +4357,22 @@ interface SymbolLineAtomTarget {
   readonly atoms: EvidenceAtom[];
   readonly seen: Set<string>;
   readonly control: SymbolLineScanControl;
+  readonly lookup: SymbolLineLookupResult | undefined;
+  readonly verifiedTerms: Set<string>;
+  readonly observedTerms: Set<string>;
 }
 
 function pushSymbolLineAtom(
   inputs: PrioritizedSymbolInputs,
   target: SymbolLineAtomTarget,
 ): boolean {
-  const { match, atoms, seen, control } = target;
+  const { match, atoms, seen, control, lookup } = target;
   const { atom, term } = match;
-  const lookup = firstSymbolLine(inputs.searchScope, inputs.fs, atom.scopePath, term, control);
-  if (lookup.lineNumber === undefined) {
-    return lookup.deadlineReached;
+  if (lookup?.lineNumber === undefined) {
+    return lookup?.deadlineReached === true || symbolLineDeadlineReached(control);
   }
+  target.observedTerms.add(term);
+  if (lookup.definitionMatch === true) target.verifiedTerms.add(term);
   pushUniqueAtom(
     atoms,
     seen,
@@ -3085,20 +4382,67 @@ function pushSymbolLineAtom(
       lookup.lineNumber,
       atom.provenance.queryFingerprint,
       inputs.nowMs,
+      lookup.definitionMatch === true,
     ),
   );
   return false;
 }
 
-function collectPrioritizedSymbolAtoms(
+function orderSymbolMatchesForTerms(
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+): readonly SymbolDefinitionMatch[] {
+  const sorted = [...matches].sort(compareSymbolMatches);
+  const firstPerTerm = new Set<SymbolDefinitionMatch>();
+  for (const term of terms) {
+    const match = sorted.find((entry) => entry.term === term);
+    if (match !== undefined) firstPerTerm.add(match);
+  }
+  return [...firstPerTerm, ...sorted.filter((match) => !firstPerTerm.has(match))];
+}
+
+function withLexicalSymbolCandidates(
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+  lexicalAtoms: readonly EvidenceAtom[],
+): readonly SymbolDefinitionMatch[] {
+  const combined = new Map(
+    matches.map((match) => [`${match.atom.scopePath}\0${match.term}`, match]),
+  );
+  for (const atom of lexicalAtoms) {
+    for (const term of terms) {
+      const key = `${atom.scopePath}\0${term}`;
+      if (!combined.has(key))
+        combined.set(key, { atom, term, priority: symbolDefinitionPriority(atom.scopePath, term) });
+    }
+  }
+  return [...combined.values()];
+}
+
+function scheduledSymbolMatches(
   inputs: PrioritizedSymbolInputs,
   matches: readonly SymbolDefinitionMatch[],
   terms: readonly string[],
-): SymbolDiscoveryResult {
+  lookups: ReadonlyMap<string, ReadonlyMap<string, SymbolLineLookupResult>>,
+): AsyncGenerator<SymbolDefinitionMatch> {
+  return iterateSequentialResults(orderSymbolMatchesForTerms(matches, terms), (candidate) =>
+    lookups.has(candidate.atom.scopePath)
+      ? Promise.resolve(candidate)
+      : groundedSchedulingYield(inputs.signal).then(() => candidate),
+  );
+}
+
+async function collectPrioritizedSymbolAtoms(
+  inputs: PrioritizedSymbolInputs,
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+): Promise<SymbolDiscoveryResult> {
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
-  let remainingLineReads = MAX_SYMBOL_LINE_READS;
-  let overflowCount = 0;
+  const verifiedTerms = new Set<string>();
+  const observedTerms = new Set<string>();
+  const lookups = new Map<string, ReadonlyMap<string, SymbolLineLookupResult>>();
+  let complete = true;
   let deadlineSkippedCount = 0;
   let lineDeadlineReached = false;
   const control: SymbolLineScanControl = {
@@ -3106,25 +4450,57 @@ function collectPrioritizedSymbolAtoms(
     nowMs: inputs.nowMs,
     deadlineMs: inputs.deadlineAtMs,
   };
-  for (const match of [...matches].sort(compareSymbolMatches)) {
+  for await (const match of scheduledSymbolMatches(inputs, matches, terms, lookups)) {
     throwIfCancelled(inputs.signal);
     pushUniqueAtom(atoms, seen, match.atom);
     if (lineDeadlineReached) {
       deadlineSkippedCount += 1;
-    } else if (remainingLineReads <= 0) {
-      overflowCount += 1;
     } else {
-      remainingLineReads -= 1;
-      lineDeadlineReached = pushSymbolLineAtom(inputs, { match, atoms, seen, control });
+      const fileLookups = cachedSymbolLines(inputs, match.atom.scopePath, terms, control, lookups);
+      complete &&= fileLookups.size === terms.length;
+      lineDeadlineReached = pushSymbolLineAtom(inputs, {
+        match,
+        atoms,
+        seen,
+        control,
+        lookup: fileLookups.get(match.term),
+        verifiedTerms,
+        observedTerms,
+      });
       if (lineDeadlineReached) deadlineSkippedCount += 1;
     }
   }
   return {
     atoms,
-    uncertainty: [
-      symbolLineReadOverflow(overflowCount, terms, inputs.nowMs),
-      symbolLineDeadlineMarker(deadlineSkippedCount, inputs.nowMs),
-    ].filter((marker): marker is UncertaintyMarker => marker !== undefined),
+    verifiedTerms,
+    observedTerms,
+    complete: complete && !lineDeadlineReached,
+    uncertainty: [symbolLineDeadlineMarker(deadlineSkippedCount, inputs.nowMs)].filter(
+      (marker): marker is UncertaintyMarker => marker !== undefined,
+    ),
+  };
+}
+
+function cachedSymbolLines(
+  inputs: PrioritizedSymbolInputs,
+  scopePath: string,
+  terms: readonly string[],
+  control: SymbolLineScanControl,
+  cache: Map<string, ReadonlyMap<string, SymbolLineLookupResult>>,
+): ReadonlyMap<string, SymbolLineLookupResult> {
+  const existing = cache.get(scopePath);
+  if (existing !== undefined) return existing;
+  const lines = symbolLinesForPath(inputs, scopePath, terms, control);
+  cache.set(scopePath, lines);
+  return lines;
+}
+
+function deterministicEvidenceObservers(
+  args: Pick<AssembleGroundedPackInputs, "recordMetadataUnavailable" | "recordSymbolReadFailure">,
+): Pick<DeterministicContextInputs, "recordMetadataUnavailable" | "recordSymbolReadFailure"> {
+  return {
+    recordMetadataUnavailable: args.recordMetadataUnavailable,
+    recordSymbolReadFailure: args.recordSymbolReadFailure,
   };
 }
 
@@ -3132,36 +4508,120 @@ async function symbolFileAtoms(
   inputs: DeterministicContextInputs,
   requestContext: StructuralAdapterRequestContext,
 ): Promise<SymbolDiscoveryResult> {
-  const { input, plan, searchScope, fs, nowMs, signal, deadlineAtMs, budget } = inputs;
-  const terms = symbolFileAnchorTerms(plan);
-  if (terms.length === 0) {
-    return { atoms: [], uncertainty: [] };
-  }
-  const collected = await collectSymbolDefinitionMatches(
-    terms,
-    input,
-    plan,
-    nowMs,
-    signal,
-    requestContext,
-    budget,
-  );
-  const prioritized = collectPrioritizedSymbolAtoms(
-    {
-      input,
-      searchScope,
-      fs,
-      nowMs,
-      signal,
-      deadlineAtMs,
-    },
-    collected.matches,
-    terms,
+  const { input, searchScope, fs, nowMs, signal, deadlineAtMs, recordSymbolReadFailure } = inputs;
+  // Both requested filename families share discovery, including the early declaration phase.
+  // Each remains a separately charged query with its own retention and coverage.
+  const { symbols, documents } = await collectFilenameMatches(inputs, requestContext);
+  const prioritized = await collectPrioritizedSymbolAtoms(
+    { input, searchScope, fs, nowMs, signal, deadlineAtMs, recordSymbolReadFailure },
+    withLexicalSymbolCandidates(symbols.matches, symbols.terms, inputs.lexicalAtoms ?? []),
+    symbols.terms,
   );
   return {
-    atoms: prioritized.atoms,
-    uncertainty: [...collected.uncertainty, ...prioritized.uncertainty],
+    ...prioritized,
+    atoms: [...prioritized.atoms, ...documents.atoms],
+    uncertainty: [...symbols.uncertainty, ...prioritized.uncertainty, ...documents.uncertainty],
   };
+}
+
+interface DefinitionDiscoveryExecution {
+  readonly evidence: SymbolDiscoveryResult;
+  readonly governor: GovernorState;
+  readonly verified: boolean;
+}
+
+function requiredDeclarationTargets(
+  query: RetrievalQuery,
+  decision: QueryTargetDecision,
+): ReadonlySet<string> {
+  const original = extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors;
+  const required = new Set(
+    [...decision.targets, ...original]
+      .filter((anchor) => anchor.kind === "quoted" || anchor.weight >= 0.9)
+      .map((anchor) => anchor.term),
+  );
+  for (const token of query.text.matchAll(/[\p{L}\p{N}_$.-]+/gu)) {
+    const term = token[0].toLowerCase();
+    const anchor = extractAnchors({ text: token[0], maxAnchors: 1 }).anchors[0];
+    if (anchor?.kind === "identifier" && anchor.weight >= 0.85 && anchor.term === term)
+      required.add(term);
+  }
+  return required;
+}
+
+function verifiedDefinitionDiscovery(
+  evidence: SymbolDiscoveryResult,
+  query: RetrievalQuery,
+  decision: QueryTargetDecision,
+): boolean {
+  const verified = evidence.verifiedTerms ?? new Set<string>();
+  return (
+    evidence.complete === true &&
+    evidence.uncertainty.length === 0 &&
+    verified.size > 0 &&
+    [...requiredDeclarationTargets(query, decision)].every((term) => verified.has(term)) &&
+    [...(evidence.observedTerms ?? [])].every((term) => verified.has(term))
+  );
+}
+
+function finishDefinitionDiscovery(
+  args: AssembleGroundedPackInputs,
+  evidence: SymbolDiscoveryResult,
+  result: AugmentationBudgetResult,
+): DefinitionDiscoveryExecution {
+  return {
+    evidence:
+      result.marker === undefined
+        ? evidence
+        : { ...evidence, uncertainty: [...evidence.uncertainty, result.marker] },
+    governor: result.governor,
+    verified:
+      result.marker === undefined &&
+      verifiedDefinitionDiscovery(
+        evidence,
+        args.input.query,
+        args.plan.targetDecision ?? resolveQueryTargetDecision(args.input.query, args.plan.anchors),
+      ),
+  };
+}
+
+async function discoverDefinitionsBeforeGraphs(
+  args: AssembleGroundedPackInputs,
+): Promise<DefinitionDiscoveryExecution> {
+  const {
+    input,
+    plan,
+    rings,
+    searchScope,
+    fs,
+    metadataFs,
+    nowMs,
+    structuralContexts,
+    deadlineAtMs,
+    deps,
+  } = args;
+  const budget = createAugmentationBudgetMeter(plan, rings.governor, nowMs, deadlineAtMs);
+  const certifiedPaths = primaryContentPaths(rings);
+  const evidence = await symbolFileAtoms(
+    {
+      ...deterministicEvidenceObservers(args),
+      input,
+      plan,
+      searchScope,
+      fs,
+      metadataFs,
+      nowMs,
+      structuralContexts,
+      deadlineAtMs,
+      budget,
+      signal: deps.signal,
+      lexicalAtoms: rings.atoms.filter(
+        (atom) => certifiedPaths.has(atom.scopePath) && atom.provenance.tool === "repo.searchText",
+      ),
+    },
+    structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS),
+  );
+  return finishDefinitionDiscovery(args, evidence, budget.finish(rings.governor));
 }
 
 function selectedFileAtom(
@@ -3208,7 +4668,7 @@ function fileExistsInSearchScope(
     searchScope,
     fs,
     parentScopePath,
-    MAX_WORKSPACE_MANIFESTS,
+    PROJECT_METADATA_FILENAMES.length,
     existsCache,
   );
   const entry = directory.entries.find((candidate) => candidate.name === entryName);
@@ -3263,18 +4723,23 @@ function containedPathIsSafeRegularFile(
 interface FileExistenceCache {
   readonly files: Map<string, boolean>;
   readonly directories: Map<string, BoundedDirectoryRead>;
-  readonly truncatedDirectories: Set<string>;
-  readonly unavailableDirectories: Set<string>;
+  unavailableDirectoryInspections: number;
   readonly metadataCoverageIssues: Map<MetadataCoverageIssue, number>;
+  readonly metadataDirectories: Set<string>;
+  readonly metadataWildcardBases: Set<string>;
+  readonly metadataScopePaths: ReadonlySet<string> | undefined;
+  metadataRetention?: MetadataRetention;
 }
 
-function createFileExistenceCache(): FileExistenceCache {
+function createFileExistenceCache(scopePaths?: readonly string[]): FileExistenceCache {
   return {
     files: new Map(),
     directories: new Map(),
-    truncatedDirectories: new Set(),
-    unavailableDirectories: new Set(),
+    unavailableDirectoryInspections: 0,
     metadataCoverageIssues: new Map(),
+    metadataDirectories: new Set(),
+    metadataWildcardBases: new Set(),
+    metadataScopePaths: scopePaths === undefined ? undefined : new Set(scopePaths),
   };
 }
 
@@ -3295,8 +4760,6 @@ function cachedDirectoryEntries(
   if (cached !== undefined) return cached;
   const read = safeReadDir(searchScope, fs, scopePath, maxEntries);
   existsCache?.directories.set(cacheKey, read);
-  if (read.status === "truncated") existsCache?.truncatedDirectories.add(scopePath);
-  if (read.status === "unavailable") existsCache?.unavailableDirectories.add(scopePath);
   return read;
 }
 
@@ -3357,38 +4820,26 @@ function acceptInjectionScopePath(scopePath: string, seen: Set<string>): boolean
   return true;
 }
 
-// Bound on glob-manifest atoms injected per metadata root from a single directory listing (M4,
-// risk #1). The exact-name loop above handles fixed basenames; this catches GLOB manifests at the
-// root/scope dir (e.g. *.csproj, *.tf) that have no fixed name. Deny-checked + deduped + capped.
-const MAX_ROOT_GLOB_MANIFESTS = 16;
-
-// Bounded glob-manifest sweep of a single directory: returns the accepted (deduped, deny-clean,
-// shape-valid) scope paths, capped at MAX_ROOT_GLOB_MANIFESTS. Mutates `seen` via the gate.
-function rootGlobManifestPaths(
+async function rootGlobManifestPaths(
   root: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   seen: Set<string>,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
+): Promise<readonly string[]> {
   if (!metadataTraversalCanContinue(control)) return [];
-  const paths: string[] = [];
-  for (const scopePath of canonicalManifestScopePathsInDir(
+  const paths = await canonicalManifestScopePathsInDir(
     root,
     searchScope,
     fs,
-    MAX_ROOT_GLOB_MANIFESTS,
+    maxResults,
+    control,
     existsCache,
-  )) {
-    if (paths.length >= MAX_ROOT_GLOB_MANIFESTS) {
-      break;
-    }
-    if (acceptInjectionScopePath(scopePath, seen)) {
-      paths.push(scopePath);
-    }
-  }
-  return paths;
+    { cacheAbsentNames: true },
+  );
+  return paths.filter((path) => acceptInjectionScopePath(path, seen));
 }
 
 // The request-scoped input set both deterministic metadata passes read, built once per request so
@@ -3403,6 +4854,7 @@ interface MetadataDiscoveryInputs {
   readonly queryFingerprint: string;
   readonly control: MetadataTraversalControl;
   readonly existsCache: FileExistenceCache;
+  readonly maxResults: number;
 }
 
 // `seen` is added per pass, not shared: each pass de-duplicates injection scope paths within its
@@ -3411,45 +4863,72 @@ interface MetadataAtomCollectionContext extends MetadataDiscoveryInputs {
   readonly seen: Set<string>;
 }
 
-function projectMetadataRootAtoms(
+async function projectMetadataRootAtoms(
   root: string,
   context: MetadataAtomCollectionContext,
-): readonly EvidenceAtom[] {
-  const { input, searchScope, fs, nowMs, queryFingerprint, control, existsCache, seen } = context;
+): Promise<readonly EvidenceAtom[]> {
+  const {
+    input,
+    searchScope,
+    fs,
+    nowMs,
+    queryFingerprint,
+    control,
+    existsCache,
+    seen,
+    maxResults,
+  } = context;
   const atoms: EvidenceAtom[] = [];
-  for (const filename of PROJECT_METADATA_FILENAMES) {
-    if (!metadataTraversalCanContinue(control)) break;
-    const scopePath = joinScopePath(root, filename);
-    if (
-      acceptInjectionScopePath(scopePath, seen) &&
-      fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
-    ) {
-      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
-    }
-  }
-  for (const scopePath of rootGlobManifestPaths(
+  const globPaths = await rootGlobManifestPaths(
     root,
     searchScope,
     fs,
     seen,
     control,
+    maxResults,
     existsCache,
+  );
+  for (const filename of PROJECT_METADATA_FILENAMES) {
+    if (!metadataTraversalCanContinue(control)) break;
+    const scopePath = joinScopePath(root, filename);
+    if (
+      isAdmittedMetadataPath(scopePath, searchScope, existsCache) &&
+      (globPaths.includes(scopePath) || acceptInjectionScopePath(scopePath, seen)) &&
+      fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
+    ) {
+      existsCache.metadataRetention?.observeRootFallback(scopePath);
+      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+    }
+  }
+  for (const scopePath of globPaths.filter(
+    (path) => !atoms.some((atom) => atom.scopePath === path),
   )) {
     atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
   }
   return atoms;
 }
 
-function workspacePackageMetadataAtoms(
+async function workspacePackageMetadataAtoms(
   context: MetadataAtomCollectionContext,
-): readonly EvidenceAtom[] {
-  const { input, searchScope, fs, nowMs, queryFingerprint, control, existsCache, seen } = context;
+): Promise<readonly EvidenceAtom[]> {
+  const {
+    input,
+    searchScope,
+    fs,
+    nowMs,
+    queryFingerprint,
+    control,
+    existsCache,
+    seen,
+    maxResults,
+  } = context;
   const atoms: EvidenceAtom[] = [];
-  for (const scopePath of workspacePackageManifestPaths(
+  for (const scopePath of await workspacePackageManifestPaths(
     input,
     searchScope,
     fs,
     control,
+    maxResults,
     existsCache,
   )) {
     if (!metadataTraversalCanContinue(control)) break;
@@ -3460,19 +4939,32 @@ function workspacePackageMetadataAtoms(
   return atoms;
 }
 
-function projectMetadataAtoms(inputs: MetadataDiscoveryInputs): readonly EvidenceAtom[] {
+async function projectMetadataAtoms(
+  inputs: MetadataDiscoveryInputs,
+): Promise<readonly EvidenceAtom[]> {
   const { input, intent, control } = inputs;
   if (!wantsProjectMetadata(input, intent) || !metadataTraversalCanContinue(control)) {
     return [];
   }
-  const atoms: EvidenceAtom[] = [];
   const context: MetadataAtomCollectionContext = { ...inputs, seen: new Set<string>() };
-  for (const root of metadataRootsForScope(input.scope)) {
+  const retained = new MetadataRetention(
+    inputs.maxResults,
+    MAX_OMITTED_CONTEXT_ENTRIES,
+    metadataRootsForScope(input.scope),
+    PROJECT_METADATA_FILENAMES,
+  );
+  inputs.existsCache.metadataRetention = retained;
+  for await (const _atoms of iterateSequentialResults(metadataRootsForScope(input.scope), (root) =>
+    metadataTraversalCanContinue(control)
+      ? projectMetadataRootAtoms(root, context)
+      : Promise.resolve([]),
+  )) {
     if (!metadataTraversalCanContinue(control)) break;
-    atoms.push(...projectMetadataRootAtoms(root, context));
   }
-  atoms.push(...workspacePackageMetadataAtoms(context));
-  return atoms;
+  await workspacePackageMetadataAtoms(context);
+  return retained
+    .retainedPaths()
+    .map((path) => metadataAtom(input.scope, path, inputs.queryFingerprint, inputs.nowMs));
 }
 
 function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly EvidenceAtom[] {
@@ -3499,16 +4991,21 @@ function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly Evid
 }
 
 interface DeterministicContextEvidence {
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
+  readonly omitted?: readonly OmittedContextEntry[];
 }
 
 function mergeDeterministicEvidence(
   sources: readonly DeterministicContextEvidence[],
 ): DeterministicContextEvidence {
   return {
+    metadataRetention: sources.find((source) => source.metadataRetention !== undefined)
+      ?.metadataRetention,
     atoms: sources.flatMap((source) => source.atoms),
     uncertainty: sources.flatMap((source) => source.uncertainty),
+    omitted: sources.flatMap((source) => source.omitted ?? []),
   };
 }
 
@@ -3517,22 +5014,12 @@ function metadataDirectoryCoverageUncertainty(
   nowMs: number,
 ): readonly UncertaintyMarker[] {
   const markers: UncertaintyMarker[] = [];
-  if (cache.truncatedDirectories.size > 0) {
-    markers.push({
-      kind: "scope-incomplete",
-      claim:
-        `project metadata discovery was truncated by bounded directory reads in ` +
-        `${String(cache.truncatedDirectories.size)} directory path(s); relevant manifests may be missing`,
-      impactedAtomIds: [],
-      emittedAtMs: nowMs,
-    });
-  }
-  if (cache.unavailableDirectories.size > 0) {
+  if (cache.unavailableDirectoryInspections > 0) {
     markers.push({
       kind: "scope-incomplete",
       claim:
         `project metadata discovery could not enumerate ` +
-        `${String(cache.unavailableDirectories.size)} directory path(s); ` +
+        `${String(cache.unavailableDirectoryInspections)} directory inspection(s); ` +
         `exact manifest probes were used but glob manifests may be missing`,
       impactedAtomIds: [],
       emittedAtMs: nowMs,
@@ -3562,17 +5049,21 @@ function metadataManifestCoverageUncertainty(
   ];
 }
 
-function deterministicMetadataEvidence(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  deadlineAtMs: number,
-): DeterministicContextEvidence {
-  const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs };
-  const existsCache = createFileExistenceCache();
+async function deterministicMetadataEvidence(
+  inputs: DeterministicContextInputs,
+): Promise<DeterministicContextEvidence> {
+  const {
+    input,
+    plan,
+    searchScope,
+    metadataFs: fs,
+    nowMs,
+    signal,
+    deadlineAtMs,
+    recordMetadataUnavailable: recordUnavailable,
+  } = inputs;
+  const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
+  const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
     input,
     intent: plan.retrievalIntent,
@@ -3582,20 +5073,53 @@ function deterministicMetadataEvidence(
     queryFingerprint: projectMetadataQueryFingerprint(input.query),
     control,
     existsCache,
+    maxResults: plan.budget.filesReadMax ?? input.query.maxResults,
   };
-  const atoms = [...projectMetadataAtoms(discovery), ...repositoryOverviewAtoms(discovery)];
+  const atoms = [...(await projectMetadataAtoms(discovery)), ...repositoryOverviewAtoms(discovery)];
   const emittedAtMs = nowMs();
   return {
     atoms,
+    omitted: metadataRetentionOmissions(existsCache, emittedAtMs),
+    metadataRetention: existsCache.metadataRetention?.observation(),
     uncertainty: [
       ...metadataDirectoryCoverageUncertainty(existsCache, emittedAtMs),
       ...metadataManifestCoverageUncertainty(existsCache, emittedAtMs),
+      ...metadataRetentionUncertainty(existsCache, emittedAtMs),
     ],
   };
 }
 
+function metadataRetentionOmissions(
+  cache: FileExistenceCache,
+  nowMs: number,
+): readonly OmittedContextEntry[] {
+  return (cache.metadataRetention?.omittedPaths() ?? []).map((scopePath) => ({
+    scopePath,
+    reason: "budget-exhausted",
+    omittedAtMs: nowMs,
+  }));
+}
+
+function metadataRetentionUncertainty(
+  cache: FileExistenceCache,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  const count = cache.metadataRetention?.discardedCount ?? 0;
+  return count === 0
+    ? []
+    : [
+        {
+          kind: "budget-clipped",
+          claim:
+            `project metadata retention omitted ${String(count)} observed manifest candidates; ` +
+            `canonical omission paths are bounded representative details, not an unfinished traversal`,
+          impactedAtomIds: [],
+          emittedAtMs: nowMs,
+        },
+      ];
+}
+
 type ParallelDeterministicEvidence = readonly [
-  DeterministicContextEvidence,
   DeterministicContextEvidence,
   DeterministicContextEvidence,
 ];
@@ -3604,6 +5128,11 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
+  readonly recordSymbolReadFailure: SymbolReadFailureObserver;
+  readonly recordMetadataUnavailable: MetadataFailureObserver;
+  readonly lexicalAtoms?: readonly EvidenceAtom[];
+  readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
+  readonly skipOptionalTrace?: boolean;
   readonly input: OrchestratorInput;
   readonly plan: ExplorationPlan;
   readonly searchScope: SearchScope;
@@ -3624,45 +5153,39 @@ async function collectParallelDeterministicEvidence(
   fileSearchContext: StructuralAdapterRequestContext,
   traceContext: StructuralAdapterRequestContext,
 ): Promise<ParallelDeterministicEvidence> {
-  const { input, plan, searchScope, fs, nowMs, signal, deadlineAtMs, budget } = inputs;
-  return Promise.all([
-    collectFollowSymbolTraceEvidence({
-      scope: input.scope,
-      query: input.query,
-      anchors: plan.anchors,
-      retrievalIntent: plan.retrievalIntent,
-      searchScope,
-      fs,
-      nowMs,
-      signal,
-      requestContext: traceContext,
-      deadlineAtMs,
-      tryReserveSearchCall: budget.tryReserveSearchCall,
-    }),
-    symbolFileAtoms(inputs, fileSearchContext),
-    documentReferenceAtoms(input, plan, nowMs, signal, fileSearchContext, budget),
-  ]);
+  const controller = new AbortController();
+  const signal = parallelStageSignal(controller, inputs.signal);
+  const { input, plan, searchScope, fs, nowMs, deadlineAtMs, budget } = inputs;
+  const pending = [
+    inputs.skipOptionalTrace === true
+      ? Promise.resolve({ atoms: [], uncertainty: [] })
+      : collectFollowSymbolTraceEvidence({
+          scope: input.scope,
+          query: input.query,
+          anchors: plan.anchors,
+          retrievalIntent: plan.retrievalIntent,
+          searchScope,
+          fs,
+          nowMs,
+          signal,
+          requestContext: traceContext,
+          deadlineAtMs,
+          tryReserveSearchCall: budget.tryReserveSearchCall,
+        }),
+    inputs.symbolDiscovery === undefined
+      ? symbolFileAtoms({ ...inputs, signal }, fileSearchContext)
+      : Promise.resolve({ atoms: [], uncertainty: [] }),
+  ] as const;
+  return settleParallelStage(Promise.all(pending), pending, controller);
 }
 
-// Project-metadata discovery (package.json/pom.xml et al.) intentionally reads directly against
-// `metadataFs` — the request's plain, unwrapped fs — rather than the ring-retrieval discovery cache
-// `deterministicContextEvidence` otherwise shares: it deliberately re-probes a directory at
-// escalating small caps to detect and report a genuine enumeration failure (#3347 P1), and it is
-// not bound to `structuralContexts`, so it never needs to match that pool's fs identity for
-// assertGraphBinding.
-function deterministicMetadataAtoms(
+// Project metadata streams the admitted filesystem directly, retaining only the accepted evidence
+// budget. It does not depend on structural inventories or their filesystem identity binding.
+async function deterministicMetadataAtoms(
   inputs: DeterministicContextInputs,
-): DeterministicContextEvidence {
+): Promise<DeterministicContextEvidence> {
   return inputs.budget.canContinue()
-    ? deterministicMetadataEvidence(
-        inputs.input,
-        inputs.plan,
-        inputs.searchScope,
-        inputs.metadataFs,
-        inputs.nowMs,
-        inputs.signal,
-        inputs.deadlineAtMs,
-      )
+    ? deterministicMetadataEvidence(inputs)
     : { atoms: [], uncertainty: [] };
 }
 
@@ -3671,28 +5194,34 @@ async function deterministicContextEvidence(
 ): Promise<DeterministicContextEvidence> {
   const fileSearchContext = inputs.structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS);
   const traceContext = inputs.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
-  const [traceEvidence, symbolDiscovery, referencedDocuments] =
-    await collectParallelDeterministicEvidence(inputs, fileSearchContext, traceContext);
-  const metadata = deterministicMetadataAtoms(inputs);
-  return mergeDeterministicEvidence([
-    symbolDiscovery,
-    traceEvidence,
-    referencedDocuments,
-    metadata,
-  ]);
+  const [traceEvidence, filenameDiscovery] = await collectParallelDeterministicEvidence(
+    inputs,
+    fileSearchContext,
+    traceContext,
+  );
+  const metadata = await deterministicMetadataAtoms(inputs);
+  return mergeDeterministicEvidence([filenameDiscovery, traceEvidence, metadata]);
 }
 
 async function withDeterministicContextAtoms(
   rings: RingRunSummary,
   inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
+  markAugmentationUsed(rings);
   const deterministic = await deterministicContextEvidence(inputs);
-  if (deterministic.atoms.length === 0 && deterministic.uncertainty.length === 0) {
+  if (
+    deterministic.atoms.length === 0 &&
+    deterministic.uncertainty.length === 0 &&
+    (deterministic.omitted?.length ?? 0) === 0 &&
+    deterministic.metadataRetention === undefined
+  ) {
     return rings;
   }
   return {
     ...rings,
+    metadataRetention: deterministic.metadataRetention,
     atoms: [...rings.atoms, ...deterministic.atoms],
+    omitted: [...rings.omitted, ...(deterministic.omitted ?? [])],
     uncertainty: [...rings.uncertainty, ...deterministic.uncertainty],
   };
 }
@@ -3782,6 +5311,35 @@ function explicitlyTargetsLockfile(
   return queryTerms(queryText, anchors).some((term) => path.includes(term) || name === term);
 }
 
+function orderForDistinctEvidencePaths(
+  kept: readonly CandidateFile[],
+  anchors: readonly SearchAnchor[],
+  priorityPaths: Set<string>,
+): readonly CandidateFile[] {
+  const selected = new Set(kept.slice(0, 1));
+  for (const anchor of anchors) {
+    if (anchor.kind === "literal" || anchor.weight < 0.7) continue;
+    const term = anchor.term.toLowerCase();
+    const candidate =
+      [...selected].find((entry) => entry.scopePath.toLowerCase().includes(term)) ??
+      kept.find((entry) => entry.scopePath.toLowerCase().includes(term));
+    if (candidate !== undefined) {
+      selected.add(candidate);
+      priorityPaths.add(candidate.scopePath);
+    }
+  }
+  const names = new Set(
+    [...selected].map((candidate) => basename(candidate.scopePath).toLowerCase()),
+  );
+  for (const candidate of kept) {
+    const name = basename(candidate.scopePath).toLowerCase();
+    if (names.has(name)) continue;
+    names.add(name);
+    selected.add(candidate);
+  }
+  return [...selected, ...kept.filter((candidate) => !selected.has(candidate))];
+}
+
 function refineCandidateOrdering(
   kept: readonly CandidateFile[],
   omitted: readonly OmittedContextEntry[],
@@ -3815,25 +5373,51 @@ function refineCandidateOrdering(
     return { kept, omitted };
   }
 
-  const nextOmitted = [...omitted];
-  for (const candidate of runtimeArtifacts) {
-    nextOmitted.push({
+  const nextOmitted = runtimeArtifactOmissions(omitted, runtimeArtifacts, nowMs);
+  const priorityPaths = new Set<string>();
+  const useSearchOrder = candidateOrderingUsesSearchOrder(query, anchors, diagnostics);
+  const orderedPreferred = useSearchOrder
+    ? orderPreferredCandidates(preferred, diagnostics, priorityPaths)
+    : preferred;
+  return {
+    kept: [
+      ...orderForDistinctEvidencePaths(orderedPreferred, anchors, priorityPaths),
+      ...lockfiles,
+    ],
+    omitted: nextOmitted,
+    priorityPaths,
+  };
+}
+
+function runtimeArtifactOmissions(
+  omitted: readonly OmittedContextEntry[],
+  artifacts: readonly CandidateFile[],
+  nowMs: number,
+): readonly OmittedContextEntry[] {
+  return [
+    ...omitted,
+    ...artifacts.map((candidate): OmittedContextEntry => ({
       scopePath: candidate.scopePath,
       reason: "low-relevance",
       omittedAtMs: nowMs,
-    });
-  }
-  nextOmitted.sort(compareByScopePath);
-  const useSearchOrder =
-    queryTargetsRouteImplementation(queryText) ||
-    directDefinitionSymbol(query, anchors) !== undefined;
-  const orderedPreferred = useSearchOrder
-    ? orderPreferredCandidates(preferred, diagnostics)
-    : preferred;
-  return {
-    kept: [...orderedPreferred, ...lockfiles],
-    omitted: nextOmitted,
-  };
+    })),
+  ].sort(compareByScopePath);
+}
+
+function candidateOrderingUsesSearchOrder(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  return (
+    queryTargetsRouteImplementation(query.text) ||
+    directDefinitionSymbol(query, anchors) !== undefined ||
+    (isOrdinaryDocumentLookup(query, false, diagnostics) &&
+      anchors.some(
+        (anchor) =>
+          (anchor.kind === "identifier" || anchor.kind === "quoted") && anchor.weight >= 0.85,
+      ))
+  );
 }
 
 const ROUTE_METHOD_QUERY_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
@@ -3852,6 +5436,7 @@ function queryTargetsRouteImplementation(queryText: string): boolean {
 function orderPreferredCandidates(
   kept: readonly CandidateFile[],
   diagnostics: ContextPackDiagnostics | undefined,
+  priorityPaths: Set<string>,
 ): readonly CandidateFile[] {
   const ranked = diagnostics?.rankedCandidates ?? [];
   if (ranked.length === 0 || kept.length <= 1) {
@@ -3862,6 +5447,7 @@ function orderPreferredCandidates(
     .map((candidate) => byPath.get(candidate.scopePath))
     .find((candidate) => candidate !== undefined);
   if (routeCandidate === undefined) return kept;
+  priorityPaths.add(routeCandidate.scopePath);
   return [routeCandidate, ...kept.filter((candidate) => candidate !== routeCandidate)];
 }
 
@@ -3885,7 +5471,7 @@ function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
   if (range === undefined) {
     return DEFAULT_EXCERPT_WINDOW;
   }
-  const isDiscoveredDefinition = atom.provenance.tool === "discovered-symbol-definition";
+  const isDiscoveredDefinition = tracePriority(atom) === 2;
   const addSingleLineContext =
     range.startLine === range.endLine &&
     atom.provenance.kind !== "semantic-search" &&
@@ -3937,21 +5523,30 @@ interface ExcerptWindowStrength {
   readonly score: number;
 }
 
-function windowsOverlap(a: LineWindow, b: LineWindow): boolean {
-  return a.startLine <= b.endLine && b.startLine <= a.endLine;
-}
-
 function mergeWindowsByTracePriority(atomsForPath: readonly EvidenceAtom[]): readonly LineWindow[] {
-  const selected: LineWindow[] = [];
+  let selected: readonly LineWindow[] = [];
   for (const priority of [2, 1, 0]) {
     const windows = mergeLineWindows(
       atomsForPath.filter((atom) => tracePriority(atom) === priority).map(lineWindowForAtom),
     );
-    selected.push(
-      ...windows.filter((window) => !selected.some((kept) => windowsOverlap(kept, window))),
-    );
+    selected = selected
+      .concat(nonOverlappingExcerptWindows(windows, selected))
+      .sort((a, b) => a.startLine - b.startLine);
   }
   return selected;
+}
+
+function nonOverlappingExcerptWindows(
+  windows: readonly LineWindow[],
+  selected: readonly LineWindow[],
+): readonly LineWindow[] {
+  const retained: LineWindow[] = [];
+  let index = 0;
+  for (const window of windows) {
+    while ((selected[index]?.endLine ?? Infinity) < window.startLine) index += 1;
+    if ((selected[index]?.startLine ?? Infinity) > window.endLine) retained.push(window);
+  }
+  return retained;
 }
 
 function strongerExcerptWindow(
@@ -3964,33 +5559,49 @@ function strongerExcerptWindow(
   return candidate.score > current.score ? candidate : current;
 }
 
-function strongestAtomStrengthForWindow(
-  window: LineWindow,
-  atomsForPath: readonly EvidenceAtom[],
-): ExcerptWindowStrength {
-  let strength: ExcerptWindowStrength = { tracePriority: 0, score: 0 };
-  for (const atom of atomsForPath) {
-    if (windowContainsAtom(window, atom)) {
-      strength = strongerExcerptWindow(
-        { tracePriority: tracePriority(atom), score: atom.score },
-        strength,
-      );
-    }
+function windowIndexContainingLine(windows: readonly LineWindow[], line: number): number {
+  let low = 0;
+  let high = windows.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((windows[middle]?.startLine ?? Infinity) <= line) low = middle + 1;
+    else high = middle;
   }
-  return strength;
+  return low - 1;
 }
 
-function compareExcerptWindows(
-  a: LineWindow,
-  b: LineWindow,
-  atomsForPath: readonly EvidenceAtom[],
-): number {
-  const aStrength = strongestAtomStrengthForWindow(a, atomsForPath);
-  const bStrength = strongestAtomStrengthForWindow(b, atomsForPath);
-  const priorityDelta = bStrength.tracePriority - aStrength.tracePriority;
-  if (priorityDelta !== 0) return priorityDelta;
-  const scoreDelta = bStrength.score - aStrength.score;
-  return scoreDelta === 0 ? a.startLine - b.startLine : scoreDelta;
+function rankedExcerptWindows(
+  windows: readonly LineWindow[],
+  atoms: readonly EvidenceAtom[],
+): readonly LineWindow[] {
+  const sorted = [...windows].sort((a, b) => a.startLine - b.startLine);
+  const strengths = sorted.map((): ExcerptWindowStrength => ({ tracePriority: 0, score: 0 }));
+  let unlocated: ExcerptWindowStrength = { tracePriority: 0, score: 0 };
+  for (const atom of atoms) {
+    const strength = { tracePriority: tracePriority(atom), score: atom.score };
+    const range = atom.lineRange;
+    if (range === undefined) {
+      unlocated = strongerExcerptWindow(strength, unlocated);
+      continue;
+    }
+    const index = windowIndexContainingLine(sorted, range.startLine);
+    const window = sorted[index];
+    const current = strengths[index];
+    if (window !== undefined && current !== undefined && windowContainsAtom(window, atom))
+      strengths[index] = strongerExcerptWindow(strength, current);
+  }
+  return sorted
+    .map((window, index) => ({
+      window,
+      strength: strongerExcerptWindow(strengths[index] ?? unlocated, unlocated),
+    }))
+    .sort(
+      (a, b) =>
+        b.strength.tracePriority - a.strength.tracePriority ||
+        b.strength.score - a.strength.score ||
+        a.window.startLine - b.window.startLine,
+    )
+    .map(({ window }) => window);
 }
 
 interface ExcerptWindowSelection {
@@ -4005,9 +5616,7 @@ function excerptLineWindows(
     return { windows: [DEFAULT_EXCERPT_WINDOW], omittedWindowCount: 0 };
   }
   const merged = mergeWindowsByTracePriority(atomsForPath);
-  const selected = [...merged]
-    .sort((a, b) => compareExcerptWindows(a, b, atomsForPath))
-    .slice(0, MAX_EXCERPT_WINDOWS_PER_FILE);
+  const selected = rankedExcerptWindows(merged, atomsForPath);
   return {
     windows: selected,
     omittedWindowCount: Math.max(0, merged.length - selected.length),
@@ -4022,6 +5631,7 @@ function exhaustedDimensions(remainingFiles: number, remainingBytes: number): st
 }
 
 interface ReadPathExcerptWindowsResult {
+  readonly anchoredWindowCount: number;
   readonly windows: readonly ExcerptWindow[];
   readonly bytesConsumed: number;
   readonly omittedWindowCount: number;
@@ -4035,23 +5645,71 @@ interface ReadPathExcerptTaskResult {
   readonly scopePath: string;
   readonly result?: ReadPathExcerptWindowsResult | undefined;
   readonly skippedReason?: ExcerptSkippedReason | undefined;
+  readonly omissionReason?: CandidateOmissionReason | undefined;
 }
 
-function readExcerptWindow(
+function appendReadExcerptWindows(
+  result: ReadExcerptResult,
+  windows: ExcerptWindow[],
+): { readonly bytes: number; readonly truncated: number; readonly anchored: number } {
+  let bytes = 0;
+  let truncated = 0;
+  let anchored = 0;
+  const seen = new Set(windows.map(excerptWindowKey));
+  for (const read of result.windows ?? [result]) {
+    const range = read.atom.lineRange;
+    if (range === undefined) continue;
+    const identity = read.truncated
+      ? connectedContextActivityDigest("keiko.excerpt-window.v1", [
+          String(range.startLine),
+          String(range.endLine),
+          read.content,
+        ])
+      : undefined;
+    const key = excerptWindowKey({ ...range, content: "", identity });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    windows.push({
+      ...range,
+      content: read.content,
+      ...(identity === undefined ? {} : { identity }),
+    });
+    bytes += utf8ByteLength(read.content);
+    truncated += Number(read.truncated);
+    anchored += Number(read.anchoredWindowApplied === true);
+  }
+  return { bytes, truncated, anchored };
+}
+
+function excerptWindowKey(window: ExcerptWindow): string {
+  return JSON.stringify([window.startLine, window.endLine, window.identity ?? null]);
+}
+
+function remainingExcerptWindowBytes(
   scopePath: string,
-  window: LineWindow,
-  maxBytes: number,
+  availableBytes: number,
   inputs: ExcerptInputs,
-): Promise<ReadExcerptResult> {
-  return readExcerpt(
-    inputs.searchScope,
-    { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
-    {
-      fs: inputs.fs,
-      nowMs: inputs.nowMs,
-      deadlineAtMs: inputs.deadlineAtMs,
-      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-    },
+): number {
+  return Math.min(
+    inputs.knownFitFileBytes?.get(scopePath) ?? MAX_EXCERPT_WINDOW_BYTES,
+    availableBytes,
+  );
+}
+
+function qualifiedWholeFileRanges(
+  scopePath: string,
+  windows: readonly LineWindow[],
+  inputs: ExcerptInputs,
+): boolean {
+  if (inputs.knownFitFileBytes?.has(scopePath) !== true) return false;
+  const wholeFile = (inputs.atomsByPath.get(scopePath) ?? []).find(
+    (atom) =>
+      atom.provenance.kind === "file-listing" &&
+      atom.provenance.tool === "repo.findFiles" &&
+      atom.lineRange !== undefined,
+  );
+  return (
+    wholeFile !== undefined && windows.every((window) => windowContainsAtom(window, wholeFile))
   );
 }
 
@@ -4061,83 +5719,94 @@ async function readPathExcerptWindows(
   remainingBytes: number,
 ): Promise<ReadPathExcerptWindowsResult> {
   const windows: ExcerptWindow[] = [];
-  let bytesConsumed = 0;
-  let truncatedWindowCount = 0;
-  let deadlineReached = false;
   const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
-  for (const window of selection.windows) {
-    throwIfCancelled(inputs.signal);
-    if (inputs.nowMs() >= inputs.deadlineAtMs) {
-      deadlineReached = true;
-      break;
-    }
-    const availableBytes = remainingBytes - bytesConsumed;
-    if (availableBytes <= 0) {
-      break;
-    }
-    const maxBytes = Math.min(8192, availableBytes);
-    const result = await readExcerptWindow(scopePath, window, maxBytes, inputs);
-    throwIfCancelled(inputs.signal);
-    if (inputs.nowMs() >= inputs.deadlineAtMs) {
-      // The absolute deadline is authoritative (#3347 P1). A read that only came back after it is
-      // dropped whole — the window is not appended and its bytes are not charged — so a late
-      // completion can neither enter the evidence pack nor spend an excerpt budget the request no
-      // longer has. Recording `deadlineReached` while keeping the content did both.
-      deadlineReached = true;
-      break;
-    }
-    if (result.truncated) {
-      truncatedWindowCount += 1;
-    }
-    const actualRange = result.atom.lineRange;
-    if (actualRange !== undefined) {
-      windows.push({ ...actualRange, content: result.content });
-    }
-    bytesConsumed += utf8ByteLength(result.content);
-  }
+  const containingRange = containingExcerptRange(selection.windows);
+  throwIfCancelled(inputs.signal);
+  if (inputs.nowMs() >= inputs.deadlineAtMs || remainingBytes <= 0)
+    return unreadExcerptWindows(selection, inputs.nowMs() >= inputs.deadlineAtMs);
+  const result = await readExcerpt(
+    inputs.searchScope,
+    {
+      scopePath,
+      ...containingRange,
+      ranges: selection.windows,
+      maxBytes: remainingExcerptWindowBytes(scopePath, remainingBytes, inputs),
+      anchors: qualifiedWholeFileRanges(scopePath, selection.windows, inputs)
+        ? undefined
+        : inputs.anchors,
+      maxTotalBytes: remainingBytes,
+      maxWindows: Math.max(1, remainingBytes),
+    },
+    {
+      fs: inputs.fs,
+      nowMs: inputs.nowMs,
+      deadlineAtMs: inputs.deadlineAtMs,
+      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+    },
+  );
+  throwIfCancelled(inputs.signal);
+  if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
+  const appended = appendReadExcerptWindows(result, windows);
   return {
     windows,
-    bytesConsumed,
-    omittedWindowCount: selection.omittedWindowCount,
-    truncatedWindowCount,
+    bytesConsumed: appended.bytes,
+    truncatedWindowCount: appended.truncated,
+    anchoredWindowCount: appended.anchored,
+    deadlineReached: false,
+    omittedWindowCount: selection.omittedWindowCount + (result.omittedRangeCount ?? 0),
+  };
+}
+
+function containingExcerptRange(windows: readonly LineWindow[]): LineWindow {
+  let startLine = Infinity;
+  let endLine = 1;
+  for (const window of windows) {
+    startLine = Math.min(startLine, window.startLine);
+    endLine = Math.max(endLine, window.endLine);
+  }
+  return { startLine, endLine };
+}
+
+function unreadExcerptWindows(
+  selection: ExcerptWindowSelection,
+  deadlineReached: boolean,
+): ReadPathExcerptWindowsResult {
+  return {
+    windows: [],
+    bytesConsumed: 0,
+    truncatedWindowCount: 0,
+    anchoredWindowCount: 0,
+    omittedWindowCount: selection.omittedWindowCount + selection.windows.length,
     deadlineReached,
   };
 }
 
-function excerptWindowUncertainty(
-  scopePath: string,
-  result: ReadPathExcerptWindowsResult,
-  nowMs: () => number,
-): readonly UncertaintyMarker[] {
-  const markers: UncertaintyMarker[] = [];
-  if (result.omittedWindowCount > 0) {
-    markers.push({
-      kind: "scope-incomplete",
-      claim: `excerpt window limit omitted ${String(result.omittedWindowCount)} additional matching range(s) in ${scopePath}`,
-      impactedAtomIds: [],
-      emittedAtMs: nowMs(),
-    });
-  }
-  if (result.truncatedWindowCount > 0) {
-    markers.push({
+function excerptReadLossSummary(state: ExcerptWaveState, nowMs: () => number): UncertaintyMarker[] {
+  if (
+    state.omittedWindowCount === 0 &&
+    state.truncatedWindowCount === 0 &&
+    state.omitted.length === 0
+  )
+    return [];
+  return [
+    {
       kind: "scope-incomplete",
       claim:
-        `excerpt byte limit truncated ${String(result.truncatedWindowCount)} selected ` +
-        `range(s) in ${scopePath}`,
+        `excerpt read limits omitted ${String(state.omittedWindowCount)} additional matching range(s); ` +
+        `excerpt byte limit truncated ${String(state.truncatedWindowCount)} selected range(s); ` +
+        `${String(state.omitted.length)} files unavailable during excerpt reading`,
       impactedAtomIds: [],
       emittedAtMs: nowMs(),
-    });
-  }
-  return markers;
+    },
+  ];
 }
 
-function largeFileExcerptOmitted(scopePath: string, nowMs: () => number): UncertaintyMarker {
-  return {
-    kind: "scope-incomplete",
-    claim: `large file omitted from excerpt evidence because it exceeds the bounded read cap: ${scopePath}`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
+function excerptOmissionReason(reason: string): CandidateOmissionReason {
+  if (reason === "binary") return "binary";
+  if (reason === "timeout" || reason === "aborted") return "budget-exhausted";
+  if (reason === "denied" || reason === "outside-scope") return "outside-scope";
+  if (reason === "ignored") return "ignored";
+  return "tool-unavailable";
 }
 
 function distributeByteBudget(totalBytes: number, slots: number): readonly number[] {
@@ -4162,14 +5831,18 @@ async function readPathExcerptTask(
     // degrade to a skipped excerpt, never crash the whole grounded answer. Other kept files and
     // the rest of the pipeline continue; the file simply contributes no excerpt content.
     if (error instanceof FileTooLargeError) {
-      return { scopePath, skippedReason: "too-large" };
+      return { scopePath, skippedReason: "too-large", omissionReason: "size-exceeded" };
     }
     if (error instanceof RepoSearchUnsupportedFileError) {
       // Preserve the stop reason (#3347 P1): the excerpt facade reports an elapsed-budget stop as
       // `timeout`, and flattening that to `unsupported` erased the only evidence that this file was
       // dropped because the request ran out of time — so no elapsed-budget marker was raised and
       // the completion status reported an unblocked elapsed budget.
-      return { scopePath, skippedReason: error.reason === "timeout" ? "timeout" : "unsupported" };
+      return {
+        scopePath,
+        skippedReason: error.reason === "timeout" ? "timeout" : "unsupported",
+        omissionReason: excerptOmissionReason(error.reason),
+      };
     }
     throw error;
   }
@@ -4182,7 +5855,10 @@ interface RemainingExcerptCapacity {
 
 function remainingExcerptCapacity(inputs: ExcerptInputs): RemainingExcerptCapacity {
   return {
-    files: Math.max(0, inputs.budget.filesReadMax - inputs.initialUsage.filesRead),
+    files: Math.max(
+      0,
+      (inputs.budget.filesReadMax ?? Number.POSITIVE_INFINITY) - inputs.initialUsage.filesRead,
+    ),
     bytes: Math.max(0, inputs.budget.excerptBytesMax - inputs.initialUsage.excerptBytes),
   };
 }
@@ -4197,16 +5873,14 @@ function excerptTaskStoppedByDeadline({
   return result?.deadlineReached === true || skippedReason === "timeout";
 }
 
-async function readKeptExcerpts(
-  keptPaths: readonly string[],
+function stoppedExcerptReads(
   inputs: ExcerptInputs,
-): Promise<ExcerptReadSummary> {
-  const excerpts = new Map<string, readonly ExcerptWindow[]>();
-  const uncertainty: UncertaintyMarker[] = [];
-  const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
+  remainingFiles: number,
+  remainingBytes: number,
+): ExcerptReadSummary | undefined {
   if (inputs.nowMs() >= inputs.deadlineAtMs) {
     return {
-      excerpts,
+      excerpts: new Map(),
       uncertainty: [budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs())],
       elapsedBudgetBlocked: true,
     };
@@ -4214,38 +5888,222 @@ async function readKeptExcerpts(
   if (remainingFiles <= 0 || remainingBytes <= 0) {
     const dimensions = exhaustedDimensions(remainingFiles, remainingBytes);
     return {
-      excerpts,
+      excerpts: new Map(),
       uncertainty: [budgetClipped(`budget-exhausted on ${dimensions}`, inputs.nowMs())],
       elapsedBudgetBlocked: false,
     };
   }
+  return undefined;
+}
+
+async function readKeptExcerpts(
+  keptPaths: readonly string[],
+  inputs: ExcerptInputs,
+): Promise<ExcerptReadSummary> {
+  const excerpts = new Map<string, readonly ExcerptWindow[]>();
+  const uncertainty: UncertaintyMarker[] = [];
+  const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
+  const stopped = stoppedExcerptReads(inputs, remainingFiles, remainingBytes);
+  if (stopped !== undefined)
+    return {
+      ...stopped,
+      omitted: budgetExcerptOmissions(keptPaths, inputs.nowMs()),
+      observation: excerptReadObservation(
+        keptPaths.length,
+        0,
+        0,
+        remainingFiles <= 0,
+        remainingBytes <= 0,
+        stopped.elapsedBudgetBlocked,
+      ),
+    };
   const readablePaths = keptPaths.slice(0, remainingFiles);
   if (readablePaths.length < keptPaths.length) {
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
   }
-  const byteBudgets = distributeByteBudget(remainingBytes, readablePaths.length);
-  const results = await Promise.all(
-    readablePaths.map((scopePath, index) => {
-      throwIfCancelled(inputs.signal);
-      return readPathExcerptTask(scopePath, inputs, byteBudgets[index] ?? 0);
-    }),
-  );
-  for (const { scopePath, result, skippedReason } of results) {
-    throwIfCancelled(inputs.signal);
-    if (result === undefined || result.windows.length === 0) {
-      if (skippedReason === "too-large") {
-        uncertainty.push(largeFileExcerptOmitted(scopePath, inputs.nowMs));
-      }
-      continue;
-    }
-    excerpts.set(scopePath, result.windows);
-    uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
-  }
-  const elapsedBudgetBlocked = results.some(excerptTaskStoppedByDeadline);
-  if (elapsedBudgetBlocked) {
+  const state: ExcerptWaveState = {
+    excerpts,
+    uncertainty,
+    remainingBytes,
+    anchoredWindowCount: 0,
+    elapsedBudgetBlocked: false,
+    byteBudgetOmittedPaths: undefined,
+    omitted: [],
+    omittedWindowCount: 0,
+    truncatedWindowCount: 0,
+  };
+  await readExcerptWaves(readablePaths, inputs, state);
+  uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
+  if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
-  return { excerpts, uncertainty, elapsedBudgetBlocked };
+  return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
+}
+
+function excerptReadObservation(
+  unreadFileCount: number,
+  omittedRangeCount: number,
+  truncatedWindowCount: number,
+  fileGrantBlocked: boolean,
+  byteGrantBlocked: boolean,
+  deadlineBlocked: boolean,
+): ExcerptReadObservation {
+  const stopReasons: ExcerptStopReason[] = [];
+  if (fileGrantBlocked) stopReasons.push("file-grant");
+  if (byteGrantBlocked) stopReasons.push("byte-grant");
+  if (deadlineBlocked) stopReasons.push("deadline");
+  return {
+    unreadFileCount,
+    omittedRangeCount,
+    truncatedWindowCount,
+    stopReasons,
+    readBudgetBlocked: fileGrantBlocked || byteGrantBlocked,
+  };
+}
+
+function budgetExcerptOmissions(paths: readonly string[], nowMs: number): OmittedContextEntry[] {
+  return paths.map((scopePath) => ({ scopePath, reason: "budget-exhausted", omittedAtMs: nowMs }));
+}
+
+function completedExcerptSummary(
+  keptPaths: readonly string[],
+  readablePaths: readonly string[],
+  state: ExcerptWaveState,
+  nowMs: () => number,
+): ExcerptReadSummary {
+  const accounted = new Set([
+    ...state.excerpts.keys(),
+    ...state.omitted.map((entry) => entry.scopePath),
+  ]);
+  const readable = new Set(readablePaths);
+  const stoppedPaths = keptPaths.filter(
+    (path) => !accounted.has(path) && (state.elapsedBudgetBlocked || !readable.has(path)),
+  );
+  return {
+    excerpts: state.excerpts,
+    uncertainty: state.uncertainty,
+    observation: excerptReadObservation(
+      keptPaths.length - state.excerpts.size,
+      state.omittedWindowCount,
+      state.truncatedWindowCount,
+      readablePaths.length < keptPaths.length,
+      (state.byteBudgetOmittedPaths?.length ?? 0) > 0 ||
+        (state.remainingBytes <= 0 &&
+          (state.omittedWindowCount > 0 || state.truncatedWindowCount > 0)),
+      state.elapsedBudgetBlocked,
+    ),
+    omitted: [
+      ...state.omitted,
+      ...(stoppedPaths.length === 0 ? [] : budgetExcerptOmissions(stoppedPaths, nowMs())),
+    ],
+    elapsedBudgetBlocked: state.elapsedBudgetBlocked,
+    readWindowCount: [...state.excerpts.values()].reduce(
+      (count, windows) => count + windows.length,
+      0,
+    ),
+    anchoredWindowCount: state.anchoredWindowCount,
+    ...(state.byteBudgetOmittedPaths === undefined
+      ? {}
+      : { byteBudgetOmittedPaths: state.byteBudgetOmittedPaths }),
+  };
+}
+
+interface ExcerptWaveState {
+  readonly omitted: OmittedContextEntry[];
+  omittedWindowCount: number;
+  truncatedWindowCount: number;
+  readonly excerpts: Map<string, readonly ExcerptWindow[]>;
+  readonly uncertainty: UncertaintyMarker[];
+  remainingBytes: number;
+  anchoredWindowCount: number;
+  elapsedBudgetBlocked: boolean;
+  byteBudgetOmittedPaths: readonly string[] | undefined;
+}
+
+function appendExcerptWave(
+  results: readonly ReadPathExcerptTaskResult[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): void {
+  for (const task of results) {
+    throwIfCancelled(inputs.signal);
+    const { scopePath, result } = task;
+    state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
+    if (result === undefined || result.windows.length === 0) {
+      if (task.omissionReason !== undefined)
+        state.omitted.push({ scopePath, reason: task.omissionReason, omittedAtMs: inputs.nowMs() });
+      continue;
+    }
+    state.remainingBytes -= result.bytesConsumed;
+    state.anchoredWindowCount += result.anchoredWindowCount;
+    state.excerpts.set(scopePath, result.windows);
+    state.omittedWindowCount += result.omittedWindowCount;
+    state.truncatedWindowCount += result.truncatedWindowCount;
+  }
+}
+
+// The next wave depends on the bytes and deadline left after the preceding reads settle.
+// A lazy iterator retains one wave and lets the asynchronous consumer apply backpressure.
+function* pendingExcerptWaves(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): Generator<readonly string[]> {
+  let next = 0;
+  while (next < paths.length && state.remainingBytes > 0 && !state.elapsedBudgetBlocked) {
+    throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) {
+      state.elapsedBudgetBlocked = true;
+      break;
+    }
+    const slots = Math.min(
+      8,
+      paths.length - next,
+      Math.max(1, Math.floor(state.remainingBytes / MAX_EXCERPT_WINDOW_BYTES)),
+    );
+    const wave = paths.slice(next, next + slots);
+    yield wave;
+    next += wave.length;
+  }
+  if (next < paths.length && state.remainingBytes <= 0) {
+    state.byteBudgetOmittedPaths = paths.slice(next);
+    state.uncertainty.push(budgetClipped("budget-exhausted on excerptBytes", inputs.nowMs()));
+  }
+}
+
+async function readExcerptWaves(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): Promise<void> {
+  for await (const results of iterateSequentialResults(
+    pendingExcerptWaves(paths, inputs, state),
+    (wave) => {
+      const grants = excerptWaveGrants(wave, state.remainingBytes, inputs);
+      return mapWithConcurrency(wave, 8, (scopePath, index) => {
+        throwIfCancelled(inputs.signal);
+        return readPathExcerptTask(scopePath, inputs, grants[index] ?? 0);
+      });
+    },
+  ))
+    appendExcerptWave(results, inputs, state);
+}
+
+function excerptWaveGrants(
+  paths: readonly string[],
+  totalBytes: number,
+  inputs: ExcerptInputs,
+): readonly number[] {
+  const known = paths.map((path) => inputs.knownFitFileBytes?.get(path));
+  const knownBytes = known.reduce<number>((sum, bytes) => sum + (bytes ?? 0), 0);
+  if (knownBytes > totalBytes || known.every((bytes) => bytes === undefined))
+    return distributeByteBudget(totalBytes, paths.length);
+  const remaining = distributeByteBudget(
+    totalBytes - knownBytes,
+    known.filter((bytes) => bytes === undefined).length,
+  );
+  let next = 0;
+  return known.map((bytes) => bytes ?? remaining[next++] ?? 0);
 }
 
 // Internal seam: package-local tests drive the excerpt-read step with a scripted clock, which the
@@ -4297,26 +6155,32 @@ function strongFileCacheIdentity(
   });
 }
 
-function fileStateCacheIdentity(
+async function fileStateCacheIdentity(
   keptPaths: readonly string[],
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
   deadlineAtMs: number,
   signal?: AbortSignal,
-): PackCacheIdentity | undefined {
+): Promise<PackCacheIdentity | undefined> {
   const identity: string[] = [];
   const guardedFs = cancellationGuardedWorkspaceFs(fs, signal);
+  const readIdentity = (scopePath: string): Promise<string | undefined> => {
+    throwIfCancelled(signal);
+    if (nowMs() >= deadlineAtMs) return Promise.resolve(undefined);
+    const target = canonicalContainedSearchPath(searchScope, guardedFs, scopePath);
+    if (target === undefined) return Promise.resolve(undefined);
+    throwIfCancelled(signal);
+    if (nowMs() >= deadlineAtMs) return Promise.resolve(undefined);
+    const stat = guardedFs.stat(target.path);
+    const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+    if (strongIdentity === undefined) return Promise.resolve(undefined);
+    return (identity.length + 1) % 64 === 0
+      ? groundedSchedulingYield(signal).then(() => strongIdentity)
+      : Promise.resolve(strongIdentity);
+  };
   try {
-    for (const scopePath of keptPaths) {
-      throwIfCancelled(signal);
-      if (nowMs() >= deadlineAtMs) return undefined;
-      const target = canonicalContainedSearchPath(searchScope, guardedFs, scopePath);
-      if (target === undefined) return undefined;
-      throwIfCancelled(signal);
-      if (nowMs() >= deadlineAtMs) return undefined;
-      const stat = guardedFs.stat(target.path);
-      const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+    for await (const strongIdentity of iterateSequentialResults(keptPaths, readIdentity)) {
       if (strongIdentity === undefined) return undefined;
       identity.push(strongIdentity);
     }
@@ -4324,20 +6188,27 @@ function fileStateCacheIdentity(
     rethrowMetadataCancellation(error);
     return undefined;
   }
+  if (nowMs() >= deadlineAtMs) return undefined;
   return identity.sort((left, right) => left.localeCompare(right));
 }
 
 // Internal mutation seam: package-local tests pin cancellation between synchronous cache-identity
 // probes without exposing this implementation detail from the server package root.
-export function _fileStateCacheIdentityForTests(
+export async function _fileStateCacheIdentityForTests(
   keptPaths: readonly string[],
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
   deadlineAtMs: number,
   signal: AbortSignal | undefined,
-): readonly string[] | undefined {
+): Promise<readonly string[] | undefined> {
   return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, signal);
+}
+
+async function groundedSchedulingYield(signal?: AbortSignal): Promise<void> {
+  // Scheduling batches bound event-loop monopolization, not eligible paths or cache coverage.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  throwIfCancelled(signal);
 }
 
 interface ReadyPlanResult {
@@ -4345,7 +6216,11 @@ interface ReadyPlanResult {
   readonly governor: GovernorState;
 }
 
-function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number): ReadyPlanResult {
+function createReadyGovernedPlan(
+  input: OrchestratorInput,
+  nowMs: () => number,
+  progress: ConnectedContextProgress,
+): ReadyPlanResult {
   const planned = planAndGovern(
     input.budget === undefined
       ? { scope: input.scope, query: input.query }
@@ -4353,6 +6228,7 @@ function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number):
     { nowMs },
   );
   const { plan } = planned;
+  progress.plan = plan;
   if (plan.state !== "ready") {
     if (plan.clarification !== undefined) {
       throw new ClarificationNeededError(plan.clarification);
@@ -4370,6 +6246,8 @@ function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number):
 }
 
 interface AssembleGroundedPackInputs {
+  readonly recordSymbolReadFailure: SymbolReadFailureObserver;
+  readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly input: OrchestratorInput;
   readonly deps: OrchestratorDeps;
   readonly plan: ExplorationPlan;
@@ -4384,6 +6262,7 @@ interface AssembleGroundedPackInputs {
   readonly structuralContexts: StructuralRequestContextPool;
   readonly workspaceIndex: WorkspaceIndex | undefined;
   readonly deadlineAtMs: number;
+  readonly hasGitMetadata: boolean;
 }
 
 interface EmptyGroundedPackInputs {
@@ -4407,9 +6286,20 @@ interface GroundedPackCacheLookupInputs {
 }
 
 interface AssembleOptionsForGroundedPack {
+  readonly maxBytesPerExcerptByPath?: ReadonlyMap<string, number>;
+  readonly includeSurroundingContext: boolean;
   readonly nowMs: () => number;
   readonly microIndex?: MicroIndex;
   readonly reranker?: RerankerSeam;
+}
+
+function knownFitAssembleOptions(
+  options: AssembleOptionsForGroundedPack,
+  rings: RingRunSummary,
+): AssembleOptionsForGroundedPack {
+  return rings.knownFitFileBytes === undefined
+    ? options
+    : { ...options, maxBytesPerExcerptByPath: rings.knownFitFileBytes };
 }
 
 function deadlineBoundMicroIndex(
@@ -4498,12 +6388,14 @@ function assembleOptionsFor(
       : deadlineBoundReranker(deps.contextPackReranker, nowMs, deadlineAtMs, deps.signal);
   return {
     nowMs,
+    includeSurroundingContext: true,
     ...(includeMicroIndex && microIndex !== undefined ? { microIndex } : {}),
     ...(includeReranker && reranker !== undefined ? { reranker } : {}),
   };
 }
 
 interface PreparedPackAssembly {
+  readonly reusedEvidenceAtomCount: number;
   readonly atoms: readonly EvidenceAtom[];
   readonly initialUsage: ExplorationUsage;
   readonly ordered: CandidateOrdering;
@@ -4520,6 +6412,8 @@ interface FinalContextPackInputs {
   readonly excerptReads: ExcerptReadSummary;
   readonly documentEvidence: DocumentEvidenceResult;
   readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly cacheKey: string | undefined;
+  readonly signal: AbortSignal | undefined;
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
@@ -4567,7 +6461,7 @@ async function assembleEmptyGroundedPack({
   return assemble.pack;
 }
 
-function cachedGroundedPack({
+function groundedPackCacheKey({
   input,
   plan,
   rings,
@@ -4576,7 +6470,7 @@ function cachedGroundedPack({
   cacheIdentity,
   initialUsage,
   assembleOptions,
-}: GroundedPackCacheLookupInputs): ConnectedContextPack | undefined {
+}: GroundedPackCacheLookupInputs): string | undefined {
   if (assembleOptions.microIndex === undefined || cacheIdentity === undefined) {
     return undefined;
   }
@@ -4592,10 +6486,81 @@ function cachedGroundedPack({
       cacheIdentity,
       initialUsage,
       diagnostics: rings.diagnostics,
+      initialUncertainty: rings.uncertainty,
     },
-    assembleOptions,
+    knownFitAssembleOptions(assembleOptions, rings),
   );
-  return assembleOptions.microIndex.get(key);
+  return key;
+}
+
+function selectPackAtoms(
+  atoms: readonly EvidenceAtom[],
+  selectedPaths: ReadonlySet<string>,
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+): readonly EvidenceAtom[] {
+  const targetDecision =
+    plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors);
+  return selectGroundedEvidenceAtoms(
+    atoms,
+    selectedPaths,
+    input.scope.scopeId,
+    targetDecision.definitionRequested,
+  );
+}
+
+function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OPTIONS {
+  const certifiedPaths = primaryContentPaths(rings);
+  return {
+    ...DEFAULT_FILTER_OPTIONS,
+    minScoreExemptPaths: certifiedPaths,
+    generatedExemptPaths: certifiedPaths,
+    maxKept: new Set(rings.atoms.map((atom) => atom.scopePath)).size,
+  };
+}
+
+function codeEvidenceAtoms(
+  atoms: readonly EvidenceAtom[],
+  scope: SelectedScope,
+): readonly EvidenceAtom[] {
+  // Explicit documents belong to extraction, including its unsupported diagnostics. Keep them
+  // off the code excerpt path before merging that exclusively document-owned result.
+  return scope.kind === "files" && scope.explicitConnection === true
+    ? atoms.filter((atom) => !isConnectedDocumentPath(atom.scopePath))
+    : atoms;
+}
+
+function selectionEvidencePaths(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  rings: RingRunSummary,
+): ReadonlySet<string> {
+  const paths = new Set(primaryContentPaths(rings));
+  const decision = plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors);
+  if (decision.kind === "contextual") {
+    for (const atom of rings.atoms) {
+      if (atom.lineRange !== undefined && atom.provenance.tool.startsWith("repo.semanticSearch:"))
+        paths.add(atom.scopePath);
+    }
+  }
+  // This changes only relative selection, after normal absolute-score filtering. Semantic
+  // context remains secondary and cannot certify literal presence or declaration discovery.
+  return paths;
+}
+
+function rankingEvidence(
+  rings: RingRunSummary,
+  scope: SelectedScope,
+): Pick<PreparedPackAssembly, "atoms" | "reusedEvidenceAtomCount"> {
+  const sourceAtoms = codeEvidenceAtoms(rings.atoms, scope);
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const atom of sourceAtoms) pushUniqueAtom(atoms, seen, atom);
+  return {
+    atoms,
+    reusedEvidenceAtomCount:
+      (rings.reusedEvidenceAtomCount ?? 0) + sourceAtoms.length - atoms.length,
+  };
 }
 
 function preparePackAssembly(
@@ -4603,15 +6568,26 @@ function preparePackAssembly(
   plan: ExplorationPlan,
   rings: RingRunSummary,
   nowMs: () => number,
+  hasGitMetadata: boolean,
 ): PreparedPackAssembly {
-  const atoms = rings.atoms;
+  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(rings, input.scope);
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
   // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
   // no-context default are byte-identical — see weightsForIntent / isIntentBoosted.
   const ranking = rankCandidates(
-    { atoms, anchors: plan.anchors, context: { retrievalIntent: plan.retrievalIntent } },
-    { nowMs },
+    {
+      atoms,
+      anchors: primaryRankingAnchors(input, plan),
+      context: { retrievalIntent: plan.retrievalIntent },
+      ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
+    },
+    {
+      nowMs,
+      // Retain the admitted evidence pool until distinct requested targets are ordered. The
+      // accepted file/read/context budgets below still bound the material sent to the model.
+      filter: primaryCandidateFilter(rings),
+    },
   );
   const refined = refineCandidateOrdering(
     ranking.kept,
@@ -4624,13 +6600,16 @@ function preparePackAssembly(
   const ordered = selectGroundedCandidateFiles({
     ...refined,
     scopeKind: input.scope.kind,
+    protectedContentPaths: selectionEvidencePaths(input, plan, rings),
+    pathOnlyPaths: pathOnlyEvidencePaths(atoms),
     filesReadMax: plan.budget.filesReadMax,
     nowMs: nowMs(),
   });
   const selectedPaths = new Set(ordered.kept.map((candidate) => candidate.scopePath));
-  const selectedAtoms = selectGroundedEvidenceAtoms(atoms, selectedPaths, input.scope.scopeId);
+  const selectedAtoms = selectPackAtoms(atoms, selectedPaths, input, plan);
   return {
     atoms: selectedAtoms,
+    reusedEvidenceAtomCount,
     initialUsage,
     ordered,
     atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
@@ -4640,25 +6619,42 @@ function preparePackAssembly(
   };
 }
 
-async function assemblePackFromReads({
-  input,
-  plan,
-  rings,
-  prepared,
-  excerptReads,
-  documentEvidence,
-  cacheIdentity,
-  assembleOptions,
-}: FinalContextPackInputs): Promise<ConnectedContextPack> {
+function afterExcerptReadOmissions(
+  ordered: CandidateOrdering,
+  reads: ExcerptReadSummary,
+  nowMs: number,
+): CandidateOrdering {
+  const entries = [
+    ...(reads.omitted ?? []),
+    ...(reads.byteBudgetOmittedPaths ?? []).map((scopePath): OmittedContextEntry => ({
+      scopePath,
+      reason: "budget-exhausted",
+      omittedAtMs: nowMs,
+    })),
+  ];
+  if (entries.length === 0) return ordered;
+  const omitted = new Set(entries.map((entry) => entry.scopePath));
+  return {
+    kept: ordered.kept.filter((candidate) => !omitted.has(candidate.scopePath)),
+    omitted: [...ordered.omitted, ...entries],
+  };
+}
+
+async function assemblePackFromReads(
+  inputs: FinalContextPackInputs,
+): Promise<ConnectedContextPack> {
+  const { input, plan, rings, prepared, excerptReads, documentEvidence, assembleOptions } = inputs;
   const excerpts = mergeExcerptSources(excerptReads.excerpts, documentEvidence.excerpts);
-  const needsNoEvidenceMarker =
-    excerpts.size === 0 &&
-    !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence");
+  const ordered = afterExcerptReadOmissions(
+    prepared.ordered,
+    excerptReads,
+    assembleOptions.nowMs(),
+  );
   // Connected documents are owned exclusively by the bounded document-extraction path: they either
   // surface as document evidence or as a precise document diagnostic. The code-first lexical scan
   // also sees them as binary candidates, so strip any document-path omission it produced to avoid a
   // path that is both a selected file and an omitted entry (which the pack validator rejects).
-  const codeOmitted = [...rings.omitted, ...prepared.ordered.omitted].filter(
+  const codeOmitted = [...rings.omitted, ...ordered.omitted].filter(
     (entry) => !isConnectedDocumentPath(entry.scopePath),
   );
   const assemble = await assembleContextPack(
@@ -4667,17 +6663,9 @@ async function assemblePackFromReads({
       query: input.query,
       budget: plan.budget,
       atoms: [...prepared.atoms, ...documentEvidence.atoms],
-      ranked: [...prepared.ordered.kept, ...documentEvidence.candidates],
+      ranked: [...ordered.kept, ...documentEvidence.candidates],
       omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
       excerpts,
-      // Document evidence is request-local and not part of the file-state cache key, so a pack that
-      // carries any document evidence — extracted atoms OR skipped-document omissions — must not be
-      // written into the micro-index under a code-only file-state key (it would orphan an entry the
-      // read-bypass gate never serves). Mirror the bypass condition in prepareGroundedAssembly.
-      cacheIdentity:
-        documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0
-          ? undefined
-          : cacheIdentity,
       initialUsage: prepared.initialUsage,
       diagnostics: rings.diagnostics,
       initialUncertainty: [
@@ -4685,12 +6673,46 @@ async function assemblePackFromReads({
         ...excerptReads.uncertainty,
         ...prepared.evidenceUncertainty,
         ...documentEvidence.uncertainty,
-        ...(needsNoEvidenceMarker ? [noEvidence(assembleOptions.nowMs())] : []),
+        ...missingExcerptEvidence(prepared, excerpts.size, assembleOptions.nowMs()),
       ],
     },
-    assembleOptions,
+    withoutMicroIndex(knownFitAssembleOptions(assembleOptions, rings)),
   );
+  cacheAssembledGroundedPack(inputs, assemble.pack);
   return assemble.pack;
+}
+
+function missingExcerptEvidence(
+  prepared: PreparedPackAssembly,
+  count: number,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  return count === 0 &&
+    !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence")
+    ? [noEvidence(nowMs)]
+    : [];
+}
+
+function cacheAssembledGroundedPack(
+  inputs: FinalContextPackInputs,
+  pack: ConnectedContextPack,
+): void {
+  throwIfCancelled(inputs.signal);
+  if (
+    inputs.cacheIdentity === undefined ||
+    inputs.cacheKey === undefined ||
+    inputs.excerptReads.elapsedBudgetBlocked ||
+    (inputs.excerptReads.omitted?.length ?? 0) !== 0
+  )
+    return;
+  inputs.assembleOptions.microIndex?.set(inputs.cacheKey, pack);
+}
+
+function withoutMicroIndex(
+  options: AssembleOptionsForGroundedPack,
+): AssembleOptionsForGroundedPack {
+  const { microIndex, ...uncached } = options;
+  return microIndex === undefined ? options : uncached;
 }
 
 function finishAugmentationBudget(
@@ -4742,11 +6764,43 @@ async function discoveredTraceForAugmentation(
   });
 }
 
+function markAugmentationSkipped(
+  rings: RingRunSummary,
+  reason: RingSkipReason | "budget-exhausted",
+): void {
+  if (rings.decisions === undefined) return;
+  rings.decisions.augmentationDisposition = "skipped";
+  rings.decisions.augmentationSkipped = true;
+  rings.decisions.augmentationSkipReason = reason;
+}
+
+function markAugmentationUsed(rings: RingRunSummary): void {
+  if (rings.decisions !== undefined) rings.decisions.augmentationDisposition = "used";
+}
+
+function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRunSummary): boolean {
+  const decision =
+    args.plan.targetDecision ?? resolveQueryTargetDecision(args.input.query, args.plan.anchors);
+  if (hasVerifiedTargetContext(args.input.query, decision, args.plan.retrievalIntent, rings)) {
+    markAugmentationSkipped(rings, "verified-target-context");
+    return true;
+  }
+  const reason = lookupAugmentationSkipReason(
+    args.input.query,
+    args.plan.anchors,
+    args.hasGitMetadata,
+    rings.diagnostics,
+    decision,
+  );
+  if (reason === undefined) return false;
+  markAugmentationSkipped(rings, reason);
+  return true;
+}
+
 async function augmentRingsWithDeterministicAtoms(
   args: AssembleGroundedPackInputs,
 ): Promise<RingRunSummary> {
   const {
-    input,
     deps,
     plan,
     rings,
@@ -4763,11 +6817,19 @@ async function augmentRingsWithDeterministicAtoms(
   // absolute deadline still prevents any new containment/stat work.
   const scopedRings =
     nowMs() < deadlineAtMs
-      ? withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
+      ? withExplicitScopeAtoms(rings, args.input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
       : rings;
-  if (!budget.canContinue()) return finishAugmentationBudget(scopedRings, budget);
+  if (!budget.canContinue()) {
+    markAugmentationSkipped(scopedRings, "budget-exhausted");
+    return finishAugmentationBudget(scopedRings, budget);
+  }
+  if (recordAugmentationSkip(args, scopedRings))
+    return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
-    input,
+    ...deterministicEvidenceObservers(args),
+    symbolDiscovery: scopedRings.symbolDiscovery,
+    skipOptionalTrace: scopedRings.verifiedDefinitionContext === true,
+    input: args.input,
     plan,
     searchScope,
     fs,
@@ -4793,18 +6855,24 @@ interface GroundedAssemblyContext {
   readonly documentEvidence: DocumentEvidenceResult;
   readonly cached: ConnectedContextPack | undefined;
   readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly cacheKey: string | undefined;
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
 interface GroundedPackAssembly {
+  readonly reusedEvidenceAtomCount?: number | undefined;
+  readonly excerptObservation?: ExcerptReadObservation | undefined;
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
+  readonly readWindowCount?: number | undefined;
+  readonly anchoredWindowCount?: number | undefined;
   readonly pack: ConnectedContextPack;
   readonly elapsedBudgetBlocked: boolean;
 }
 
-function assemblyFileStateCacheIdentity(
+async function assemblyFileStateCacheIdentity(
   args: AssembleGroundedPackInputs,
   keptPaths: readonly string[],
-): PackCacheIdentity | undefined {
+): Promise<PackCacheIdentity | undefined> {
   const { searchScope, fs, nowMs, deadlineAtMs, deps } = args;
   return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, deps.signal);
 }
@@ -4832,7 +6900,7 @@ async function prepareGroundedAssembly(
   const cacheIdentity =
     deps.microIndex === undefined || hasDocumentEvidence || !withinDeadline
       ? undefined
-      : assemblyFileStateCacheIdentity(args, prepared.keptPaths);
+      : await assemblyFileStateCacheIdentity(args, prepared.keptPaths);
   const canStartAssemblySeams = nowMs() < deadlineAtMs;
   const assembleOptions = assembleOptionsFor(
     deps,
@@ -4843,9 +6911,9 @@ async function prepareGroundedAssembly(
   );
   // The micro-index cache key does not model request-local document evidence, so a scope that
   // carried documents this run must not be served from (or written to) the shared cache.
-  const cached = hasDocumentEvidence
+  const cacheKey = hasDocumentEvidence
     ? undefined
-    : cachedGroundedPack({
+    : groundedPackCacheKey({
         input,
         plan,
         rings: augmentedRings,
@@ -4855,7 +6923,8 @@ async function prepareGroundedAssembly(
         initialUsage: prepared.initialUsage,
         assembleOptions,
       });
-  return { documentEvidence, cached, cacheIdentity, assembleOptions };
+  const cached = cacheKey === undefined ? undefined : assembleOptions.microIndex?.get(cacheKey);
+  return { documentEvidence, cached, cacheIdentity, cacheKey, assembleOptions };
 }
 
 // PR4-W1 (ADR-0055 D1): conditional diagnostics observer. When a ContextProfile is threaded
@@ -4882,13 +6951,13 @@ function withGroundedContextDiagnostics(
 // claims. Re-derive the identity after the reads and keep it only when every kept path matches the
 // one proven before them; on any mismatch — or an identity that can no longer be established at all
 // — drop the identity so the pack is assembled but never inserted into the cache.
-function excerptBoundCacheIdentity(
+async function excerptBoundCacheIdentity(
   args: AssembleGroundedPackInputs,
   keptPaths: readonly string[],
   captured: PackCacheIdentity | undefined,
-): PackCacheIdentity | undefined {
+): Promise<PackCacheIdentity | undefined> {
   if (captured === undefined) return undefined;
-  const current = assemblyFileStateCacheIdentity(args, keptPaths);
+  const current = await assemblyFileStateCacheIdentity(args, keptPaths);
   if (current === undefined) return undefined;
   if (current.length !== captured.length) return undefined;
   return current.every((entry, index) => entry === captured[index]) ? captured : undefined;
@@ -4899,20 +6968,24 @@ async function assembleGroundedPack(
 ): Promise<GroundedPackAssembly> {
   const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
   const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
-  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
+  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs, args.hasGitMetadata);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined) {
     return {
       pack: withGroundedContextDiagnostics(ctx.cached, deps),
+      reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
+      metadataRetention: augmentedRings.metadataRetention,
       elapsedBudgetBlocked: false,
     };
   }
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
+    knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
     fs,
     budget: plan.budget,
     initialUsage: prepared.initialUsage,
     atomsByPath: prepared.atomsByPath,
+    anchors: plan.anchors.filter((anchor) => anchor.kind !== "path").map((anchor) => anchor.term),
     nowMs,
     signal: deps.signal,
     deadlineAtMs,
@@ -4924,18 +6997,33 @@ async function assembleGroundedPack(
     prepared,
     excerptReads,
     documentEvidence: ctx.documentEvidence,
-    cacheIdentity: excerptBoundCacheIdentity(args, prepared.keptPaths, ctx.cacheIdentity),
+    cacheIdentity: await excerptBoundCacheIdentity(args, prepared.keptPaths, ctx.cacheIdentity),
+    cacheKey: ctx.cacheKey,
+    signal: deps.signal,
     assembleOptions: ctx.assembleOptions,
   });
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
+    reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
+    metadataRetention: augmentedRings.metadataRetention,
+    excerptObservation: excerptReads.observation,
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
+    anchoredWindowCount: excerptReads.anchoredWindowCount,
+    readWindowCount: excerptReads.readWindowCount,
   };
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly reusedEvidenceAtomCount?: number | undefined;
+  readonly sourceDecision?: SourceDecisionObservation | undefined;
+  readonly scopeContextObservation?: ScopeContextObservation | undefined;
+  readonly excerptObservation?: ExcerptReadObservation | undefined;
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
+  readonly decisions?: RingDecisionAudit | undefined;
+  readonly excerptReadWindowCount?: number | undefined;
+  readonly anchoredExcerptWindowCount?: number | undefined;
   readonly readBudgetBlocked: boolean;
   readonly elapsedBudgetBlocked: boolean;
   readonly workspaceIndexProviderStatus: "not-evaluated" | "available" | "unavailable";
@@ -4950,6 +7038,9 @@ interface ConnectedContextExecution {
 }
 
 interface ConnectedContextActivity {
+  readonly symbolReadFailure: SymbolReadFailureObserver;
+  readonly metadataUnavailable: MetadataFailureObserver;
+  readonly clarification: (plan: ExplorationPlan) => void;
   readonly elapsedMs: () => number;
   readonly started: () => void;
   readonly completed: (execution: ConnectedContextExecution) => void;
@@ -4964,9 +7055,13 @@ type ConnectedContextPhase =
   | "workspace-detection"
   | "ring-retrieval"
   | "pack-assembly"
-  | "empty-pack-assembly";
+  | "empty-pack-assembly"
+  | "directory-cleanup";
 
 interface ConnectedContextProgress {
+  plan?: ExplorationPlan | undefined;
+  sourceDecision?: SourceDecisionObservation | undefined;
+  scopeContextObservation?: ScopeContextObservation | undefined;
   phase: ConnectedContextPhase;
   plannedRingCount: number;
   structuralContexts?: StructuralRequestContextPool | undefined;
@@ -5007,21 +7102,30 @@ const NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS = workspaceIndexActivityDiagnost
 // a live retrieval whose excerpt reads were stopped by the absolute deadline reached this status
 // claiming an unblocked elapsed budget, contradicting the elapsed-budget marker on its own pack.
 function liveRetrievalCompletion(
-  workspaceIndexAvailable: boolean,
-  elapsedBudgetBlocked: boolean,
+  workspaceIndexProviderStatus: WorkspaceIndexProviderStatus,
+  assembled: GroundedPackAssembly,
+  decisions: RingDecisionAudit | undefined,
 ): ConnectedContextCompletionStatus {
   return {
-    readBudgetBlocked: false,
-    elapsedBudgetBlocked,
-    workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
+    anchoredExcerptWindowCount: assembled.anchoredWindowCount,
+    excerptReadWindowCount: assembled.readWindowCount,
+    excerptObservation: assembled.excerptObservation,
+    metadataRetention: assembled.metadataRetention,
+    reusedEvidenceAtomCount: assembled.reusedEvidenceAtomCount,
+    decisions,
+    readBudgetBlocked: assembled.excerptObservation?.readBudgetBlocked ?? false,
+    elapsedBudgetBlocked: assembled.elapsedBudgetBlocked,
+    workspaceIndexProviderStatus,
   };
 }
 
 function stoppedRetrievalCompletion(
   readBudgetBlocked: boolean,
   elapsedBudgetBlocked: boolean,
+  rings: readonly RetrievalRing[],
 ): ConnectedContextCompletionStatus {
   return {
+    decisions: newRingDecisions(rings),
     readBudgetBlocked,
     elapsedBudgetBlocked,
     workspaceIndexProviderStatus: "not-evaluated",
@@ -5043,11 +7147,11 @@ interface ConnectedContextActivityIdentity {
   readonly caseSensitive: ActivityBoolean;
   readonly maxResults: ActivityNumber;
   readonly searchCallsMax: ActivityNumber;
-  readonly filesReadMax: ActivityNumber;
+  readonly filesReadMax: ActivityNumber | null;
   readonly excerptBytesMax: ActivityNumber;
   readonly modelInputTokensMax: ActivityNumber;
   readonly modelOutputTokensMax: ActivityNumber;
-  readonly elapsedMsMax: ActivityNumber;
+  readonly elapsedMsMax: ActivityNumber | null;
   readonly rerankCallsMax: ActivityNumber;
 }
 
@@ -5063,10 +7167,12 @@ interface ConnectedContextCommonActivityFields {
   readonly maxResults?: number;
   readonly searchCallsMax?: number;
   readonly filesReadMax?: number;
+  readonly filesReadBounded: boolean;
   readonly excerptBytesMax?: number;
   readonly modelInputTokensMax?: number;
   readonly modelOutputTokensMax?: number;
   readonly elapsedMsMax?: number;
+  readonly elapsedMsBounded: boolean;
   readonly rerankCallsMax?: number;
   readonly completeness: "complete";
   readonly loss: "none";
@@ -5087,7 +7193,7 @@ function activityString(record: Readonly<Record<string, unknown>>, key: string):
 
 function activityNumber(record: Readonly<Record<string, unknown>>, key: string): ActivityNumber {
   const value = activityProperty(record, key);
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : "invalid";
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : "invalid";
 }
 
 function activityBoolean(record: Readonly<Record<string, unknown>>, key: string): ActivityBoolean {
@@ -5172,11 +7278,17 @@ function budgetActivityIdentity(
   const budget = activityBudget(input);
   return {
     searchCallsMax: activityNumber(budget, "searchCallsMax"),
-    filesReadMax: activityNumber(budget, "filesReadMax"),
+    filesReadMax:
+      activityProperty(budget, "filesReadMax") === null
+        ? null
+        : activityNumber(budget, "filesReadMax"),
     excerptBytesMax: activityNumber(budget, "excerptBytesMax"),
     modelInputTokensMax: activityNumber(budget, "modelInputTokensMax"),
     modelOutputTokensMax: activityNumber(budget, "modelOutputTokensMax"),
-    elapsedMsMax: activityNumber(budget, "elapsedMsMax"),
+    elapsedMsMax:
+      activityProperty(budget, "elapsedMsMax") === null
+        ? null
+        : activityNumber(budget, "elapsedMsMax"),
     rerankCallsMax: activityNumber(budget, "rerankCallsMax"),
   };
 }
@@ -5207,15 +7319,15 @@ function connectedContextActivityIdentity(
   };
 }
 
-function validActivityNumber(value: ActivityNumber): number | undefined {
-  return value === "invalid" ? undefined : value;
+function validActivityNumber(value: ActivityNumber | null): number | undefined {
+  return typeof value === "number" ? value : undefined;
 }
 
 function connectedContextInputStatus(
   identity: ConnectedContextActivityIdentity,
 ): "valid" | "invalid" {
   const values: readonly (
-    ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind
+    ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind | null
   )[] = [
     identity.scopeKind,
     identity.queryKind,
@@ -5255,10 +7367,12 @@ function commonActivityExtra(
     ...(maxResults === undefined ? {} : { maxResults }),
     ...(searchCallsMax === undefined ? {} : { searchCallsMax }),
     ...(filesReadMax === undefined ? {} : { filesReadMax }),
+    filesReadBounded: filesReadMax !== undefined,
     ...(excerptBytesMax === undefined ? {} : { excerptBytesMax }),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(modelOutputTokensMax === undefined ? {} : { modelOutputTokensMax }),
     ...(elapsedMsMax === undefined ? {} : { elapsedMsMax }),
+    elapsedMsBounded: elapsedMsMax !== undefined,
     ...(rerankCallsMax === undefined ? {} : { rerankCallsMax }),
     completeness: "complete",
     loss: "none",
@@ -5297,6 +7411,9 @@ type ConnectedContextCompletedActivityFields = ActivityLogFields<
 type ConnectedContextCompletionDetailsActivityFields = ActivityLogFields<
   typeof SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION
 >;
+type ConnectedContextSourceDetailsActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION
+>;
 type ConnectedContextFailedActivityFields = ActivityLogFields<
   typeof SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION
 >;
@@ -5325,6 +7442,7 @@ type FailedIndexFields = Pick<
   | "indexSearchCount"
   | "indexReportCount"
   | "indexFallbackSearchCount"
+  | "indexBypassedSearchCount"
   | "indexLoadFailures"
   | "indexSaveFailures"
 >;
@@ -5388,6 +7506,7 @@ function workspaceIndexActivityExtra(
     indexSearchCount: index.searchCount,
     indexReportCount: index.reportCount,
     indexFallbackSearchCount: index.fallbackSearchCount,
+    indexBypassedSearchCount: index.bypassedSearchCount,
     indexLoadFailures: index.loadFailures,
     indexSaveFailures: index.saveFailures,
   };
@@ -5407,6 +7526,68 @@ function workspaceIoActivityExtra(
   };
 }
 
+function contextObservationActivityExtra(
+  pack: ConnectedContextPack,
+): Partial<ConnectedContextCompletedActivityFields> {
+  const profile = pack.diagnostics?.contextBudget?.profile;
+  if (profile === undefined) return {};
+  const observed = deriveGroundedContextAssembly(pack, profile);
+  return {
+    contextSelectedExcerptCount: observed.lanes.reduce((sum, lane) => sum + lane.includedItems, 0),
+    contextSelectedExcerptEstimatedTokens: observed.totalEstimatedTokens,
+    contextBudgetPressure: observed.budgetPressure,
+    contextRecencyLayoutApplied: observed.orderedForRecency,
+  };
+}
+
+function retrievalLossActivityExtra(
+  status: ConnectedContextCompletionStatus,
+): Partial<ConnectedContextCompletionDetailsActivityFields> {
+  const { excerptObservation: excerpt } = status;
+  return {
+    ...scopeContextActivityExtra(status.scopeContextObservation),
+    ...(excerpt === undefined
+      ? {}
+      : {
+          excerptOmittedRangeCount: excerpt.omittedRangeCount,
+          excerptTruncatedWindowCount: excerpt.truncatedWindowCount,
+          excerptUnreadFileCount: excerpt.unreadFileCount,
+          excerptStopReasons: excerpt.stopReasons,
+        }),
+  };
+}
+
+function metadataRetentionActivityExtra(
+  status: ConnectedContextCompletionStatus,
+): Partial<ConnectedContextSourceDetailsActivityFields> {
+  const { metadataRetention: metadata } = status;
+  return {
+    ...(metadata === undefined
+      ? {}
+      : {
+          metadataObservedCount: metadata.observedCount,
+          metadataRetainedCount: metadata.retainedCount,
+          metadataDiscardedCount: metadata.discardedCount,
+          metadataOmittedDetailCount: metadata.omittedDetailCount,
+          metadataRetentionLimit: metadata.limit,
+        }),
+  };
+}
+
+function scopeContextActivityExtra(
+  observation: ScopeContextObservation | undefined,
+): Readonly<Record<string, unknown>> {
+  return observation === undefined
+    ? {}
+    : {
+        scopeContextState: observation.state,
+        scopeContextObservedFileCount: observation.observedFileCount,
+        scopeContextRetainedFileCount: observation.retainedFileCount,
+        scopeContextChargedBytes: observation.chargedBytes,
+        scopeContextCapacityBytes: observation.capacityBytes,
+      };
+}
+
 function completionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -5417,15 +7598,35 @@ function completionActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     plannedRingCount: plan.rings.length,
+    retrievalIntent: plan.retrievalIntent,
+    ...(plan.targetDecision === undefined
+      ? {}
+      : {
+          retrievalTargetDecision: plan.targetDecision.kind,
+          retrievalTargetCount: plan.targetDecision.targets.length,
+        }),
+    retrievalAnchorCount: plan.anchors.length,
+    ...execution.status.decisions,
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
     usageExcerptBytes: pack.usage.excerptBytes,
+    excerptAnchoredWindowCount: execution.status.anchoredExcerptWindowCount ?? 0,
+    excerptReadWindowCount: execution.status.excerptReadWindowCount ?? 0,
     usageModelInputTokens: pack.usage.modelInputTokens,
     usageModelOutputTokens: pack.usage.modelOutputTokens,
     usageElapsedMs: pack.usage.elapsedMs,
     usageRerankCalls: pack.usage.rerankCalls,
     selectedFileCount: pack.files.length,
-    omittedCount: pack.omitted.length,
+    scopeContextSelectedFileCount: pack.files.filter((file) =>
+      file.excerpts.some(
+        (excerpt) =>
+          excerpt.atom.provenance.kind === "file-listing" &&
+          excerpt.atom.provenance.tool === "repo.findFiles" &&
+          excerpt.atom.lineRange !== undefined,
+      ),
+    ).length,
+    ...contextObservationActivityExtra(pack),
+    omittedCount: connectedContextOmittedCount(pack),
     uncertaintyCount: pack.uncertainty.length,
     ...uncertaintyActivityExtra(pack.uncertainty),
     ...coverageActivityExtra(pack),
@@ -5437,6 +7638,30 @@ function completionActivityExtra(
   };
 }
 
+function omissionTotalsActivityExtra(
+  pack: ConnectedContextPack,
+): Partial<ConnectedContextSourceDetailsActivityFields> {
+  const counts = connectedContextOmittedCounts(pack);
+  return {
+    omittedDetailRetainedCount: pack.omitted.length,
+    omittedDetailsClipped: connectedContextOmittedCount(pack) > pack.omitted.length,
+    omittedOutsideScopeCount: counts["outside-scope"],
+    omittedBinaryCount: counts.binary,
+    omittedGeneratedCount: counts.generated,
+    omittedIgnoredCount: counts.ignored,
+    omittedSizeExceededCount: counts["size-exceeded"],
+    omittedNearDuplicateCount: counts["near-duplicate"],
+    omittedLowRelevanceCount: counts["low-relevance"],
+    omittedRedactedOnlyCount: counts["redacted-only"],
+    omittedBudgetExhaustedCount: counts["budget-exhausted"],
+    omittedToolUnavailableCount: counts["tool-unavailable"],
+    omittedUnsupportedFormatCount: counts["unsupported-format"],
+    omittedNoTextLayerCount: counts["no-text-layer"],
+    omittedMalformedDocumentCount: counts["malformed-document"],
+    omittedEncryptedDocumentCount: counts["encrypted-document"],
+  };
+}
+
 function completionDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -5445,6 +7670,7 @@ function completionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
+    ...retrievalLossActivityExtra(execution.status),
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),
     ...workspaceIoActivityExtra(execution.workspaceIo),
@@ -5453,13 +7679,82 @@ function completionDetailsActivityExtra(
   };
 }
 
+function sourceDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+): ConnectedContextSourceDetailsActivityFields {
+  const shared = {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    completeness: "complete" as const,
+    loss: "none" as const,
+  };
+  try {
+    return {
+      ...shared,
+      activityDetailStatus: "complete",
+      directEvidenceLookup: execution.output.plan.directEvidenceLookup,
+      reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
+      unrepresentablePathCount:
+        execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
+      ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
+      ...metadataRetentionActivityExtra(execution.status),
+      ...omissionTotalsActivityExtra(execution.output.pack),
+    };
+  } catch (error) {
+    reportServerLogFailure(error, { op: "search.connected-context.source-details", correlationId });
+    return { ...shared, activityDetailStatus: "unavailable" };
+  }
+}
+
+function originalSearchFailure(error: unknown): unknown {
+  if (contentFreeErrorClass(error) !== "AggregateError") return error;
+  const primary = safeProperty(error, "cause");
+  return isRecord(primary) ? (activityProperty(primary, "cause") ?? primary) : primary;
+}
+
+function aggregateSearchFailureDetails(
+  error: unknown,
+): Pick<
+  ConnectedContextFailedActivityFields,
+  "secondaryFailureCount" | "secondaryFailureKinds" | "primaryFailureScopeDigest"
+> {
+  if (contentFreeErrorClass(error) !== "AggregateError") return {};
+  const candidates = safeProperty(error, "errors");
+  if (!Array.isArray(candidates)) return {};
+  const failures: readonly unknown[] = candidates;
+  const primary = safeProperty(error, "cause");
+  const path = isRecord(primary) ? activityProperty(primary, "requestedPath") : undefined;
+  const kinds = failures
+    .slice(0, 16)
+    .filter((failure) => failure !== primary)
+    .map((failure) => {
+      const cause = isRecord(failure) ? activityProperty(failure, "cause") : undefined;
+      return contentFreeErrorClass(cause ?? failure);
+    });
+  return {
+    secondaryFailureCount: failures.length - Number(failures.includes(primary)),
+    secondaryFailureKinds: [...new Set(kinds)].sort(compareStrings),
+    ...(typeof path !== "string"
+      ? {}
+      : {
+          primaryFailureScopeDigest: createHash("sha256").update(path).digest("hex"),
+        }),
+  };
+}
+
+function pendingDirectoryCleanupCount(progress: ConnectedContextProgress): number {
+  return progress.workspaceIoActivity?.pendingCleanupCount() ?? 0;
+}
+
 function failureActivityExtra(
   identity: ConnectedContextActivityIdentity,
   error: unknown,
   progress: ConnectedContextProgress,
   cancelled: boolean,
 ): ConnectedContextFailedActivityFields {
-  const frames = keikoStackFrames(error);
+  const frames = keikoStackFrames(originalSearchFailure(error));
   const chain = causeChain(error);
   const structural = progress.structuralContexts?.diagnostics() ?? EMPTY_STRUCTURAL_DIAGNOSTICS;
   const index =
@@ -5476,6 +7771,8 @@ function failureActivityExtra(
     ...structuralActivityExtra(structural),
     ...workspaceIndexActivityExtra(index),
     ...workspaceIoActivityExtra(io),
+    ...aggregateSearchFailureDetails(error),
+    directoryCleanupPendingCount: pendingDirectoryCleanupCount(progress),
     ...(frames.length === 0 ? {} : { frames }),
     ...(chain.length === 0 ? {} : { causeChain: chain }),
     completeness: "complete",
@@ -5605,12 +7902,23 @@ function logConnectedContextCompletion(
   execution: ConnectedContextExecution,
   correlationId: string,
   durationMs: number,
+  metadataUnavailableInspectionCount: number,
 ): void {
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION,
       { correlationId },
       safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+    ),
+  );
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION,
+      { correlationId },
+      {
+        ...sourceDetailsActivityExtra(identity, execution, correlationId),
+        metadataUnavailableInspectionCount,
+      },
     ),
   );
   logger.info(() =>
@@ -5622,18 +7930,68 @@ function logConnectedContextCompletion(
   );
 }
 
+function logConnectedContextClarification(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  plan: ExplorationPlan,
+  correlationId: string,
+  durationMs: number,
+): void {
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_CLARIFICATION_OPERATION,
+      { correlationId, durationMs },
+      {
+        scopeIdentitySha256: identity.scopeIdentitySha256,
+        queryIdentitySha256: identity.queryIdentitySha256,
+        clarificationReason: plan.clarification?.reason ?? "scope-invalid",
+        retrievalIntent: plan.retrievalIntent,
+        directEvidenceLookup: plan.directEvidenceLookup,
+        anchorCount: plan.anchors.length,
+        plannedRingCount: plan.rings.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logConnectedContextFailure(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  error: unknown,
+  progress: ConnectedContextProgress,
+  correlationId: string,
+  durationMs: number,
+): void {
+  const errorKind = safeConnectedContextErrorKind(error);
+  const cancelled = isConnectedContextCancellation(error, errorKind);
+  const event = (): ServerLogEvent =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION,
+      { correlationId, durationMs, errorKind },
+      safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
+    );
+  if (cancelled) logger.warn(event);
+  else logger.error(event);
+}
+
 function createConnectedContextActivity(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   nowMs: () => number,
   logicalStartMs: number,
 ): ConnectedContextActivity {
-  const sink = deps.activityLog ?? processServerLogSink();
-  const logger = createServerLogger({ sink, level: "debug" });
+  const logger = createServerLogger({
+    sink: deps.activityLog ?? processServerLogSink(),
+    level: "debug",
+  });
   const correlationId = correlationIdOrUnknown(deps.correlationId);
   const identity = connectedContextActivityIdentity(input);
   const logElapsed = startLogTimer();
+  let metadataUnavailableInspectionCount = 0;
   return {
+    symbolReadFailure: createSymbolReadFailureObserver(logger, correlationId),
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
       logger.info(() =>
@@ -5645,19 +8003,24 @@ function createConnectedContextActivity(
       );
     },
     completed: (execution): void => {
-      logConnectedContextCompletion(logger, identity, execution, correlationId, logElapsed());
+      logConnectedContextCompletion(
+        logger,
+        identity,
+        execution,
+        correlationId,
+        logElapsed(),
+        metadataUnavailableInspectionCount,
+      );
+    },
+    clarification: (plan): void => {
+      logConnectedContextClarification(logger, identity, plan, correlationId, logElapsed());
+    },
+    metadataUnavailable: (error, scopePath): void => {
+      metadataUnavailableInspectionCount += 1;
+      logger.warn(() => metadataUnavailableEvent(error, scopePath, identity, correlationId));
     },
     failed: (error, progress): void => {
-      const errorKind = safeConnectedContextErrorKind(error);
-      const cancelled = isConnectedContextCancellation(error, errorKind);
-      const event = (): ServerLogEvent =>
-        activityLogEvent(
-          SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION,
-          { correlationId, durationMs: logElapsed(), errorKind },
-          safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
-        );
-      if (cancelled) logger.warn(event);
-      else logger.error(event);
+      logConnectedContextFailure(logger, identity, error, progress, correlationId, logElapsed());
     },
   };
 }
@@ -5667,7 +8030,10 @@ function fallbackConnectedContextActivity(
   logicalStartMs: number,
 ): ConnectedContextActivity {
   return {
+    symbolReadFailure: createSymbolReadFailureObserver(undefined, undefined),
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
+    metadataUnavailable: (): void => undefined,
+    clarification: (): void => undefined,
     started: (): void => undefined,
     completed: (): void => undefined,
     failed: (): void => undefined,
@@ -5724,8 +8090,21 @@ function connectedContextSearchInputs(
 ): SearchInputs {
   const { workspaceIndex } = context;
   return {
+    observeSourceDecision: (observation): void => {
+      runtime.progress.sourceDecision = observation;
+    },
+    discoverDefinitions: (governor, evidence) =>
+      discoverDefinitionsBeforeGraphs(
+        liveGroundedPackInputs(input, deps, plan, runtime, context, { ...evidence, governor }),
+      ),
+    scopeContextBytesMax: plan.budget.excerptBytesMax,
+    observeScopeContext: (observation): void => {
+      runtime.progress.scopeContextObservation = observation;
+    },
+    hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
     query: input.query,
+    targetDecision: plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors),
     anchors: plan.anchors,
     retrievalIntent: plan.retrievalIntent,
     fs: context.ringFs,
@@ -5993,9 +8372,36 @@ function observedCanonicalWorkspaceRoot(
   return canonical;
 }
 
-function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
+function observedDirectoryIteration(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+  onCleanupFailure: (error: unknown) => void,
+  onCleanup: (cleanup: Promise<unknown>) => void,
+): Pick<WorkspaceFs, "iterateDirectory"> {
+  const iterate = workspaceFsProperty(fs, "iterateDirectory");
+  if (iterate === undefined) return {};
+  return {
+    iterateDirectory: (path): AsyncIterable<WorkspaceDirEntry> => {
+      counters.readDirCalls += 1;
+      return observeDirectoryIteration(
+        iterate.call(fs, path),
+        (): void => {
+          addWorkspaceIoPayloadCount(counters, "readDirEntries", 1);
+        },
+        onCleanupFailure,
+        onCleanup,
+      );
+    },
+  };
+}
+
+function requestScopedWorkspaceFs(
+  fs: WorkspaceFs,
+  onCleanupFailure: (error: unknown) => void,
+): WorkspaceIoActivity {
   const counters: MutableWorkspaceIoActivityCounters = emptyWorkspaceIoActivityDiagnostics();
   const canonicalRoots = new Map<string, string>();
+  const cleanup = directoryCleanupTracker();
   const observedRealPath = (absolutePath: string): string => {
     counters.realPathCalls += 1;
     return fs.realPath(absolutePath);
@@ -6024,6 +8430,7 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
       counters.existsCalls += 1;
       return fs.exists(absolutePath);
     },
+    ...observedDirectoryIteration(fs, counters, onCleanupFailure, cleanup.observe),
     ...observedSynchronousContentReads(fs, counters),
     ...observedAsyncContentReads(fs, counters),
     canonicalWorkspaceRoot: (absoluteRoot): string =>
@@ -6032,6 +8439,7 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
   return {
     fs: observedFs,
     diagnostics: (): WorkspaceIoActivityDiagnostics => ({ ...counters }),
+    pendingCleanupCount: cleanup.pendingCount,
   };
 }
 
@@ -6152,11 +8560,11 @@ function liveStructuralContexts(
 }
 
 interface LiveRetrievalContext {
+  readonly hasGitMetadata: boolean;
   readonly deadlineAtMs: number;
   readonly searchScope: SearchScope;
   readonly ringFs: WorkspaceFs;
   readonly structuralContexts: StructuralRequestContextPool;
-  readonly workspaceIndexSource: WorkspaceIndex | undefined;
   readonly workspaceIndexActivity: WorkspaceIndexActivity;
   readonly workspaceIndex: WorkspaceIndex | undefined;
 }
@@ -6189,13 +8597,19 @@ function detectionGuardedFs(fs: WorkspaceFs, control: MetadataTraversalControl):
   });
 }
 
+function explorationDeadlineAtMs(startedAtMs: number, budget: ExplorationBudget): number {
+  return budget.elapsedMsMax === null
+    ? Number.POSITIVE_INFINITY
+    : startedAtMs + Math.max(0, budget.elapsedMsMax);
+}
+
 function prepareLiveRetrievalContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   plan: ExplorationPlan,
   runtime: ConnectedContextRuntime,
 ): LiveRetrievalContext {
-  const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
+  const deadlineAtMs = explorationDeadlineAtMs(runtime.requestStartedAtMs, plan.budget);
   runtime.progress.phase = "workspace-detection";
   const detectionControl: MetadataTraversalControl = {
     signal: deps.signal,
@@ -6205,6 +8619,9 @@ function prepareLiveRetrievalContext(
   const workspace = runtime.detect(
     runtime.workspaceRoot,
     detectionGuardedFs(runtime.fs, detectionControl),
+  );
+  const hasGitMetadata = detectionGuardedFs(runtime.fs, detectionControl).exists(
+    resolve(workspace.root, ".git"),
   );
   const searchScope = buildSearchScope(input.scope, workspace);
   const workspaceIndexSource =
@@ -6222,11 +8639,11 @@ function prepareLiveRetrievalContext(
   );
   runtime.progress.structuralContexts = structuralContexts;
   return {
+    hasGitMetadata,
     deadlineAtMs,
     searchScope,
     ringFs,
     structuralContexts,
-    workspaceIndexSource,
     workspaceIndexActivity,
     workspaceIndex: workspaceIndexActivity.workspaceIndex,
   };
@@ -6241,6 +8658,8 @@ function liveGroundedPackInputs(
   rings: RingRunSummary,
 ): AssembleGroundedPackInputs {
   return {
+    recordMetadataUnavailable: runtime.activity.metadataUnavailable,
+    recordSymbolReadFailure: runtime.activity.symbolReadFailure,
     input,
     deps,
     plan,
@@ -6252,6 +8671,7 @@ function liveGroundedPackInputs(
     structuralContexts: context.structuralContexts,
     workspaceIndex: context.workspaceIndex,
     deadlineAtMs: context.deadlineAtMs,
+    hasGitMetadata: context.hasGitMetadata,
   };
 }
 
@@ -6275,16 +8695,18 @@ async function retrieveLiveConnectedContext(
     liveGroundedPackInputs(input, deps, plan, runtime, context, rings),
   );
   throwIfCancelled(deps.signal);
+  const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   return connectedContextExecution(
     assembled.pack,
     plan,
     runtime.activity,
-    liveRetrievalCompletion(
-      context.workspaceIndexSource !== undefined,
-      assembled.elapsedBudgetBlocked,
-    ),
+    {
+      ...liveRetrievalCompletion(workspaceIndex.providerStatus, assembled, rings.decisions),
+      scopeContextObservation: runtime.progress.scopeContextObservation,
+      sourceDecision: runtime.progress.sourceDecision,
+    },
     context.structuralContexts.diagnostics(),
-    context.workspaceIndexActivity.diagnostics(),
+    workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
 }
@@ -6309,7 +8731,7 @@ async function emptyBudgetExhaustedRetrieval(
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "empty-pack-assembly";
   const stoppedGovernor = stop.elapsedBudgetBlocked
-    ? applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax }))
+    ? applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax ?? 0 }))
     : governor;
   const pack = await assembleEmptyGroundedPack({
     input,
@@ -6324,7 +8746,7 @@ async function emptyBudgetExhaustedRetrieval(
     pack,
     plan,
     runtime.activity,
-    stoppedRetrievalCompletion(stop.readBudgetBlocked, stop.elapsedBudgetBlocked),
+    stoppedRetrievalCompletion(stop.readBudgetBlocked, stop.elapsedBudgetBlocked, plan.rings),
     EMPTY_STRUCTURAL_DIAGNOSTICS,
     NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
     runtime.workspaceIoActivity.diagnostics(),
@@ -6367,7 +8789,7 @@ async function executeConnectedContextRetrieval(
 ): Promise<ConnectedContextExecution> {
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "planning";
-  const { plan, governor } = createReadyGovernedPlan(input, runtime.nowMs);
+  const { plan, governor } = createReadyGovernedPlan(input, runtime.nowMs, runtime.progress);
   runtime.progress.plannedRingCount = plan.rings.length;
   deps.recordPlan?.(plan);
   throwIfCancelled(deps.signal);
@@ -6378,7 +8800,7 @@ async function executeConnectedContextRetrieval(
   };
   runtime.progress.phase = "budget-evaluation";
   const readBudgetBlock = readBudgetStopReason(plan.budget);
-  const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
+  const deadlineAtMs = explorationDeadlineAtMs(runtime.requestStartedAtMs, plan.budget);
   const elapsedBudgetBlock =
     runtime.nowMs() >= deadlineAtMs ? "budget-exhausted on elapsedMs" : undefined;
   const stopReason = readBudgetBlock ?? elapsedBudgetBlock;
@@ -6411,10 +8833,29 @@ function assertGroundedWorkspaceRootAllowed(
     ) {
       throw error;
     }
-    throw new WorkspaceNotFoundError("The workspace root is unavailable.", workspaceRoot, [
+    if (!isExpectedWorkspaceRootFailure(error)) throw error;
+    const unavailable = new WorkspaceNotFoundError(
+      "The workspace root is unavailable.",
       workspaceRoot,
-    ]);
+      [workspaceRoot],
+    );
+    unavailable.cause = error;
+    throw unavailable;
   }
+}
+
+function recordConnectedContextFailureOutcome(
+  activity: ConnectedContextActivity,
+  error: unknown,
+  progress: ConnectedContextProgress,
+): void {
+  if (
+    progress.phase === "planning" &&
+    progress.plan !== undefined &&
+    progress.plan.state !== "ready"
+  )
+    activity.clarification(progress.plan);
+  else activity.failed(error, progress);
 }
 
 export async function retrieveConnectedContextPack(
@@ -6432,6 +8873,9 @@ export async function retrieveConnectedContextPack(
   try {
     const workspaceIoActivity = requestScopedWorkspaceFs(
       input.workspaceFs ?? deps.fs ?? nodeWorkspaceFs,
+      (error): void => {
+        activity.failed(error, { ...progress, phase: "directory-cleanup" });
+      },
     );
     progress.workspaceIoActivity = workspaceIoActivity;
     const execution = await executeConnectedContextRetrieval(input, deps, {
@@ -6447,7 +8891,9 @@ export async function retrieveConnectedContextPack(
     activity.completed(execution);
     return execution.output;
   } catch (error) {
-    activity.failed(error, progress);
+    // A queued iterator return may be waiting on an OS read that JavaScript cannot interrupt.
+    // Publish the original failure now; the owned observer still records later cleanup failures.
+    recordConnectedContextFailureOutcome(activity, error, progress);
     throw error;
   }
 }
@@ -6467,8 +8913,13 @@ function citationCoverageMarkerFor(
   answerContent: string,
   pack: ConnectedContextPack,
   nowMs: number,
+  correlationId: string | undefined,
 ): UncertaintyMarker | undefined {
-  const reconciliation = reconcileInlineCitations(answerContent, buildPackCitationIndex([pack]));
+  const reconciliation = reconcileAndLogInlineCitations(
+    answerContent,
+    buildPackCitationIndex([pack]),
+    correlationId,
+  );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   if (unsupported !== undefined || reconciliation.citedScopePaths.size > 0) return unsupported;
   return missingCitationMarkerFor(answerContent, nowMs);
@@ -6484,7 +8935,9 @@ function exhaustedAnswerBudgetDimensions(
     ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
       ? ["modelOutputTokens"]
       : []),
-    ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
+    ...(pack.budget.elapsedMsMax !== null && elapsedMs > pack.budget.elapsedMsMax
+      ? ["elapsedMs"]
+      : []),
   ];
 }
 
@@ -6502,7 +8955,12 @@ async function answerWithAvailableContext(
   );
   const elapsedMs = Math.max(0, nowMs() - start);
   const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
-  const unsupportedMarker = citationCoverageMarkerFor(answer.content, pack, nowMs());
+  const unsupportedMarker = citationCoverageMarkerFor(
+    answer.content,
+    pack,
+    nowMs(),
+    deps.correlationId,
+  );
   const entailmentMarkers = await entailmentMarkersFor(deps, answer.content, pack, nowMs());
   const groundedPack: ConnectedContextPack = {
     ...pack,
@@ -6510,7 +8968,10 @@ async function answerWithAvailableContext(
       ...pack.usage,
       modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
       modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
-      elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
+      elapsedMs: Math.min(
+        Math.max(pack.usage.elapsedMs, elapsedMs),
+        pack.budget.elapsedMsMax ?? Number.POSITIVE_INFINITY,
+      ),
     },
     uncertainty: [
       ...pack.uncertainty,
@@ -6551,7 +9012,7 @@ export async function runGroundedExploration(
     const elapsedMs = Math.max(0, nowMs() - start);
     return {
       pack,
-      assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
+      assistantContent: connectedSearchNoEvidenceAnswer(input.currentQuestion ?? input.query.text),
       elapsedMs,
       plan,
       noEvidence: true,

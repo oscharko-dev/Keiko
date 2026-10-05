@@ -237,9 +237,9 @@ describe("collectDiscoveredSymbolTraceEvidence", () => {
       searchScope,
       GROUNDED_TRACE_SEARCH_LIMITS,
       probe.fs,
-      { nowMs: () => currentMs },
+      { nowMs: () => currentMs, deadlineAtMs: 10 },
     );
-    currentMs = GROUNDED_TRACE_SEARCH_LIMITS.elapsedMsMax + 1;
+    currentMs = 11;
 
     const result = await collectDiscoveredSymbolTraceEvidence({
       scope: selectedScope(),
@@ -262,6 +262,33 @@ describe("collectDiscoveredSymbolTraceEvidence", () => {
 });
 
 describe("collectFollowSymbolTraceEvidence", () => {
+  it("does not reserve graph work for directly requested implementation facts", async () => {
+    const probe = fsProbe();
+    let reservations = 0;
+    const result = await collectFollowSymbolTraceEvidence({
+      scope: selectedScope(),
+      query: {
+        ...routeQuery(),
+        text: "Where are WindowFrame and ChatPanel implemented, and what values do they return?",
+      },
+      anchors: [
+        { term: "windowframe", weight: 0.85, kind: "identifier" },
+        { term: "chatpanel", weight: 0.85, kind: "identifier" },
+      ],
+      retrievalIntent: "targeted-code-search",
+      searchScope: { workspace: workspaceInfo(), scopeId: "direct-facts", relativePaths: [] },
+      fs: probe.fs,
+      nowMs: () => NOW,
+      tryReserveSearchCall: () => {
+        reservations += 1;
+        return false;
+      },
+    });
+    expect(result).toEqual({ atoms: [], uncertainty: [] });
+    expect(reservations).toBe(0);
+    expect(probe.accessCount()).toBe(0);
+  });
+
   it("does not start the trace when its search call cannot be reserved", async () => {
     const probe = fsProbe();
     const searchScope: SearchScope = {

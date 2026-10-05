@@ -5,13 +5,29 @@
 
 import type { CostClass, RunStatus, VerificationStatus } from "./types";
 
+const decimalFormatters = new Map<string, Intl.NumberFormat>();
+
+function decimalFormatter(locale: string | undefined, digits: 0 | 1): Intl.NumberFormat {
+  const resolvedLocale = locale ?? "en";
+  const key = `${resolvedLocale}:${digits}`;
+  let formatter = decimalFormatters.get(key);
+  if (formatter === undefined) {
+    formatter = new Intl.NumberFormat(resolvedLocale, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+      useGrouping: false,
+    });
+    decimalFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 // ---------------------------------------------------------------------------
 // Bytes → human-readable
 // ---------------------------------------------------------------------------
 
 function formatByteMagnitude(value: number, locale: string | undefined): string {
-  if (locale === undefined) return value.toFixed(1);
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
+  return decimalFormatter(locale, 1).format(value);
 }
 
 export function formatBytes(bytes: number, locale?: string): string {
@@ -52,12 +68,19 @@ export function formatBytesPrecise(bytes: number): string {
 // Milliseconds → human-readable
 // ---------------------------------------------------------------------------
 
-export function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms.toString()} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.floor((ms % 60_000) / 1000);
-  return `${minutes.toString()}m ${seconds.toString()}s`;
+function formatInteger(value: number, locale: string | undefined): string {
+  return decimalFormatter(locale, 0).format(value);
+}
+
+export function formatMs(ms: number, locale?: string): string {
+  const milliseconds = Math.round(ms);
+  if (milliseconds < 1000) return `${formatInteger(milliseconds, locale)} ms`;
+  // Select the unit after rounding to the displayed precision so seconds never render as 60.0.
+  const roundedSeconds = Math.round(ms / 100) / 10;
+  if (roundedSeconds < 60) return `${decimalFormatter(locale, 1).format(roundedSeconds)} s`;
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = Math.floor(roundedSeconds % 60);
+  return `${formatInteger(minutes, locale)}m ${formatInteger(seconds, locale)}s`;
 }
 
 // Compact whole-second duration presenter (GEN-DUP-SEMANTIC-005): rounds to whole

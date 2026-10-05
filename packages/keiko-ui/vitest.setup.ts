@@ -4,6 +4,7 @@ import { cleanup } from "@testing-library/react";
 import { toHaveNoViolations } from "jest-axe";
 import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
 import { resetLoadedMessageCatalogs } from "./src/lib/i18n";
+import { resetLoadedOptionalWidgetMessages } from "./src/lib/optional-widget-i18n";
 import { writeToBrowserConsole } from "./src/lib/install-client-diagnostics";
 
 import { createOriginLocksFixture } from "./src/test-utils/origin-locks-fixture";
@@ -32,6 +33,7 @@ beforeEach(() => {
   // every other locale lazy), so a test that needs German must establish that precondition itself
   // — by awaiting `loadLocaleMessages("de")` or by awaiting the rendered German copy.
   resetLoadedMessageCatalogs();
+  resetLoadedOptionalWidgetMessages();
   // Mock call history is a cross-test input too. This file's `cleanup()` below is registered first,
   // so it runs AFTER every suite's own `afterEach`, including a suite's `vi.clearAllMocks()`. React
   // runs an effect a test left pending while it unmounts, so a call that effect makes counted toward

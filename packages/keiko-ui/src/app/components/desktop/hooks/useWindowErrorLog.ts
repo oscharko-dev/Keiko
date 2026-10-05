@@ -11,7 +11,12 @@
 import { useEffect } from "react";
 import { isBenignWindowNotification } from "@/lib/benign-browser-error";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { recordClientDiagnosticLoss, reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  publishGlobalClientFailure,
+  recordClientDiagnosticLoss,
+  reportClientDiagnostic,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
 const MAX_LOGGED_WINDOW_ERRORS = 5;
@@ -21,17 +26,22 @@ export function useWindowErrorLog(): void {
     let logged = 0;
     const onError = (event: ErrorEvent): void => {
       if (isBenignWindowNotification(event)) return;
+      const meta: ClientDiagnosticMeta = {
+        kind: "window-error",
+        globalFailure: true,
+        errorEvidence: clientErrorEvidence(event.error),
+        correlationId: correlationIdOf(event.error) ?? crypto.randomUUID(),
+      };
+      publishGlobalClientFailure(meta);
       if (logged >= MAX_LOGGED_WINDOW_ERRORS) {
         recordClientDiagnosticLoss("errorsSuppressed");
         return;
       }
       logged += 1;
-      reportClientDiagnostic(`[keiko] uncaught window error: ${clientErrorSummary(event.error)}`, {
-        kind: "window-error",
-        globalFailure: true,
-        errorEvidence: clientErrorEvidence(event.error),
-        correlationId: correlationIdOf(event.error) ?? crypto.randomUUID(),
-      });
+      reportClientDiagnostic(
+        `[keiko] uncaught window error: ${clientErrorSummary(event.error)}`,
+        meta,
+      );
     };
     window.addEventListener("error", onError);
     return (): void => {

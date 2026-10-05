@@ -467,7 +467,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 | `TimeoutError` | `GATEWAY_TIMEOUT` | — | Yes |
 | `CancelledError` | `GATEWAY_CANCELLED` | — | No |
 | `CircuitOpenError` | `GATEWAY_CIRCUIT_OPEN` | — | No |
-| `ProviderError` | `GATEWAY_PROVIDER_ERROR` | `httpStatus: number` | No |
+| `ProviderError` | `GATEWAY_PROVIDER_ERROR` | `httpStatus: number`, `retryAfterMs: number \| null` | HTTP 500/502/503/529 before delivered output |
 | `ConfigInvalidError` | `GATEWAY_CONFIG_INVALID` | — | No |
 | `UnknownModelError` | `GATEWAY_UNKNOWN_MODEL` | — | No |
 
@@ -588,19 +588,25 @@ HTTP 200.
 `TimeoutError` and `RateLimitError`, the gateway retries up to `config.maxRetries` times. The
 backoff is `min(retryBaseDelayMs * 2^(attempt - 1), 30_000)` at the top of an equal-jitter band
 (each sleep lies between half of it and all of it); a `RateLimitError` that carries `retryAfterMs`
-waits exactly that long instead, capped at 30 s. The delay uses `clock.sleep()`. The
+waits at least the stated cooldown instead, subject to the remaining whole-call budget and
+platform timer ceiling. Retryable `ProviderError` responses (including HTTP 503) preserve the same
+optional `retryAfterMs` duration. OpenAI-compatible adapters parse both delay-seconds and HTTP-date
+forms of `Retry-After`; malformed values use the normal backoff. Provider cooldowns are never
+shortened to the exponential backoff cap: an overloaded LiteLLM queue may legitimately request
+a two-minute wait. Gateway calls add positive backoff jitter after that minimum and refuse a
+delay that cannot fit the remaining request budget. The delay uses cancellation-aware `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
-(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry, the longest sleep the
-loop honours (the backoff cap and the cap on a provider's `retryAfterMs` are both 30 s), so a
-rate-limited provider keeps all its configured attempts and the cool-down it asked for. A retry
+(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
+all configured attempts and exponential backoff windows. A provider cooldown above 30 s consumes
+the same fixed whole-call budget and may leave fewer attempts; it never expands the deadline. A retry
 whose delay does not fit what is left of the budget could never run, so the call ends at once with
 the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and the remaining
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
-left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
+left, after earlier attempts or provider cooldowns consumed that budget, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
 coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable startup failure only before delivering its
 first non-empty delta or terminal response. Empty role deltas do not commit the answer. Once any
@@ -654,13 +660,48 @@ States:
   coding runtime reports that one as `turn-rejected` and keeps its error-level diagnostic. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
   timeout is a multi-minute silence, which is the outage signal the breaker exists for. When counter
   reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
-- **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.
+- **Open**: a fresh call without an announced provider cooldown immediately throws
+  `CircuitOpenError` without contacting the provider. The existing per-model breaker retains an
+  announced cooldown, so later calls wait for that minimum before requesting admission. Retry
+  callers recovering from an announced cooldown also wait out the remaining breaker cooldown
+  inside their original request budget; if admission cannot fit, they retain their own original
+  provider error rather than replacing it with `CircuitOpenError`.
+  Refused admission terminates retry accounting without inventing another provider attempt.
+  A fresh blocked caller receives `CircuitOpenError`; an exhausted caller with no circuit
+  blockage retains `TimeoutError`. Retryable parallel responses from the generation that opened
+  the current outage may extend its announced recovery minimum. They cannot alter probe ownership
+  or a later half-open, recovered or reopened generation. Terminal HTTP failures do not announce
+  a shared recovery minimum, and waiters are notified only when admission state changes.
   When `clock.now() - openedAt >= cooldownMs`, transition to **Half-Open**.
 - **Half-Open**: the next `halfOpenProbes` calls are forwarded as probes. Each success decrements the
   probe counter. When the counter reaches zero, transition to **Closed** and reset all counters. Any
   failure transitions back to **Open** immediately and resets `openedAt`.
+  Recovering cooldown callers wait for a saturated probe slot instead of failing immediately.
+  Cancellation, expiry and settlement dispose the wait timer and notification subscription.
+  Generation checks still prevent an older admission from changing a later circuit generation;
+  waiting and its outcome emit body-free `gateway.circuit.wait` lifecycle evidence. A blocked
+  admission that cannot fit its caller budget records `budget-refused`, with the remaining budget
+  and proposed delay, even when no wait timer starts.
 
 Circuit state is observable via `gateway.circuitStatus(modelId): CircuitBreakerStatus`.
+
+**Shared provider cooldown.** A retryable HTTP 429 or provider failure carrying `Retry-After`
+announces a per-model recovery minimum even while the breaker remains Closed. Every later caller
+using that breaker observes the same deadline, including after the announcing request ends.
+Its duration is capped only by the platform timer ceiling (2,147,483,647 ms); the expired deadline
+does not block later calls. A waiting admission samples positive jitter only when it encounters
+an active provider cooldown, using `max(1, round(retryBaseDelayMs * random()))`. Retries use the
+equal-jitter backoff ladder above. Both stay inside the caller's original whole-request budget.
+An admission refusal retains the previous provider error when present; otherwise a blocked caller
+receives `CircuitOpenError`, while an exhausted healthy admission receives `TimeoutError`.
+Late Closed-generation failures may extend the outage they opened. Late half-open probes cannot
+extend the outage reopened by a sibling probe or affect the next probe generation.
+
+`gateway.circuit.wait` records reasons `provider-cooldown`, `circuit-cooldown`, or `probe-saturated`
+and outcomes `started`, `timer`, `changed`, `cancelled`, `failed`, or `budget-refused`.
+For saturated probes there is no proposed cooldown duration: `delayMs` records the remaining
+request budget, including zero at refusal, rather than the platform timer ceiling. Stream lifecycle
+starts before admission waiting and settles with a zero-chunk failure if admission fails.
 
 ### CLI commands
 

@@ -1,5 +1,6 @@
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { useEffect, type ReactNode, type RefObject } from "react";
-import { useTranslate } from "@/lib/i18n";
+
 import styles from "./ChatHistorySelection.module.css";
 
 interface SelectAllChatsProps {

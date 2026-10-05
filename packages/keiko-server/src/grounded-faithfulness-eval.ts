@@ -10,11 +10,14 @@
 
 import {
   buildPackCitationIndex,
-  GROUNDED_NO_EVIDENCE_ANSWER,
   packHasUsableEvidence,
   reconcileInlineCitations,
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
+import {
+  connectedSearchNoEvidenceAnswer,
+  isCanonicalConnectedSearchAbstention,
+} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { buildEvalContextPack, evalFileEntry, evalUncertainty } from "./grounded-eval-support.js";
 import type {
   ConnectedContextPack,
@@ -85,6 +88,27 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
   },
   {
+    name: "hallucinated-bare-path",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "See src/secret/keys.ts:40-55.",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
+  },
+  {
+    name: "hallucinated-code-path",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "See `src/secret/keys.ts:40-55`.",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
+  },
+  {
+    name: "hallucinated-table-path",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "| Source | src/secret/keys.ts:40-55 |",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
+  },
+  {
     name: "hallucinated-only",
     variant: "hallucinated-citation",
     packScopePaths: PACK_PATHS,
@@ -136,10 +160,17 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
-    name: "refusal-on-empty",
+    name: "refusal-on-empty-en",
     variant: "refusal",
     packScopePaths: [],
-    answerText: GROUNDED_NO_EVIDENCE_ANSWER,
+    answerText: connectedSearchNoEvidenceAnswer("What evidence exists?"),
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
+  },
+  {
+    name: "refusal-on-empty-de",
+    variant: "refusal",
+    packScopePaths: [],
+    answerText: connectedSearchNoEvidenceAnswer("Welche Belege gibt es?"),
     expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
 ];
@@ -191,7 +222,7 @@ export function isGroundedEmptyEvidenceAbstention(
   pack: ConnectedContextPack,
   answerText: string,
 ): boolean {
-  return !packHasUsableEvidence(pack) && answerText === GROUNDED_NO_EVIDENCE_ANSWER;
+  return !packHasUsableEvidence(pack) && isCanonicalConnectedSearchAbstention(answerText);
 }
 
 function emptyEvidenceVariantMatched(fixture: FaithfulnessFixture): boolean {

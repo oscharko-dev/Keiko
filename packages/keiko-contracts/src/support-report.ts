@@ -1,10 +1,21 @@
-import type { DiagnosticSufficiencyReason, DiagnosticSufficiencyStatus } from "./observability.js";
-import type { SupportIncidentPrivateProjection } from "./support-incident.js";
+export * from "./support-report-policy.js";
+import type {
+  ActivityLogCompletenessState,
+  ActivityLogLossState,
+  DiagnosticSufficiencyReason,
+  DiagnosticSufficiencyStatus,
+} from "./observability.js";
+import type {
+  SupportIncidentPinStatus,
+  SupportIncidentTrigger,
+  SupportIncidentPrivateProjection,
+} from "./support-incident.js";
 
 export const SUPPORT_REPORT_KIND = "keiko.support.report";
 /** The default export directory under the state directory. */
 export const SUPPORT_REPORT_DIRECTORY_NAME = "support-reports";
 export const SUPPORT_REPORT_SCHEMA_VERSION = 1;
+export const MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES = 1024;
 export const MAX_SUPPORT_REPORT_BYTES = 10 * 1024 * 1024;
 export const MAX_SUPPORT_REPORT_EVENT_BYTES = 16 * 1024 * 1024;
 export const MAX_SUPPORT_REPORT_INCIDENT_BYTES = 1024 * 1024;
@@ -55,6 +66,8 @@ export interface SupportReportSelection {
   readonly status: DiagnosticSufficiencyStatus;
   readonly reasons: readonly DiagnosticSufficiencyReason[];
   readonly requiredBytes: number;
+  /** Required closure and lifetime records, independent of the byte requirement; absent in older reports. */
+  readonly requiredRecordCount?: number;
   // Exactly the lifetimes the evidence shows, in (pid, instanceId) order.
   readonly lifetimes: readonly SupportLifetimeProvenance[];
 }
@@ -103,20 +116,48 @@ export function supportReportFileName(
   createdAtMs: number,
 ): string {
   const date = new Date(createdAtMs).toISOString().slice(0, 10);
-  return `keiko-support-v${String(schemaVersion)}-${incidentId.slice(0, 12)}-${date}.json`;
+  const fileName = `keiko-support-v${String(schemaVersion)}-${incidentId.slice(0, 12)}-${date}.json`;
+  if (!isSupportReportFileName(fileName)) throw new TypeError("Invalid support report file name");
+  return fileName;
 }
 
 export function isSupportReportFileName(name: string): boolean {
   return SUPPORT_REPORT_FILE_NAME_PATTERN.test(name);
 }
 
+const SUPPORT_REPORT_DOWNLOAD_PREFIX = "/api/diagnostics/report/download/";
+const SUPPORT_REPORT_DOWNLOAD_ID_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+
+/** One same-origin, opaque attachment identity; never a path selected by the caller. */
+export function supportReportDownloadPath(downloadId: string): string {
+  if (!SUPPORT_REPORT_DOWNLOAD_ID_PATTERN.test(downloadId))
+    throw new TypeError("Invalid support report download identity");
+  return `${SUPPORT_REPORT_DOWNLOAD_PREFIX}${downloadId}`;
+}
+
+export function isSupportReportDownloadPath(path: string): boolean {
+  return (
+    path.startsWith(SUPPORT_REPORT_DOWNLOAD_PREFIX) &&
+    SUPPORT_REPORT_DOWNLOAD_ID_PATTERN.test(path.slice(SUPPORT_REPORT_DOWNLOAD_PREFIX.length))
+  );
+}
+
 /** Same-origin desktop export; the state directory and destination are server-owned. */
 export interface DesktopSupportReportRequest {
   readonly correlationId?: string | undefined;
+  readonly evidenceScope?: "client-only" | undefined;
+  /** Unverified closed browser cause; ignored for authenticated server evidence. */
+  readonly failure?: NonNullable<SupportIncidentPrivateProjection["clientReport"]>["failure"];
 }
 export interface DesktopSupportReportResponse {
+  /** Explicitly limited browser availability artifact; contains no server-log evidence. */
+  readonly evidenceScope?: "client-only" | undefined;
   readonly fileName: string;
   readonly reportJson: string;
+  /** Same-origin attachment; full server evidence always requires its original session. */
+  readonly downloadPath?: string | undefined;
+  readonly downloadExpiresAtMs?: number | undefined;
   readonly summary?:
     | {
         readonly status: DiagnosticSufficiencyStatus;
@@ -124,8 +165,18 @@ export interface DesktopSupportReportResponse {
         readonly recordCount: number;
         readonly reportDigest: string;
         readonly incidentId: string;
+        /** Attribution of the actual prepared descriptor, independent of its retention status. */
+        readonly incidentTrigger?: SupportIncidentTrigger | undefined;
         readonly manifestUnreadableCount: number;
         readonly manifestReusedCount: number;
+        readonly completeness?: ActivityLogCompletenessState | undefined;
+        readonly loss?: ActivityLogLossState | undefined;
+        readonly pinDisposition?: SupportIncidentPinStatus | undefined;
+        /** Actual server preparation provenance; absent when no retention was attempted. */
+        readonly retentionDisposition?: "stored" | "transient" | undefined;
+        readonly availabilityReason?:
+          | NonNullable<SupportIncidentPrivateProjection["clientReport"]>["availabilityReason"]
+          | undefined;
       }
     | undefined;
 }

@@ -89,6 +89,21 @@ prefix) — no raw absolute path ever enters the manifest (connected-context-evi
 We will deliver PR5 as four additive waves. PR5 does NOT change any live model-facing output,
 prompt assembly, or context selection. It is a pure persistence and validation wave.
 
+The grounded `contextAssembly` observer describes every excerpt in the already selected pack,
+using the active calibrated token accounting without a second eviction pass. Exceeding the observed
+lane/model budget is recorded as pressure `exceeded`; the observer neither changes source evidence
+nor claims that it applied recency ordering. These selected-source estimates remain separate from
+Gateway `promptContext` counts of references actually sent after fitting and from conversation
+compaction evidence.
+
+Connected source reads can return several separate, bounded windows for disjoint query anchors,
+including anchors on the same minified HTML source line. Each window retains its real line range;
+no fabricated contiguous text joins distant spans. Same-line partial windows carry an opaque
+identity derived from their content and source range so canonical atom IDs and context-pack cache
+keys distinguish them. The cumulative per-file byte grant and aggregate excerpt-byte budget still
+apply; there is no per-file window-count quota. A file with several selected windows counts as one
+file read, while excerpt diagnostics count each window.
+
 ### D1 — Additive EvidenceManifest fields: contextAssembly? and compaction?
 
 We will add two additive optional fields to `EvidenceManifest`

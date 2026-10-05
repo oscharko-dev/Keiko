@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 import type { AppWindow, Connection } from "../windows/types";
+import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-diagnostics", () => ({
@@ -795,6 +796,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       "chat-1",
       expect.objectContaining({ root: "/repo" }),
       undefined,
+      "files-1~chat-1",
     );
     // The edge itself is swept by useConnectionPrune once the window is gone.
     await waitFor(() => expect(readConns()).toHaveLength(0));
@@ -916,8 +918,8 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     await waitFor(() => expect(screen.getByTestId("connecting")).toHaveTextContent("null"));
   });
 
-  it("does not unbind the current Files scope when a persisted bind snapshot was elided", async () => {
-    const onScopeUnbind = vi.fn();
+  it("requires canonical teardown review when a persisted bind snapshot was elided", async () => {
+    const onScopeUnbind = vi.fn(() => false);
     persistWorkspace(
       [filesWindow({ cfg: { resolvedRoot: "/repo-now" } }), appWindow()],
       [
@@ -937,8 +939,9 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "close files" }));
 
-    await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
-    expect(onScopeUnbind).not.toHaveBeenCalled();
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+    expect(readWins().some((w) => w.id === "files-1")).toBe(true);
+    expect(readConns()).toHaveLength(1);
   });
 
   it("snapshots the chat owner before closing a bound chat window", async () => {
@@ -960,6 +963,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       "chat-1",
       expect.objectContaining({ root: "/repo" }),
       { conversationId: "chat-private", projectPath: "/private" },
+      "files-1~chat-1",
     );
   });
 
@@ -1016,9 +1020,55 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
         boundRoot: "/repo",
         boundScopeKind: "directory",
         boundRelativePath: "src",
+        boundScopeFingerprint: connectedScopeFingerprint({
+          kind: "directory",
+          root: "/repo",
+          relativePaths: ["src"],
+          connectedAtMs: 99,
+        }),
       });
     });
   });
+
+  it.each(["/manuals/Distinct", undefined])(
+    "requires restored-edge teardown acceptance before closing its Files window (%s)",
+    async (visibleRoot) => {
+      const onScopeUnbind = vi.fn<NonNullable<UseWorkspaceOptions["onScopeUnbind"]>>(() => false);
+      persistWorkspace(
+        [
+          filesWindow({
+            cfg: {
+              root: visibleRoot,
+              resolvedRoot: visibleRoot,
+              rootBinding: "coding-repository",
+            },
+          }),
+          appWindow({ cfg: { chatId: "saved-chat" } }),
+        ],
+        [
+          {
+            id: "files-1~chat-1",
+            a: "files-1",
+            b: "chat-1",
+            boundScopeElided: true,
+            boundScopeFingerprint: connectedScopeFingerprint({
+              kind: "workspace-root",
+              root: "/manuals/Scale",
+              relativePaths: [],
+              connectedAtMs: 1,
+            }),
+          },
+        ],
+      );
+      render(<Harness onScopeUnbind={onScopeUnbind} />);
+      await waitFor(() => expect(readConns()).toHaveLength(1));
+      fireEvent.click(screen.getByRole("button", { name: "close files" }));
+      await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+      expect(onScopeUnbind.mock.calls[0]?.[1].root).toBe(visibleRoot);
+      expect(readConns()).toHaveLength(1);
+      expect(readWins().some((window) => window.id === "files-1")).toBe(true);
+    },
+  );
 
   it("exposes linked Figma image sources through the returned Workspace API", async () => {
     persistWorkspace(

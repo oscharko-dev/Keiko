@@ -20,6 +20,11 @@ export {
   type DtoContractEdge,
 } from "./codeIntelligence.js";
 export { importGraphAdapter } from "./importGraph.js";
+export {
+  repositorySourceLines,
+  type RepositorySourceLine,
+} from "./repoSearchSourceClassification.js";
+export { structuralLineLooksLikeSymbolDefinition } from "./repoSearchMatchers.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export type {
   StructuralAdapterRequestContext,

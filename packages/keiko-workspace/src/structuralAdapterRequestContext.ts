@@ -11,6 +11,8 @@ import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpa
 import {
   createRequestLocalSearchTextSessionPool,
   findFiles,
+  findFilesBatch,
+  type FilenameSearchRequest,
   type RequestLocalSearchTextSessionPool,
   type SearchLimits,
   type SearchResult,
@@ -67,6 +69,10 @@ export interface StructuralAdapterRequestContext {
     limits: SearchLimits,
     deps?: StructuralRequestSearchDeps,
   ) => Promise<SearchResult>;
+  readonly findFilesBatch: (
+    requests: readonly FilenameSearchRequest[],
+    deps?: Pick<StructuralRequestSearchDeps, "signal" | "searchHints">,
+  ) => Promise<readonly SearchResult[]>;
   readonly searchText: (
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -76,6 +82,8 @@ export interface StructuralAdapterRequestContext {
 }
 
 export interface StructuralRequestSearchDeps {
+  readonly filePatternGroups?:
+    { readonly patterns: readonly string[]; readonly maxMatchesPerPattern: number } | undefined;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
@@ -201,6 +209,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private readonly staleContentPreviewPaths = new Set<string>();
   private readonly searchTextSessions: RequestLocalSearchTextSessionPool =
     createRequestLocalSearchTextSessionPool();
+  private hasGitMetadata: boolean | undefined;
   private paths: readonly string[] | undefined;
   private symbolicLinks: readonly string[] | undefined;
   private codeIndexPromise: Promise<CodeIntelligenceIndex> | undefined;
@@ -485,10 +494,10 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
 
   private assertInventoryCovers(limits: SearchLimits): void {
     if (
-      limits.maxFilesScanned > this.limits.maxFilesScanned ||
+      (limits.maxFilesScanned ?? Infinity) > (this.limits.maxFilesScanned ?? Infinity) ||
       limits.maxMatchesReturned > this.limits.maxMatchesReturned ||
       limits.maxBytesPerFileScanned > this.limits.maxBytesPerFileScanned ||
-      limits.elapsedMsMax > this.limits.elapsedMsMax
+      (limits.elapsedMsMax ?? Infinity) > (this.limits.elapsedMsMax ?? Infinity)
     ) {
       throw new RangeError("request context does not cover the requested search limits");
     }
@@ -499,7 +508,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     deps: StructuralRequestSearchDeps,
   ): StructuralExecutionControl {
     const nowMs = this.executionControl.nowMs;
-    const callDeadlineAtMs = nowMs() + Math.max(0, limits.elapsedMsMax);
+    const callDeadlineAtMs = nowMs() + Math.max(0, limits.elapsedMsMax ?? Infinity);
     const signal = combinedAbortSignal(this.executionControl.signal, deps.signal);
     return {
       nowMs,
@@ -519,6 +528,15 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     }
   }
 
+  private searchHints(hints: SearchHints | undefined): SearchHints {
+    if (structuralExecutionStopped(this.executionControl))
+      return { ...hints, hasGitMetadata: false };
+    this.hasGitMetadata ??= this.executionFs.exists(
+      resolveWithinWorkspace(this.scope.workspace.root, ".git"),
+    );
+    return { ...hints, hasGitMetadata: this.hasGitMetadata };
+  }
+
   public findFiles(
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -532,7 +550,10 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         fs: this.executionFs,
         nowMs: this.executionControl.nowMs,
         deadlineAtMs: control.deadlineAtMs,
-        ...(deps.searchHints === undefined ? {} : { searchHints: deps.searchHints }),
+        searchHints: this.searchHints(deps.searchHints),
+        ...(deps.filePatternGroups === undefined
+          ? {}
+          : { filePatternGroups: deps.filePatternGroups }),
         ...(control.signal === undefined ? {} : { signal: control.signal }),
         ...(deps.workspaceIndex === undefined ? {} : { workspaceIndex: deps.workspaceIndex }),
         ...(deps.semanticSearchProvider === undefined
@@ -551,6 +572,24 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     });
   }
 
+  public async findFilesBatch(
+    requests: readonly FilenameSearchRequest[],
+    deps: Pick<StructuralRequestSearchDeps, "signal" | "searchHints"> = {},
+  ): Promise<readonly SearchResult[]> {
+    for (const request of requests) this.assertInventoryCovers(request.limits);
+    const first = requests[0];
+    if (first === undefined) return [];
+    const control = this.searchControl(first.limits, deps);
+    this.fileSearchCount += requests.length;
+    return findFilesBatch(this.scope, requests, {
+      fs: this.executionFs,
+      nowMs: this.executionControl.nowMs,
+      deadlineAtMs: control.deadlineAtMs,
+      searchHints: this.searchHints(deps.searchHints),
+      ...(control.signal === undefined ? {} : { signal: control.signal }),
+    });
+  }
+
   public searchText(
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -564,7 +603,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         fs: this.executionFs,
         nowMs: this.executionControl.nowMs,
         deadlineAtMs: control.deadlineAtMs,
-        ...(deps.searchHints === undefined ? {} : { searchHints: deps.searchHints }),
+        searchHints: this.searchHints(deps.searchHints),
         ...(control.signal === undefined ? {} : { signal: control.signal }),
         ...(deps.workspaceIndex === undefined ? {} : { workspaceIndex: deps.workspaceIndex }),
         ...(deps.semanticSearchProvider === undefined

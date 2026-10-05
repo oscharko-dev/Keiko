@@ -99,6 +99,11 @@ receive an identical result — backward-compatible by construction.
 The grounded-QA call site in `keiko-server` already computes `deriveGroundedContextAssembly` for
 the evidence path (PR5 W3). It will pass the same result as the fourth argument.
 
+The source observer counts every excerpt already selected in the canonical pack without a second
+eviction pass. Its pressure reports overflow honestly; it does not alter selection. Source omission
+or trimming never activates conversation compaction. Connected and hybrid turns project the actual
+prepared conversation-history splice into `compactionActive`.
+
 **Why this shape**: `ContextLaneId` is a finite string literal union locked in
 `context-engineering.ts:15–23`; it carries no path information. `totalEstimatedTokens` and
 `budgetPressure` are a number and an enum. `includedItems` is a count. The type is structurally
@@ -132,6 +137,64 @@ The panel renders: effective budget (tokens), total estimated tokens (with press
 per-lane source counts from `contextSummary.laneCounts`, plus a "Compaction active" / "No
 compaction" indicator from `contextSummary.compactionActive`. It reuses `MetricRow`
 (GroundedAnswer.tsx:68) for all rows and `formatTokens` (lib/format.ts:94) for token numbers.
+
+The live composer meter is a separate request projection. Grounded conversation history has its
+own lane, capped at 8,000 tokens and a third of the usable input. Automatic compaction is triggered
+at 90% of that lane, even when the full model input is mostly empty. The meter identifies the lane
+budget explicitly, shows conversation headroom and its remaining compaction buffer separately from
+additional source capacity, and never labels unused source capacity as a conversation buffer.
+Source excerpts are fetched afresh per question and are trimmed, rather than summarized, to fit the
+remaining input. The previous grounded request's source share is an estimate for the next turn;
+the allocator's assembled estimate and provider/gateway request accounting remain distinct.
+
+The answer disclosure is labeled **Source context**. Its estimate counts selected source-excerpt content;
+prompt formatting, system instructions and conversation messages belong to the full-request
+accounting shown by the conversation meter. Populated source groups have localized names; the
+repository group is labeled **Repository excerpts**, whose item count can differ from files read
+and citation references. Fitting the gateway request can reduce the selected excerpts; the actual
+sent source share is recorded separately in `promptContext`. The panel never presents a source-only
+estimate as the total prompt.
+
+Checkpoint validation and manual compaction use the same bounded conversation profile as grounded
+sending. A valid 8,000-token lane checkpoint is not invalidated by comparison with a larger full
+model window. Checkpoints stamped with an effective input budget remain reusable when only the
+model window grows and the independent input ceiling keeps that budget unchanged. Legacy records
+without the budget stamp retain their window-based comparison. The shared capture evidence records
+both current and stamped input budgets when known. A failed checkpoint listing or manifest read
+has the explicit `read-failed` disposition and partial completeness; it never claims that no
+checkpoint existed. The correlated read diagnostic preserves the failure evidence.
+Each synchronous meter or manual-compaction read phase loads the checkpoint once and shares its
+unfiltered record and disposition between counting and capture. Manual compaction reloads after
+persistence so the returned status verifies the newly saved record. This reuse never spans requests.
+
+The meter refreshes when connected folder, knowledge or Git-change scopes change,
+without requiring another sent message to update its grounding posture. Body-free
+`chat.context.management` evidence includes `conversationInputBudgetTokens` and
+`sourceCapacityTokens` so its displayed lane and unused source capacity can be reconstructed.
+
+Grounding scope identity also guards the request that consumes this context. The server issues
+`gsi-v1:<digest>` from canonical connected-folder roots/relative paths, knowledge source kinds/IDs,
+and Git comparison relationship/repository/snapshot digests. Display labels, timestamps and counts
+are excluded. A supplied `expectedGroundingScopeIdentity` is validated syntactically (malformed
+values return 400 `BAD_REQUEST`) and checked against the current scope at serialized admission for
+sending or PATCH. A mismatch returns 409 `GROUNDING_SCOPE_CHANGED`; it does not silently apply a
+stale source mutation or run against newly connected sources. The grounded path also rechecks the
+scope before committing its answer. Legacy requests without a precondition still undergo the
+existing grounding-mode and access checks; absence is not a matching-identity claim.
+
+Git-change description authority is independent of source connectivity. Buffered and streaming
+turns require authority for the exact active comparison and return 409
+`GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED` when admission fails. Ordinary chat regeneration rejects
+both folder/knowledge grounding and an active Git-change scope with 409 `NOT_APPLIABLE`, before
+provider execution, and emits `chat.regeneration.rejected` with reason `grounding-scope`.
+
+`chat.scope.update` records a serialized source update as `applied` or `conflict` under the
+request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
+`resultScopeDigest`, and connected/local-knowledge/Git-change source counts. The result counts
+describe the post-update scope; a conflict
+retains the current scope and equal actual/result digests. These are body-free identifiers and
+counts, never raw roots, names or comparison content. A missing request correlation uses the
+existing `UNKNOWN_CORRELATION_ID` fallback.
 
 The panel is mounted inside `GroundedAnswerPanel` (ChatWindow.tsx:1147–1176), which already
 conditionally renders when a grounded answer is present. `ContextStatusPanel` receives only the

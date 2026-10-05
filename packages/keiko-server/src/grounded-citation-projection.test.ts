@@ -122,6 +122,33 @@ function packWithPathLevelEvidence(): ConnectedContextPack {
 }
 
 describe("buildAnswerCitations", () => {
+  it("projects the actual cited range of a deep manual source rather than reporting zero evidence", () => {
+    const scopePath = `${Array.from({ length: 120 }, (_, i) => `d${String(i).padStart(3, "0")}`).join("/")}/manual.html`;
+    const deepPack: ConnectedContextPack = {
+      ...pack(),
+      files: [
+        {
+          scopePath,
+          role: "read-only",
+          selectionReason: "ranked candidate",
+          excerpts: [excerpt(scopePath, "deep-manual", 1, 2, 1)],
+        },
+      ],
+    };
+    expect(
+      buildAnswerCitations(
+        deepPack,
+        `DeepManualProbe is 1440 hours [${scopePath}:1-2].`,
+        (value) => value,
+      ),
+    ).toMatchObject([
+      { scopePath, stableId: "deep-manual", lineRange: { startLine: 1, endLine: 2 } },
+    ]);
+    expect(
+      buildAnswerCitations(deepPack, `Unsupported [${scopePath}:9-10].`, (value) => value),
+    ).toEqual([]);
+  });
+
   it("projects only evidence ranges the answer actually cites", () => {
     const citations = buildAnswerCitations(
       pack(),

@@ -1,14 +1,16 @@
 // Shared incident resolution for desktop and CLI support reports.
 import {
   activityLogOperationSchema,
+  diagnosticSufficiencyStatus,
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   type SupportIncident,
-  type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentSufficiency,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import type { SupportQueryResult } from "./support-query.js";
+import { attributeSelectedReportFailure } from "./support-desktop-report-attribution.js";
 import type { SupportIncidentSegmentFile } from "../support-incident.js";
 import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import {
@@ -94,7 +96,7 @@ export function resolveSupportIncidentEvidence(
 }
 
 function incidentFailureClasses(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   analysis: AnalyzeAllResult,
 ): readonly string[] {
   if (record.trigger === "registered-failure") {
@@ -108,7 +110,7 @@ function incidentFailureClasses(
 }
 
 function incidentSufficiency(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   analysis: AnalyzeAllResult,
 ): SupportIncidentSufficiency {
   const required = incidentFailureClasses(record, analysis);
@@ -139,7 +141,7 @@ function evidenceLineCount(evidence: ActivityLogEvidenceSummary): number {
 
 /** Builds the canonical SupportIncident descriptor from a record and its window's evidence. */
 export function resolveSupportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   segments: readonly SupportIncidentSegmentFile[],
   stateDir: string,
 ): SupportIncident {
@@ -152,7 +154,7 @@ export function resolveSupportIncident(
 
 /** A selected causal closure supplies its own evidence, independent of the report click time. */
 export function resolveSupportIncidentAnalysis(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   segments: readonly SupportIncidentSegmentFile[],
   analysis: AnalyzeAllResult,
 ): SupportIncident {
@@ -180,7 +182,7 @@ export function resolveSupportIncidentAnalysis(
  * publish an honest report instead of failing.
  */
 export function unresolvedSupportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   segments: readonly SupportIncidentSegmentFile[],
   reason: SupportIncidentWindowError["reason"],
 ): SupportIncident {
@@ -231,22 +233,35 @@ function selectedSegments(query: SupportQueryResult): readonly SupportIncidentSe
 }
 
 export function resolveSelectedSupportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   selected: SupportQueryResult,
 ): ReturnType<typeof resolveSupportIncidentAnalysis> {
+  const attributed = attributeSelectedReportFailure(record, selected);
   const segments = selectedSegments(selected);
   try {
     const analysis = analyzeLogLines(
       selected.events.map((event) => ({ text: event.text, terminated: true })),
       {
+        sourceKind: "support-report",
         maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
         maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
       },
     );
-    return resolveSupportIncidentAnalysis(record, segments, analysis);
+    const incident = resolveSupportIncidentAnalysis(attributed, segments, analysis);
+    const reasons = [
+      ...new Set([...incident.sufficiency.reasons, ...selected.diagnosticSufficiency.reasons]),
+    ];
+    return {
+      ...incident,
+      sufficiency: {
+        ...incident.sufficiency,
+        status: diagnosticSufficiencyStatus(reasons),
+        reasons,
+      },
+    };
   } catch (error) {
     if (!(error instanceof ActivityLogAnalyzeBudgetError)) throw error;
     // Reuse the canonical budget-exceeded descriptor; retain the query's selected evidence.
-    return unresolvedSupportIncident(record, segments, "window-too-large");
+    return unresolvedSupportIncident(attributed, segments, "window-too-large");
   }
 }

@@ -551,6 +551,10 @@
       "types": "./dist/grounded-assessment.d.ts",
       "import": "./dist/grounded-assessment.js"
     },
+    "./runtime/connected-search-abstention": {
+      "types": "./dist/connected-search-abstention.d.ts",
+      "import": "./dist/connected-search-abstention.js"
+    },
     "./runtime/no-evidence-answer": {
       "types": "./dist/no-evidence-answer.d.ts",
       "import": "./dist/no-evidence-answer.js"

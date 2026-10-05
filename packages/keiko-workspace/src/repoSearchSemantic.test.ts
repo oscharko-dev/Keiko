@@ -26,6 +26,89 @@ function providerReturning(matches: readonly SemanticSearchMatch[]): SemanticSea
 }
 
 describe("repoSearchSemantic", () => {
+  it.each([
+    { text: "ok\uFFFD", maxDocumentBytes: 5, expected: "ok\uFFFD" },
+    { text: "ok中", maxDocumentBytes: 4, expected: "ok" },
+    { text: "ok😀", maxDocumentBytes: 5, expected: "ok" },
+  ])(
+    "preserves valid replacement characters and clips only incomplete bytes ($text)",
+    ({ text, maxDocumentBytes, expected }) => {
+      const session = createSemanticSearchSession(providerReturning([]), query(), {
+        maxDocumentBytes,
+        maxDocuments: 1,
+      });
+      collectSemanticSearchDocument(session, { scopePath: "src/note.txt", text });
+      expect(session?.documents).toEqual([{ scopePath: "src/note.txt", text: expected }]);
+    },
+  );
+  it("bounds the ranked provider payload across documents before egress", async () => {
+    const bounds = { maxDocuments: 3, maxDocumentBytes: 15 };
+    let supplied: readonly { readonly scopePath: string; readonly text: string }[] = [];
+    const session = createSemanticSearchSession(
+      {
+        name: "payload-fixture",
+        search: (input) => {
+          supplied = input.documents;
+          return Promise.resolve([]);
+        },
+      },
+      query(),
+      bounds,
+    );
+    for (let index = 0; index < 6; index += 1) {
+      collectSemanticSearchDocument(
+        session,
+        { scopePath: `note-${String(index)}.txt`, text: "ok\uFFFDtail" },
+        index,
+      );
+    }
+    await runSemanticSearchSession(session, query(), undefined);
+    expect(supplied.map((document) => document.scopePath)).toEqual([
+      "note-5.txt",
+      "note-4.txt",
+      "note-3.txt",
+    ]);
+    expect(supplied.map((document) => document.text)).toEqual(["ok\uFFFD", "ok\uFFFD", "ok\uFFFD"]);
+    expect(supplied).toHaveLength(bounds.maxDocuments);
+    expect(supplied.reduce((sum, document) => sum + Buffer.byteLength(document.text), 0)).toBe(
+      bounds.maxDocumentBytes,
+    );
+  });
+
+  it("keeps an explicitly unbounded provider wait pending without scheduling a timer", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish: ((matches: readonly SemanticSearchMatch[]) => void) | undefined;
+      const response = new Promise<readonly SemanticSearchMatch[]>((resolve) => {
+        finish = resolve;
+      });
+      const onTimeout = vi.fn();
+      const session = createSemanticSearchSession(
+        { name: "unbounded-fixture", search: () => response },
+        query(),
+      );
+      collectSemanticSearchDocument(session, { scopePath: "note.txt", text: "charge card" });
+      let settled = false;
+      const pending = runSemanticSearchSession(session, query(), undefined, {
+        timeoutMs: Infinity,
+        onTimeout,
+      });
+      void pending.then(() => {
+        settled = true;
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(86_400_000);
+      expect(settled).toBe(false);
+      expect(onTimeout).not.toHaveBeenCalled();
+      if (finish === undefined) throw new Error("Expected a pending provider response");
+      finish([{ scopePath: "note.txt", score: 1, line: 1 }]);
+      await expect(pending).resolves.toEqual([{ scopePath: "note.txt", score: 1, line: 1 }]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the RRF constant stable and sanitizes provider names", () => {
     expect(SEMANTIC_RRF_K).toBe(60);
     expect(semanticSearchTool("Local Fixture Provider")).toBe(

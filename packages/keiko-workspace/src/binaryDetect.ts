@@ -2,6 +2,8 @@
 // byte means binary" rule rejected UTF-16 source files, so this module now sniffs BOM/patterned
 // UTF-16 first and then falls back to a bounded control-byte ratio. Pure synchronous scan — no IO.
 
+import { WorkspaceReadError } from "@oscharko-dev/keiko-security/errors/workspace";
+
 export interface BinaryProbeOptions {
   readonly maxProbeBytes: number;
 }
@@ -10,7 +12,8 @@ export const DEFAULT_BINARY_PROBE: BinaryProbeOptions = {
   maxProbeBytes: 4096,
 } as const;
 
-export type TextByteEncoding = "utf-8" | "utf-16le" | "utf-16be";
+// Canonical codec names are obtained from the platform decoder, never guessed from arbitrary bytes.
+export type TextByteEncoding = TextDecoder["encoding"];
 
 export interface DecodedTextBytes {
   readonly encoding: TextByteEncoding;
@@ -18,7 +21,9 @@ export interface DecodedTextBytes {
 }
 
 export interface DecodeTextBytesOptions {
+  readonly scopePath?: string | undefined;
   readonly allowIncompleteTail?: boolean | undefined;
+  readonly requireSupportedEncoding?: boolean | undefined;
 }
 
 function probeLimit(bytes: Uint8Array, options?: BinaryProbeOptions): number {
@@ -79,6 +84,7 @@ export function detectTextByteEncoding(
   bytes: Uint8Array,
   options?: BinaryProbeOptions,
 ): TextByteEncoding | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
   if (hasUtf16LeBom(bytes)) {
     return "utf-16le";
   }
@@ -89,45 +95,154 @@ export function detectTextByteEncoding(
   return utf16PatternEncoding(bytes, limit);
 }
 
-function utf8LeadByteSeqLen(lead: number): number {
-  if ((lead & 0x80) === 0x00) return 1;
-  if ((lead & 0xe0) === 0xc0) return 2;
-  if ((lead & 0xf0) === 0xe0) return 3;
-  if ((lead & 0xf8) === 0xf0) return 4;
-  return 0;
+interface HtmlAttributeCursor {
+  readonly tag: string;
+  offset: number;
 }
 
-function validUtf8PrefixLength(bytes: Uint8Array): number {
-  const len = bytes.length;
-  if (len === 0) return 0;
-  let i = len - 1;
-  const limit = Math.max(len - 4, -1);
-  while (i > limit && ((bytes[i] ?? 0) & 0xc0) === 0x80) {
-    i -= 1;
-  }
-  const seqLen = utf8LeadByteSeqLen(bytes[i] ?? 0);
-  if (seqLen === 0) return i;
-  return i + seqLen <= len ? len : i;
+function skipHtmlAttributeSeparators(cursor: HtmlAttributeCursor, slash = false): void {
+  const separator = slash ? /[\t\n\f\r /]/u : /[\t\n\f\r ]/u;
+  while (cursor.offset < cursor.tag.length && separator.test(cursor.tag.charAt(cursor.offset)))
+    cursor.offset += 1;
 }
 
-export function completeTextBytePrefix(bytes: Uint8Array, encoding: TextByteEncoding): Uint8Array {
-  if (encoding === "utf-8") {
-    return bytes.subarray(0, validUtf8PrefixLength(bytes));
+function htmlAttributeName(cursor: HtmlAttributeCursor): string {
+  const start = cursor.offset;
+  while (
+    cursor.offset < cursor.tag.length &&
+    !/[\t\n\f\r />=]/u.test(cursor.tag.charAt(cursor.offset))
+  )
+    cursor.offset += 1;
+  return cursor.tag.slice(start, cursor.offset).toLowerCase();
+}
+
+function htmlAttributeValue(cursor: HtmlAttributeCursor): string | undefined {
+  skipHtmlAttributeSeparators(cursor);
+  const quote = cursor.tag.charAt(cursor.offset);
+  if (quote === '"' || quote === "'") {
+    const start = cursor.offset + 1;
+    const end = cursor.tag.indexOf(quote, start);
+    cursor.offset = end < 0 ? cursor.tag.length : end + 1;
+    return end < 0 ? undefined : cursor.tag.slice(start, end);
   }
-  return bytes.subarray(0, bytes.length - (bytes.length % 2));
+  const start = cursor.offset;
+  while (
+    cursor.offset < cursor.tag.length &&
+    !/[\t\n\f\r >]/u.test(cursor.tag.charAt(cursor.offset))
+  )
+    cursor.offset += 1;
+  // Preserve the existing compact self-closing declaration tolerance only at the tag terminator.
+  // Interior slashes belong to the unquoted value, including text/html in http-equiv content.
+  const end =
+    cursor.tag.charAt(cursor.offset) === ">" && cursor.tag.charAt(cursor.offset - 1) === "/"
+      ? cursor.offset - 1
+      : cursor.offset;
+  return end === start ? undefined : cursor.tag.slice(start, end);
+}
+
+interface HtmlMetaTag {
+  readonly end: number;
+  readonly attributes: ReadonlyMap<string, string>;
+}
+
+function parseHtmlMetaTag(prefix: string, offset: number): HtmlMetaTag | undefined {
+  const cursor = { tag: prefix, offset };
+  const attributes = new Map<string, string>();
+  while (cursor.offset < prefix.length) {
+    skipHtmlAttributeSeparators(cursor, true);
+    if (cursor.offset === prefix.length) return undefined;
+    if (prefix.charAt(cursor.offset) === ">") return { end: cursor.offset + 1, attributes };
+    const name = htmlAttributeName(cursor);
+    skipHtmlAttributeSeparators(cursor);
+    if (prefix.charAt(cursor.offset) !== "=") continue;
+    cursor.offset += 1;
+    const value = htmlAttributeValue(cursor);
+    if (name !== "" && value !== undefined && !attributes.has(name)) attributes.set(name, value);
+  }
+  return undefined;
+}
+
+function* htmlMetaTags(prefix: string): Generator<ReadonlyMap<string, string>> {
+  const folded = prefix.toLowerCase();
+  let offset = 0;
+  while (offset < prefix.length) {
+    const start = folded.indexOf("<meta", offset);
+    if (start < 0) return;
+    offset = start + 5;
+    if (!/[\t\n\f\r />]/u.test(prefix.charAt(offset))) continue;
+    const tag = parseHtmlMetaTag(prefix, offset);
+    if (tag === undefined) return;
+    offset = tag.end;
+    yield tag.attributes;
+  }
+}
+
+function htmlMetaCharset(attributes: ReadonlyMap<string, string>): string | undefined {
+  const direct = attributes.get("charset");
+  if (direct !== undefined) return direct;
+  if (attributes.get("http-equiv")?.toLowerCase() !== "content-type") return undefined;
+  const value = /\bcharset[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"]*)"|'([^']*)'|([^;\t\n\f\r ]+))/iu.exec(
+    attributes.get("content") ?? "",
+  );
+  return value?.[1] ?? value?.[2] ?? value?.[3];
+}
+
+function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {
+  try {
+    const encoding = new TextDecoder(charset, { fatal: true }).encoding;
+    // HTML metadata maps UTF-16 labels to UTF-8; an actual byte-order mark still takes precedence.
+    return encoding === "utf-16le" || encoding === "utf-16be" ? "utf-8" : encoding;
+  } catch (error) {
+    if (error instanceof RangeError) return false;
+    throw error;
+  }
+}
+
+function declaredHtmlEncoding(
+  bytes: Uint8Array,
+  scopePath: string | undefined,
+): TextByteEncoding | false | undefined {
+  if (scopePath === undefined || !/\.(?:html?|xhtml)$/iu.test(scopePath)) return undefined;
+  const prefix = new TextDecoder("windows-1252")
+    .decode(bytes.subarray(0, 1024))
+    .replace(/<!--[\s\S]*?(?:-->|$)/gu, "");
+  for (const tag of htmlMetaTags(prefix)) {
+    const charset = htmlMetaCharset(tag)?.trim().toLowerCase();
+    if (charset === undefined || charset === "") continue;
+    return supportedDeclaredHtmlEncoding(charset);
+  }
+  return undefined;
+}
+
+function selectedTextEncoding(
+  bytes: Uint8Array,
+  encoding: TextByteEncoding | undefined,
+  options: DecodeTextBytesOptions | undefined,
+): TextByteEncoding | undefined {
+  const selected =
+    encoding ??
+    detectTextByteEncoding(bytes) ??
+    declaredHtmlEncoding(bytes, options?.scopePath) ??
+    "utf-8";
+  if (selected !== false) return selected;
+  if (options?.requireSupportedEncoding === true)
+    throw new WorkspaceReadError("declared text encoding is unavailable", options.scopePath ?? "");
+  return undefined;
 }
 
 export function decodeTextBytes(
   bytes: Uint8Array,
-  encoding: TextByteEncoding = detectTextByteEncoding(bytes) ?? "utf-8",
+  encoding?: TextByteEncoding,
   options?: DecodeTextBytesOptions,
 ): DecodedTextBytes | undefined {
-  const complete =
-    options?.allowIncompleteTail === true ? completeTextBytePrefix(bytes, encoding) : bytes;
+  const selected = selectedTextEncoding(bytes, encoding, options);
+  if (selected === undefined) return undefined;
   try {
     return {
-      encoding,
-      text: new TextDecoder(encoding, { fatal: true }).decode(complete),
+      encoding: selected,
+      text: new TextDecoder(selected, { fatal: true }).decode(bytes, {
+        stream: options?.allowIncompleteTail === true,
+      }),
     };
   } catch {
     return undefined;
@@ -158,9 +273,8 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
   if (limit === 0) {
     return false;
   }
-  if (detectTextByteEncoding(bytes, options) !== undefined) {
-    return false;
-  }
+  const encoding = detectTextByteEncoding(bytes, options);
+  if (encoding !== undefined) return hintedProbeLooksBinary(bytes, limit, encoding);
   let nulCount = 0;
   let controlCount = 0;
   for (let i = 0; i < limit; i += 1) {
@@ -173,4 +287,43 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
     }
   }
   return exceedsBinaryControlThreshold(bytes[0] ?? 0, nulCount, controlCount, limit);
+}
+
+function hintedProbeLooksBinary(
+  bytes: Uint8Array,
+  limit: number,
+  encoding: TextByteEncoding,
+): boolean {
+  // UTF-16/32 document-reader hints contain structural NUL bytes. A UTF-8 BOM is only a hint:
+  // validate its bounded decoded payload, including a safe incomplete final codepoint.
+  if (encoding !== "utf-8") return false;
+  const decoded = decodeTextBytes(bytes.subarray(0, limit), encoding, {
+    allowIncompleteTail: true,
+  });
+  return (
+    decoded === undefined || decoded.text.includes("\0") || decodedTextLooksBinary(decoded.text)
+  );
+}
+
+function decodedTextLooksBinary(text: string): boolean {
+  if (text.length === 0) return false;
+  let controls = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.codePointAt(index) ?? 0;
+    if (code < 32 && !isAllowedControlByte(code)) controls += 1;
+  }
+  return exceedsBinaryControlThreshold(text.codePointAt(0) ?? 0, 0, controls, text.length);
+}
+
+/** Classify the complete, size-admitted file consistently for search and source reads. */
+export function decodeTextFileBytes(
+  bytes: Uint8Array,
+  options?: DecodeTextBytesOptions,
+): DecodedTextBytes | undefined {
+  const decoded = decodeTextBytes(bytes, undefined, options);
+  return decoded === undefined ||
+    decoded.text.includes("\0") ||
+    decodedTextLooksBinary(decoded.text)
+    ? undefined
+    : decoded;
 }

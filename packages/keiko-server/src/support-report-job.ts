@@ -1,10 +1,13 @@
 import { Worker } from "node:worker_threads";
 import {
+  SUPPORT_REPORT_WORKER_TIMEOUT_MS,
   type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
   type SupportReportFailure,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { dismissSupportIncident, reportServerLogFailure } from "@oscharko-dev/keiko-activity-log";
 import {
   prepareDesktopSupportReport,
   SupportReportError,
@@ -33,7 +36,7 @@ export type SupportReportWorkerMessage =
   | { readonly kind: "prepare"; readonly correlationId?: string | undefined };
 export interface SupportReportPreparedMessage {
   readonly kind: "prepared";
-  readonly record: SupportIncidentRecord;
+  readonly record: SupportIncidentDescriptorRecord;
 }
 
 export class SupportReportJobError extends Error {
@@ -57,10 +60,10 @@ function prepareReport(
   worker: Worker,
   stateDir: string,
   correlationId: string | undefined,
-  requestCorrelationId: string | undefined,
+  onCreated: ((record: SupportIncidentRecord) => void) | undefined,
 ): void {
   try {
-    const record = prepareDesktopSupportReport(stateDir, correlationId, requestCorrelationId);
+    const record = prepareDesktopSupportReport(stateDir, correlationId, undefined, onCreated);
     worker.postMessage({ kind: "prepared", record } satisfies SupportReportPreparedMessage);
   } catch (error) {
     throw new SupportReportJobError(
@@ -78,7 +81,7 @@ function reportMessageHandler(
   correlationId: string | undefined,
   resolve: (report: DesktopSupportReportResponse) => void,
   reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
-  requestCorrelationId: string | undefined,
+  onCreated: ((record: SupportIncidentRecord) => void) | undefined,
 ): (value: SupportReportWorkerMessage) => void {
   let prepareStarted = false;
   return (value): void => {
@@ -96,7 +99,7 @@ function reportMessageHandler(
         return;
       }
       try {
-        prepareReport(worker, stateDir, value.correlationId, requestCorrelationId);
+        prepareReport(worker, stateDir, value.correlationId, onCreated);
       } catch (error) {
         reject(error);
       }
@@ -114,7 +117,7 @@ async function awaitReport(
   stateDir: string,
   correlationId: string | undefined,
   signal?: AbortSignal,
-  requestCorrelationId?: string,
+  onCreated?: (record: SupportIncidentRecord) => void,
 ): Promise<DesktopSupportReportResponse> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancel: (() => void) | undefined;
@@ -126,7 +129,7 @@ async function awaitReport(
       };
       timer = setTimeout(() => {
         reject(new SupportReportJobError("timeout"));
-      }, 30_000);
+      }, SUPPORT_REPORT_WORKER_TIMEOUT_MS);
       signal?.addEventListener("abort", cancel, { once: true });
       const onMessage = reportMessageHandler(
         worker,
@@ -134,7 +137,7 @@ async function awaitReport(
         correlationId,
         resolve,
         reject,
-        requestCorrelationId,
+        onCreated,
       );
       worker.on("message", (value: SupportReportWorkerMessage) => {
         if (accepting) onMessage(value);
@@ -164,27 +167,81 @@ async function releaseWorker(worker: Worker | undefined): Promise<void> {
   }
 }
 
+interface OwnedReportPreparation {
+  readonly record: SupportIncidentRecord;
+  retired: boolean;
+}
+
+function reportAbandonedPreparation(
+  stateDir: string,
+  owned: OwnedReportPreparation,
+  correlationId: string | undefined,
+): void {
+  if (owned.retired) return;
+  try {
+    const result = dismissSupportIncident(stateDir, owned.record.incidentId, {
+      correlationId,
+      retirementReason: "abandoned",
+    });
+    owned.retired = result !== "failed";
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: "support.incident.dismissed",
+      correlationId,
+      loss: "event-dropped",
+    });
+  }
+}
+
+async function releaseReportJob(
+  worker: Worker | undefined,
+  completed: boolean,
+  stateDir: string,
+  owned: OwnedReportPreparation | undefined,
+  correlationId: string | undefined,
+): Promise<void> {
+  let released = false;
+  try {
+    await releaseWorker(worker);
+    released = true;
+  } finally {
+    if ((!completed || !released) && owned !== undefined)
+      reportAbandonedPreparation(stateDir, owned, correlationId);
+  }
+}
+
 /** Keep synchronous log scans off the request event loop, with one bounded worker per server. */
 export async function runSupportReportJob(
   stateDir: string,
   correlationId?: string,
   signal?: AbortSignal,
   requestCorrelationId?: string,
+  onPrepared?: (abandon: () => void) => void,
 ): Promise<DesktopSupportReportResponse> {
   if (running) throw new SupportReportJobError("busy");
   if (signal?.aborted === true) throw new SupportReportJobError("cancelled");
   running = true;
   let worker: Worker | undefined;
+  let owned: OwnedReportPreparation | undefined;
+  let completed = false;
   try {
     worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
       workerData: { stateDir, correlationId },
       resourceLimits: { maxOldGenerationSizeMb: 256 },
     });
-    return await awaitReport(worker, stateDir, correlationId, signal, requestCorrelationId);
+    const report = await awaitReport(worker, stateDir, correlationId, signal, (record): void => {
+      const preparation = { record, retired: false };
+      owned = preparation;
+      onPrepared?.((): void => {
+        reportAbandonedPreparation(stateDir, preparation, requestCorrelationId);
+      });
+    });
+    completed = true;
+    return report;
   } catch (error) {
     if (error instanceof SupportReportJobError) throw error;
     throw new SupportReportJobError("unavailable", error);
   } finally {
-    await releaseWorker(worker);
+    await releaseReportJob(worker, completed, stateDir, owned, requestCorrelationId);
   }
 }

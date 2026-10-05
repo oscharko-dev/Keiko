@@ -1,6 +1,8 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type {
   ClientStageId,
   ClientNavigationOutcome,
+  ClientSourcePreviewCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
@@ -35,27 +37,75 @@ export interface FilesNavigationRead {
   readonly settle: (response?: unknown, outcome?: ClientNavigationOutcome) => void;
 }
 
+function validSourceByteCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_RECURSIVE_TEXT_FILE_BYTES
+  );
+}
+
+function previewResponseRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
+
+function binaryPreviewCounts(response: Record<string, unknown>): ClientSourcePreviewCounts {
+  const counts: ClientSourcePreviewCounts = {
+    previewKind: "binary",
+    sourceTextBytesRead: 0,
+    canEdit: false,
+  };
+  if (response.reason === "too_large") return { ...counts, binaryReason: "too-large" };
+  if (response.reason === "unsupported") return { ...counts, binaryReason: "unsupported" };
+  return counts;
+}
+
+function sourcePreviewCounts(
+  stage: ClientStageId,
+  response: unknown,
+): ClientSourcePreviewCounts | undefined {
+  if (stage !== "files source preview" || !previewResponseRecord(response)) return undefined;
+  if (response.kind === "image")
+    return { previewKind: "image", sourceTextBytesRead: 0, canEdit: false };
+  if (response.kind === "binary") return binaryPreviewCounts(response);
+  if (response.kind !== "text" || !("sourceTextBytesRead" in response) || !("canEdit" in response))
+    return undefined;
+  if (!validSourceByteCount(response.sourceTextBytesRead) || typeof response.canEdit !== "boolean")
+    return undefined;
+  return {
+    previewKind: "text",
+    sourceTextBytesRead: response.sourceTextBytesRead,
+    canEdit: response.canEdit,
+  };
+}
+
 export function startFilesNavigationEvidence(
   stage: ClientStageId,
   correlationId = newClientCorrelationId(),
+  parentCorrelationId?: string,
 ): (response?: unknown, navigationOutcome?: ClientNavigationOutcome) => void {
+  if (stage === "files source preview" && !readStageAvailable()) return (): void => undefined;
   const ordinal = ++nextOrdinal;
   const startedAt = performance.now();
   reportClientDiagnostic("Workspace navigation started", {
     correlationId,
+    parentCorrelationId,
     stageReport: { stage, phase: "started", ordinal },
   });
   let settled = false;
-  return (_response?: unknown, navigationOutcome?: ClientNavigationOutcome): void => {
+  return (response?: unknown, navigationOutcome?: ClientNavigationOutcome): void => {
     if (settled) return;
     settled = true;
     reportClientDiagnostic("Workspace navigation settled", {
       correlationId,
+      parentCorrelationId,
       stageReport: {
         stage,
         phase: "settled",
         ordinal,
         ...(navigationOutcome === undefined ? {} : { navigationOutcome }),
+        preview: sourcePreviewCounts(stage, response),
         durationMs: Math.min(
           CLIENT_STAGE_DURATION_MS_MAX,
           Math.max(0, Math.round(performance.now() - startedAt)),
@@ -82,6 +132,7 @@ export async function observeFilesDirectoryRead<T>(
   } catch (error: unknown) {
     reportClientDiagnostic("Workspace directory read failed", {
       correlationId,
+      failureStage: "files directory load",
       errorKind: bffRequestErrorKind(error),
       errorEvidence: clientErrorEvidence(error),
     });

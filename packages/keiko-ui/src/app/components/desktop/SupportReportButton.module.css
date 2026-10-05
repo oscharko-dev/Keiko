@@ -1,24 +1,68 @@
 .cmpControl {
   border: 0;
   min-inline-size: 0;
+  max-inline-size: 100%;
   margin: 0;
   padding: 0;
   display: inline-flex;
+  align-self: flex-start;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--sp-2, 8px);
+  gap: var(--space-4);
 }
 
 .cmpFeedback {
   color: var(--text-secondary);
-  font-size: var(--text-sm, 12px);
+  font-size: var(--text-label);
+  min-inline-size: 0;
+  flex: 1 1 18rem;
+  overflow-wrap: anywhere;
+}
+
+.cmpFeedback:empty {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.cmpControl .cmpAction {
+  flex: none;
+  width: auto;
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-height: 28px;
+  height: auto;
+  padding: 4px 8px;
+  font-size: var(--text-label);
+  font-weight: 400;
 }
 
 .cmpAction {
-  flex: none;
-  width: auto;
-  min-height: 28px;
-  padding: 4px 8px;
-  font-size: var(--text-sm, 12px);
-  font-weight: 400;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-control);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.cmpAction:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--button-secondary-surface-hover);
+}
+
+.cmpAction:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.cmpAction:disabled,
+.cmpAction[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

@@ -1668,6 +1668,26 @@ describe("analyzeLogText — process sequence integrity", () => {
     expect(result.evidence.classification).toBe("supported");
   });
 
+  it("accepts report selection jumps without hiding duplicate, reset or decreasing sequence anomalies", () => {
+    const event = (seq: number): string =>
+      line({ ts: T0, category: "process", op: "selected", pid: 8, instanceId: "feedface", seq });
+    const selected = analyzeLogText(`${event(340)}\n${event(341)}\n`, {
+      sourceKind: "support-report",
+    });
+    expect(selected.evidence.sequenceAnomalies).toEqual([]);
+    expect(selected.warnings).toEqual([]);
+
+    const anomalous = analyzeLogText(`${event(340)}\n${event(342)}\n${event(342)}\n${event(1)}\n`, {
+      sourceKind: "support-report",
+    });
+    expect(anomalous.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({ kind: "duplicate", previousSeq: 342, seq: 342 }),
+      expect.objectContaining({ kind: "reset", previousSeq: 342, seq: 1 }),
+      expect.objectContaining({ kind: "decreasing", previousSeq: 342, seq: 1 }),
+    ]);
+    expect(anomalous.evidence.classification).toBe("incomplete");
+  });
+
   it("does not mistake process-wide allocations in another state directory for missing evidence", () => {
     const event = (seq: number): string =>
       line({

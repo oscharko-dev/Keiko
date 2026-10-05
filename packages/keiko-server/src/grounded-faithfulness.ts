@@ -31,20 +31,14 @@ import {
   citationFindingTotalSuffix,
   citationMarkerIndices,
   findCitationMarkerGroups,
+  markdownCodeRanges,
+  type MarkdownCodeRange,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
-
-// Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
-// model call. Kept generic (no scope path) so it is safe to display and speak verbatim.
-// Source-neutral on purpose: this constant is now shared by the folder, multi-source AND
-// hybrid topologies (KEIKO-0196), and a hybrid scope may contain only knowledge-capsule
-// connectors with no repository scope searched at all. Naming "repository evidence" there
-// would report on a source that was never queried, so the wording states only what is
-// true of every topology — nothing in the connected scope matched.
-export const GROUNDED_NO_EVIDENCE_ANSWER =
-  "I could not find evidence in the connected scope to answer this question. " +
-  "No answer is given because there is nothing to ground it in.";
+export { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 // ─── Evidence-presence predicates ─────────────────────────────────────────────
 
@@ -82,9 +76,88 @@ export interface ParsedInlineCitation {
 // repo path: it must contain a `/` or a filename extension, and be built from path-safe characters.
 // This is deliberately conservative so ordinary prose brackets (`[1]`, `[note]`, `[a, b]`) and
 // markdown links (`[text](url)`) are NOT misread as citations.
-const BRACKET_RE = /\[([^\]\n]{1,200})\]/g;
-const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
+// The shared path bound plus bounded source ordinal and safe-integer line suffixes.
+const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
+const BRACKET_PATTERN = String.raw`\[([^\[\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`;
+const FOLLOWING_BRACKET_RE = new RegExp(BRACKET_PATTERN, "y");
+// Formatting whitespace belongs to citation punctuation, never to the actual cited path.
+const CITATION_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
+const LINE_RANGE_SUFFIX_SOURCE = String.raw`${CITATION_HORIZONTAL_SPACE}:${CITATION_HORIZONTAL_SPACE}(\d{1,16})(?:${CITATION_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${CITATION_HORIZONTAL_SPACE}(\d{1,16}))?`;
+const LINE_RANGE_SUFFIX_RE = new RegExp(`${LINE_RANGE_SUFFIX_SOURCE}$`, "u");
+const BARE_CITATION_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
+const BARE_CITATION_PATH = String.raw`(?:${BARE_CITATION_SEGMENT}\/){0,1000}${BARE_CITATION_SEGMENT}\.[A-Za-z0-9]{1,12}`;
+const BARE_CITATION_RANGE = String.raw`${CITATION_HORIZONTAL_SPACE}:${CITATION_HORIZONTAL_SPACE}\d{1,16}(?:${CITATION_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${CITATION_HORIZONTAL_SPACE}\d{1,16})?`;
+const REPOSITORY_CITATION_RE = new RegExp(
+  String.raw`${BRACKET_PATTERN}|(?<!\x60)\x60([^\x60\r\n]{1,${CITATION_TOKEN_MAX_CHARS}})\x60(?!\x60)(?:${BARE_CITATION_RANGE})?|(?<=\|)([^|\x60\r\n]{1,${CITATION_TOKEN_MAX_CHARS}}${BARE_CITATION_RANGE})(?=${CITATION_HORIZONTAL_SPACE}\|)|(?<![\p{L}\p{N}\p{M}_./:@\x60\[(-])(${BARE_CITATION_PATH}${BARE_CITATION_RANGE})(?![\p{L}\p{N}_:/\u2010-\u2014\u2212-])`,
+  "gu",
+);
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
+// Root-level implicit filenames need a known text/source extension. Explicit bracketed
+// references retain the broader portable-path contract, including uncommon extensions.
+const IMPLICIT_REPOSITORY_EXTENSIONS = new Set([
+  "astro",
+  "bash",
+  "c",
+  "cc",
+  "cjs",
+  "config",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "cts",
+  "go",
+  "gradle",
+  "h",
+  "hpp",
+  "htm",
+  "html",
+  "ini",
+  "java",
+  "js",
+  "json",
+  "jsonc",
+  "jsx",
+  "kt",
+  "kts",
+  "less",
+  "lock",
+  "lua",
+  "md",
+  "mdx",
+  "mjs",
+  "mts",
+  "php",
+  "py",
+  "rb",
+  "rs",
+  "sass",
+  "scala",
+  "scss",
+  "sh",
+  "sql",
+  "svelte",
+  "swift",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zsh",
+]);
+
+function looksLikeImplicitRepoPath(path: string): boolean {
+  if (!looksLikeRepoPath(path)) return false;
+  if (/\s/u.test(path.split("/")[0] ?? "")) return false;
+  if (!/\p{L}/u.test(path)) return false;
+  if (path.includes("/")) return true;
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  return IMPLICIT_REPOSITORY_EXTENSIONS.has(extension);
+}
+
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codePoint = value.codePointAt(index);
@@ -96,7 +169,7 @@ function hasControlCharacter(value: string): boolean {
 function looksLikeRepoPath(candidate: string): boolean {
   if (
     candidate.length === 0 ||
-    candidate.length > 180 ||
+    candidate.length > WORKSPACE_PORTABLE_PATH_MAX_BYTES ||
     candidate.trim() !== candidate ||
     hasControlCharacter(candidate)
   ) {
@@ -154,8 +227,22 @@ function parseCitationToken(token: string): ParsedInlineCitation | undefined {
 
 function isMarkdownLink(answerText: string, match: RegExpMatchArray): boolean {
   if (match.index === undefined) return false;
-  const next = answerText.charAt(match.index + match[0].length);
-  return next === "(" || next === "[";
+  const nextOffset = match.index + match[0].length;
+  const next = answerText.charAt(nextOffset);
+  if (next === "(") return true;
+  if (next !== "[") return false;
+  FOLLOWING_BRACKET_RE.lastIndex = nextOffset;
+  const following = FOLLOWING_BRACKET_RE.exec(answerText);
+  return following === null || !isCitationBracket(following[0]);
+}
+
+function isCitationBracket(token: string): boolean {
+  const numeric = findCitationMarkerGroups(token)[0];
+  if (numeric?.start === 0 && numeric.end === token.length) return true;
+  return token
+    .slice(1, -1)
+    .split(",")
+    .every((part) => parseCitationToken(part.trim()) !== undefined);
 }
 
 function citationDedupKey(citation: ParsedInlineCitation): string {
@@ -166,28 +253,161 @@ function citationDedupKey(citation: ParsedInlineCitation): string {
   return `${citation.sourceId ?? "*"}:${citation.scopePath}@${range}`;
 }
 
-/** Parse the inline `[path:line]` / `[path:start-end]` / `[path]` markers from an answer. */
-export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
-  const out: ParsedInlineCitation[] = [];
-  const seen = new Set<string>();
-  for (const match of answerText.matchAll(BRACKET_RE)) {
-    if (isMarkdownLink(answerText, match)) {
-      continue;
-    }
-    const inner = match[1]?.trim() ?? "";
-    // A single bracket may hold several comma-separated refs: `[a.ts:1-2, b.ts:3]`.
-    for (const part of inner.split(",")) {
-      const citation = parseCitationToken(part.trim());
-      if (citation === undefined) {
-        continue;
-      }
-      const dedupKey = citationDedupKey(citation);
-      if (seen.has(dedupKey)) {
-        continue;
-      }
+function skipCompletedCodeRanges(
+  code: readonly MarkdownCodeRange[],
+  from: number,
+  offset: number,
+): number {
+  let next = from;
+  let range = code[next];
+  while (range !== undefined && range.end <= offset) {
+    next += 1;
+    range = code[next];
+  }
+  return next;
+}
+
+function appendBracketCitations(
+  inner: string,
+  seen: Set<string>,
+  out: ParsedInlineCitation[],
+): void {
+  // A single bracket may hold several comma-separated refs: `[a.ts:1-2, b.ts:3]`.
+  for (const part of inner.split(",")) {
+    const citation = parseCitationToken(part.trim());
+    if (citation === undefined) continue;
+    const dedupKey = citationDedupKey(citation);
+    if (!seen.has(dedupKey)) {
       seen.add(dedupKey);
       out.push(citation);
     }
+  }
+}
+
+function referenceMatchInsideCode(
+  match: RegExpExecArray,
+  range: MarkdownCodeRange | undefined,
+): boolean {
+  if (range === undefined || range.start > match.index) return false;
+  // A complete, pure inline-code path+line is a source location. Other code stays excluded.
+  return (
+    match[2] === undefined ||
+    range.start !== match.index ||
+    range.end !== match.index + match[2].length + 2
+  );
+}
+
+function incompleteLocationSuffix(text: string, offset: number): boolean {
+  const tail = text.slice(offset, offset + 65).replace(/^[ \t\u00a0\u202f]{0,64}/u, "");
+  return /^[:\u2010-\u2014\u2212-]/u.test(tail);
+}
+
+function appendUniqueCitation(
+  citation: ParsedInlineCitation,
+  seen: Set<string>,
+  out: ParsedInlineCitation[],
+): void {
+  const key = citationDedupKey(citation);
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push(citation);
+}
+
+const TABLE_LOCATION_SEPARATOR_RE = new RegExp(`${BARE_CITATION_RANGE}[ \t]*[,;]`, "gu");
+
+function tableLocationParts(token: string): readonly string[] {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of token.matchAll(TABLE_LOCATION_SEPARATOR_RE)) {
+    const separatorOffset = match.index + match[0].length - 1;
+    parts.push(token.slice(cursor, separatorOffset).trim());
+    cursor = separatorOffset + 1;
+  }
+  parts.push(token.slice(cursor).trim());
+  return parts;
+}
+
+function implicitCitationToken(token: string): ParsedInlineCitation | undefined {
+  const citation = parseCitationToken(token);
+  return citation?.lineRange !== undefined && looksLikeImplicitRepoPath(citation.scopePath)
+    ? citation
+    : undefined;
+}
+
+function tableCellCitations(token: string): readonly ParsedInlineCitation[] {
+  if (stripUnsafeFormatChars(token) !== token) return [];
+  const parts = tableLocationParts(token);
+  const citations = parts.map(implicitCitationToken);
+  // Split only punctuation after a complete line location, never commas inside filenames.
+  if (citations.every((citation) => citation !== undefined)) return citations;
+  if (hasControlCharacter(token)) return [];
+  return parseInlineCitations(token);
+}
+
+interface InlineCitationScanCounts {
+  droppedImplicitCount: number;
+}
+
+function implicitCitationsForMatch(
+  match: RegExpExecArray,
+  counts: InlineCitationScanCounts | undefined,
+): readonly ParsedInlineCitation[] {
+  if (match[3] !== undefined) return tableCellCitations(match[3].trim());
+  const outsideCode =
+    match[2] === undefined ? (match[4] ?? "") : match[0].slice(match[2].length + 2);
+  const token =
+    match[2] === undefined ? (match[4] ?? "").trim() : `${match[2]}${outsideCode}`.trim();
+  const citation = implicitCitationToken(token);
+  if (citation === undefined) return [];
+  // A spaced count after a root filename remains prose; path/code/table locations stay explicit.
+  if (/:[ \t]+/u.test(outsideCode) && !match[0].includes("/")) {
+    if (counts !== undefined) counts.droppedImplicitCount += 1;
+    return [];
+  }
+  return [citation];
+}
+
+function appendMatchedRepositoryCitation(
+  match: RegExpExecArray,
+  seen: Set<string>,
+  out: ParsedInlineCitation[],
+  counts: InlineCitationScanCounts | undefined,
+): void {
+  if (match[1] !== undefined) {
+    appendBracketCitations(match[1].trim(), seen, out);
+    return;
+  }
+  for (const citation of implicitCitationsForMatch(match, counts)) {
+    appendUniqueCitation(citation, seen, out);
+  }
+}
+
+/**
+ * Parse explicit bracketed markers and syntactic prose/table/inline-code location candidates.
+ * Reconciliation reports candidates unsupported when the sent excerpts do not support them.
+ */
+export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
+  return scanInlineCitations(answerText);
+}
+
+function scanInlineCitations(
+  answerText: string,
+  counts?: InlineCitationScanCounts,
+): readonly ParsedInlineCitation[] {
+  const out: ParsedInlineCitation[] = [];
+  const seen = new Set<string>();
+  const code = markdownCodeRanges(answerText);
+  let nextCode = 0;
+  for (const match of answerText.matchAll(REPOSITORY_CITATION_RE)) {
+    nextCode = skipCompletedCodeRanges(code, nextCode, match.index);
+    if (referenceMatchInsideCode(match, code[nextCode])) continue;
+    if (match[1] !== undefined && isMarkdownLink(answerText, match)) continue;
+    if (
+      match[1] === undefined &&
+      incompleteLocationSuffix(answerText, match.index + match[0].length)
+    )
+      continue;
+    appendMatchedRepositoryCitation(match, seen, out, counts);
   }
   return out;
 }
@@ -331,6 +551,14 @@ export interface CitationReconciliation {
   readonly citedScopePaths: ReadonlySet<string>;
 }
 
+export interface InlineCitationReconciliationSummary {
+  readonly referenceCount: number;
+  readonly attachedCount: number;
+  readonly danglingMarkerCount: number;
+  readonly ambiguousMarkerCount: number;
+  readonly droppedImplicitCount: number;
+}
+
 /**
  * Reconcile an answer's inline citations against the evidence pack(s) sent to the model.
  * Path-level mismatches are the strong signal (the model named a file it never received). A cited
@@ -340,16 +568,34 @@ export interface CitationReconciliation {
 export function reconcileInlineCitations(
   answerText: string,
   index: PackCitationIndex,
+  report?: (summary: InlineCitationReconciliationSummary) => void,
 ): CitationReconciliation {
   const unsupported: ParsedInlineCitation[] = [];
   const citedScopePaths = new Set<string>();
-  for (const citation of parseInlineCitations(answerText)) {
+  // Evidence membership decides support, never whether a syntactic source location disappears.
+  const counts = { droppedImplicitCount: 0 };
+  const citations = scanInlineCitations(answerText, counts);
+  for (const citation of citations) {
     if (resolveSupportedCitationSourceId(citation, index) === undefined) {
       unsupported.push(citation);
       continue;
     }
     citedScopePaths.add(citation.scopePath);
   }
+  report?.({
+    referenceCount: [...index.sourceIdsByPath.values()].reduce(
+      (total, sources) => total + sources.size,
+      0,
+    ),
+    attachedCount: citations.length - unsupported.length,
+    danglingMarkerCount: unsupported.length,
+    ambiguousMarkerCount: unsupported.filter(
+      (citation) =>
+        citation.sourceId === undefined &&
+        (index.sourceIdsByPath.get(citation.scopePath)?.size ?? 0) > 1,
+    ).length,
+    droppedImplicitCount: counts.droppedImplicitCount,
+  });
   return { unsupported, citedScopePaths };
 }
 
@@ -580,17 +826,28 @@ export function splitClaimSpans(text: string): readonly string[] {
   const spans: string[] = [];
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < text.length; i += 1) {
+  const code = markdownCodeRanges(text);
+  let codeCursor = 0;
+  let i = 0;
+  while (i < text.length) {
+    codeCursor = skipCompletedCodeRanges(code, codeCursor, i);
+    const range = code[codeCursor];
+    if (range !== undefined && i >= range.start) {
+      i = range.end;
+      continue;
+    }
+    const offset = i;
     const ch = text.charAt(i);
+    i += 1;
     const nextDepth = citationBracketDepth(depth, ch);
     if (nextDepth !== depth) {
       depth = nextDepth;
       continue;
     }
-    if (depth !== 0 || !isSentenceBoundary(text, i)) continue;
-    const span = text.slice(start, i + 1);
+    if (depth !== 0 || !isSentenceBoundary(text, offset)) continue;
+    const span = text.slice(start, i);
     if (span.trim().length > 0) spans.push(span);
-    start = i + 1;
+    start = i;
   }
   if (text.slice(start).trim().length > 0) {
     spans.push(text.slice(start));
@@ -599,12 +856,32 @@ export function splitClaimSpans(text: string): readonly string[] {
 }
 
 // Every bracketed span the claim stripper removes, a citation or not.
-const CLAIM_BRACKET_RE = /[[［【][^\]］】\n]{1,200}[\]］】]/g;
+const CLAIM_BRACKET_RE = new RegExp(
+  String.raw`[[［【][^\[［【\]］】\n]{1,${CITATION_TOKEN_MAX_CHARS}}[\]］】]`,
+  "g",
+);
+
+function* proseBracketMatches(text: string): Generator<RegExpExecArray> {
+  const code = markdownCodeRanges(text);
+  let nextCode = 0;
+  for (const match of text.matchAll(CLAIM_BRACKET_RE)) {
+    nextCode = skipCompletedCodeRanges(code, nextCode, match.index);
+    if ((code[nextCode]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
+    yield match;
+  }
+}
 
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
-  return text
-    .replace(CLAIM_BRACKET_RE, " ")
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of proseBracketMatches(text)) {
+    parts.push(text.slice(cursor, match.index), " ");
+    cursor = match.index + match[0].length;
+  }
+  parts.push(text.slice(cursor));
+  return parts
+    .join("")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -623,7 +900,7 @@ function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
 // `[The repository enforces MFA]` or a link label that the reader sees and the judge never reads.
 function hidesBracketedProse(span: string): boolean {
   const markerStarts = new Set(findCitationMarkerGroups(span).map((group) => group.start));
-  return [...span.matchAll(CLAIM_BRACKET_RE)].some(
+  return [...proseBracketMatches(span)].some(
     (match) => !markerStarts.has(match.index) && !isPathCitationBracket(span, match),
   );
 }
@@ -983,7 +1260,11 @@ function inlineEntailmentClaims(
   const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
   return segmentCitedClaims(answerText).flatMap((claim): readonly EntailmentClaim[] => {
     const evidence = claim.citations
-      .filter((citation) => !membershipFailed.has(citationDedupKey(citation)))
+      .filter(
+        (citation) =>
+          membership.citedScopePaths.has(citation.scopePath) &&
+          !membershipFailed.has(citationDedupKey(citation)),
+      )
       .map((citation) => ({
         citedPath: citation.scopePath,
         excerptText: resolveExcerptText(citation),

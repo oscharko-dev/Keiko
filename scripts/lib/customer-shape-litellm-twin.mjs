@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
+import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 
@@ -192,7 +193,200 @@ async function handleTwinChat(request, response, requests, behavior) {
   }
 }
 
+const TRANSPORT_CASES = new Set([
+  "immediate",
+  "delay35",
+  "pause35",
+  "retry429",
+  "retry503",
+  "partial",
+]);
+
+async function transportStreamMode(request) {
+  const body = await requestBody(request);
+  return body?.stream === true;
+}
+
+function transportCase(request) {
+  const candidate = (request.url ?? "").split("/")[1];
+  return TRANSPORT_CASES.has(candidate) ? candidate : undefined;
+}
+
+function transportModels(response) {
+  sendJson(response, {
+    data: [
+      {
+        id: CUSTOMER_SHAPE_MODEL,
+        object: "model",
+        model_name: CUSTOMER_SHAPE_MODEL,
+        litellm_params: { custom_llm_provider: "hosted_vllm" },
+        model_info: { max_input_tokens: 128_000, max_output_tokens: 4096 },
+      },
+    ],
+  });
+}
+
+function transportReply(response, stream, text = "Synthetic gateway transport test completed.") {
+  if (!stream) {
+    sendJson(response, {
+      model: CUSTOMER_SHAPE_MODEL,
+      choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 8 },
+    });
+    return;
+  }
+  if (!response.headersSent) response.writeHead(200, { "content-type": "text/event-stream" });
+  writeFrame(response, { content: text });
+  writeFrame(response, {}, "stop");
+  response.end("data: [DONE]\n\n");
+}
+
+function waitForTransportDeadline(deadline, signal) {
+  return new Promise((resolve, reject) => {
+    const rearm = () => {
+      const remaining = deadline - performance.now();
+      if (Number.isNaN(remaining) || remaining <= 0) {
+        resolve();
+        return;
+      }
+      // Early timer wakeups rearm one wait against the same monotonic deadline. The callback
+      // returns no successor promise, so completed timers do not form a retained chain.
+      void delay(Math.ceil(remaining), undefined, { signal }).then(rearm, reject);
+    };
+    rearm();
+  });
+}
+
+export async function transportWait(response, milliseconds) {
+  if (response.destroyed) return false;
+  const controller = new globalThis.AbortController();
+  const cancel = () => controller.abort();
+  response.once("close", cancel);
+  try {
+    await waitForTransportDeadline(performance.now() + milliseconds, controller.signal);
+    return !response.destroyed;
+  } catch (error) {
+    if (error?.name === "AbortError") return false;
+    throw error;
+  } finally {
+    response.off("close", cancel);
+  }
+}
+
+function transportCooldown(response, scenario, options) {
+  const status = scenario === "retry429" ? 429 : 503;
+  response.writeHead(status, {
+    "content-type": "application/json",
+    "retry-after": String(options.retryAfterSeconds),
+  });
+  response.end('{"error":{"type":"synthetic_overload"}}');
+  return status;
+}
+
+function isDelayedTransport(scenario) {
+  return scenario === "delay35" || scenario === "pause35";
+}
+
+async function transportChat(request, response, requests, options, scenario) {
+  const stream = await transportStreamMode(request);
+  const startedAt = performance.now();
+  const observed = {
+    scenario,
+    stream,
+    startedAtMs: Date.now(),
+    status: 0,
+    elapsedMs: 0,
+    closed: false,
+    completed: false,
+  };
+  requests.push(observed);
+  response.once("close", () => {
+    observed.closed = true;
+    observed.elapsedMs = Math.ceil(performance.now() - startedAt);
+  });
+  if (scenario.startsWith("retry")) {
+    const readyAt = options.readyAt.get(scenario) ?? Date.now() + options.retryAfterSeconds * 1000;
+    options.readyAt.set(scenario, readyAt);
+    if (Date.now() < readyAt) {
+      observed.status = transportCooldown(response, scenario, options);
+      return;
+    }
+  }
+  if (scenario === "partial" && stream) {
+    observed.status = 200;
+    truncatedStream(response);
+    return;
+  }
+  if (scenario === "pause35" && stream) {
+    observed.status = 200;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    writeFrame(response, { content: "Synthetic gateway stream started. " });
+  }
+  if (isDelayedTransport(scenario) && !(await transportWait(response, options.delayMs))) return;
+  observed.status = 200;
+  transportReply(response, stream);
+  observed.completed = true;
+}
+
+function handleTransportControl(request, response, requests, options) {
+  if (request.method === "GET" && request.url === "/metrics") {
+    sendJson(response, { requestCount: requests.length, requests });
+    return true;
+  }
+  if (request.method === "POST" && request.url === "/reset") {
+    request.resume();
+    requests.length = 0;
+    options.readyAt.clear();
+    sendJson(response, { reset: true });
+    return true;
+  }
+  return false;
+}
+
+export function failTransportResponse(response) {
+  if (response.destroyed) return;
+  if (response.headersSent) response.destroy();
+  else sendJson(response, { error: { type: "invalid_request_error" } }, 400);
+}
+
+function handleTransportRequest(request, response, requests, options) {
+  if (handleTransportControl(request, response, requests, options)) return;
+  const scenario = transportCase(request);
+  if (scenario === undefined) {
+    request.resume();
+    sendJson(response, { error: { type: "not_found" } }, 404);
+    return;
+  }
+  if (request.method === "GET" && /\/(models|model\/info)$/.test(request.url ?? "")) {
+    transportModels(response);
+    return;
+  }
+  if (request.method === "POST" && (request.url ?? "").endsWith("/chat/completions")) {
+    if (!acceptChatAuthentication(request, response)) return;
+    void transportChat(request, response, requests, options, scenario).catch(() => {
+      failTransportResponse(response);
+    });
+    return;
+  }
+  request.resume();
+  sendJson(response, { error: { type: "not_found" } }, 404);
+}
+
+function acceptChatAuthentication(request, response) {
+  if (
+    request.headers["x-litellm-key"] === apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY)
+  )
+    return true;
+  request.resume();
+  sendJson(response, { error: { type: "authentication_error" } }, 401);
+  return false;
+}
+
 function handleTwinRequest(request, response, requests, behavior) {
+  if (behavior.transport !== undefined) {
+    handleTransportRequest(request, response, requests, behavior.transport);
+    return;
+  }
   const url = request.url ?? "";
   if (request.method === "GET" && url.endsWith("/model/info")) {
     sendJson(response, {
@@ -211,39 +405,50 @@ function handleTwinRequest(request, response, requests, behavior) {
     return;
   }
   if (request.method === "POST" && url.endsWith("/chat/completions")) {
-    if (
-      request.headers["x-litellm-key"] !==
-      apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY)
-    ) {
-      sendJson(response, { error: { type: "authentication_error" } }, 401);
-      return;
-    }
+    if (!acceptChatAuthentication(request, response)) return;
     void handleTwinChat(request, response, requests, behavior);
     return;
   }
   sendJson(response, { error: { type: "not_found" } }, 404);
 }
 
-export async function startCustomerShapeLiteLlmTwin() {
-  const requests = [];
-  const behavior = {
+function twinBehavior(options) {
+  return {
     rejectAllStreams: false,
     reinsertStreamOptions: false,
     acceptedStreamDelayMs: 0,
     workspaceDiscoveryPending: false,
     truncateNextAcceptedStream: false,
+    ...(options.transportOnly
+      ? {
+          transport: {
+            delayMs: options.delayMs ?? 35_000,
+            retryAfterSeconds: options.retryAfterSeconds ?? 120,
+            readyAt: new Map(),
+          },
+        }
+      : {}),
   };
+}
+
+export async function startCustomerShapeLiteLlmTwin(options = {}) {
+  const requests = [];
+  const behavior = twinBehavior(options);
   const server = createServer((request, response) =>
     handleTwinRequest(request, response, requests, behavior),
   );
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(options.port ?? 0, "127.0.0.1", resolve);
   });
   const address = server.address();
   if (typeof address !== "object" || address === null) throw new Error("twin did not bind");
+  return twinControls(server, requests, behavior, address.port);
+}
+
+function twinControls(server, requests, behavior, port) {
   return {
-    baseUrl: `http://127.0.0.1:${String(address.port)}/v1`,
+    baseUrl: `http://127.0.0.1:${String(port)}${behavior.transport ? "/immediate" : ""}/v1`,
     requests,
     rejectAllStreaming: () => {
       behavior.rejectAllStreams = true;
@@ -264,8 +469,9 @@ export async function startCustomerShapeLiteLlmTwin() {
       behavior.truncateNextAcceptedStream = true;
     },
     close: () =>
-      new Promise((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      }),
   };
 }

@@ -213,6 +213,7 @@ import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
 import { SupportReportButton } from "../../SupportReportButton";
+import { FilePreview } from "./FilePreview";
 import {
   useRegisterWorkspaceReplaceBuffer,
   type WorkspaceReplaceOpenBufferResult,
@@ -844,6 +845,7 @@ interface EditorFileSessionSnapshot {
   readonly loadState: KeikoEditorLoadState;
   readonly loadCorrelationId?: string | undefined;
   readonly loadRetryable?: boolean | undefined;
+  readonly loadPreviewTargetKey?: string | undefined;
   readonly saveStatus: EditorSaveStatus;
   readonly saveError: string | undefined;
   readonly cursor: EditorPosition | null;
@@ -1552,6 +1554,7 @@ function failedEditorSessionSnapshot(
   state: KeikoEditorLoadState,
   correlationId: string,
   retryable: boolean,
+  previewTargetKey?: string,
 ): EditorFileSessionSnapshot {
   return {
     content: "",
@@ -1562,6 +1565,7 @@ function failedEditorSessionSnapshot(
     loadState: state,
     loadCorrelationId: correlationId,
     loadRetryable: retryable,
+    loadPreviewTargetKey: previewTargetKey,
     saveStatus: "idle",
     saveError: undefined,
     cursor: null,
@@ -1570,11 +1574,47 @@ function failedEditorSessionSnapshot(
   };
 }
 
+function sourcePreviewAvailable(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "UNSUPPORTED_FILE" || error.code === "FILE_TOO_LARGE")
+  );
+}
+
+function sourcePreviewTarget(
+  root: string | undefined,
+  file: string | undefined,
+  previewTargetKey: string | null,
+  loadError: string | null,
+  dirty: boolean,
+): { readonly root: string; readonly path: string } | null {
+  if (loadError === null || root === undefined || file === undefined || dirty) return null;
+  if (previewTargetKey !== documentSessionKey(root, file)) return null;
+  return { root, path: file };
+}
+
 function editorLoadFailureState(error: unknown): KeikoEditorLoadState {
   return {
     status: "error",
     message: errorMessage(error, EN_MESSAGES["editor.runtime.loadFailed"]),
   };
+}
+
+function SourcePreviewReopenButton({
+  available,
+  onClick,
+  label,
+}: {
+  readonly available: boolean;
+  readonly onClick: () => void;
+  readonly label: string;
+}): ReactNode {
+  if (!available) return null;
+  return (
+    <button type="button" className="ed-reload" onClick={onClick}>
+      {label}
+    </button>
+  );
 }
 
 function editorLoadErrorMessage(
@@ -1848,6 +1888,8 @@ function EditorRuntimeWidget({
   );
   const [loadCorrelationId, setLoadCorrelationId] = useState<string | undefined>(undefined);
   const [loadRetryable, setLoadRetryable] = useState(true);
+  const [loadPreviewTargetKey, setLoadPreviewTargetKey] = useState<string | null>(null);
+  const [closedSourcePreviewKey, setClosedSourcePreviewKey] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [localHistoryProtection, setLocalHistoryProtection] = useState<
@@ -2321,6 +2363,7 @@ function EditorRuntimeWidget({
       loadState,
       loadCorrelationId,
       loadRetryable,
+      loadPreviewTargetKey: loadPreviewTargetKey ?? undefined,
       saveStatus,
       saveError,
       cursor,
@@ -2340,6 +2383,7 @@ function EditorRuntimeWidget({
     loadState,
     loadCorrelationId,
     loadRetryable,
+    loadPreviewTargetKey,
     localHistoryProtection,
     maxBytes,
     modifiedAt,
@@ -2362,6 +2406,7 @@ function EditorRuntimeWidget({
     setLoadState({ status: "ready" });
     setLoadCorrelationId(undefined);
     setLoadRetryable(true);
+    setLoadPreviewTargetKey(null);
     setSaveStatus("idle");
     setSaveError(undefined);
     setLocalHistoryProtection(undefined);
@@ -2376,6 +2421,7 @@ function EditorRuntimeWidget({
     setLoadState(cached.loadState);
     setLoadCorrelationId(cached.loadCorrelationId);
     setLoadRetryable(cached.loadRetryable ?? true);
+    setLoadPreviewTargetKey(cached.loadPreviewTargetKey ?? null);
     setSaveStatus(cached.saveStatus);
     setSaveError(cached.saveError);
     setLocalHistoryProtection(cached.localHistoryProtection);
@@ -2388,6 +2434,7 @@ function EditorRuntimeWidget({
     setLoadState({ status: "loading" });
     setLoadCorrelationId(undefined);
     setLoadRetryable(true);
+    setLoadPreviewTargetKey(null);
     setSaveStatus("idle");
     setSaveError(undefined);
     setLocalHistoryProtection(undefined);
@@ -2437,6 +2484,7 @@ function EditorRuntimeWidget({
       setMaxBytes(response.maxBytes);
       setLocalHistoryProtection(response.localHistoryProtection);
       setLoadState({ status: "ready" });
+      setLoadPreviewTargetKey(null);
       setExternalCompareBaseline(null);
       dispatchExternalChange({ type: "reloadSucceeded" });
       const recoverable = snapshot !== null && snapshot.content !== response.content;
@@ -2444,6 +2492,34 @@ function EditorRuntimeWidget({
       setRecoveryDiskBaseline(recoverable ? response.content : null);
     },
     [editorModelScope],
+  );
+
+  const failLoad = useCallback(
+    (err: unknown, requestCorrelationId: string, sessionKey: string): void => {
+      const correlationId = correlationIdOf(err) ?? requestCorrelationId;
+      const failureState = editorLoadFailureState(err);
+      const retryable = retryableEditorLoadError(err);
+      const previewAvailable = sourcePreviewAvailable(err);
+      setLoadCorrelationId(correlationId);
+      setLoadRetryable(retryable);
+      setLoadPreviewTargetKey(previewAvailable ? sessionKey : null);
+      setLoadState(failureState);
+      sessionCacheRef.current.set(
+        sessionKey,
+        failedEditorSessionSnapshot(
+          failureState,
+          correlationId,
+          retryable,
+          previewAvailable ? sessionKey : undefined,
+        ),
+      );
+      reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
+        correlationId,
+        errorKind: bffRequestErrorKind(err),
+        errorEvidence: clientErrorEvidence(err),
+      });
+    },
+    [],
   );
 
   const load = useCallback(
@@ -2478,21 +2554,7 @@ function EditorRuntimeWidget({
         finishLoad(root, file, response, snapshot);
       } catch (err: unknown) {
         if (signal.cancelled) return;
-        const correlationId = correlationIdOf(err) ?? requestCorrelationId;
-        const failureState = editorLoadFailureState(err);
-        const retryable = retryableEditorLoadError(err);
-        setLoadCorrelationId(correlationId);
-        setLoadRetryable(retryable);
-        setLoadState(failureState);
-        sessionCacheRef.current.set(
-          sessionKey,
-          failedEditorSessionSnapshot(failureState, correlationId, retryable),
-        );
-        reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
-          correlationId,
-          errorKind: bffRequestErrorKind(err),
-          errorEvidence: clientErrorEvidence(err),
-        });
+        failLoad(err, requestCorrelationId, sessionKey);
         throw err;
       }
     },
@@ -2500,6 +2562,7 @@ function EditorRuntimeWidget({
       beginLoad,
       clearLoadedTarget,
       file,
+      failLoad,
       finishLoad,
       hasTarget,
       reconcilePreservedDirtyBuffer,
@@ -4366,18 +4429,15 @@ function EditorRuntimeWidget({
     return callHierarchyRevealRequest ?? outlineSelectionRequest ?? lineRevealRequest;
   };
   const surfaceRevealRequest = buildSurfaceRevealRequest();
-  const callHierarchyLabels = useMemo(
-    () => ({
-      title: optionalT("editor.callHierarchy.title"),
-      incoming: optionalT("editor.callHierarchy.incoming"),
-      outgoing: optionalT("editor.callHierarchy.outgoing"),
-      callSite: optionalT("editor.callHierarchy.callSite"),
-      empty: optionalT("editor.callHierarchy.empty"),
-      close: optionalT("editor.callHierarchy.close"),
-      command: optionalT("editor.callHierarchy.command"),
-    }),
-    [optionalT],
-  );
+  const callHierarchyLabels = {
+    title: optionalT("editor.callHierarchy.title"),
+    incoming: optionalT("editor.callHierarchy.incoming"),
+    outgoing: optionalT("editor.callHierarchy.outgoing"),
+    callSite: optionalT("editor.callHierarchy.callSite"),
+    empty: optionalT("editor.callHierarchy.empty"),
+    close: optionalT("editor.callHierarchy.close"),
+    command: optionalT("editor.callHierarchy.command"),
+  };
 
   const renderGitGutterPeek = (): ReactNode => {
     if (gitGutterPeek === null || file === undefined) return null;
@@ -4559,10 +4619,36 @@ function EditorRuntimeWidget({
     const reviewSurface = renderActiveReviewSurface();
     if (reviewSurface !== null) return reviewSurface;
     let panel: ReactNode;
-    if (editorLoadError !== null) {
+    const previewTarget = sourcePreviewTarget(
+      root,
+      file,
+      loadPreviewTargetKey,
+      editorLoadError,
+      dirtyRef.current,
+    );
+    const previewRequestKey = JSON.stringify([root, file, revealRequestId]);
+    if (previewTarget !== null && closedSourcePreviewKey !== previewRequestKey) {
+      panel = (
+        <FilePreview
+          key={documentSessionKey(previewTarget.root, previewTarget.path)}
+          root={previewTarget.root}
+          path={previewTarget.path}
+          revealLineStart={revealLineStart}
+          revealLineEnd={revealLineEnd}
+          revealRequestId={revealRequestId}
+          parentCorrelationId={loadCorrelationId}
+          onClose={() => setClosedSourcePreviewKey(previewRequestKey)}
+        />
+      );
+    } else if (editorLoadError !== null) {
       panel = (
         <div className="ed-host-loading" role="alert">
           <span>{editorLoadError}</span>
+          <SourcePreviewReopenButton
+            available={previewTarget !== null}
+            onClick={() => setClosedSourcePreviewKey(null)}
+            label={commonT("filePreview.showSource")}
+          />
           {loadRetryable ? (
             <>
               <button type="button" className="ed-reload" onClick={reload}>

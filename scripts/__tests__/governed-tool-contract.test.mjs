@@ -1,3 +1,4 @@
+import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { validateResultExample } from "../lib/governed-tool-examples.mjs";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -21,6 +22,31 @@ function changed(change) {
   return validateGovernedToolContract(fixture);
 }
 describe("governed-tool architecture consistency", () => {
+  it("matches the live recursive search bounds without imposing corpus cutoffs", () => {
+    expect(original.bounds).toMatchObject({
+      maxQueryCharacters: CODING_REPOSITORY_LIMITS.queryChars,
+      maxSearchHits: CODING_REPOSITORY_LIMITS.returnedHits,
+      maxSearchFiles: CODING_REPOSITORY_LIMITS.scannedFiles,
+      maxSearchFileBytes: CODING_REPOSITORY_LIMITS.fileBytes,
+      maxSearchDurationMs: CODING_REPOSITORY_LIMITS.elapsedMs,
+      maxSnippetBytes: CODING_REPOSITORY_LIMITS.snippetBytes,
+      maxSearchOutputBytes: CODING_REPOSITORY_LIMITS.outputBytes,
+      maxSearchGlobsPerList: CODING_REPOSITORY_LIMITS.globs,
+      maxSearchGlobCharacters: CODING_REPOSITORY_LIMITS.globChars,
+      maxSearchInventory: CODING_REPOSITORY_LIMITS.inventoryFiles,
+      maxSearchYieldCandidates: CODING_REPOSITORY_LIMITS.yieldEvery,
+    });
+  });
+  it.each(["maxSearchHits", "maxSearchFileBytes", "maxSearchOutputBytes"])(
+    "does not permit an unbounded %s",
+    (key) => {
+      expect(
+        changed((fixture) => {
+          fixture.bounds[key] = null;
+        }),
+      ).not.toEqual([]);
+    },
+  );
   it("reproduces every live inventory probe and contract mapping", () => {
     expect(checkGovernedToolContract(root)).toEqual([]);
     expect(checkGovernedToolContractNegatives(root)).toEqual([]);

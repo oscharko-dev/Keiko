@@ -12,6 +12,9 @@ import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
+  countContextTokens,
+  deriveContextProfile,
+  resolveContextTokenAccounting,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   validateContextAssemblyDiagnostics,
@@ -240,7 +243,36 @@ describe("deriveGroundedContextAssembly — evidence producer (ADR-0056 W3)", ()
     expect(diagnostics.schemaVersion).toBe(CONTEXT_ENGINEERING_SCHEMA_VERSION);
     expect(diagnostics.profile).toBe(DEFAULT_CONTEXT_PROFILE);
     expect(diagnostics.lanes.some((lane) => lane.laneId === "repo-evidence")).toBe(true);
-    expect(diagnostics.orderedForRecency).toBe(true);
+    expect(diagnostics.orderedForRecency).toBe(false);
+  });
+
+  it("observes every sent excerpt even when the profile could not allocate it", () => {
+    const pack = basePack();
+    const profile = deriveContextProfile({
+      maxInputTokens: 8,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const sent = buildGroundedGatewayMessages("q", pack, identity);
+    const diagnostics = deriveGroundedContextAssembly(pack, profile);
+    const excerpts = pack.files.flatMap((file) => file.excerpts);
+    expect(diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence")).toMatchObject({
+      includedItems: excerpts.length,
+      excludedItems: 0,
+      estimatedTokens: excerpts.reduce(
+        (sum, excerpt) =>
+          sum + countContextTokens(excerpt.content, resolveContextTokenAccounting(profile)),
+        0,
+      ),
+      budgetPressure: "exceeded",
+    });
+    expect(diagnostics.budgetPressure).toBe("exceeded");
+    expect(diagnostics.lanes.some((lane) => lane.compactionReason !== undefined)).toBe(false);
+    expect(
+      buildGroundedGatewayMessages("q", attachContextBudgetDiagnostics(pack, profile), identity),
+    ).toEqual(sent);
+    for (const excerpt of excerpts) expect(JSON.stringify(sent)).toContain(excerpt.content);
+    expect(validateContextAssemblyDiagnostics(diagnostics).ok).toBe(true);
   });
 
   it("returns the richer ContextAssemblyDiagnostics type, not the ContextBudget slot value", () => {

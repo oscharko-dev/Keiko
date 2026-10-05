@@ -25,6 +25,19 @@ function build(diff: string, compacted: boolean): GatewayCallRequest {
 const capability = { ...createDefaultChatCapability("fixture"), contextWindow: 8192 };
 
 describe("commit draft evidence bounds", () => {
+  it("compacts a diff against the declared input ceiling inside a larger context window", () => {
+    const capped = { ...capability, contextWindow: 128_000, maxInputTokens: 16_000 };
+    const prepared = prepareCommitDraft(
+      "diff --git a/a.ts b/a.ts\n" + "+change\n".repeat(12_000),
+      capped,
+      build,
+    );
+    expect(prepared.diffCompacted).toBe(true);
+    expect(prepared.maxPromptTokens).toBe(16_000);
+    expect(prepared.promptTokens).toBeLessThanOrEqual(16_000);
+    expect(prepared.request).toBeDefined();
+  });
+
   it("preserves complete small diffs", () => {
     const patch = "diff --git a/a.ts b/a.ts\n+change";
     const prepared = prepareCommitDraft(patch, capability, build);

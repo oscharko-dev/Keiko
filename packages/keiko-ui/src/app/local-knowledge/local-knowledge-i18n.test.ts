@@ -5,7 +5,10 @@ import {
   MANUAL_REFRESH_REASON_GUIDANCE,
 } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 
-import { loadLocaleMessages, translate } from "@/lib/i18n";
+import {
+  loadOptionalWidgetMessages as loadLocaleMessages,
+  translateOptionalWidget as translate,
+} from "@/lib/optional-widget-i18n";
 import type { KnowledgePodGuidanceCode, KnowledgePodUiGuidance } from "@/lib/local-knowledge-api";
 import {
   knowledgePodGuidanceText,

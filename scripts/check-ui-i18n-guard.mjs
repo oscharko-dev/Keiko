@@ -487,9 +487,94 @@ function readText(repoRoot, file) {
   return readFileSync(resolve(repoRoot, file), "utf8");
 }
 
+// Intl formatting consumes a caller-provided locale, but introduces no catalog message.
+// Resolve local aliases and lexical parameters rather than blessing an identifier's spelling.
+const INTL_LOCALE_CONSTRUCTORS = new Set([
+  "NumberFormat",
+  "DateTimeFormat",
+  "PluralRules",
+  "RelativeTimeFormat",
+  "ListFormat",
+  "Collator",
+  "Segmenter",
+  "DisplayNames",
+]);
+
+function intlLocaleBinding(scope, name) {
+  if (ts.isFunctionLike(scope)) {
+    return scope.parameters.find(
+      (parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name,
+    );
+  }
+  if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) return undefined;
+  return scope.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => [...statement.declarationList.declarations])
+    .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name);
+}
+
+function hasDynamicIntlFallback(expression, visited) {
+  // The selected locale stays authoritative; a literal default only handles its absence.
+  return (
+    expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken &&
+    hasDynamicIntlLocale(expression.left, visited)
+  );
+}
+
+function hasDynamicIntlIdentifier(expression, visited) {
+  let scope = expression;
+  while (!ts.isSourceFile(scope)) {
+    scope = scope.parent;
+    const binding = intlLocaleBinding(scope, expression.text);
+    if (binding === undefined) continue;
+    if (ts.isParameter(binding)) return true;
+    return hasDynamicIntlLocale(binding.initializer, visited);
+  }
+  return false;
+}
+
+function hasDynamicIntlLocale(expression, visited = new Set()) {
+  if (expression === undefined || visited.has(expression)) return false;
+  visited.add(expression);
+  if (ts.isPropertyAccessExpression(expression) && expression.name.text === "locale") {
+    return hasDynamicIntlLocale(expression.expression, visited);
+  }
+  if (ts.isBinaryExpression(expression)) return hasDynamicIntlFallback(expression, visited);
+  return ts.isIdentifier(expression) && hasDynamicIntlIdentifier(expression, visited);
+}
+
+function isSelectedLocaleIntlCall(node) {
+  if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return false;
+  const callee = node.expression;
+  return (
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === "Intl" &&
+    INTL_LOCALE_CONSTRUCTORS.has(callee.name.text) &&
+    hasDynamicIntlLocale(node.arguments?.[0])
+  );
+}
+
+function hasSelectedLocaleIntlUsage(source) {
+  const parsed = ts.createSourceFile(
+    "intl-usage.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  function visit(node) {
+    return isSelectedLocaleIntlCall(node) || ts.forEachChild(node, visit) === true;
+  }
+  return visit(parsed);
+}
+
 function hasI18nUsage(repoRoot, file) {
   const source = readText(repoRoot, file);
-  return I18N_USAGE_PATTERNS.some((pattern) => pattern.test(source));
+  return (
+    I18N_USAGE_PATTERNS.some((pattern) => pattern.test(source)) ||
+    hasSelectedLocaleIntlUsage(source)
+  );
 }
 
 function nonCompliantUiFiles(repoRoot, uiFiles) {
@@ -1873,7 +1958,9 @@ function hasI18nRelevantChange(repoRoot, file) {
     );
   }
   const source = readText(repoRoot, file);
-  return hasI18nUsage(repoRoot, file) || sourceHasUserFacingText(source);
+  return (
+    I18N_USAGE_PATTERNS.some((pattern) => pattern.test(source)) || sourceHasUserFacingText(source)
+  );
 }
 
 function isSafeGitSha(value) {

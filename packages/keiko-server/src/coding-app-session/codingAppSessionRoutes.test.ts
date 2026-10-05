@@ -22,7 +22,11 @@ import {
   readPairingBody,
 } from "./codingAppSessionRoutes.js";
 import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./sessionChannel.js";
-import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
+import {
+  APP_SESSION_COOKIE_NAME,
+  APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+  serializeSessionCookies,
+} from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -112,11 +116,69 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       expect(channel.sessionCount()).toBe(0);
     },
   );
-  it("local-session confirms a launcher-paired cookie without issuing or widening authority", () => {
+  it("local-session restores every scoped cookie using the same verified bearer", () => {
     const { channel, cookie } = pairedChannel();
     const count = channel.sessionCount();
-    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeUndefined();
+    const headers = handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers;
+    const projections = headers?.["Set-Cookie"];
+    expect(projections).toHaveLength(
+      serializeSessionCookies("test", { secure: false, maxAgeSeconds: 1 }).length,
+    );
+    expect(String(projections)).toContain("Path=/api/diagnostics/report;");
+    expect(String(projections)).toContain("Path=/api/chats/messages/grounded;");
+    const values = typeof projections === "string" || projections === undefined ? [] : projections;
+    for (const projection of values) {
+      if (!projection.includes("Max-Age=0")) expect(projection.split(";")[0]).toBe(cookie);
+    }
     expect(channel.sessionCount()).toBe(count);
+  });
+
+  it("bounds restored cookie projections by the registry's remaining absolute lifetime", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 10_000 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Pairing failed");
+    now = 2500;
+    const projections = handleCodingAppSessionLocalSession(
+      ctx(`${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+      deps(channel),
+    ).headers?.["Set-Cookie"];
+    if (typeof projections === "string" || projections === undefined)
+      throw new TypeError("Expected scoped cookie projections");
+    const active = projections.filter((projection) => !projection.includes("Max-Age=0"));
+    expect(active.length).toBeGreaterThan(0);
+    for (const projection of active)
+      expect(/(?:^|; )Max-Age=(\d+)/u.exec(projection)?.[1]).toBe("7");
+    expect(registry.inspect(paired.cookieToken)?.issuedAtMs).toBe(0);
+  });
+
+  it("scoped cookie repair never extends absolute expiry or revives a revoked session", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 2000 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Pairing failed");
+    const cookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+    now = 500;
+    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeDefined();
+    now = 2001;
+    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeUndefined();
+    const replacement = channel.pair(fakePairingRequestBody());
+    if (!replacement.paired) throw new TypeError("Replacement pairing failed");
+    channel.signOut(replacement.cookieToken);
+    expect(
+      handleCodingAppSessionLocalSession(
+        ctx(`${APP_SESSION_COOKIE_NAME}=${replacement.cookieToken}`),
+        deps(channel),
+      ).headers,
+    ).toBeUndefined();
   });
 
   it("rotate without a composed channel acknowledges without a cookie", () => {
@@ -128,7 +190,10 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionRotate(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(13);
+    expect(setCookie).toHaveLength(
+      serializeSessionCookies("test", { secure: false, maxAgeSeconds: 1 }).length,
+    );
+    expect(String(setCookie)).toContain("Path=/api/chats/messages/grounded;");
     expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
     expect(String(setCookie)).toContain("Path=/api/coding-workbench");
@@ -147,7 +212,10 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionSignOut(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(13);
+    expect(setCookie).toHaveLength(
+      serializeSessionCookies("test", { secure: false, maxAgeSeconds: 1 }).length,
+    );
+    expect(String(setCookie)).toContain("Path=/api/chats/messages/grounded;");
     expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain("Path=/api/editor/local-history");
     expect(String(setCookie)).toContain("Path=/api/runs");
@@ -219,7 +287,12 @@ describe("app-session lifecycle lines (F65)", () => {
         category: "http",
         op: "coding-app-session.paired",
         correlationId: "pair-correlation",
-        extra: { completeness: "complete", loss: "none" },
+        extra: {
+          expiredSessionCount: 0,
+          evictedSessionClass: "none",
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
     expectActivityLogProof(
@@ -228,22 +301,148 @@ describe("app-session lifecycle lines (F65)", () => {
     );
   });
 
+  it("records expiry cleanup and active-session protection during capacity admission", async () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, idleTtlMs: 100, maxSessions: 2 });
+    const active = registry.mint("active");
+    const release = registry.beginOperation(active.cookieToken);
+    now = 1;
+    registry.mint("expired");
+    now = 102;
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const { deps: logDeps, events } = logged(channel);
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody()), logDeps);
+    expect(events[0]?.extra).toMatchObject({ expiredSessionCount: 1, evictedSessionClass: "none" });
+    expect(
+      expectActivityLogProof(
+        "coding-app-session.paired.request",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ expiredSessionCount: 1, evictedSessionClass: "none" });
+    expect(registry.inspect(active.cookieToken)).toBeDefined();
+    release?.();
+  });
+
+  it.each(["inactive", "active"] as const)(
+    "records %s capacity eviction with the actual pairing correlation",
+    async (evictedSessionClass) => {
+      let now = 0;
+      const registry = createSessionRegistry({ now: () => now, maxSessions: 2 });
+      const oldest = registry.mint("oldest");
+      const releaseOldest =
+        evictedSessionClass === "active" ? registry.beginOperation(oldest.cookieToken) : undefined;
+      now = 1;
+      const protectedSession = registry.mint("protected");
+      const releaseProtected = registry.beginOperation(protectedSession.cookieToken);
+      const { deps: logDeps, events } = logged(
+        createCodingAppSessionChannel({
+          registry,
+          pairingPort: createFakeSessionPairingPort(),
+        }),
+      );
+      await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody()), logDeps);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        op: "coding-app-session.paired",
+        correlationId: "pair-correlation",
+      });
+      expect(
+        expectActivityLogProof(
+          "coding-app-session.paired.request",
+          formatActivityLogProofLine(events[0] ?? {}),
+        ),
+      ).toMatchObject({ expiredSessionCount: 0, evictedSessionClass });
+      expect(registry.inspect(oldest.cookieToken)).toBeUndefined();
+      expect(registry.inspect(protectedSession.cookieToken)).toBeDefined();
+      expect(registry.sessionCount()).toBe(2);
+      releaseOldest?.();
+      releaseProtected?.();
+    },
+  );
+
+  it.each([0, 1, 400, 999])(
+    "does not clear cookies or confirm repair with %i ms remaining",
+    (remaining) => {
+      let now = 0;
+      const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 10_000 });
+      const mint = registry.mint("local");
+      const channel = createCodingAppSessionChannel({ registry });
+      const { deps: logDeps, events } = logged(channel);
+      now = 10_000 - remaining;
+      const result = handleCodingAppSessionLocalSession(
+        {
+          ...ctx(`${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`),
+          correlationId: "repair-boundary",
+        },
+        logDeps,
+      );
+      expect(result.status).toBe(200);
+      expect(result.headers).toBeUndefined();
+      expect(events).toEqual([]);
+      expect(channel.ensureLocalSession(mint.cookieToken)).toEqual({ status: "unavailable" });
+    },
+  );
+
+  it("repairs twelve active projections with one complete second remaining", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 10_000 });
+    const mint = registry.mint("local");
+    const { deps: logDeps, events } = logged(createCodingAppSessionChannel({ registry }));
+    now = 9_000;
+    const result = handleCodingAppSessionLocalSession(
+      {
+        ...ctx(`${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`),
+        correlationId: "repair-boundary",
+      },
+      logDeps,
+    );
+    const cookies = result.headers?.["Set-Cookie"];
+    if (cookies === undefined || typeof cookies === "string")
+      throw new TypeError("Missing cookie projections");
+    expect(cookies).toHaveLength(14);
+    expect(cookies.slice(0, 12).every((cookie) => cookie.endsWith("Max-Age=1"))).toBe(true);
+    expect(cookies.slice(12).every((cookie) => cookie.endsWith("Max-Age=0"))).toBe(true);
+    expect(
+      expectActivityLogProof(
+        "coding-app-session.local-session.confirmed.request",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ cookieMaxAgeSeconds: 1, projectionCount: 12 });
+    now = 10_001;
+    expect(registry.inspect(mint.cookieToken)).toBeUndefined();
+  });
+
   it("logs a confirmed existing session with body-free lifecycle evidence", () => {
     const { channel, cookie } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
-    handleCodingAppSessionLocalSession(
+    const result = handleCodingAppSessionLocalSession(
       { ...ctx(cookie), correlationId: "local-correlation" },
       logDeps,
     );
-    expect(events).toEqual([
+    const projections = result.headers?.["Set-Cookie"];
+    if (typeof projections === "string" || projections === undefined)
+      throw new TypeError("Expected repaired cookie projections");
+    expect(projections).toHaveLength(14);
+    expect(events).toMatchObject([
       {
         level: "info",
         category: "http",
         op: "coding-app-session.local-session.confirmed",
         correlationId: "local-correlation",
-        extra: { completeness: "complete", loss: "none" },
+        extra: {
+          projectionCount: 12,
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
+    expect(events[0]?.extra?.cookieMaxAgeSeconds).toBeGreaterThan(0);
+    expect(events[0]?.extra?.cookieMaxAgeSeconds).toBeLessThanOrEqual(
+      APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+    );
     expectActivityLogProof(
       "coding-app-session.local-session.confirmed.request",
       formatActivityLogProofLine(events[0] ?? {}),

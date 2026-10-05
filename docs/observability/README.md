@@ -15,13 +15,15 @@ argument parsing, rendering, and publication remain their composition owners
 ## Create a report in the browser
 
 Choose **Create error report** beside a failed editor load, window crash, file-tree load, or
-degraded local-history save. An uncaught browser failure also offers a compact footer action;
-a healthy workspace has none. Each action selects that failure's correlation and disappears
-after a successful download. Keiko downloads one canonical `keiko-support-v1-*.json` file.
+degraded local-history save. An uncaught browser failure offers the same action in the workspace
+alert area and remains visible until dismissed. The footer keeps the centered product version.
+Each action selects that failure's correlation. Keiko downloads one `keiko-support-v1-*.json.gz`
+attachment whose decompressed bytes are the canonical report.
 Attach it to your usual support channel; Keiko does not upload it or require a CLI command.
 
-The local paired app session authorizes the report endpoint. The browser cannot select a state
-directory. One worker performs bounded, read-only evidence scans with a 30-second deadline and a
+The local paired app session authorizes reports containing stored server evidence. A limited
+client-only report requires no paired session and grants no access to that stored evidence.
+The browser cannot select a state directory. One worker performs bounded, read-only evidence scans with a 30-second deadline and a
 256 MiB heap ceiling. The existing Activity Log owner thread alone creates the incident and retention
 pin. Disconnecting cancels the worker. Incident resolution, query selection and canonical JSON
 validation are shared with CLI export; incomplete evidence stays explicitly incomplete.
@@ -29,6 +31,44 @@ validation are shared with CLI export; incomplete evidence stays explicitly inco
 A downloaded report contains body-free evidence, build/registry identities, causal timelines and
 sufficiency reasons. It does not include file contents or raw workspace paths. The report requires
 the local server to respond; a stopped server cannot create an export through this endpoint.
+
+For report delivery, `support.report.ui.delivered.reportBytes` is the canonical JSON size;
+`transportBytes` is the compressed attachment size. `parentCorrelationId` joins the creating
+request and `reportDigest` identifies the artifact. Response completion and
+`client.support-report.download-started` show transport completion and manual initiation,
+respectively; neither acknowledges an operating-system save. Download refusals use
+`support.report.ui.download-refused` with `no-session`, `other-session` or `expired-or-unknown`
+and the actual HTTP status. Unknown references and other sessions return 404; an existing protected
+reference without a valid session returns 403.
+
+Browser preparation records artifact quality in `client.support-report.prepared.reportCompleteness`
+and `reportLoss`. The event's own `completeness: complete` and `loss: none` mean that this state
+was recorded successfully, not that the report contains complete server evidence. Closed
+`evidenceScope` and `availabilityReason` describe that distinction without report contents.
+
+`client.files-scope.decision` joins source ownership and grounding-queue decisions to their actual
+actions. Current queue/retry records identify `mutationSurface` as `files`, `local-knowledge` or
+`git-change`. The shared closed decision vocabulary covers restoration, release, ambiguity,
+acknowledgement, conflict retries, suppression, timeout and supersession. A `timeout-rejected`
+record belongs to the refused attempt and names the blocker in `parentCorrelationId`;
+`timeout-recovered.rejectionCount` summarizes the exact number refused, including zero, under the
+original action. Source/candidate counts and binding fingerprints contain no paths or source bodies.
+
+`gateway.setup.metadata.resolved` distinguishes available, unavailable, cancelled and failed
+discovery. `selectedModelCount` is the known number of explicit chat/embedding selections.
+Successful discovery additionally reports `metadataEnrichedModelCount`, `roleMismatchModelCount`
+and `notDiscoveredModelCount`. Compatible selections with no metadata are outside those three
+subsets; the counts are not guaranteed to sum to the selection count. Unknown result counts are
+omitted after failure or cancellation, and discovery without explicit selections omits selection
+counts entirely. These counts do not establish a model's context window or expose model names. The
+closed `discoverySource` and per-route outcomes distinguish management metadata, model-list
+fallback and injected discovery. Unattempted routes stay `not-attempted`; a successful fallback
+retains earlier timeout, HTTP, transport or unusable-answer outcomes. The existing 30-second
+setup discovery budget reserves five seconds for each remaining fallback, rather than dividing
+it equally before the first management request. Answered but unusable discovery is classified as
+`validation-failed`; upstream HTTP status is `extra.httpStatus`, separate from the local envelope.
+Failure evidence retains the original reduced Keiko frames and cause classes without messages,
+credentials or endpoint addresses.
 
 ## File location, segments, and retention
 
@@ -250,14 +290,14 @@ are derived metadata that a query rebuilds whenever one is missing or stale, and
 the path that writes or reads evidence, so their state cannot make evidence unwritable or
 unreadable. `keiko support manifest verify` reports it.
 
-| Where to read it                   | What it shows                                                        |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| `keiko status`                     | `Diagnostic evidence: <state> (<reasons>); lost events: N.`          |
-| `keiko ui` (foreground)            | A line naming the state and reasons when readiness is not `ready`.   |
-| `keiko support export`             | The exported directory's readiness, after the report is written.     |
-| `GET /api/health`                  | The `diagnostics` block: state, reasons, writer kind, lost events.   |
-| The desktop footer                 | A badge when readiness is `degraded` or `unavailable`, with reasons. |
-| The log (`activity-log.readiness`) | The startup state and every later transition.                        |
+| Where to read it                   | What it shows                                                                                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `keiko status`                     | `Diagnostic evidence: <state> (<reasons>); lost events: N.`                                                                                  |
+| `keiko ui` (foreground)            | A line naming the state and reasons when readiness is not `ready`.                                                                           |
+| `keiko support export`             | The exported directory's readiness, after the report is written.                                                                             |
+| `GET /api/health`                  | The `diagnostics` block: state, reasons, writer kind, lost events.                                                                           |
+| The desktop workspace              | A plain-language notice and report action when readiness is `degraded` or `unavailable`; technical reasons stay in health, logs and reports. |
+| The log (`activity-log.readiness`) | The startup state and every later transition.                                                                                                |
 
 ## The op catalog
 
@@ -685,7 +725,7 @@ Each candidate pins the Activity Log from 15 minutes before to 5 minutes after t
 every process, including segments sealed later in that window. For the automatic trigger, that pin is
 published synchronously in the same turn as the failure that caused it, before any later maintenance
 pass — this process's own next segment admission, or another process sharing the state directory —
-can run against the window. The pin expires with the candidate after 14 days; it is released by
+can run against the window. The pin expires with the candidate after twenty-four hours; it is released by
 `dismiss`, and also when a duplicate or a rejected candidate finds it no longer needs the window its
 trigger pre-published. It holds only within `KEIKO_LOG_PIN_QUOTA_BYTES`; the candidate shows
 `pinned`, `quota-exceeded` or `rejected`, plus `evidenceLostBeforePin` when a sealed segment inside
@@ -712,12 +752,20 @@ or window not resolvable, `2` usage error.
   failure is `insufficient` with `no-registered-failure`: an instrumentation gap, never a complete
   record.
 - **Store.** Candidates live in `<stateDir>/support-incidents/` (owner-only), one
-  `incident-<32 hex>.json` of at most 4 KiB each. At most 32 are open, at most 24 of them automatic,
-  so explicit reports always have room. A full store rejects the new candidate
-  (`support.incident.rejected`) and never evicts an existing one. Candidates expire after 14 days
-  (`support.incident.expired`).
+  `incident-<32 hex>.json` of at most 4 KiB each. The governing Activity Log byte budget
+  reserves each record's maximum bytes plus its claims; all automatic candidates may use three
+  quarters of this capacity, browser candidates one quarter, and manual reports retain headroom.
+  At byte pressure, a durable replacement retires the oldest eligible candidate and releases its
+  owned pin and claims (`support.incident.expired`, reason `retention`). In-flight claims are never
+  stolen. Manual exports use an unretained descriptor when no slot can be reclaimed. Unreported
+  candidates expire after twenty-four hours. Shared Activity Log pin pressure can retire an eligible
+  pinned candidate earlier, so byte headroom is not a promise of protected pins.
+  `/api/health` reports writer readiness, closed reasons and `lostEvents`; it does not scan or
+  measure candidate storage. The retired optional `retainedDiagnosticCount` and
+  `diagnosticCapacity` fields are accepted only for wire compatibility and are never produced by
+  current servers. Neither readiness nor the compatibility fields represent open customer defects.
 - **Cross-process dedup and quotas.** The store also holds `fingerprint-<64 hex>.claim` and
-  `slot-<NN>.claim` files: exclusive-create claims that make "one open automatic candidate per
+  `slot-<nonnegative safe integer>.claim` files: exclusive-create claims that make "one open automatic candidate per
   defectFingerprint" and the count quotas hold even when two processes hit the identical failure at
   once, not just within one process. Both are released when their incident is dismissed or expires.
   A claim whose record is not written yet, or a record whose bytes are not, belongs to a process

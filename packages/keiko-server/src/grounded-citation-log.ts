@@ -15,7 +15,14 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown } from "./correlation.js";
-import { reconcileNumericCitations } from "./grounded-faithfulness.js";
+import {
+  reconcileNumericCitations,
+  reconcileInlineCitations,
+  type CitationReconciliation,
+  type PackCitationIndex,
+  type InlineCitationReconciliationSummary,
+} from "./grounded-faithfulness.js";
+import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { getServerLogger } from "./observability/index.js";
 
 export type CitationReconciliationOutcome =
@@ -35,14 +42,26 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["cited", "cited-with-dangling", "dangling-only", "uncited", "refusal"],
     },
+    citationKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["numeric", "file"],
+    },
+    ambiguousMarkerCount: { type: "integer", dataClass: "count", required: false },
+    droppedImplicitCount: { type: "integer", dataClass: "count", required: false },
     referenceCount: { type: "integer", dataClass: "count", required: true },
     attachedCount: { type: "integer", dataClass: "count", required: true },
-    weakOverlapCount: { type: "integer", dataClass: "count", required: true },
-    groupedMarkerCount: { type: "integer", dataClass: "count", required: true },
+    weakOverlapCount: { type: "integer", dataClass: "count", required: false },
+    groupedMarkerCount: { type: "integer", dataClass: "count", required: false },
     danglingMarkerCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [
+    { field: "danglingMarkerCount", positive: true },
+    { field: "ambiguousMarkerCount", positive: true },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -58,7 +77,7 @@ export interface CitationReconciliationEvidence {
   // Attached citation entries — one per in-range marker index, grouped markers expanded.
   readonly attachedIndices: readonly number[];
   // Attached entries whose claim shared little vocabulary with the excerpt (kept, not dropped).
-  readonly weakOverlapCount: number;
+  readonly weakOverlapCount?: number;
   // The answer was enforced as a refusal ("nothing about this in the documents").
   readonly refusal: boolean;
 }
@@ -109,11 +128,45 @@ export function logCitationReconciliation(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         outcome: summary.outcome,
+        citationKind: "numeric",
         referenceCount: evidence.referenceCount,
         attachedCount: summary.attachedCount,
-        weakOverlapCount: evidence.weakOverlapCount,
+        ...(evidence.weakOverlapCount === undefined
+          ? {}
+          : { weakOverlapCount: evidence.weakOverlapCount }),
         groupedMarkerCount: summary.groupedMarkerCount,
         danglingMarkerCount: summary.danglingMarkerCount,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+/** Reconcile file locations once and log only the resulting closed counts. */
+export function reconcileAndLogInlineCitations(
+  answer: string,
+  index: PackCitationIndex,
+  correlationId: string | undefined,
+): CitationReconciliation {
+  return reconcileInlineCitations(answer, index, (summary) => {
+    logInlineCitationSummary(summary, isNoEvidenceAnswerText(answer), correlationId);
+  });
+}
+
+function logInlineCitationSummary(
+  summary: InlineCitationReconciliationSummary,
+  refusal: boolean,
+  correlationId: string | undefined,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      SEARCH_CITATIONS_RECONCILED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        ...summary,
+        outcome: outcomeFor(refusal, summary.attachedCount, summary.danglingMarkerCount),
+        citationKind: "file",
         completeness: "complete",
         loss: "none",
       },
@@ -150,6 +203,9 @@ const SEARCH_CITATIONS_SUPPORT_SETTLED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [
+    { field: "supportCaveat", values: ["judge-undecided", "no-judge", "unjudged-citation"] },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

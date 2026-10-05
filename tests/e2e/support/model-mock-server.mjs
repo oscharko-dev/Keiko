@@ -18,6 +18,7 @@
 // `stream` would test the transport instead of the product.
 
 import { createServer } from "node:http";
+import { GROUNDED_SYSTEM_PROMPT } from "../../../packages/keiko-server/dist/grounded-prompt.js";
 
 const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
 const HOST = "127.0.0.1";
@@ -28,8 +29,7 @@ const HOST = "127.0.0.1";
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const JOURNAL_CAPTURE_MARKER = "KEIKO_E2E_JOURNAL_CAPTURE";
 const SALIENCE_PROMPT_MARKER = "You extract durable memories from a chat turn";
-const GROUNDED_PROMPT_MARKER =
-  "You are Keiko answering a repository question from a connected Files scope";
+const GROUNDED_PROMPT_MARKER = JSON.stringify(GROUNDED_SYSTEM_PROMPT).slice(1, -1);
 const PR_DESCRIPTION_PROMPT_MARKER = "Write a factual pull-request description";
 const GROUNDING_PARITY_EVIDENCE_MARKER = "KEIKO_E2E_GROUNDING_PARITY";
 const GROUNDING_PARITY_REPLY =
@@ -255,6 +255,15 @@ const server = createServer((req, res) => {
   }
   if (req.method === "POST" && url.pathname.endsWith("/chat/completions")) {
     void readBody(req).then((raw) => {
+      if (raw.includes("KEIKO_E2E_SUPPORT_FAILURE")) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { message: "Synthetic support download failure", type: "invalid_request_error" },
+          }),
+        );
+        return;
+      }
       let wantsStream = false;
       try {
         wantsStream = JSON.parse(raw || "{}").stream === true;

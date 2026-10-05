@@ -116,8 +116,8 @@ describe("ConnectedScopePill", () => {
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByText("Repository scope")).toBeInTheDocument();
-    expect(screen.getByText(/Keiko may inspect only the connected repository/i)).toHaveTextContent(
+    expect(screen.getByText("Connected root folder")).toBeInTheDocument();
+    expect(screen.getByText(/Keiko may inspect only the connected root folder/i)).toHaveTextContent(
       /safe-read exclusions and context budget limits apply/i,
     );
   });
@@ -347,6 +347,23 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
   });
 
+  it("ignores an uncapped file count while preserving real finite budget pressure", () => {
+    const pack = contextPack();
+    const uncapped = { ...pack, budget: { ...pack.budget, filesReadMax: null } };
+    expect(
+      buildLastGroundedBudgetStatus({
+        ...uncapped,
+        usage: { ...pack.usage, filesRead: 40 },
+      })?.pressure,
+    ).toBe("low");
+    expect(
+      buildLastGroundedBudgetStatus({
+        ...uncapped,
+        usage: { ...pack.usage, filesRead: 40, modelInputTokens: 6000 },
+      })?.pressure,
+    ).toBe("exceeded");
+  });
+
   // Issue #2723 — pressureFromRatio's other three thresholds (low/high/exceeded), reached through
   // the same exported entry point the "Moderate" case above already uses.
   it.each([
@@ -429,4 +446,21 @@ describe("ConnectedScopePill", () => {
       );
     });
   });
+});
+
+it("sends the canonical scope baseline when disconnecting from a stale tab", async () => {
+  const identity = "gsi-v1:" + "a".repeat(64);
+  const chat = makeChat({
+    groundingScopeIdentity: identity,
+    connectedScope: {
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: 1,
+      root: "/data/alpha",
+    },
+  });
+  const updateScopes = vi.fn().mockResolvedValue({ chat: makeChat() } satisfies ChatResponse);
+  render(<ConnectedScopePill chat={chat} updateScopes={updateScopes} />);
+  await userEvent.setup().click(screen.getByRole("button", { name: /^Disconnect/ }));
+  await waitFor(() => expect(updateScopes).toHaveBeenCalledWith(chat.id, null, identity));
 });

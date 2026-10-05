@@ -124,14 +124,16 @@ it("rejects unregistered conversation coverage fields without echoing their cont
 
 describe("conversation coverage schema", () => {
   const coverage = { version: 1, throughMessageId: "message-fixture", historyRevision: 0 };
-  it.each([coverage, { ...coverage, contextWindowTokens: 4096 }])(
-    "accepts registered checkpoint metadata: %j",
-    (conversationCoverage) => {
-      expect(validateContextCompactionRecord({ ...minimalRecord(), conversationCoverage }).ok).toBe(
-        true,
-      );
-    },
-  );
+  it.each([
+    coverage,
+    { ...coverage, contextWindowTokens: 4096 },
+    { ...coverage, effectiveInputBudget: 2048 },
+    { ...coverage, effectiveInputBudget: 0 },
+  ])("accepts registered checkpoint metadata: %j", (conversationCoverage) => {
+    expect(validateContextCompactionRecord({ ...minimalRecord(), conversationCoverage }).ok).toBe(
+      true,
+    );
+  });
   it.each([
     null,
     [],
@@ -145,6 +147,10 @@ describe("conversation coverage schema", () => {
     { ...coverage, contextWindowTokens: 0 },
     { ...coverage, contextWindowTokens: -1 },
     { ...coverage, contextWindowTokens: "4096" },
+    { ...coverage, effectiveInputBudget: -1 },
+    { ...coverage, effectiveInputBudget: 1.5 },
+    { ...coverage, effectiveInputBudget: Number.MAX_SAFE_INTEGER + 1 },
+    { ...coverage, effectiveInputBudget: "2048" },
   ])("rejects malformed checkpoint metadata: %j", (conversationCoverage) => {
     expectInvalidWithReason(
       validateContextCompactionRecord({ ...minimalRecord(), conversationCoverage }),

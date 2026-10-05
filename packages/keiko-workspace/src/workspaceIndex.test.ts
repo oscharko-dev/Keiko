@@ -26,8 +26,12 @@ import {
   type WorkspaceFs,
   type WorkspaceStat,
 } from "./fs.js";
-import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
-import { resolveSearchPolicy } from "./repoSearchPolicy.js";
+import {
+  DEFAULT_SEARCH_LIMITS as PUBLIC_SEARCH_LIMITS,
+  searchText,
+  type SearchScope,
+} from "./repoSearch.js";
+import { resolveSearchPolicy, resolveWorkspaceSearchPolicy } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
 import {
@@ -50,6 +54,9 @@ import {
   workspaceIndexCandidateSet,
   workspaceIndexFileMetadata,
 } from "./workspaceIndex.js";
+
+// These tests exercise the explicitly bounded structural/index acceleration path.
+const INDEX_TEST_LIMITS = { ...PUBLIC_SEARCH_LIMITS, maxFilesScanned: 2_000, elapsedMsMax: 5_000 };
 
 const MEM_ROOT = "/ws";
 const FIXED_NOW: () => number = () => 1_700_000_000_000;
@@ -461,7 +468,7 @@ async function snapshotFor(
   index: WorkspaceIndex,
   currentScope: SearchScope,
 ): Promise<WorkspaceIndexSnapshot | undefined> {
-  const policy = resolveSearchPolicy(currentScope.relativePaths.length > 0, undefined);
+  const policy = resolveWorkspaceSearchPolicy(currentScope, nodeWorkspaceFs, undefined);
   return await index.loadSnapshot(
     buildWorkspaceIndexScopeKey(
       currentScope,
@@ -470,8 +477,8 @@ async function snapshotFor(
         applyGitignore: policy.applyGitignore,
         omitLowValueWorkspaceFiles: policy.omitLowValueWorkspaceFiles,
       },
-      DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-      DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+      INDEX_TEST_LIMITS.maxFilesScanned,
     ),
   );
 }
@@ -508,8 +515,8 @@ function sampleSnapshot(content: string): WorkspaceIndexSnapshot {
       applyGitignore: true,
       omitLowValueWorkspaceFiles: true,
     },
-    maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-    maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+    maxBytesPerFileScanned: INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+    maxFilesScanned: INDEX_TEST_LIMITS.maxFilesScanned,
     discovery: {
       files: [{ scopePath: "src/app.ts", sizeBytes: Buffer.byteLength(content, "utf8") }],
       directories: [],
@@ -553,8 +560,8 @@ describe("workspaceIndex", () => {
         applyGitignore: policy.applyGitignore,
         omitLowValueWorkspaceFiles: policy.omitLowValueWorkspaceFiles,
       },
-      DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-      DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+      INDEX_TEST_LIMITS.maxFilesScanned,
     );
     const legacy = {
       ...sampleSnapshot("needle"),
@@ -587,8 +594,8 @@ describe("workspaceIndex", () => {
         applyGitignore: true,
         omitLowValueWorkspaceFiles: true,
       },
-      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      maxBytesPerFileScanned: INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: INDEX_TEST_LIMITS.maxFilesScanned,
       discovery: {
         files: [...contents].map(([scopePath, content]) => ({
           scopePath,
@@ -639,8 +646,8 @@ describe("workspaceIndex", () => {
         applyGitignore: true,
         omitLowValueWorkspaceFiles: true,
       },
-      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      maxBytesPerFileScanned: INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: INDEX_TEST_LIMITS.maxFilesScanned,
       discovery: {
         files: [...contents].map(([scopePath, content]) => ({
           scopePath,
@@ -685,8 +692,8 @@ describe("workspaceIndex", () => {
     };
     const options = { fs: tracked.fs, nowMs: FIXED_NOW, workspaceIndex: index };
 
-    const cold = await searchText(scope(), exactQuery, DEFAULT_SEARCH_LIMITS, options);
-    const warm = await searchText(scope(), exactQuery, DEFAULT_SEARCH_LIMITS, options);
+    const cold = await searchText(scope(), exactQuery, INDEX_TEST_LIMITS, options);
+    const warm = await searchText(scope(), exactQuery, INDEX_TEST_LIMITS, options);
 
     expect(cold.atoms.map((atom) => atom.lineRange)).toEqual([{ startLine: 1, endLine: 3 }]);
     expect(warm.atoms.map((atom) => atom.lineRange)).toEqual(
@@ -701,7 +708,7 @@ describe("workspaceIndex", () => {
         '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
     });
     const index = createWorkspaceIndex();
-    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const limits = { ...INDEX_TEST_LIMITS, maxFilesScanned: 1 };
 
     const result = await searchText(
       scope(),
@@ -727,7 +734,7 @@ describe("workspaceIndex", () => {
         applyGitignore: true,
         omitLowValueWorkspaceFiles: true,
       },
-      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxBytesPerFileScanned: INDEX_TEST_LIMITS.maxBytesPerFileScanned,
       maxFilesScanned: 1,
       discovery: {
         files: Object.entries(files).map(([scopePath, content]) => ({
@@ -747,7 +754,7 @@ describe("workspaceIndex", () => {
       loadSnapshot: () => snapshot,
       saveSnapshot: () => undefined,
     });
-    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const limits = { ...INDEX_TEST_LIMITS, maxFilesScanned: 1 };
 
     const result = await searchText(
       scope(),
@@ -775,18 +782,18 @@ describe("workspaceIndex", () => {
     });
     const currentScope = scope();
     const index = createWorkspaceIndex();
-    await searchText(currentScope, nlq("unrelated"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("unrelated"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
 
-    const result = await searchText(currentScope, nlq("function defined"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("function defined"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
-    const cold = await searchText(currentScope, nlq("function defined"), DEFAULT_SEARCH_LIMITS, {
+    const cold = await searchText(currentScope, nlq("function defined"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
     });
@@ -810,7 +817,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
     const capped = {
-      ...DEFAULT_SEARCH_LIMITS,
+      ...INDEX_TEST_LIMITS,
       maxFilesScanned: 2,
       maxMatchesReturned: 1,
     };
@@ -864,8 +871,8 @@ describe("workspaceIndex", () => {
         applyGitignore: true,
         omitLowValueWorkspaceFiles: true,
       },
-      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      maxBytesPerFileScanned: INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: INDEX_TEST_LIMITS.maxFilesScanned,
       discovery: {
         files: [
           { scopePath: "src/a.ts", sizeBytes: 10, mtimeMs: 1.5 },
@@ -1018,7 +1025,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1061,7 +1068,7 @@ describe("workspaceIndex", () => {
         workspace: { ...workspace(), root: workspaceRoot },
       };
       const index = createWorkspaceIndex();
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: nodeWorkspaceFs,
         nowMs: FIXED_NOW,
         workspaceIndex: index,
@@ -1184,7 +1191,7 @@ describe("workspaceIndex", () => {
       },
     });
 
-    const result = await searchText(scope(), nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(scope(), nlq("needle"), INDEX_TEST_LIMITS, {
       fs: guardedFs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1250,7 +1257,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    const first = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const first = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1258,7 +1265,7 @@ describe("workspaceIndex", () => {
     expect(first.atoms.map((atom) => atom.scopePath)).toEqual(["README.md", "src/a.ts"]);
 
     tracked.resetCounters();
-    const second = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const second = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1278,7 +1285,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1287,7 +1294,7 @@ describe("workspaceIndex", () => {
     tracked.writeFile("src/b.ts", "export const beta = 'needle';\n");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1311,7 +1318,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("cached"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("cached"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1320,7 +1327,7 @@ describe("workspaceIndex", () => {
 
     tracked.replaceFilePreservingMtime("src/app.ts", "export const marker = 'fresh!';\n");
     tracked.resetCounters();
-    const result = await searchText(currentScope, nlq("fresh"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("fresh"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1345,7 +1352,7 @@ describe("workspaceIndex", () => {
     };
     const tracked = createTrackedFs(initialFiles);
     const currentScope = scope();
-    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const limits = { ...INDEX_TEST_LIMITS, maxFilesScanned: 1 };
     const index = createWorkspaceIndex();
     const searchOptions = {
       fs: tracked.fs,
@@ -1369,7 +1376,7 @@ describe("workspaceIndex", () => {
       "src/z.ts": "export const target = 'needle';\n",
     });
     const currentScope = scope();
-    const narrowLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const narrowLimits = { ...INDEX_TEST_LIMITS, maxFilesScanned: 1 };
     const index = createWorkspaceIndex();
     const options = { fs: tracked.fs, nowMs: FIXED_NOW, workspaceIndex: index };
 
@@ -1387,7 +1394,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1396,7 +1403,7 @@ describe("workspaceIndex", () => {
     tracked.writeFile("src/c.ts", "export const gamma = 'needle';\n");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1418,7 +1425,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    const empty = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const empty = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1431,7 +1438,7 @@ describe("workspaceIndex", () => {
     tracked.writeFile("src/app.ts", "export const app = 'needle';\n");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1452,7 +1459,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1464,7 +1471,7 @@ describe("workspaceIndex", () => {
     tracked.writeFile("docs/readme.md", "needle in docs\n");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1486,7 +1493,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1496,7 +1503,7 @@ describe("workspaceIndex", () => {
     tracked.writeFile("src/b.ts", "export const beta = 'needle';\n");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1533,7 +1540,7 @@ describe("workspaceIndex", () => {
       };
       const index = createWorkspaceIndex();
 
-      const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: nodeWorkspaceFs,
         nowMs: FIXED_NOW,
         workspaceIndex: index,
@@ -1615,7 +1622,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1624,7 +1631,7 @@ describe("workspaceIndex", () => {
     tracked.writeFile("src/app.ts", "magnet alpha\n");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("magnet"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("magnet"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1643,7 +1650,7 @@ describe("workspaceIndex", () => {
     });
     const currentScope = scope();
     const index = createWorkspaceIndex();
-    const narrowLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const narrowLimits = { ...INDEX_TEST_LIMITS, maxFilesScanned: 1 };
 
     const first = await searchText(currentScope, nlq("needle"), narrowLimits, {
       fs: tracked.fs,
@@ -1653,7 +1660,7 @@ describe("workspaceIndex", () => {
     expect(first.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts"]);
 
     tracked.resetCounters();
-    const second = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const second = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1672,7 +1679,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    const cold = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const cold = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1689,7 +1696,7 @@ describe("workspaceIndex", () => {
     });
     expect(JSON.stringify(cold.workspaceIndex)).not.toContain(MEM_ROOT);
 
-    const warm = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const warm = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1724,14 +1731,14 @@ describe("workspaceIndex", () => {
     };
     const index = createWorkspaceIndex(store);
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
     expect(saves).toBe(1);
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1756,7 +1763,7 @@ describe("workspaceIndex", () => {
       },
     });
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1766,7 +1773,7 @@ describe("workspaceIndex", () => {
       "src",
     );
 
-    const warm = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const warm = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1791,7 +1798,7 @@ describe("workspaceIndex", () => {
       },
     });
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1800,7 +1807,7 @@ describe("workspaceIndex", () => {
     expect(tracked.counters.readDir).toBe(0);
 
     tracked.resetCounters();
-    const warm = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const warm = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1836,7 +1843,7 @@ describe("workspaceIndex", () => {
           },
         };
 
-        const cold = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+        const cold = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
           fs: nodeWorkspaceFs,
           nowMs: FIXED_NOW,
           workspaceIndex: createWorkspaceIndex(store),
@@ -1862,7 +1869,7 @@ describe("workspaceIndex", () => {
         ).toThrow(PathDeniedError);
 
         await expect(
-          searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+          searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
             fs: nodeWorkspaceFs,
             nowMs: FIXED_NOW,
             workspaceIndex: createWorkspaceIndex(store),
@@ -1901,7 +1908,7 @@ describe("workspaceIndex", () => {
     const result = await searchText(
       { ...scope(), relativePaths: ["src"] },
       nlq("needle"),
-      DEFAULT_SEARCH_LIMITS,
+      INDEX_TEST_LIMITS,
       { fs: racingFs, nowMs: FIXED_NOW, workspaceIndex: index },
     );
 
@@ -1917,7 +1924,7 @@ describe("workspaceIndex", () => {
     const originalScope = scope();
     const index = createWorkspaceIndex();
 
-    const cold = await searchText(originalScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const cold = await searchText(originalScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1928,7 +1935,7 @@ describe("workspaceIndex", () => {
       ...originalScope,
       workspace: { ...originalScope.workspace, ignoreLines: ["ignored-area/"] },
     };
-    const warm = await searchText(ignoredScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const warm = await searchText(ignoredScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1952,7 +1959,7 @@ describe("workspaceIndex", () => {
       saveSnapshot: () => undefined,
     });
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1973,7 +1980,7 @@ describe("workspaceIndex", () => {
       },
     });
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -1990,7 +1997,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2028,7 +2035,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2037,7 +2044,7 @@ describe("workspaceIndex", () => {
     tracked.deleteFile("src/a.ts");
     tracked.resetCounters();
 
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2061,7 +2068,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, rxq("absent"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, rxq("absent"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2070,12 +2077,12 @@ describe("workspaceIndex", () => {
     tracked.writeFile("foo/hit.ts", "export const found = 'needle';\n");
     tracked.writeFile("bar.ts", "export const added = true;\n");
 
-    const warm = await searchText(currentScope, rxq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const warm = await searchText(currentScope, rxq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
-    const cold = await searchText(currentScope, rxq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const cold = await searchText(currentScope, rxq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
     });
@@ -2092,7 +2099,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, rxq("absent"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, rxq("absent"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2101,12 +2108,12 @@ describe("workspaceIndex", () => {
     tracked.writeFile("foo", "needle\n");
     tracked.writeFile("bar.ts", "export const added = true;\n");
 
-    const warm = await searchText(currentScope, rxq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const warm = await searchText(currentScope, rxq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
-    const cold = await searchText(currentScope, rxq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const cold = await searchText(currentScope, rxq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
     });
@@ -2134,13 +2141,13 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("beta"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("beta"), INDEX_TEST_LIMITS, {
       fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
     deleteOnDirectoryInspection = true;
-    const result = await searchText(currentScope, nlq("beta"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("beta"), INDEX_TEST_LIMITS, {
       fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2161,7 +2168,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2192,7 +2199,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("token"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("token"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2218,7 +2225,7 @@ describe("workspaceIndex", () => {
     const currentScope = scope();
     const index = createWorkspaceIndex();
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2227,7 +2234,7 @@ describe("workspaceIndex", () => {
     expect(snapshot?.records[0]?.lexical?.truncated).toBe(true);
 
     tracked.resetCounters();
-    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,
@@ -2250,7 +2257,7 @@ describe("workspaceIndex", () => {
       const currentScope = scope();
       const firstIndex = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
 
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: firstIndex,
@@ -2258,7 +2265,7 @@ describe("workspaceIndex", () => {
 
       tracked.resetCounters();
       const secondIndex = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
-      const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      const result = await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: secondIndex,
@@ -2277,7 +2284,7 @@ describe("workspaceIndex", () => {
   it("persists default-limit snapshots with many directory fingerprints", async () => {
     const runtimeDir = tempRuntimeDir();
     try {
-      const fileCount = DEFAULT_SEARCH_LIMITS.maxFilesScanned;
+      const fileCount = INDEX_TEST_LIMITS.maxFilesScanned;
       const files = Array.from({ length: fileCount }, (_, index) => ({
         scopePath: `dir-${index.toString().padStart(4, "0")}/app.ts`,
         sizeBytes: 12,
@@ -2289,8 +2296,8 @@ describe("workspaceIndex", () => {
           applyGitignore: true,
           omitLowValueWorkspaceFiles: true,
         },
-        maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-        maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+        maxBytesPerFileScanned: INDEX_TEST_LIMITS.maxBytesPerFileScanned,
+        maxFilesScanned: INDEX_TEST_LIMITS.maxFilesScanned,
         discovery: {
           files,
           directories: [
@@ -2331,7 +2338,7 @@ describe("workspaceIndex", () => {
       const currentScope = scope();
       const index = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
 
-      await searchText(currentScope, nlq("token"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("token"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: index,
@@ -2369,7 +2376,7 @@ describe("workspaceIndex", () => {
       const currentScope = scope();
       const index = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
 
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: index,
@@ -2575,7 +2582,7 @@ describe("workspaceIndex", () => {
       });
       const firstIndex = createWorkspaceIndex(tinyStore);
 
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: firstIndex,
@@ -2587,7 +2594,7 @@ describe("workspaceIndex", () => {
       const secondIndex = createWorkspaceIndex(
         createFileWorkspaceIndexStore({ runtimeDir, maxSnapshotBytes: 64 }),
       );
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: secondIndex,
@@ -2634,7 +2641,7 @@ describe("workspaceIndex", () => {
       const currentScope = scope();
       const firstIndex = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
 
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: firstIndex,
@@ -2648,7 +2655,7 @@ describe("workspaceIndex", () => {
       tracked.resetCounters();
 
       const secondIndex = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
-      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
         workspaceIndex: secondIndex,
@@ -2798,7 +2805,7 @@ describe("workspaceIndex", () => {
     };
     const index = createWorkspaceIndex(store);
 
-    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+    await searchText(currentScope, nlq("needle"), INDEX_TEST_LIMITS, {
       fs: tracked.fs,
       nowMs: FIXED_NOW,
       workspaceIndex: index,

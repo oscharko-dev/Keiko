@@ -19,7 +19,10 @@ import type { WorkspaceInfo } from "./types.js";
 const MEM_ROOT = "/ws";
 const FIXED_NOW = (): number => 1_700_000_000_000;
 
-function scopeFor(files: Readonly<Record<string, string>>): {
+function scopeFor(
+  files: Readonly<Record<string, string>>,
+  gitMetadata = false,
+): {
   scope: SearchScope;
   fs: ReturnType<typeof memFs>;
 } {
@@ -36,7 +39,10 @@ function scopeFor(files: Readonly<Record<string, string>>): {
   };
   return {
     scope: { workspace, scopeId: "bench", relativePaths: [] },
-    fs: memFs(MEM_ROOT, files),
+    fs: memFs(
+      MEM_ROOT,
+      gitMetadata ? { ...files, ".git": "gitdir: .metadata/worktrees/benchmark\n" } : files,
+    ),
   };
 }
 
@@ -45,6 +51,7 @@ function nlq(text: string): RetrievalQuery {
 }
 
 interface BenchCase {
+  readonly gitMetadata?: boolean;
   readonly id: string;
   readonly category: string;
   readonly files: Readonly<Record<string, string>>;
@@ -219,6 +226,7 @@ const CASES: readonly BenchCase[] = [
   },
   {
     id: "generated-avoidance",
+    gitMetadata: true,
     category: "generated-avoidance",
     files: {
       "src/main/java/com/acme/Service.java":
@@ -599,9 +607,31 @@ function caseById(id: string): BenchCase {
 }
 
 describe("repository-retrieval benchmark — golden top-k over synthetic polyglot fixtures", () => {
+  it("allows generated-named ordinary text without Git and still excludes actual binary content", async () => {
+    const generated = CASES.find((entry) => entry.id === "generated-avoidance");
+    if (generated === undefined) throw new Error("Missing generated policy benchmark");
+    const { scope, fs } = scopeFor({
+      ...generated.files,
+      "build/generated/binary.bin": "version\0\0\0\0\0\0\0\0",
+    });
+    expect(fs.exists(`${MEM_ROOT}/.git`)).toBe(false);
+    const result = await searchText(scope, nlq(generated.query), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: generated.intent },
+    });
+    const paths = result.atoms.map((atom) => atom.scopePath);
+    expect(paths).toContain(generated.expectTop);
+    for (const ordinary of generated.mustNotInclude ?? []) expect(paths).toContain(ordinary);
+    expect(paths).not.toContain("build/generated/binary.bin");
+    expect(result.candidates).toContainEqual(
+      expect.objectContaining({ scopePath: "build/generated/binary.bin", omitted: "binary" }),
+    );
+  });
+
   for (const c of CASES) {
     it(`[${c.category}] ${c.id}: surfaces ${c.expectTop} first`, async () => {
-      const { scope, fs } = scopeFor(c.files);
+      const { scope, fs } = scopeFor(c.files, c.gitMetadata);
       const result = await searchText(scope, nlq(c.query), DEFAULT_SEARCH_LIMITS, {
         fs,
         nowMs: FIXED_NOW,

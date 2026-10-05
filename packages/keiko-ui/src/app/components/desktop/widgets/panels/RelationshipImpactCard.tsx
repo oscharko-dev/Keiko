@@ -1,3 +1,9 @@
+"use client";
+
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 // Issue #542 (Epic #532) — bounded impact / dependency detail card.
 //
 // Renders the result of the bounded dependency walk for a relationship in both directions:
@@ -20,8 +26,6 @@
 //
 // State is conveyed by text + counts, never colour alone. No new dependency, CSS var, or @keyframes.
 
-"use client";
-
 import type { ReactNode } from "react";
 import type {
   DependencyReport,
@@ -29,7 +33,6 @@ import type {
   ApiRelationship,
 } from "../../../../relationships/api";
 import { deriveImpact, type ImpactOrigin } from "../../../../relationships/impact";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 const UI_RENDER_CAP = 50;
 

@@ -147,3 +147,10 @@ export const REQUIRED_STATUS_REASONS = {
   failed:
     "handler-unavailable,handler-mismatch,handler-failed,result-contract-failed,effect-outcome-unknown,budget-port-failed",
 };
+
+// These discovery dimensions are unbounded; eligible file size and result budgets remain finite.
+export const UNBOUNDED_SEARCH_FIELDS = new Set([
+  "maxSearchFiles",
+  "maxSearchDurationMs",
+  "maxSearchInventory",
+]);

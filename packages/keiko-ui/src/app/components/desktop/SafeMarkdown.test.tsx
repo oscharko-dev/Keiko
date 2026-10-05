@@ -210,6 +210,26 @@ describe("SafeMarkdown — safe link", () => {
 });
 
 describe("SafeMarkdown — repository references", () => {
+  it("opens a native model's non-breaking-hyphen range at the exact cited lines", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-unicode-range" }));
+    render(
+      <SafeMarkdown
+        source={"Price [src/domain/shipping.ts:1\u20116]."}
+        repositoryRoots={[{ root: "/repo", label: "Fixture" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const reference = screen.getByRole("button", {
+      name: "Open src/domain/shipping.ts at lines 1-6 in editor",
+    });
+    fireEvent.click(reference);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/domain/shipping.ts",
+      lineStart: 1,
+      lineEnd: 6,
+    });
+  });
   it("renders conservative repository references as editor-open controls", () => {
     const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     render(
@@ -259,6 +279,95 @@ describe("SafeMarkdown — repository references", () => {
       "/assets/icons/typescript.svg",
     );
     expect(jsonReference.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/json.svg");
+  });
+
+  it("disambiguates all 96 same-basename references across Markdown table cells", () => {
+    const paths = Array.from(
+      { length: 96 },
+      (_, index) =>
+        `packages/entry-${String(index + 1).padStart(3, "0")}/src/LateDefinitionProbe.ts`,
+    );
+    const source =
+      "| Source |\n| --- |\n" + paths.map((path) => `| [${path}:301-302] |`).join("\n");
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={source}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const references = screen.getAllByRole("button", { name: /^Open / });
+    expect(references.map((button) => button.textContent)).toEqual(
+      paths.map((path) => `${path.split("/").slice(-3).join("/")}:301-302`),
+    );
+    const last = references[95];
+    if (last === undefined) throw new Error("last citation missing");
+    fireEvent.click(last);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: paths[95],
+      lineStart: 301,
+      lineEnd: 302,
+    });
+  });
+
+  it("uses one path set across prose and inline code without lengthening repeated file references", () => {
+    render(
+      <SafeMarkdown
+        source="[alpha/src/foo.ts:1] and `beta/src/foo.ts:2`, then [alpha/src/foo.ts:3]."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={() => ({ ok: true, windowId: "editor-1" })}
+      />,
+    );
+    expect(
+      screen.getAllByRole("button", { name: /^Open / }).map((button) => button.textContent),
+    ).toEqual(["alpha/src/foo.ts:1", "beta/src/foo.ts:2", "alpha/src/foo.ts:3"]);
+  });
+
+  it.each([
+    "src/überprüfung/status.ts",
+    "src/u\u0308berpru\u0308fung/status.ts",
+    "Handbücher/Service Anleitung.html",
+    "Handbücher/Service  Anleitung.html",
+    "Handbücher/🔧.html",
+  ])("opens the exact complete citation path %s", (path) => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={`Grüße [${path}:1-2].`}
+        repositoryRoots={[{ root: "/repo", label: "Manuals" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const reference = screen.getByRole("button", {
+      name: `Open ${path.replace(/ +/gu, " ")} at lines 1-2 in editor`,
+    });
+    expect(reference).toHaveAttribute("aria-label", `Open ${path} at lines 1-2 in editor`);
+    fireEvent.click(reference);
+    expect(openReference).toHaveBeenCalledWith({ root: "/repo", path, lineStart: 1, lineEnd: 2 });
+    expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("[src/überprü");
+  });
+
+  it.each([
+    "/private/status.ts",
+    "../private/status.ts",
+    "src/\u0001private/status.ts",
+    "src/\u202eprivate/status.ts",
+    "src/\t\tprivate/status.ts",
+    "src/\nprivate/status.ts",
+  ])("keeps an invalid citation path as text without clickable suffixes: %s", (path) => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={`Evidence [${path}:1-2].`}
+        repositoryRoots={[{ root: "/repo", label: "Manuals" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
+    expect(openReference).not.toHaveBeenCalled();
   });
 
   it("renders root-level repository files and bracket citations as editor-open controls", () => {
@@ -831,5 +940,91 @@ describe("SafeMarkdown — ordered list continuation", () => {
       "3",
       "7",
     ]);
+  });
+});
+
+describe("SafeMarkdown spaced source table", () => {
+  it("preserves ordinary table text and code boundaries without a reference opener", () => {
+    const path = "文書/運転 手順.html";
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| ${path}\u202f:\u202f182 |\n| \`${path}\`\u202f:\u202f182 |`}
+      />,
+    );
+    const cells = screen.getAllByRole("cell");
+    expect(cells[0]?.querySelector("code")).toBeNull();
+    expect(cells[0]?.textContent).toBe(`${path}\u202f:\u202f182`);
+    expect(cells[1]?.querySelector("code")?.textContent).toBe(path);
+    expect(cells[1]?.textContent).toBe(`${path}\u202f:\u202f182`);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("preserves a CJK filename containing a space in a complete code-wrapped location", () => {
+    const path = "文書/運転 手順.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| \`${path}\u202f:\u202f182\` |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ path, lineStart: 182, lineEnd: 182 }),
+    );
+  });
+
+  it("opens an explicitly adjacent outside-code line with its unchanged CJK path", () => {
+    const path = "文書/運転 手順.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| \`${path}\`\u202f:\u202f182 |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ path, lineStart: 182, lineEnd: 182 }),
+    );
+  });
+
+  it("keeps an entire space-bearing path in a bare table source cell", () => {
+    const path = "文書/運転 手順.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| ${path}\u202f:\u202f182 |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ path, lineStart: 182, lineEnd: 182 }),
+    );
+  });
+
+  it("opens the actual source line182 rather than only the bare path", () => {
+    const path = "handbooks/material/service/archive/current/chapters/conveyor.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Machine | Interval | Source |\n|---|---|---|\n| Conveyor | 1193 hours | ${path}\u202f:\u202f182 |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/synthetic/handbook",
+        path,
+        lineStart: 182,
+        lineEnd: 182,
+      }),
+    );
   });
 });

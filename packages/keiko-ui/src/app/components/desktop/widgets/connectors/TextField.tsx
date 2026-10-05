@@ -3,8 +3,8 @@
 // and role="alert" error wired via aria-describedby.
 
 import type { ReactNode } from "react";
-import { useTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+import type { WidgetMessageKey as MessageKey } from "@/lib/optional-widget-i18n";
 
 export interface TextFieldProps {
   readonly id: string;

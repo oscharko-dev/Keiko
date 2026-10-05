@@ -15,7 +15,11 @@ import {
   useTranslate,
 } from "./i18n";
 import { ATTACHMENT_CLEANUP_DEFERRED_ERROR } from "./chat-session-error";
-import { presentChatSessionError, translateOptionalWidget } from "./optional-widget-i18n";
+import {
+  presentChatSessionError,
+  translateOptionalWidget,
+  loadOptionalWidgetMessages,
+} from "./optional-widget-i18n";
 
 const navigatorLanguageDescriptor = Object.getOwnPropertyDescriptor(window.navigator, "language");
 
@@ -133,6 +137,7 @@ describe("translate", () => {
 
   it("translates the remediated widget surfaces from the German catalog", async () => {
     await loadLocaleMessages("de");
+    await loadOptionalWidgetMessages("de");
 
     expect(translateOptionalWidget("de", "commandPalette.title")).toBe("Befehle");
     expect(translateOptionalWidget("de", "browserWidget.action.open")).toBe("Sitzung öffnen");
@@ -161,7 +166,8 @@ describe("translate", () => {
     ).toBe("Befehl abgeschlossen: Exit-Code 0, 12 ms");
   });
 
-  it("presents content-free chat session errors in both locales", () => {
+  it("presents content-free chat session errors in both locales", async () => {
+    await loadOptionalWidgetMessages("de");
     expect(
       presentChatSessionError(ATTACHMENT_CLEANUP_DEFERRED_ERROR, (key, values) =>
         translateOptionalWidget("en", key, values),

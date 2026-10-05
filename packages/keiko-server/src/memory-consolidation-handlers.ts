@@ -49,7 +49,7 @@ import type {
   ConsolidationJobSettings,
 } from "./memory-consolidation-registry.js";
 import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
-import { readJsonRequestBody } from "./bounded-request-body.js";
+import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { consolidationLogSinkFor } from "./process-log-sink.js";
 
 const MAX_BODY_BYTES = 64_000;
@@ -76,14 +76,14 @@ function isRouteResult(value: unknown): value is RouteResult {
 
 // Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap above is
 // unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
-// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBodyOutcome` (bounded-request-body.ts) is
 // the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
 // identically in this file, memory-handlers.ts and memory-conv-handlers.ts.
 function readJsonBody(
   req: IncomingMessage,
   correlationId?: string,
-): Promise<Record<string, unknown> | RouteResult> {
-  return readJsonRequestBody(req, MAX_BODY_BYTES, correlationId);
+): Promise<JsonRequestBodyOutcome> {
+  return readJsonRequestBodyOutcome(req, MAX_BODY_BYTES, correlationId);
 }
 
 function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
@@ -727,8 +727,9 @@ export async function handleCreateConsolidationJob(
   if (isRouteResult(vault)) return vault;
   const registry = resolveJobRegistry(deps);
   if (isRouteResult(registry)) return registry;
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
   const input = parseCreateInput(body);
   if (isRouteResult(input)) return input;
   const createdAt = Date.now();
@@ -1044,8 +1045,9 @@ export async function handleApplyConsolidationReviewItem(
   if (previous !== undefined) return previous;
   const inputs = findApplyInputs(route.record, route.itemId);
   if (isRouteResult(inputs)) return inputs;
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
   const latest = route.registry.get(route.jobId);
   const concurrent = latest === undefined ? undefined : previousApplication(latest, route.itemId);
   if (concurrent !== undefined) return concurrent;

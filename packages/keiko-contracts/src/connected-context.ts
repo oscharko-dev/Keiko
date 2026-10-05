@@ -161,22 +161,24 @@ export interface EvidenceAtomMetrics {
 // overshoot in another.
 export interface ExplorationBudget {
   readonly searchCallsMax: number;
-  readonly filesReadMax: number;
+  // Null selects evidence under byte/model bounds without an artificial file-count cutoff.
+  readonly filesReadMax: number | null;
   readonly excerptBytesMax: number;
   readonly modelInputTokensMax: number;
   readonly modelOutputTokensMax: number;
-  readonly elapsedMsMax: number;
+  // Null keeps selected-source exploration cancellable without an artificial time cutoff.
+  readonly elapsedMsMax: number | null;
   readonly rerankCallsMax: number;
 }
 
-// KEIKO-0880: Object.freeze — flat record of numbers, so a shallow freeze is sufficient.
+// KEIKO-0880: Object.freeze — flat record of scalar values, so a shallow freeze is sufficient.
 export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = Object.freeze({
   searchCallsMax: 16,
-  filesReadMax: 32,
+  filesReadMax: null,
   excerptBytesMax: 131_072,
   modelInputTokensMax: 116_000,
   modelOutputTokensMax: 4_096,
-  elapsedMsMax: 30_000,
+  elapsedMsMax: null,
   rerankCallsMax: 1,
 });
 
@@ -344,15 +346,12 @@ export interface UncertaintyMarker {
 }
 
 // ─── Omitted-context entry ────────────────────────────────────────────────────
-// KEIKO-0849: upper bound on how many omitted entries a pack may carry. validatePackOmitted's
-// overlap checks are O(n^2) in entries.length (each entry is checked for overlap against every
-// selected path and every previously-seen omitted path); above this cap the validator short-circuits
-// with a single reason instead of running that scan. 4_096 is 2x the default single-ring lexical
-// retrieval scan size — packages/keiko-workspace/src/repoSearch.ts DEFAULT_SEARCH_LIMITS.
-// maxFilesScanned = 2_000, and every scanned-but-excluded file becomes one omitted entry via
-// omittedFromSearchCandidates in grounded-orchestrator.ts — rounded up to match this package's own
-// TOKEN_ESTIMATE_CACHE_MAX_ENTRIES precedent for a similar order-of-magnitude cap.
+// Bound retained path details, not inspected files or total omissions. The validator checks
+// path overlap among these details; producers retain exact closed per-reason totals when the
+// detailed list is clipped. This keeps large eligible corpora valid without unbounded metadata.
 export const MAX_OMITTED_CONTEXT_ENTRIES = 4_096;
+
+export type ContextOmissionCounts = Readonly<Record<CandidateOmissionReason, number>>;
 
 export interface OmittedContextEntry {
   readonly scopePath: string;
@@ -370,6 +369,9 @@ export interface ConnectedContextPack {
   readonly usage: ExplorationUsage;
   readonly files: readonly ConnectedFileEntry[];
   readonly omitted: readonly OmittedContextEntry[];
+  // Exact totals before detail retention. Absent when the complete detailed list fits;
+  // counts never grant source authority or represent evidence from unread file bodies.
+  readonly omittedCounts?: ContextOmissionCounts | undefined;
   readonly uncertainty: readonly UncertaintyMarker[];
   readonly emittedAtMs: number;
   readonly ledgerRef: EvidenceLedgerRef | undefined;
@@ -379,6 +381,24 @@ export interface ConnectedContextPack {
   // fingerprint hashes only scope/query/atomStableIds). `bucket`/`ecosystem` are opaque strings
   // here — contracts does not depend on the workspace registry that produces them.
   readonly diagnostics?: ContextPackDiagnostics | undefined;
+}
+
+// Legacy packs derive totals from their complete detailed list.
+export function connectedContextOmittedCounts(
+  pack: Pick<ConnectedContextPack, "omitted" | "omittedCounts">,
+): ContextOmissionCounts {
+  if (pack.omittedCounts !== undefined) return pack.omittedCounts;
+  const counts = Object.fromEntries(
+    CANDIDATE_OMISSION_REASONS.map((reason) => [reason, 0]),
+  ) as Record<CandidateOmissionReason, number>;
+  for (const entry of pack.omitted) counts[entry.reason] += 1;
+  return counts;
+}
+
+export function connectedContextOmittedCount(
+  pack: Pick<ConnectedContextPack, "omitted" | "omittedCounts">,
+): number {
+  return Object.values(connectedContextOmittedCounts(pack)).reduce((sum, count) => sum + count, 0);
 }
 
 // ─── Explainable ranking diagnostics (enterprise retrieval M2) ──────────────────
@@ -398,7 +418,13 @@ export interface RankedCandidateExplanation {
 }
 
 export type ContextCoverageTruncationReason =
-  "aborted" | "file-cap" | "match-cap" | "timeout" | "depth-pruned";
+  | "aborted"
+  | "file-cap"
+  | "match-cap"
+  | "timeout"
+  | "depth-pruned"
+  | "io-error"
+  | "unrepresentable-path";
 
 export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTruncationReason[] = [
   "aborted",
@@ -406,17 +432,21 @@ export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTrunca
   "match-cap",
   "timeout",
   "depth-pruned",
+  "io-error",
+  "unrepresentable-path",
 ] as const;
 
 export interface ContextCoverageLimits {
-  readonly maxFilesScanned: number;
+  readonly maxFilesScanned: number | null;
   readonly maxMatchesReturned: number;
-  readonly elapsedMsMax: number;
+  readonly elapsedMsMax: number | null;
 }
 
 // Path-free coverage summary for repository search. Counts and closed reason enums are safe for
 // prompts, BFF summaries, and evidence manifests; raw paths, query text, and excerpts stay elsewhere.
 export interface ContextCoverageDiagnostics {
+  // Rejected directory entries, not the unknown number of files in their subtrees.
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
@@ -591,35 +621,40 @@ export function isValidLineRange(range: unknown): boolean {
   return endLine >= startLine;
 }
 
+const EXPLORATION_USAGE_DIMENSIONS = [
+  "searchCalls",
+  "filesRead",
+  "excerptBytes",
+  "modelInputTokens",
+  "modelOutputTokens",
+  "elapsedMs",
+  "rerankCalls",
+] as const satisfies readonly (keyof ExplorationUsage)[];
+
+// These are the only nullable caps on the connected-context wire, including search coverage.
+const NULLABLE_CONTEXT_CAPS: ReadonlySet<string> = new Set([
+  "filesReadMax",
+  "elapsedMsMax",
+  "maxFilesScanned",
+]);
+
+function isValidContextCap(value: unknown, field: string): value is number | null {
+  return (value === null && NULLABLE_CONTEXT_CAPS.has(field)) || isFiniteNonNegativeInteger(value);
+}
+
+function isValidBudgetUsage(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
-  if (!isRecord(usage) || !isRecord(budget)) {
-    return false;
-  }
-  const dims: readonly (readonly [number, number])[] = [
-    [usage.searchCalls, budget.searchCallsMax],
-    [usage.filesRead, budget.filesReadMax],
-    [usage.excerptBytes, budget.excerptBytesMax],
-    [usage.modelInputTokens, budget.modelInputTokensMax],
-    [usage.modelOutputTokens, budget.modelOutputTokensMax],
-    [usage.elapsedMs, budget.elapsedMsMax],
-    [usage.rerankCalls, budget.rerankCallsMax],
-  ];
-  for (const dim of dims) {
-    const used = dim[0];
-    const cap = dim[1];
-    // The cap side must be validated FIRST. `used > cap` is false whenever cap is undefined or NaN,
-    // so an unchecked cap made a partially-constructed budget report every usage as in-budget — the
-    // guard that stops a runaway exploration loop failing OPEN. checkBudgetDimension below already
-    // validates the cap before the usage; this is the same rule on the spend path.
-    if (!isFiniteNonNegativeInteger(cap)) {
-      return false;
-    }
-    if (!Number.isFinite(used) || used < 0) {
-      return false;
-    }
-    if (used > cap) {
-      return false;
-    }
+  if (!isRecord(usage) || !isRecord(budget)) return false;
+  for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
+    const field = `${dimension}Max` as const;
+    const cap = budget[field];
+    const used = usage[dimension];
+    // Validate the cap before comparison: missing/NaN caps must never fail open.
+    if (!isValidContextCap(cap, field) || !isValidBudgetUsage(used)) return false;
+    if (cap !== null && used > cap) return false;
   }
   return true;
 }
@@ -693,29 +728,17 @@ function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
   }
 }
 
-function isPathWithinSelectedScope(scope: SelectedScope, candidatePath: unknown): boolean {
-  if (typeof candidatePath !== "string") {
-    return false;
-  }
-  if (scope.kind === "workspace-root") {
-    return true;
-  }
-  return scope.relativePaths.some(
-    (scopePath) => candidatePath === scopePath || candidatePath.startsWith(`${scopePath}/`),
+function isPathWithinSelectedScope(
+  scope: SelectedScope,
+  scopePaths: ReadonlySet<string>,
+  candidatePath: unknown,
+): boolean {
+  if (typeof candidatePath !== "string") return false;
+  if (scope.kind === "workspace-root") return true;
+  return (
+    scopePaths.has(candidatePath) ||
+    pathAncestors(candidatePath).some((path) => scopePaths.has(path))
   );
-}
-
-function pathsOverlap(a: string, b: string): boolean {
-  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-}
-
-function setHasOverlappingPath(paths: ReadonlySet<string>, candidatePath: string): boolean {
-  for (const path of paths) {
-    if (pathsOverlap(path, candidatePath)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function validateSelectedScope(scope: SelectedScope): ValidationResult {
@@ -918,7 +941,8 @@ interface PackFileValidationSummary {
 function validatePackFileEntry(
   entry: unknown,
   scope: SelectedScope,
-  selectedPaths: Set<string>,
+  selectedPaths: OmittedPathIndex,
+  scopePaths: ReadonlySet<string>,
   reasons: string[],
 ): void {
   if (!isRecord(entry)) {
@@ -927,12 +951,12 @@ function validatePackFileEntry(
   }
   const scopePath = entry.scopePath;
   if (typeof scopePath === "string" && isValidScopePath(scopePath, { mustBeRelative: true })) {
-    if (selectedPaths.has(scopePath)) {
+    if (selectedPaths.paths.has(scopePath)) {
       reasons.push("pack.files contains duplicate scopePath");
-    } else if (setHasOverlappingPath(selectedPaths, scopePath)) {
+    } else if (indexedPathsOverlap(selectedPaths, scopePath)) {
       reasons.push("pack.files contains overlapping scopePath");
     }
-    selectedPaths.add(scopePath);
+    addIndexedPath(selectedPaths, scopePath);
   }
   if (!isConnectedFileRole(entry.role)) {
     reasons.push("pack.files entry has invalid role");
@@ -940,7 +964,7 @@ function validatePackFileEntry(
   if (!isValidScopePath(scopePath, { mustBeRelative: true })) {
     reasons.push("pack.files entry has invalid scopePath");
   }
-  if (!isPathWithinSelectedScope(scope, scopePath)) {
+  if (!isPathWithinSelectedScope(scope, scopePaths, scopePath)) {
     reasons.push("pack.files entry falls outside selected scope");
   }
   if (!isNonEmptyTrimmed(entry.selectionReason)) {
@@ -952,6 +976,7 @@ function validatePackExcerptAtom(
   atom: unknown,
   entryScopePath: string,
   scope: SelectedScope,
+  scopePaths: ReadonlySet<string>,
   reasons: string[],
 ): void {
   const atomScopePath = isRecord(atom) ? atom.scopePath : undefined;
@@ -959,7 +984,10 @@ function validatePackExcerptAtom(
     reasons.push("pack.files excerpt atom.scopePath does not match parent scopePath");
   }
   appendPrefixedReasons(validateEvidenceAtom(atom as EvidenceAtom), "pack.files excerpt ", reasons);
-  if (typeof atomScopePath === "string" && !isPathWithinSelectedScope(scope, atomScopePath)) {
+  if (
+    typeof atomScopePath === "string" &&
+    !isPathWithinSelectedScope(scope, scopePaths, atomScopePath)
+  ) {
     reasons.push("pack.files excerpt atom.scopePath falls outside selected scope");
   }
   if (isRecord(atom) && atom.redactionState === "raw-internal") {
@@ -988,13 +1016,14 @@ function validatePackExcerpt(
   excerpt: unknown,
   entryScopePath: string,
   scope: SelectedScope,
+  scopePaths: ReadonlySet<string>,
   reasons: string[],
 ): number {
   if (!isRecord(excerpt)) {
     reasons.push("pack.files excerpt invalid");
     return 0;
   }
-  validatePackExcerptAtom(excerpt.atom, entryScopePath, scope, reasons);
+  validatePackExcerptAtom(excerpt.atom, entryScopePath, scope, scopePaths, reasons);
   return validatePackExcerptContent(excerpt, reasons);
 }
 
@@ -1025,14 +1054,15 @@ function validatePackFiles(
   scope: SelectedScope,
   reasons: string[],
 ): PackFileValidationSummary {
-  const selectedPaths = new Set<string>();
+  const selectedPaths = omittedPathIndex(new Set());
+  const scopePaths = new Set(scope.relativePaths);
   let actualExcerptBytes = 0;
   if (!Array.isArray(files)) {
     reasons.push("pack.files invalid");
-    return { actualExcerptBytes, selectedPaths };
+    return { actualExcerptBytes, selectedPaths: selectedPaths.paths };
   }
   for (const entry of files as readonly unknown[]) {
-    validatePackFileEntry(entry, scope, selectedPaths, reasons);
+    validatePackFileEntry(entry, scope, selectedPaths, scopePaths, reasons);
     if (!isRecord(entry)) {
       continue;
     }
@@ -1042,34 +1072,97 @@ function validatePackFiles(
     }
     const parentScopePath = typeof entry.scopePath === "string" ? entry.scopePath : "";
     for (const excerpt of entry.excerpts) {
-      actualExcerptBytes += validatePackExcerpt(excerpt, parentScopePath, scope, reasons);
+      actualExcerptBytes += validatePackExcerpt(
+        excerpt,
+        parentScopePath,
+        scope,
+        scopePaths,
+        reasons,
+      );
     }
   }
-  return { actualExcerptBytes, selectedPaths };
+  return { actualExcerptBytes, selectedPaths: selectedPaths.paths };
+}
+
+interface OmittedPathIndex {
+  readonly paths: Set<string>;
+  readonly ancestors: Set<string>;
+}
+
+function pathAncestors(path: string): readonly string[] {
+  const ancestors: string[] = [];
+  let separator = path.indexOf("/");
+  while (separator >= 0) {
+    ancestors.push(path.slice(0, separator));
+    separator = path.indexOf("/", separator + 1);
+  }
+  return ancestors;
+}
+
+function addIndexedPath(index: OmittedPathIndex, path: string): void {
+  index.paths.add(path);
+  for (const ancestor of pathAncestors(path)) index.ancestors.add(ancestor);
+}
+
+function omittedPathIndex(paths: ReadonlySet<string>): OmittedPathIndex {
+  const index: OmittedPathIndex = { paths: new Set(), ancestors: new Set() };
+  for (const path of paths) addIndexedPath(index, path);
+  return index;
+}
+
+function indexedPathsOverlap(index: OmittedPathIndex, path: string): boolean {
+  return (
+    index.paths.has(path) ||
+    index.ancestors.has(path) ||
+    pathAncestors(path).some((ancestor) => index.paths.has(ancestor))
+  );
 }
 
 function validateOmittedPathState(
   entry: Record<string, unknown>,
   entryIndex: number,
   reasons: string[],
-  selectedPaths: ReadonlySet<string>,
-  omittedPaths: Set<string>,
+  selectedPaths: OmittedPathIndex,
+  omittedPaths: OmittedPathIndex,
 ): void {
   const scopePath = entry.scopePath;
   const validScopePath = isValidScopePath(scopePath, { mustBeRelative: true });
-  if (typeof scopePath === "string" && setHasOverlappingPath(selectedPaths, scopePath)) {
+  if (typeof scopePath === "string" && indexedPathsOverlap(selectedPaths, scopePath)) {
     reasons.push("pack.omitted overlaps selected scopePath");
   }
   if (typeof scopePath === "string" && validScopePath) {
-    if (omittedPaths.has(scopePath)) {
+    if (omittedPaths.paths.has(scopePath)) {
       reasons.push("pack.omitted contains duplicate scopePath");
-    } else if (setHasOverlappingPath(omittedPaths, scopePath)) {
+    } else if (indexedPathsOverlap(omittedPaths, scopePath)) {
       reasons.push("pack.omitted contains overlapping scopePath");
     }
-    omittedPaths.add(scopePath);
+    addIndexedPath(omittedPaths, scopePath);
   }
-  if (!validScopePath) {
-    reasons.push(`omitted[${entryIndex.toString()}].scopePath invalid`);
+  if (!validScopePath) reasons.push(`omitted[${entryIndex.toString()}].scopePath invalid`);
+}
+
+function validateOmittedEntries(
+  entries: readonly unknown[],
+  scope: SelectedScope,
+  reasons: string[],
+  selectedPaths: ReadonlySet<string>,
+): void {
+  const selectedIndex = omittedPathIndex(selectedPaths);
+  const omittedIndex = omittedPathIndex(new Set());
+  const scopePaths = new Set(scope.relativePaths);
+  for (const [i, entry] of entries.entries()) {
+    if (!isRecord(entry)) {
+      reasons.push("pack.omitted entry invalid");
+      continue;
+    }
+    validateOmittedPathState(entry, i, reasons, selectedIndex, omittedIndex);
+    if (!isCandidateOmissionReason(entry.reason)) reasons.push("pack.omitted has invalid reason");
+    if (!isPathWithinSelectedScope(scope, scopePaths, entry.scopePath)) {
+      reasons.push("pack.omitted entry falls outside selected scope");
+    }
+    if (!isFiniteNonNegativeInteger(entry.omittedAtMs)) {
+      reasons.push("pack.omitted has invalid omittedAtMs");
+    }
   }
 }
 
@@ -1083,27 +1176,64 @@ function validatePackOmitted(
     reasons.push("pack.omitted invalid");
     return;
   }
-  // KEIKO-0849: cap BEFORE the O(n^2) overlap scan below, not after — return immediately instead
-  // of continuing on to run that scan over an oversized array.
   if (entries.length > MAX_OMITTED_CONTEXT_ENTRIES) {
     reasons.push(`pack.omitted exceeds ${String(MAX_OMITTED_CONTEXT_ENTRIES)}`);
     return;
   }
-  const omittedPaths = new Set<string>();
-  for (const [i, entry] of entries.entries()) {
-    if (!isRecord(entry)) {
-      reasons.push("pack.omitted entry invalid");
-      continue;
-    }
-    validateOmittedPathState(entry, i, reasons, selectedPaths, omittedPaths);
-    if (!isCandidateOmissionReason(entry.reason)) {
-      reasons.push("pack.omitted has invalid reason");
-    }
-    if (!isPathWithinSelectedScope(scope, entry.scopePath)) {
-      reasons.push("pack.omitted entry falls outside selected scope");
-    }
-    if (!isFiniteNonNegativeInteger(entry.omittedAtMs)) {
-      reasons.push("pack.omitted has invalid omittedAtMs");
+  validateOmittedEntries(entries, scope, reasons, selectedPaths);
+}
+
+// Producers validate every known omission before retaining bounded wire details. Prefix sets
+// check overlap in path-depth time; no previously seen path collection is scanned per entry.
+export function validateOmittedContextEntries(
+  entries: readonly OmittedContextEntry[],
+  scope: SelectedScope,
+  selectedScopePaths: readonly string[],
+): ValidationResult {
+  const reasons: string[] = [];
+  appendPrefixedReasons(validateSelectedScope(scope), "omitted ", reasons);
+  if (!Array.isArray(entries)) return buildResult([...reasons, "pack.omitted invalid"]);
+  if (isRuntimeSelectedScope(scope)) {
+    validateOmittedEntries(entries, scope, reasons, new Set(selectedScopePaths));
+  }
+  return buildResult(reasons);
+}
+
+function validOmissionCountRecord(
+  value: unknown,
+): value is Record<CandidateOmissionReason, number> {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === CANDIDATE_OMISSION_REASONS.length &&
+    Object.keys(value).every(isCandidateOmissionReason) &&
+    CANDIDATE_OMISSION_REASONS.every(
+      (reason) =>
+        Object.hasOwn(value, reason) &&
+        Number.isSafeInteger(value[reason]) &&
+        Number(value[reason]) >= 0,
+    )
+  );
+}
+
+function validatePackOmittedCounts(pack: ConnectedContextPack, reasons: string[]): void {
+  if (pack.omittedCounts === undefined) return;
+  if (!validOmissionCountRecord(pack.omittedCounts)) {
+    reasons.push("pack.omittedCounts invalid");
+    return;
+  }
+  const total = connectedContextOmittedCount(pack);
+  if (!Number.isSafeInteger(total)) reasons.push("pack.omittedCounts total invalid");
+  if (!Array.isArray(pack.omitted)) return;
+  if (pack.omitted.length !== Math.min(total, MAX_OMITTED_CONTEXT_ENTRIES)) {
+    reasons.push("pack.omitted details do not account for omittedCounts");
+  }
+  const retained = pack.omitted.filter(
+    (entry) => isRecord(entry) && isCandidateOmissionReason(entry.reason),
+  );
+  const retainedCounts = connectedContextOmittedCounts({ omitted: retained });
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    if (pack.omittedCounts[reason] < retainedCounts[reason]) {
+      reasons.push(`pack.omittedCounts.${reason} below retained details`);
     }
   }
 }
@@ -1174,19 +1304,19 @@ function validatePackUncertainty(
 
 function checkBudgetDimension(
   used: number,
-  cap: number,
-  dimension: string,
+  cap: number | null,
+  dimension: keyof ExplorationUsage,
   reasons: string[],
 ): void {
-  if (!isFiniteNonNegativeInteger(cap)) {
+  if (!isValidContextCap(cap, `${dimension}Max`)) {
     reasons.push(`budget.${dimension}Max not a finite non-negative integer`);
     return;
   }
-  if (!Number.isFinite(used) || used < 0) {
+  if (!isValidBudgetUsage(used)) {
     reasons.push(`pack.usage.${dimension} invalid`);
     return;
   }
-  if (used > cap) {
+  if (cap !== null && used > cap) {
     reasons.push(`pack.usage.${dimension} exceeds budget`);
   }
 }
@@ -1204,28 +1334,9 @@ function validatePackBudget(
     reasons.push("pack.budget invalid");
     return;
   }
-  checkBudgetDimension(pack.usage.searchCalls, pack.budget.searchCallsMax, "searchCalls", reasons);
-  checkBudgetDimension(pack.usage.filesRead, pack.budget.filesReadMax, "filesRead", reasons);
-  checkBudgetDimension(
-    pack.usage.excerptBytes,
-    pack.budget.excerptBytesMax,
-    "excerptBytes",
-    reasons,
-  );
-  checkBudgetDimension(
-    pack.usage.modelInputTokens,
-    pack.budget.modelInputTokensMax,
-    "modelInputTokens",
-    reasons,
-  );
-  checkBudgetDimension(
-    pack.usage.modelOutputTokens,
-    pack.budget.modelOutputTokensMax,
-    "modelOutputTokens",
-    reasons,
-  );
-  checkBudgetDimension(pack.usage.elapsedMs, pack.budget.elapsedMsMax, "elapsedMs", reasons);
-  checkBudgetDimension(pack.usage.rerankCalls, pack.budget.rerankCallsMax, "rerankCalls", reasons);
+  for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
+    checkBudgetDimension(pack.usage[dimension], pack.budget[`${dimension}Max`], dimension, reasons);
+  }
   if (actualExcerptBytes > pack.usage.excerptBytes) {
     reasons.push("pack.files excerpts exceed pack.usage.excerptBytes");
   }
@@ -1281,6 +1392,7 @@ export function validateConnectedContextPack(pack: ConnectedContextPack): Valida
   const fileSummary = validatePackFileCollection(pack, reasons);
   validatePackBudget(pack, fileSummary.actualExcerptBytes, reasons);
   validatePackOmittedCollection(pack, fileSummary, reasons);
+  validatePackOmittedCounts(pack, reasons);
   validatePackUncertainty(pack.uncertainty, collectPackAtomIds(pack.files), reasons);
   pushIf(reasons, !isFiniteNonNegativeInteger(pack.emittedAtMs), "pack.emittedAtMs invalid");
   if (pack.ledgerRef !== undefined) {
@@ -1373,6 +1485,7 @@ const REQUIRED_COVERAGE_FIELDS = [
 ] as const;
 
 const OPTIONAL_COVERAGE_FIELDS = [
+  "unrepresentablePathsByDiscovery",
   "oversizedFilesScanned",
   "lowValueRescueFilesDiscovered",
   "lowValueRescueFilesScanned",
@@ -1432,10 +1545,6 @@ function validateCoverageCounters(
     );
   }
   for (const field of COVERAGE_LIMIT_FIELDS) {
-    pushIf(
-      reasons,
-      !isFiniteNonNegativeInteger(coverage.limits[field]),
-      `coverage.${field} invalid`,
-    );
+    pushIf(reasons, !isValidContextCap(coverage.limits[field], field), `coverage.${field} invalid`);
   }
 }

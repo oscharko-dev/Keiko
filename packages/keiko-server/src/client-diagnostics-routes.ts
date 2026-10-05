@@ -71,19 +71,25 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
+  CLIENT_FILES_SCOPE_DECISIONS,
+  CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  HEALTH_DIAGNOSTICS_INVALID_REASONS,
   isClientGitRetryAttemptIngestRequest,
   isClientSessionRepairIngestRequest,
   isClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   activityLogEvent,
+  ACTIVITY_LOG_ERROR_KINDS,
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
   defineActivityLogOperation,
   recordActivityLogLoss,
   type ActivityLogErrorKind,
@@ -360,11 +366,17 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       maxLength: 128,
       maxItems: 5,
     },
+    healthDiagnosticsInvalidReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: HEALTH_DIAGNOSTICS_INVALID_REASONS,
+    },
     moduleLoadFailure: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["git-sync", "git-history"],
+      values: CLIENT_MODULE_LOAD_FAILURES,
     },
     renderFailure: {
       type: "string",
@@ -554,6 +566,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "command-palette",
   "chat-history-deletion",
   "files-directory-load",
+  "files-source-preview",
+  "files-source-reveal",
   "files-directory-navigation",
   "files-project-selection",
   "editor-project-selection",
@@ -568,6 +582,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "command palette": "command-palette",
   "chat history deletion": "chat-history-deletion",
   "files directory load": "files-directory-load",
+  "files source preview": "files-source-preview",
+  "files source reveal": "files-source-reveal",
   "files directory navigation": "files-directory-navigation",
   "files project selection": "files-project-selection",
   "editor project selection": "editor-project-selection",
@@ -616,6 +632,20 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.logClientStageSettled",
   fields: {
     ...CLIENT_STAGE_FIELDS,
+    previewKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["text", "image", "binary"],
+    },
+    binaryReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["too-large", "unsupported"],
+    },
+    sourceTextBytesRead: { type: "integer", dataClass: "count", required: false },
+    canEdit: { type: "boolean", dataClass: "closed-enum", required: false },
     navigationOutcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -1091,6 +1121,195 @@ const CLIENT_ANSWER_SPEECH_PREPARED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CLIENT_CITATION_ACTIVATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.citation.activated",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientCitationActivation",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["matched", "unmatched", "absent", "malformed", "ambiguous"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["opened", "open-refused", "picker-opened", "picker-dismissed", "refused"],
+    },
+    rootCount: { type: "integer", dataClass: "count", required: true },
+    matchCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-citation-activation"],
+  proofIds: ["client.citation.activated.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.support-report.download-started",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSupportReportDownload",
+  fields: {
+    deliveryMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["automatic", "manual"],
+    },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "browser"],
+    },
+    evidenceScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "client-only"],
+    },
+    reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-report"],
+  proofIds: ["client.support-report.download-started.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.files-scope.decision",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientFilesScopeDecision",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_FILES_SCOPE_DECISIONS,
+    },
+    // Ingress validates these against the producer's array lengths and decision-specific fields.
+    // The registry count primitive has no numeric-bound property; do not invent an inert one here.
+    sourceCount: { type: "integer", dataClass: "count", required: false },
+    candidateCount: { type: "integer", dataClass: "count", required: false },
+    bindingFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    rejectionCount: { type: "integer", dataClass: "count", required: false },
+    mutationSurface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_GROUNDING_MUTATION_SURFACES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.files-scope.decision.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_SUPPORT_REPORT_PREPARATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.support-report.preparation-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSupportReportPreparationFailed",
+  fields: {
+    preparationErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      values: ACTIVITY_LOG_ERROR_KINDS,
+    },
+    originalErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      values: ACTIVITY_LOG_ERROR_KINDS,
+    },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    durationMs: { type: "integer", dataClass: "duration", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-report"],
+  proofIds: ["client.support-report.preparation-failed.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_SUPPORT_REPORT_PREPARED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.support-report.prepared",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSupportReportPrepared",
+  fields: {
+    reportBytes: { type: "integer", dataClass: "count", required: true },
+    evidenceScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["server", "client-only"],
+    },
+    availabilityReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: SUPPORT_REPORT_AVAILABILITY_REASONS,
+    },
+    reportCompleteness: { type: "string", dataClass: "completeness-state", required: true },
+    reportLoss: { type: "string", dataClass: "loss-state", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-report"],
+  proofIds: ["client.support-report.prepared.line"],
+  releaseImpact: "patch",
+});
+
 // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
 // trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
 // shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
@@ -1117,7 +1336,7 @@ const CLIENT_SELECT_DISMISSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["trigger", "search", "option"],
+      values: ["trigger", "search", "option", "menu"],
     },
   },
   causal: "correlation",
@@ -1359,7 +1578,7 @@ function clientDiagnosticErrorKind(
 }
 
 function clientDiagnosticCorrelation(
-  request: ClientDiagnosticIngestRequest,
+  request: Pick<ClientDiagnosticIngestRequest, "parentCorrelationId">,
   correlationId: string,
 ): {
   readonly correlationId: string;
@@ -1453,6 +1672,8 @@ function projectClientFailure(
 ): void {
   if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
   if (request.renderFailure !== undefined) extra.renderFailure = request.renderFailure;
+  if (request.healthDiagnosticsInvalidReason !== undefined)
+    extra.healthDiagnosticsInvalidReason = request.healthDiagnosticsInvalidReason;
   if (request.errorEvidence !== undefined) {
     extra.errorClass = request.errorEvidence.errorClass;
     extra.frames = request.errorEvidence.frames;
@@ -1646,6 +1867,136 @@ function logClientAnswerSpeech(
   return true;
 }
 
+function logClientSupportReportDownload(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const delivery = request.supportReportDelivery;
+  if (delivery === undefined) return false;
+  const fields =
+    typeof delivery === "string"
+      ? { deliveryMode: delivery }
+      : {
+          deliveryMode: delivery.mode,
+          source: delivery.source,
+          evidenceScope: delivery.evidenceScope,
+          ...(delivery.reportDigest === undefined ? {} : { reportDigest: delivery.reportDigest }),
+        };
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        ...fields,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+function logClientSupportReportPreparationFailed(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const prepared = request.supportReportPreparation;
+  if (prepared === undefined || !("outcome" in prepared)) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SUPPORT_REPORT_PREPARATION_FAILED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        preparationErrorKind: prepared.errorKind,
+        ...(prepared.originalErrorKind === undefined
+          ? {}
+          : { originalErrorKind: prepared.originalErrorKind }),
+        ...prepared.errorEvidence,
+        durationMs: prepared.durationMs,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+function logClientSupportReportPrepared(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const prepared = request.supportReportPreparation;
+  if (prepared === undefined) return false;
+  if ("outcome" in prepared) return logClientSupportReportPreparationFailed(request, correlationId);
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SUPPORT_REPORT_PREPARED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        reportBytes: prepared.reportBytes,
+        evidenceScope: prepared.evidenceScope,
+        ...(prepared.availabilityReason === undefined
+          ? {}
+          : { availabilityReason: prepared.availabilityReason }),
+        reportCompleteness: prepared.completeness,
+        reportLoss: prepared.loss,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+function logClientFilesScopeDecision(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const decision = request.filesScopeDecision;
+  if (decision === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_FILES_SCOPE_DECISION_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        decision: decision.decision,
+        ...(decision.sourceCount === undefined ? {} : { sourceCount: decision.sourceCount }),
+        ...(decision.candidateCount === undefined
+          ? {}
+          : { candidateCount: decision.candidateCount }),
+        ...(decision.rejectionCount === undefined
+          ? {}
+          : { rejectionCount: decision.rejectionCount }),
+        ...(decision.bindingFingerprint === undefined
+          ? {}
+          : { bindingFingerprint: decision.bindingFingerprint }),
+        ...(decision.mutationSurface === undefined
+          ? {}
+          : { mutationSurface: decision.mutationSurface }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+function logClientCitationActivation(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const activation = request.citationActivation;
+  if (activation === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_CITATION_ACTIVATED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...activation, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
 // The closed report shapes, each of which owns its own registered line.
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -1655,7 +2006,11 @@ function logClosedClientReport(
     logClientSelectDismissed(request, correlationId) ||
     logClientKnowledgeCatalog(request, correlationId) ||
     logClientAnswerCopy(request, correlationId) ||
-    logClientAnswerSpeech(request, correlationId)
+    logClientAnswerSpeech(request, correlationId) ||
+    logClientSupportReportDownload(request, correlationId) ||
+    logClientSupportReportPrepared(request, correlationId) ||
+    logClientFilesScopeDecision(request, correlationId) ||
+    logClientCitationActivation(request, correlationId)
   );
 }
 
@@ -1741,7 +2096,7 @@ function logClientStageStarted(
   getServerLogger().info(
     activityLogEvent(
       CLIENT_STAGE_STARTED_OPERATION,
-      { correlationId },
+      clientDiagnosticCorrelation(request, correlationId),
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
@@ -1753,6 +2108,19 @@ function logClientStageStarted(
   );
 }
 
+type SourcePreviewActivityFields = Pick<
+  ActivityLogFields<typeof CLIENT_STAGE_SETTLED_OPERATION>,
+  "previewKind" | "sourceTextBytesRead" | "canEdit" | "binaryReason"
+>;
+
+function sourcePreviewActivityFields(
+  preview: ClientStageSettledIngestRequest["preview"],
+): SourcePreviewActivityFields {
+  if (preview === undefined) return {};
+  const { binaryReason, ...counts } = preview;
+  return binaryReason === undefined ? counts : { ...counts, binaryReason };
+}
+
 function logClientStageSettled(
   request: ClientStageSettledIngestRequest,
   correlationId: string,
@@ -1760,11 +2128,12 @@ function logClientStageSettled(
   getServerLogger().info(
     activityLogEvent(
       CLIENT_STAGE_SETTLED_OPERATION,
-      { correlationId, durationMs: request.durationMs },
+      { ...clientDiagnosticCorrelation(request, correlationId), durationMs: request.durationMs },
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
+        ...sourcePreviewActivityFields(request.preview),
         ...(request.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: request.navigationOutcome }),
@@ -2170,7 +2539,11 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
   if (
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
-    report.answerSpeech !== undefined
+    report.answerSpeech !== undefined ||
+    report.supportReportDelivery !== undefined ||
+    report.supportReportPreparation !== undefined ||
+    report.filesScopeDecision !== undefined ||
+    report.citationActivation !== undefined
   ) {
     return "routine";
   }

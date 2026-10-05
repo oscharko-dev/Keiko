@@ -1,7 +1,7 @@
 // PR4-W1 grounded diagnostics observer (ADR-0055 D1). A PURE, no-IO, no-clock function that
 // accepts a fully assembled `ConnectedContextPack` and a `ContextProfile` and returns a pack
 // whose `diagnostics.contextBudget?` is populated with a deterministic `ContextBudget` derived by
-// running the keiko-workflows allocator over lanes mapped from the pack.
+// observing the already assembled excerpts with the keiko-workflows token accounting.
 //
 // NON-NEGOTIABLE INVARIANT (AC5): this observer MUST NOT touch any field a prompt builder reads.
 // `buildGroundedGatewayMessages` (grounded-qa.ts) reads only pack.schemaVersion / stableId /
@@ -68,31 +68,47 @@ function diagnosticsWithBudget(
   return { ...existing, rankedCandidates, contextBudget: budget };
 }
 
-// SHARED lane-derivation + allocation pass (single source of truth for the observer AND the
-// evidence producer below). Pure, no-IO, no-clock: maps the pack's repo-evidence lane, builds the
-// profile budget, and runs the deterministic allocator once. Both the BFF/UI ContextBudget slot
-// and the regulated ContextAssemblyDiagnostics are projected from THIS result — there is no
-// divergent derivation path that could let the two views disagree for the same pack + profile.
+// Shared lane derivation for both diagnostic projections. The attached ContextBudget is the
+// canonical selection plan. The allocator observes already selected excerpts using a copy with
+// eviction disabled and the evidence cap intersected with the profile's effective input budget.
+// ContextAssemblyDiagnostics therefore describe every selected excerpt against that observation
+// cap; they do not claim that selection applied the observation settings or changed the prompt.
 function allocateGroundedContext(
   pack: ConnectedContextPack,
   profile: ContextProfile,
 ): { readonly budget: ContextBudget; readonly result: AllocateContextResult } {
   const budget = budgetForProfile(profile);
-  const result = allocateContext({ profile, budget, lanes: groundedLanes(pack) });
+  // The pack has already been selected. Observe every selected excerpt
+  // without evicting them a second time; retain the real lane/model caps to report overflow.
+  const observedBudget: ContextBudget = {
+    ...budget,
+    lanes: budget.lanes.map((lane) =>
+      lane.laneId === "repo-evidence"
+        ? {
+            ...lane,
+            eviction: "none",
+            maxTokens: Math.min(lane.maxTokens, profile.effectiveInputBudget),
+          }
+        : lane,
+    ),
+  };
+  const result = allocateContext({ profile, budget: observedBudget, lanes: groundedLanes(pack) });
   return { budget, result };
 }
 
 // EVIDENCE producer (ADR-0056 W3). Returns the rich ContextAssemblyDiagnostics
-// (allocateContext(...).diagnostics) for the pack's repo-evidence lane under the supplied profile.
+// for the pack's repo-evidence lane under the supplied profile, without hypothetical eviction.
 // This is the value persisted to EvidenceManifest.contextAssembly? — NOT the ContextBudget that
 // ContextPackDiagnostics.contextBudget? carries. Derives the lane via the same shared helper the
-// observer uses, so the persisted diagnostics describe exactly the budget plan the observer
-// attached. Pure and deterministic.
+// observer uses, so persisted diagnostics describe the selected excerpts under the attached
+// budget plan. Actual Gateway fitting and sent counts are reported by promptContext separately.
 export function deriveGroundedContextAssembly(
   pack: ConnectedContextPack,
   profile: ContextProfile,
 ): ContextAssemblyDiagnostics {
-  return allocateGroundedContext(pack, profile).result.diagnostics;
+  const diagnostics = allocateGroundedContext(pack, profile).result.diagnostics;
+  // Observation does not rearrange the prompt or apply the recency layout.
+  return { ...diagnostics, orderedForRecency: false };
 }
 
 // Runs the deterministic allocator over the pack-derived lanes and attaches the resulting

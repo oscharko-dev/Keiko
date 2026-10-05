@@ -9,6 +9,10 @@ import type {
   ContextAssemblyDiagnostics,
   CostClass,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { redactContextAssemblyDiagnostics } from "./context-assembly-redaction.js";
@@ -112,11 +116,10 @@ function workspaceRootAuditId(workspaceRoot: string, redact: Redactor): string {
 function contextOf(input: ConnectedContextEvidenceInput, redact: Redactor): AuditSummary {
   return {
     workspaceRoot: workspaceRootAuditId(input.workspaceRoot, redact),
-    totalCandidates: input.pack.files.length + input.pack.omitted.length,
+    totalCandidates: input.pack.files.length + connectedContextOmittedCount(input.pack),
     usedBytes: input.pack.usage.excerptBytes,
     budgetBytes: input.pack.budget.excerptBytesMax,
-    droppedForBudget: input.pack.omitted.filter((entry) => entry.reason === "budget-exhausted")
-      .length,
+    droppedForBudget: connectedContextOmittedCounts(input.pack)["budget-exhausted"],
     entries: [],
   };
 }
@@ -231,7 +234,7 @@ function summaryOf(input: ConnectedContextEvidenceInput): EvidenceConnectedConte
   return {
     fileCount: input.pack.files.length,
     citationCount: input.citationCount,
-    omittedCount: input.pack.omitted.length,
+    omittedCount: connectedContextOmittedCount(input.pack),
     uncertaintyCount: input.pack.uncertainty.length,
     elapsedMs: input.elapsedMs,
   };
@@ -274,12 +277,15 @@ function connectedContextOf(
     budget: {
       usage: numberRecord(input.pack.usage),
       limits: numberRecord(input.pack.budget),
+      filesReadBounded: input.pack.budget.filesReadMax !== null,
+      elapsedMsBounded: input.pack.budget.elapsedMsMax !== null,
     },
     files: input.pack.files.map((file) => fileOf(file, redact)),
     omitted: input.pack.omitted.map((entry) => ({
       scopePath: redactString(redact, entry.scopePath),
       reason: entry.reason,
     })),
+    ...(input.pack.omittedCounts !== undefined ? { omittedCounts: input.pack.omittedCounts } : {}),
     uncertainty: input.pack.uncertainty.map((entry) => ({
       kind: entry.kind,
       impactedAtomCount: entry.impactedAtomIds.length,

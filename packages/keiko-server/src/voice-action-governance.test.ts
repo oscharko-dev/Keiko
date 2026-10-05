@@ -472,7 +472,7 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
     pair: () => ({ paired: false }),
     ensureLocalSession: (cookieToken) =>
       cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN
-        ? { status: "active" }
+        ? { status: "active", maxAgeSeconds: 3600 }
         : { status: "unavailable" },
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
@@ -480,6 +480,8 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
     sessionCount: () => 1,
     verifySession: (cookieToken) =>
       cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? ROUTE_APP_SESSION : undefined,
+    beginOperation: (cookieToken) =>
+      cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? (): void => undefined : undefined,
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,

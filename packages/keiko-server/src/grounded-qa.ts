@@ -1,3 +1,13 @@
+import {
+  caughtGroundedPackValidation,
+  inspectGroundedPack,
+  recordGroundedPackValidation,
+  GROUNDED_PACK_VALIDATION_MESSAGE,
+} from "./grounded-pack-validation.js";
+import {
+  deriveChatGroundingScopeIdentity,
+  parseExpectedGroundingScopeIdentity,
+} from "./store/chat-grounding-scope-identity.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
@@ -30,25 +40,30 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
 import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  isDenied,
   PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
+  WorkspaceError,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
-  validateConnectedContextPack,
+  isValidScopePath,
   type ConnectedContextPack,
   type ContextExcerpt,
   type EvidenceAtom,
@@ -62,6 +77,7 @@ import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ConversationMemoryResultWire,
   type GroundedAnswer,
+  type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -102,6 +118,7 @@ import {
   buildConnectedScopes,
   createMultiSourceAnswerer,
   defaultRetriever,
+  groundedSourceScopeFingerprint,
   runMultiSourceAsk,
   type GroundedRetriever,
   type MultiSourceAnswerer,
@@ -116,8 +133,13 @@ import {
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
+  isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
+  recordWorkspaceRootDenied,
+  recordWorkspaceRootUnavailable,
   resolveRecordedWorkspaceRoot,
+  workspaceRootFailureStatus,
+  type WorkspaceRootDenialLogContext,
 } from "./workspace-root-denial-log.js";
 import {
   uncitedMemoryContextMarker,
@@ -136,8 +158,8 @@ import {
   buildMemoryResult,
   chatClosedResult,
   parseClientTurnId,
-  parseExpectedGroundingScopeIdentity,
   parseMemoryRequest,
+  logChatRejection,
   runPostCommitCanonicalTurnMemorySideEffects,
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
@@ -149,7 +171,10 @@ import {
 } from "./chat-turn-identity.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
-import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  beginAppSessionOperation,
+  resolveAppSessionReadAuthority,
+} from "./coding-app-session/appSessionReadAuthority.js";
 import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
@@ -166,7 +191,8 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
-import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
@@ -175,7 +201,6 @@ import {
   documentFormatForAtom,
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
-import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
   captureConversationReadinessAdmission,
@@ -213,8 +238,43 @@ function payloadTooLarge(): RouteResult {
   };
 }
 
-export function internalError(message: string): RouteResult {
-  return { status: 500, body: errorBody("INTERNAL", message) };
+export function internalError(message: string, correlationId?: string): RouteResult {
+  return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
+}
+
+function groundedCompletionFailure(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  completionKind: "conflict",
+): RouteResult {
+  const message = "Canonical grounded chat turn completion conflicted.";
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: "grounded.qa.turn-completion",
+      error: new Error(message),
+      summary: "grounded-turn-completion-conflicted",
+      redact: (value): string => redactString(deps.redactor, value),
+    }),
+    code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
+    httpStatus: 500,
+    diagnosticStage: "grounded-turn-completion",
+    diagnosticOutcome: "request-failed",
+    completionKind,
+  });
+  return internalError(message, correlationId);
+}
+
+export function mappedContextPackValidationError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const failure = caughtGroundedPackValidation(error);
+  if (failure === undefined) return undefined;
+  recordGroundedPackValidation(deps, correlationId, failure, "request-failed");
+  return internalError(GROUNDED_PACK_VALIDATION_MESSAGE, correlationId);
 }
 
 // Issue #154 (GAP-B) — the dynamic `error.message` of a GatewayError may echo the provider base
@@ -273,27 +333,45 @@ function pathDeniedResult(error: PathDeniedError): RouteResult {
   };
 }
 
-export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
-  if (error instanceof PathDeniedError) return pathDeniedResult(error);
-  if (error instanceof WorkspaceNotFoundError) {
-    return badRequest("Connected scope root is not accessible.");
-  }
-  if (
-    error instanceof RepoSearchInvalidQueryError ||
-    error instanceof RepoSearchInvalidRangeError ||
-    error instanceof RepoSearchUnsupportedFileError
-  ) {
-    return badRequest(error.message);
-  }
-  return undefined;
+function primaryWorkspaceFailure(error: unknown): unknown {
+  if (!(error instanceof AggregateError)) return error;
+  const primary: unknown = error.cause;
+  if (primary instanceof WorkspaceError) return primary;
+  if (primary instanceof Error && primary.cause instanceof WorkspaceError) return primary.cause;
+  return error;
 }
 
-export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
-  try {
-    return validateConnectedContextPack(pack).ok;
-  } catch {
-    return false;
+function unavailableWorkspaceResult(error: unknown, correlationId?: string): RouteResult {
+  return workspaceRootFailureStatus(error) === 503
+    ? {
+        status: 503,
+        body: errorBody(
+          "UNAVAILABLE",
+          "The connected source is temporarily unavailable. Please try again.",
+          correlationId,
+        ),
+      }
+    : badRequest("Connected scope root is not accessible.");
+}
+
+export function mappedWorkspaceError(
+  error: unknown,
+  context: WorkspaceRootDenialLogContext = {},
+): RouteResult | undefined {
+  const failure = primaryWorkspaceFailure(error);
+  if (failure instanceof PathDeniedError) return pathDeniedResult(failure);
+  if (failure instanceof WorkspaceNotFoundError) {
+    recordWorkspaceRootUnavailable(failure, context);
+    return unavailableWorkspaceResult(failure, context.correlationId);
   }
+  if (
+    failure instanceof RepoSearchInvalidQueryError ||
+    failure instanceof RepoSearchInvalidRangeError ||
+    failure instanceof RepoSearchUnsupportedFileError
+  ) {
+    return badRequest(failure.message);
+  }
+  return undefined;
 }
 
 export interface AskInput {
@@ -509,10 +587,20 @@ function canonicalGroundedRoot(
     if (error instanceof PathDeniedError) {
       return pathDeniedResult(error);
     }
-    return badRequest("Connected scope root is not accessible.");
+    if (!isExpectedWorkspaceRootFailure(error)) throw error;
+    recordWorkspaceRootUnavailable(error, { correlationId });
+    return unavailableWorkspaceResult(error, correlationId);
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
+    recordWorkspaceRootDenied(
+      {
+        reason: "credential-shaped-root",
+        failureKind: "CREDENTIAL_SHAPED_METADATA",
+        errorKind: "permission-denied",
+      },
+      { correlationId },
+    );
     return badRequest("Connected scope root contains credential-shaped metadata.");
   }
   return realRoot;
@@ -544,6 +632,7 @@ interface SkippedFolderScope {
 interface CanonicalizedFolderScopes {
   readonly canonical: readonly ChatConnectedScope[];
   readonly skipped: readonly SkippedFolderScope[];
+  readonly sourceScopeFingerprints: ReadonlyMap<ChatConnectedScope, string>;
 }
 
 function skippedFolderMessage(result: RouteResult): string {
@@ -552,7 +641,8 @@ function skippedFolderMessage(result: RouteResult): string {
 }
 
 // Fail-soft canonicalization: inaccessible/denied scopes are collected in `skipped` instead of
-// aborting the entire request. Callers apply the hard-400 only when NO healthy scope remains.
+// aborting the entire request. If no healthy scope remains, retain the recorded failure status;
+// transient server/filesystem outages take precedence over invalid or unavailable selections.
 function canonicalizeGroundedFolderScopes(
   chat: Chat,
   deps: UiHandlerDeps,
@@ -562,6 +652,7 @@ function canonicalizeGroundedFolderScopes(
 ): CanonicalizedFolderScopes {
   const canonical: ChatConnectedScope[] = [];
   const skipped: SkippedFolderScope[] = [];
+  const sourceScopeFingerprints = new Map<ChatConnectedScope, string>();
   for (const scope of scopes) {
     const rootInput = scope.root ?? chat.projectPath;
     const access = groundedRootAccess(rootInput, deps, request, correlationId);
@@ -570,9 +661,15 @@ function canonicalizeGroundedFolderScopes(
       skipped.push({ label, message: skippedFolderMessage(access), reason: access });
       continue;
     }
-    canonical.push(scopeWithWorkspaceAccess(scope, access));
+    const admittedScope = scopeWithWorkspaceAccess(scope, access);
+    canonical.push(admittedScope);
+    // Attribution retains the human-selected identity; canonical roots govern filesystem access.
+    sourceScopeFingerprints.set(
+      admittedScope,
+      groundedSourceScopeFingerprint(buildSelectedScopeFrom(chat, scope, "source-attribution")),
+    );
   }
-  return { canonical, skipped };
+  return { canonical, skipped, sourceScopeFingerprints };
 }
 
 // The canonical list is authoritative even when it is EMPTY. With every folder denied or
@@ -588,7 +685,7 @@ export function buildQuery(content: string, nowMs: () => number): RetrievalQuery
     kind: "natural-language",
     text: content,
     caseSensitive: false,
-    maxResults: 50,
+    maxResults: DEFAULT_LEXICAL_MATCH_LIMIT,
     emittedAtMs: nowMs(),
   };
 }
@@ -838,11 +935,36 @@ type GroundedPromptBuilder = (
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
+  omissionPathBytes?: number,
 ) => readonly GatewayChatMessage[];
 
 interface FittedPromptPack {
+  readonly omissionPathBytes: number;
   readonly messages: readonly GatewayChatMessage[];
   readonly pack: ConnectedContextPack;
+}
+
+export function fitPromptOmissionMetadata(
+  build: (pathBytes: number) => readonly GatewayChatMessage[],
+  fits: (messages: readonly GatewayChatMessage[]) => boolean,
+  pathByteLimit: number,
+):
+  | { readonly messages: readonly GatewayChatMessage[]; readonly omissionPathBytes: number }
+  | undefined {
+  const minimum = build(0);
+  if (!fits(minimum)) return undefined;
+  let best = { messages: minimum, omissionPathBytes: 0 };
+  let low = 1;
+  let high = pathByteLimit;
+  while (low <= high) {
+    const bytes = Math.floor((low + high) / 2);
+    const messages = build(bytes);
+    if (fits(messages)) {
+      best = { messages, omissionPathBytes: bytes };
+      low = bytes + 1;
+    } else high = bytes - 1;
+  }
+  return best;
 }
 
 function fitGroundedPrompt(
@@ -859,10 +981,16 @@ function fitGroundedPrompt(
     countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
       budgetedPack.budget.modelInputTokensMax;
   const messages = build(question, budgetedPack, redactor);
-  if (fits(messages)) return { messages, pack: budgetedPack };
+  if (fits(messages)) return { messages, pack: budgetedPack, omissionPathBytes: limit };
+  const metadataFit = fitPromptOmissionMetadata(
+    (bytes) => build(question, budgetedPack, redactor, bytes),
+    fits,
+    limit,
+  );
+  if (metadataFit !== undefined) return { ...metadataFit, pack: budgetedPack };
 
   const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
-  const emptyMessages = build(question, emptyPack, redactor);
+  const emptyMessages = build(question, emptyPack, redactor, 0);
   const overheadBytes = promptByteLength(emptyMessages);
   // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
   // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
@@ -874,13 +1002,13 @@ function fitGroundedPrompt(
   }
   let low = 0;
   let high = Math.max(0, limit - overheadBytes);
-  let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack };
+  let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack, omissionPathBytes: 0 };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
     const candidatePack = withPromptExcerptBudget(budgetedPack, totalExcerptBytes);
-    const candidate = build(question, candidatePack, redactor);
+    const candidate = build(question, candidatePack, redactor, 0);
     if (fits(candidate)) {
-      best = { messages: candidate, pack: candidatePack };
+      best = { messages: candidate, pack: candidatePack, omissionPathBytes: 0 };
       low = totalExcerptBytes + 1;
     } else {
       high = totalExcerptBytes - 1;
@@ -937,6 +1065,7 @@ export function fittedGroundedGatewayPrompt(
       question,
       withPromptExcerptBudget(fitted.pack, 0),
       redactor,
+      -1,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -947,12 +1076,16 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
   const { usage, budget } = pack;
   return [
     `search calls ${String(usage.searchCalls)}/${String(budget.searchCallsMax)}`,
-    `files read ${String(usage.filesRead)}/${String(budget.filesReadMax)}`,
+    budget.filesReadMax === null
+      ? `files read ${String(usage.filesRead)}`
+      : `files read ${String(usage.filesRead)}/${String(budget.filesReadMax)}`,
     `excerpt bytes ${String(usage.excerptBytes)}/${String(budget.excerptBytesMax)}`,
     `model input tokens ${String(usage.modelInputTokens)}/${String(budget.modelInputTokensMax)}`,
     `model output tokens ${String(usage.modelOutputTokens)}/${String(budget.modelOutputTokensMax)}`,
     `rerank calls ${String(usage.rerankCalls)}/${String(budget.rerankCallsMax)}`,
-    `elapsed ${String(usage.elapsedMs)}/${String(budget.elapsedMsMax)} ms`,
+    budget.elapsedMsMax === null
+      ? `elapsed ${String(usage.elapsedMs)} ms (no search time limit)`
+      : `elapsed ${String(usage.elapsedMs)}/${String(budget.elapsedMsMax)} ms`,
   ].join("; ");
 }
 
@@ -978,8 +1111,11 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
           : `Document evidence (${documentFormat.toUpperCase()}, extracted text)`;
       lines.push(
         `- ${label} ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
+        evidenceProvenanceLine(excerpt.atom.provenance, redactor),
         "```",
-        promptSafeExcerptText(redactedString(redactor, excerpt.content)),
+        promptSafeExcerptText(
+          numberedEvidenceText(redactedString(redactor, excerpt.content), excerpt.atom.lineRange),
+        ),
         "```",
       );
     }
@@ -987,6 +1123,105 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
   if (lines.length === 0) {
     lines.push("No evidence excerpts were selected for this question.");
   }
+  return lines;
+}
+
+/** Retrieval provenance describes selection, not proof that a requested literal occurs. */
+export function evidenceProvenanceLine(
+  provenance: EvidenceAtom["provenance"],
+  redactor: Redactor,
+): string {
+  const label =
+    provenance.kind === "semantic-search" || provenance.tool.startsWith("repo.semanticSearch:")
+      ? "Related semantic context (not verified as an exact literal match)"
+      : "Retrieval provenance";
+  return `${label}: ${provenance.kind}; tool: ${redactedString(redactor, provenance.tool)}.`;
+}
+
+/** Line annotations belong to the prompt; source content and citation ranges remain unchanged. */
+export function numberedEvidenceText(content: string, range: EvidenceAtom["lineRange"]): string {
+  if (range === undefined || content.length === 0) return content;
+  return content
+    .split("\n")
+    .slice(0, range.endLine - range.startLine + 1)
+    .map((line, index) => `${String(range.startLine + index)} | ${line}`)
+    .join("\n");
+}
+
+/** Closed canonical counts disclose unavailable evidence without revealing excluded paths. */
+export function omissionReasonLines(pack: ConnectedContextPack): readonly string[] {
+  const omittedCounts = connectedContextOmittedCounts(pack);
+  const counts = Object.entries(omittedCounts).filter(([, count]) => count > 0);
+  const reasons =
+    counts.length === 0
+      ? []
+      : [
+          "Known omission reason counts (metadata only, not file-content evidence):",
+          ...counts.map(([reason, count]) => `- ${reason}: ${String(count)}`),
+        ];
+  const unavailable = omittedCounts["tool-unavailable"];
+  const coverage = pack.diagnostics?.coverage;
+  return [
+    ...reasons,
+    ...(unavailable > 0
+      ? [`Candidate file evidence unavailable for reading/retrieval: ${String(unavailable)}.`]
+      : []),
+    ...(coverage === undefined
+      ? []
+      : [
+          `Current traversal incomplete: ${String(coverage.incomplete)}; reasons: ${coverage.reasons.join(", ") || "none"}.`,
+        ]),
+  ];
+}
+
+function allowedSizeExclusionPaths(pack: ConnectedContextPack): readonly string[] {
+  const paths = pack.omitted
+    .filter(
+      (entry) =>
+        entry.reason === "size-exceeded" &&
+        isValidScopePath(entry.scopePath, { mustBeRelative: true }) &&
+        stripUnsafeFormatChars(entry.scopePath) === entry.scopePath,
+    )
+    .map((entry) => entry.scopePath)
+    .filter((path) => isValidScopePath(path, { mustBeRelative: true }) && !isDenied(path));
+  return [...new Set(paths)];
+}
+
+// The existing pack owns eligibility decisions. Project only safe omission metadata, never
+// unread file bodies; bound prompt bytes without changing which files retrieval inspects.
+const MAX_SIZE_EXCLUSION_PATH_BYTES = 4096;
+
+export function sizeExclusionLines(
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  pathByteLimit = MAX_SIZE_EXCLUSION_PATH_BYTES,
+): readonly string[] {
+  if (pathByteLimit < 0) return [];
+  const paths = allowedSizeExclusionPaths(pack);
+  const total =
+    pack.omittedCounts === undefined
+      ? paths.length
+      : connectedContextOmittedCounts(pack)["size-exceeded"];
+  if (total === 0) return [];
+  const lines = [
+    "Known file-size exclusions (metadata only, not file-content evidence):",
+    `Files excluded by file-size policy: ${String(total)}.`,
+  ];
+  let pathBytes = 0;
+  let listed = 0;
+  for (const path of paths) {
+    const line = `- omitted path: ${JSON.stringify(redactedString(redactor, path))}; reason=size-exceeded`;
+    const bytes = Buffer.byteLength(line, "utf8") + 1;
+    if (pathBytes + bytes > Math.min(pathByteLimit, MAX_SIZE_EXCLUSION_PATH_BYTES)) break;
+    lines.push(line);
+    pathBytes += bytes;
+    listed += 1;
+  }
+  if (listed < total)
+    lines.push(`Additional excluded paths not listed: ${String(total - listed)}.`);
+  lines.push(
+    "These files were not read as evidence. Do not infer their contents or invent line references.",
+  );
   return lines;
 }
 
@@ -1001,8 +1236,7 @@ export function uncertaintyLines(
 }
 
 // The grounded system message is shared verbatim by the single-source and multi-source (#532)
-// paths so both apply the identical untrusted-evidence + citation + no-secret guardrails. The
-// single-source wire output must stay byte-identical (AC5), so this literal must not change.
+// paths so both apply the identical capability, untrusted-evidence, citation and no-secret rules.
 // GROUNDED_SYSTEM_PROMPT now lives in the dependency-free ./grounded-prompt.js leaf (re-exported
 // here for back-compat) so the hybrid path can interpolate it without a circular-import TDZ.
 export { GROUNDED_SYSTEM_PROMPT };
@@ -1011,6 +1245,7 @@ function buildRawGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
+  omissionPathBytes?: number,
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1023,7 +1258,9 @@ function buildRawGroundedGatewayMessages(
     `- scope kind: ${pack.scope.kind}`,
     `- query kind: ${pack.query.kind}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
-    `- omitted evidence atoms: ${String(pack.omitted.length)}`,
+    `- omitted files: ${String(connectedContextOmittedCount(pack))}`,
+    ...omissionReasonLines(pack),
+    ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",
     ...evidenceLines(pack, redactor),
@@ -1144,11 +1381,16 @@ function runDefaultGroundedExploration(
 ): Promise<OrchestratorOutput> {
   const { deps, modelId, signal, contextProfile, model, entailmentStage } = runnerCtx;
   const nowMs = Date.now;
-  const budgetedInput =
-    input.budget === undefined
-      ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
-      : input;
-  const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
+  const budgetedInput = {
+    ...input,
+    budget: input.budget ?? modelWindowAwareBudget(deps, modelId),
+  };
+  const contextPackReranker = configuredContextPackRerankerFor(
+    deps,
+    budgetedInput.query,
+    signal,
+    budgetedInput.budget.excerptBytesMax,
+  );
   const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
     deps,
     signal,
@@ -1344,6 +1586,7 @@ interface AskWorkerCtx {
 }
 
 interface PreparedGroundedAsk {
+  readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly messageCountBeforeTurn?: number;
   readonly continuityStartedAt?: number;
   readonly continuity?: GroundedConversationContinuity | undefined;
@@ -1579,8 +1822,13 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const query = buildQuery(workerCtx.retrievalContent ?? content, () => Date.now());
   const output = await runGroundedRunner(workerCtx, query);
   if (isRouteResult(output)) return output;
-  if (!isValidGroundedPack(output.pack)) {
-    return internalError("Grounded answer context pack failed validation.");
+  const validationFailure = inspectGroundedPack(output.pack, {
+    deps,
+    correlationId: workerCtx.correlationId,
+    outcome: "request-failed",
+  });
+  if (validationFailure !== undefined) {
+    return internalError(GROUNDED_PACK_VALIDATION_MESSAGE, workerCtx.correlationId);
   }
   const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps, workerCtx.correlationId);
   if (cancelResult !== undefined) return cancelResult;
@@ -1643,7 +1891,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     content: assistantContent,
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
-    omittedCount: output.pack.omitted.length,
+    omittedCount: connectedContextOmittedCount(output.pack),
     elapsedMs: output.elapsedMs,
     contextPack,
     ...(modelInvoked && output.promptContext !== undefined
@@ -1690,6 +1938,7 @@ async function runGroundedRunner(
       scope,
       query,
       answerQuestion: answerContent,
+      currentQuestion: workerCtx.content,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
       workspaceRoot: scope.workspaceRoot,
       ...optionalWorkspaceFs(workerCtx.workspaceFs),
@@ -1700,7 +1949,13 @@ async function runGroundedRunner(
     if (error instanceof ClarificationNeededError) {
       return clarificationRequest(clarificationUserMessage(error));
     }
-    const workspaceResult = mappedWorkspaceError(error);
+    const validationResult = mappedContextPackValidationError(
+      error,
+      workerCtx.deps,
+      workerCtx.correlationId,
+    );
+    if (validationResult !== undefined) return validationResult;
+    const workspaceResult = mappedWorkspaceError(error, { correlationId: workerCtx.correlationId });
     if (workspaceResult !== undefined) return workspaceResult;
     const gatewayResult = mappedGatewayError(error, workerCtx.deps, workerCtx.correlationId);
     if (gatewayResult !== undefined) return gatewayResult;
@@ -1823,6 +2078,9 @@ async function dispatchMultiSourceAsk(
   return runMultiSourceAsk({
     chat,
     scopes,
+    ...(args.sourceScopeFingerprints === undefined
+      ? {}
+      : { sourceScopeFingerprints: args.sourceScopeFingerprints }),
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
@@ -1978,6 +2236,9 @@ async function dispatchHybridAsk(
   const modelId = groundedModelId(prepared);
   return runHybridGroundedAsk({
     chat,
+    ...(prepared.sourceScopeFingerprints === undefined
+      ? {}
+      : { sourceScopeFingerprints: prepared.sourceScopeFingerprints }),
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
@@ -2014,6 +2275,14 @@ function canonicalizePreparedFolderScopes(
   );
 }
 
+function unavailableFolderResult(skipped: readonly SkippedFolderScope[]): RouteResult {
+  return (
+    skipped.find((entry) => entry.reason.status === 503)?.reason ??
+    skipped[0]?.reason ??
+    badRequest("Chat has no connected scope.")
+  );
+}
+
 async function dispatchPreparedGroundedAsk(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -2027,19 +2296,21 @@ async function dispatchPreparedGroundedAsk(
   // EXISTING single-connector path (#189, byte-identical). Everything else (folders+connector, or
   // 2+ connectors) is the hybrid merge.
   // Fail-soft: inaccessible/denied folders are skipped; only effective (canonical) counts drive
-  // dispatch. A chat with ONLY denied/inaccessible sources still returns the original 400 so the
-  // user sees a clear rejection (security preserved).
-  const { canonical: canonicalFolderScopes, skipped: skippedFolders } =
-    canonicalizePreparedFolderScopes(prepared, deps);
+  // dispatch. With no usable source, preserve the admission failure or retriable outage status.
+  const {
+    canonical: canonicalFolderScopes,
+    skipped: skippedFolders,
+    sourceScopeFingerprints,
+  } = canonicalizePreparedFolderScopes(prepared, deps);
   const preparedWithCanonicalFolders: PreparedGroundedAsk = {
     ...prepared,
     chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),
+    sourceScopeFingerprints,
   };
   const connectorCount = buildLocalKnowledgeScopes(chat).length;
   const effectiveFolders = canonicalFolderScopes.length;
   if (effectiveFolders === 0 && connectorCount === 0) {
-    // Hard-fail: return the first skipped reason (preserves exact 400 message) or the generic guard.
-    return skippedFolders[0]?.reason ?? badRequest("Chat has no connected scope.");
+    return unavailableFolderResult(skippedFolders);
   }
   if (connectorCount === 0) {
     return dispatchFolderAsk(
@@ -2227,9 +2498,9 @@ function groundedAnswerContent(content: string, memory: ConversationMemoryResult
 function groundedMemoryPreparationFailure(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-  errorClass: string,
+  error: unknown,
 ): PreparedGroundedAsk | RouteResult {
-  recordGroundedMemoryFailure(deps, prepared.chat.id, errorClass);
+  recordGroundedMemoryFailure(prepared, deps, error);
   return prepared;
 }
 
@@ -2266,7 +2537,13 @@ async function prepareGroundedMemory(
   if (memoryRequest === undefined) return prepared;
   const context = prepared.memoryContext;
   if (context === undefined) {
-    return groundedMemoryPreparationFailure(prepared, deps, "GroundedMemoryContextUnavailable");
+    return groundedMemoryPreparationFailure(
+      prepared,
+      deps,
+      Object.assign(new Error("Grounded memory context is unavailable"), {
+        name: "GroundedMemoryContextUnavailable",
+      }),
+    );
   }
   try {
     const result = await buildMemoryResult(
@@ -2285,8 +2562,45 @@ async function prepareGroundedMemory(
     );
     return withPreparedGroundedMemory(prepared, context, result);
   } catch (error) {
-    return groundedMemoryPreparationFailure(prepared, deps, contentFreeErrorClass(error));
+    return groundedMemoryPreparationFailure(prepared, deps, error);
   }
+}
+
+function groundedScopeRefusal(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  reason: "scope-identity-mismatch" | "grounding-mode-changed" | "scope-changed-during-answer",
+): RouteResult {
+  const message = {
+    "scope-identity-mismatch": "The grounded source scope changed before the turn could run.",
+    "grounding-mode-changed": "The chat grounding mode changed before the turn could run.",
+    "scope-changed-during-answer":
+      "The grounded source scope changed while the answer was in progress.",
+  }[reason];
+  logChatRejection(
+    "chat.send.rejected",
+    admitted.correlationId,
+    groundedModelId(admitted),
+    deps,
+    409,
+    "grounding-scope",
+  );
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(admitted.correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: `grounded.qa.${reason}`,
+      error: Object.assign(new Error(message), { code: "GROUNDING_SCOPE_CHANGED" }),
+      redact: (value): string => redactString(deps.redactor, value),
+    }),
+    errorClass: "invalid-request",
+    httpStatus: 409,
+    diagnosticOutcome: "request-refused",
+  });
+  return settleGroundedChatTurn(admitted, deps, {
+    status: 409,
+    body: errorBody("GROUNDING_SCOPE_CHANGED", message, admitted.correlationId),
+  });
 }
 
 function admittedGroundingScopeFailure(
@@ -2298,13 +2612,7 @@ function admittedGroundingScopeFailure(
     expectedIdentity !== undefined &&
     expectedIdentity !== deriveChatGroundingScopeIdentity(admitted.chat)
   ) {
-    return settleGroundedChatTurn(admitted, deps, {
-      status: 409,
-      body: errorBody(
-        "GROUNDING_SCOPE_CHANGED",
-        "The grounded source scope changed before the turn could run.",
-      ),
-    });
+    return groundedScopeRefusal(admitted, deps, "scope-identity-mismatch");
   }
   if (
     expectedIdentity === undefined ||
@@ -2313,13 +2621,44 @@ function admittedGroundingScopeFailure(
   ) {
     return undefined;
   }
-  return settleGroundedChatTurn(admitted, deps, {
-    status: 409,
-    body: errorBody(
-      "GROUNDING_SCOPE_CHANGED",
-      "The chat grounding mode changed before the turn could run.",
-    ),
-  });
+  return groundedScopeRefusal(admitted, deps, "grounding-mode-changed");
+}
+
+function withHistoryCompactionSummary(
+  pack: GroundedAnswerContextPackSummary,
+): GroundedAnswerContextPackSummary {
+  return pack.contextSummary === undefined
+    ? pack
+    : {
+        ...pack,
+        contextSummary: { ...pack.contextSummary, compactionActive: true },
+      };
+}
+
+function withGroundedCompactionSummary(
+  prepared: PreparedGroundedAsk,
+  result: RouteResult,
+): RouteResult {
+  if (
+    prepared.continuity?.compaction === undefined ||
+    result.status !== 200 ||
+    !groundedAnswerBody(result.body)
+  )
+    return result;
+  const answer = result.body;
+  if (answer.groundingKind === "local-knowledge") return result;
+  const contextPack =
+    answer.groundingKind === "hybrid"
+      ? { ...answer.contextPack, folder: withHistoryCompactionSummary(answer.contextPack.folder) }
+      : withHistoryCompactionSummary(answer.contextPack);
+  return { ...result, body: { ...answer, contextPack } };
+}
+
+async function prepareGroundedMemoryWithContinuity(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): Promise<PreparedGroundedAsk | RouteResult> {
+  return prepareGroundedMemory(await withGroundedContinuity(admitted, deps), deps);
 }
 
 async function runAdmittedGroundedAsk(
@@ -2331,10 +2670,7 @@ async function runAdmittedGroundedAsk(
 ): Promise<RouteResult> {
   let stagedAssistantId: string | undefined;
   try {
-    const memoryPrepared = await prepareGroundedMemory(
-      await withGroundedContinuity(admitted, deps),
-      deps,
-    );
+    const memoryPrepared = await prepareGroundedMemoryWithContinuity(admitted, deps);
     ensureNotCancelled(admitted.signal);
     if (isRouteResult(memoryPrepared)) {
       return settleGroundedChatTurn(admitted, deps, memoryPrepared);
@@ -2358,7 +2694,10 @@ async function runAdmittedGroundedAsk(
       stagedAssistantId = result.body.assistantMessageId;
     }
     ensureNotCancelled(memoryPrepared.signal);
-    const withMemory = await attachGroundedMemory(memoryPrepared, deps, result);
+    const withMemory = withGroundedCompactionSummary(
+      memoryPrepared,
+      await attachGroundedMemory(memoryPrepared, deps, result),
+    );
     ensureNotCancelled(memoryPrepared.signal);
     const settled = settleGroundedChatTurn(memoryPrepared, deps, withMemory);
     persistGroundedContinuity(memoryPrepared, deps, settled);
@@ -2387,7 +2726,16 @@ async function executeGroundedAskInTurn(
   const admitted = admitGroundedUser(modelAdmitted, deps);
   if (isRouteResult(admitted)) return admitted;
   const scopeFailure = admittedGroundingScopeFailure(admitted, deps);
-  return scopeFailure ?? runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+  if (scopeFailure !== undefined) return scopeFailure;
+  const releaseSession = beginAppSessionOperation(deps, admitted.request, admitted.signal, {
+    correlationId: admitted.correlationId,
+    surface: "grounded-chat",
+  });
+  try {
+    return await runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+  } finally {
+    releaseSession();
+  }
 }
 
 async function executeGroundedAsk(
@@ -2444,16 +2792,13 @@ function settleGroundedChatTurn(
   }
   if (!groundedScopeStillCurrent(prepared, deps)) {
     discardGroundedTurn(result.body.assistantMessageId);
-    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
-    return {
-      status: 409,
-      body: errorBody(
-        "GROUNDING_SCOPE_CHANGED",
-        "The grounded source scope changed while the answer was in progress.",
-      ),
-    };
+    return groundedScopeRefusal(prepared, deps, "scope-changed-during-answer");
   }
-  if (result.body.memory !== undefined || hasAnswerOnlyContext(prepared)) {
+  if (
+    result.body.memory !== undefined ||
+    hasAnswerOnlyContext(prepared) ||
+    prepared.continuity?.compaction !== undefined
+  ) {
     deps.store.attachGroundedAnswer(result.body.assistantMessageId, result.body);
   }
   let completion;
@@ -2471,7 +2816,7 @@ function settleGroundedChatTurn(
   if (completion.kind !== "completed") {
     discardGroundedTurn(result.body.assistantMessageId);
     deps.store.failChatTurn(prepared.chat.id, commitTurnId);
-    return internalError("Canonical grounded chat turn completion conflicted.");
+    return groundedCompletionFailure(deps, prepared.correlationId, completion.kind);
   }
   commitGroundedTurn(result.body.assistantMessageId);
   runGroundedPostCommitMemorySideEffects(prepared, deps, result.body);
@@ -2528,18 +2873,21 @@ function groundedAnswerBody(value: unknown): value is GroundedAnswer {
 }
 
 function recordGroundedMemoryFailure(
+  prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-  assistantMessageId: string,
-  errorClass: string,
+  error: unknown,
 ): void {
-  emitServerDiagnostic(deps.diagnostics, {
-    correlationId: assistantMessageId,
-    timestamp: new Date(Date.now()).toISOString(),
-    operation: "grounded.memory",
-    source: "grounded-qa.attach-memory",
-    errorClass,
-    message: "grounded-memory-enrichment-failed",
-  });
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(prepared.correlationId),
+      operation: "grounded.memory",
+      source: "grounded-qa.attach-memory",
+      summary: "grounded-memory-enrichment-failed",
+      error,
+      redact: (value): string => redactString(deps.redactor, value),
+    }),
+  );
 }
 
 function groundedCanonicalMemoryRequest(
@@ -2592,7 +2940,7 @@ async function attachGroundedMemory(
     );
     return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
   } catch (error) {
-    recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
+    recordGroundedMemoryFailure(prepared, deps, error);
     return markedResult;
   }
 }

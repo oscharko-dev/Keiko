@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { memFs } from "./_memfs.js";
 
 describe("in-memory workspace live membership", () => {
+  it("streams current membership through the actual receiver's instrumented directory port", async () => {
+    const files: Record<string, string> = { "a.ts": "first" };
+    const fs = memFs("/workspace", files);
+    const readDir = vi.spyOn(fs, "readDir");
+    files["new.ts"] = "new content";
+    delete files["a.ts"];
+    if (fs.iterateDirectory === undefined) throw new TypeError("Missing fixture iterator");
+    const names: string[] = [];
+    for await (const item of fs.iterateDirectory("/workspace")) names.push(item.name);
+    expect(names).toEqual(["new.ts"]);
+    expect(readDir).toHaveBeenCalledExactlyOnceWith("/workspace");
+  });
+
   it("reads files added after construction without a preceding directory scan", () => {
     const files: Record<string, string> = { "src/a.ts": "first" };
     const fs = memFs("/workspace", files);

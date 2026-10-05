@@ -8,7 +8,7 @@
 // file. Only names of the closed grammar (`incident-<32 hex>.json`) are ever opened or removed, so
 // a planted or foreign file is never touched. The residual same-user race window is the one the
 // Activity Log store documents; the store never grows unbounded because the caller enforces the
-// count quota and every record is bounded to MAX_SUPPORT_INCIDENT_RECORD_BYTES.
+// byte-derived reservation capacity and every record is bounded to MAX_SUPPORT_INCIDENT_RECORD_BYTES.
 //
 // Records are immutable once published (exclusive create, never replaced). A crash can leave at
 // most a torn record, which fails the closed-schema parse and is reported as `invalid` so the
@@ -18,6 +18,7 @@
 // bounded; its Activity Log pin still lapses at the pin's own expiry.
 
 import {
+  type BigIntStats,
   closeSync,
   fstatSync,
   fsyncSync,
@@ -30,6 +31,7 @@ import {
 import { join } from "node:path";
 import {
   SafeArtifactFileError,
+  assertSafeArtifactAncestors,
   openSafeArtifactFile,
   removeSafeArtifactFile,
 } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -159,6 +161,21 @@ export function listSupportIncidentEntries(stateDir: string): readonly SupportIn
   );
 }
 
+/** Counts closed-name regular records without opening bodies, including torn records. */
+export function countSupportIncidentEntries(stateDir: string): number {
+  try {
+    let count = 0;
+    for (const entry of readdirSync(supportIncidentDirectory(stateDir), { withFileTypes: true })) {
+      if (entry.isFile() && isSupportIncidentId(parseSupportIncidentFileName(entry.name)))
+        count += 1;
+    }
+    return count;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
 /** One record by id through the same hardened read, or `undefined` when absent or unreadable. */
 export function readSupportIncidentRecord(
   stateDir: string,
@@ -168,6 +185,18 @@ export function readSupportIncidentRecord(
   const directory = supportIncidentDirectory(stateDir);
   const path = join(directory, supportIncidentFileName(incidentId));
   return regularFileSize(path) === undefined ? undefined : readRecord(path, directory, incidentId);
+}
+
+/** Distinguishes an actually withdrawn record from an unreadable or unsafe retained entry. */
+export function isSupportIncidentRecordAbsent(stateDir: string, incidentId: string): boolean {
+  if (!isSupportIncidentId(incidentId)) return false;
+  try {
+    lstatSync(join(supportIncidentDirectory(stateDir), supportIncidentFileName(incidentId)));
+    return false;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+    throw error;
+  }
 }
 
 function writeAllBytes(descriptor: number, payload: Buffer): void {
@@ -191,7 +220,8 @@ export function writeSupportIncidentRecord(
   payload: Buffer,
   incidentId: string,
 ): void {
-  const descriptor = openSafeArtifactFile(join(directory, supportIncidentFileName(incidentId)), {
+  const path = join(directory, supportIncidentFileName(incidentId));
+  const descriptor = openSafeArtifactFile(path, {
     artifactClass: ARTIFACT_CLASS,
     mode: "exclusive-create",
     trustedRoot: directory,
@@ -199,18 +229,99 @@ export function writeSupportIncidentRecord(
   try {
     writeAllBytes(descriptor, payload);
     fsyncSync(descriptor);
+  } catch (error) {
+    removeFailedPublication(path, directory, descriptor, error);
+    throw error;
   } finally {
     closeSync(descriptor);
+  }
+}
+
+function publicationAndCleanupError(
+  publicationError: unknown,
+  cleanupError: unknown,
+): AggregateError {
+  return new AggregateError(
+    [publicationError, cleanupError],
+    "Support incident publication and owned cleanup failed",
+    { cause: publicationError },
+  );
+}
+
+function removeFailedPublication(
+  path: string,
+  directory: string,
+  ownedDescriptor: number,
+  publicationError: unknown,
+): void {
+  try {
+    const owned = fstatSync(ownedDescriptor, { bigint: true });
+    removeSafeArtifactFile(
+      path,
+      { artifactClass: ARTIFACT_CLASS, trustedRoot: directory },
+      (target): boolean => {
+        const current = fstatSync(target, { bigint: true });
+        return current.dev === owned.dev && current.ino === owned.ino;
+      },
+    );
+  } catch (cleanupError) {
+    throw publicationAndCleanupError(publicationError, cleanupError);
+  }
+}
+
+function artifactLeafIsAbsent(
+  path: string,
+  directory: string,
+  originalDirectory: BigIntStats,
+): boolean {
+  assertSafeArtifactAncestors(path, ARTIFACT_CLASS);
+  const root = lstatSync(directory, { bigint: true });
+  return (
+    root.isDirectory() &&
+    !root.isSymbolicLink() &&
+    root.dev === originalDirectory.dev &&
+    root.ino === originalDirectory.ino &&
+    root.uid === originalDirectory.uid &&
+    root.mode === originalDirectory.mode &&
+    lstatSync(path, { throwIfNoEntry: false }) === undefined
+  );
+}
+
+function peerRemovalFailure(error: unknown): boolean {
+  return (
+    error instanceof SafeArtifactFileError &&
+    (error.kind === "open-failed" ||
+      error.kind === "unsafe-target" ||
+      error.kind === "target-mutated")
+  );
+}
+
+function removeIncidentArtifact(
+  path: string,
+  directory: string,
+  shouldRemove?: (descriptor: number) => boolean,
+): void {
+  assertSafeArtifactAncestors(path, ARTIFACT_CLASS);
+  const originalDirectory = lstatSync(directory, { bigint: true });
+  try {
+    removeSafeArtifactFile(
+      path,
+      { artifactClass: ARTIFACT_CLASS, trustedRoot: directory },
+      shouldRemove,
+    );
+  } catch (error) {
+    // A peer can unlink before open or while the descriptor is held. Only confirmed leaf
+    // absence beneath the same safe directory completes that idempotent cleanup.
+    if (peerRemovalFailure(error) && artifactLeafIsAbsent(path, directory, originalDirectory))
+      return;
+    throw error;
   }
 }
 
 /** Removes one closed-grammar record through the handle-checked removal primitive. */
 export function removeSupportIncidentRecord(stateDir: string, incidentId: string): void {
   const directory = supportIncidentDirectory(stateDir);
-  removeSafeArtifactFile(join(directory, supportIncidentFileName(incidentId)), {
-    artifactClass: ARTIFACT_CLASS,
-    trustedRoot: directory,
-  });
+  removeIncidentArtifact(join(directory, supportIncidentFileName(incidentId)), directory);
 }
 
 // ─── Cross-process dedup and quota claims (#3533 review 4050606506) ────────────────────────────
@@ -228,8 +339,8 @@ export function removeSupportIncidentRecord(stateDir: string, incidentId: string
 
 // No claim at this path is the common, expected outcome for most fingerprints and slots (most
 // were simply never claimed), so it is checked first and treated as a plain `undefined`, never a
-// caught failure. A file that exists but cannot be read (permission, corruption, a same-instant
-// removal after this check) is a genuine anomaly and propagates: support-incident-store.ts never
+// caught failure. A peer unlink between inspection and open is also confirmed as absence.
+// A present file that cannot be read (permission or corruption) remains an anomaly and propagates: support-incident-store.ts never
 // imports the evidence sink (server-log.ts also reaches this module, and reporting from here would
 // cycle back through it), so every caller that can legitimately hit that anomaly reports it itself.
 /** A claim as read: the occurrence holding it, and when it was claimed. */
@@ -241,14 +352,27 @@ export interface SupportIncidentClaim {
   readonly claimedAtMs: number;
 }
 
+function openClaim(path: string, directory: string): number | undefined {
+  try {
+    return openSafeArtifactFile(path, {
+      artifactClass: ARTIFACT_CLASS,
+      mode: "read",
+      trustedRoot: directory,
+    });
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError && error.kind === "open-failed") {
+      assertSafeArtifactAncestors(path, ARTIFACT_CLASS);
+      if (lstatSync(path, { throwIfNoEntry: false }) === undefined) return undefined;
+    }
+    throw error;
+  }
+}
+
 function readClaim(path: string, directory: string): SupportIncidentClaim | undefined {
   const state = regularFileState(path);
   if (state === undefined) return undefined;
-  const descriptor = openSafeArtifactFile(path, {
-    artifactClass: ARTIFACT_CLASS,
-    mode: "read",
-    trustedRoot: directory,
-  });
+  const descriptor = openClaim(path, directory);
+  if (descriptor === undefined) return undefined;
   try {
     const text = readBoundedText(descriptor);
     return {
@@ -290,11 +414,40 @@ function claimSupportIncidentFile(
   return true;
 }
 
-/** Best-effort, idempotent removal: a claim that is already gone is not an error. */
-function removeClaimIfPresent(directory: string, fileName: string): void {
+function claimOwnerMatches(descriptor: number, owner: string | undefined): boolean {
+  const text = readBoundedText(descriptor);
+  const current = text !== undefined && isSupportIncidentId(text) ? text : undefined;
+  return current === owner;
+}
+
+interface ExpectedClaimOwner {
+  readonly incidentId: string | undefined;
+  readonly claimedAtMs?: number;
+}
+
+/** An absent claim is idempotent; a changed owner or mtime remains untouched. */
+function removeClaimIfPresent(
+  directory: string,
+  fileName: string,
+  expected?: ExpectedClaimOwner,
+): void {
   const path = join(directory, fileName);
-  if (regularFileSize(path) === undefined) return;
-  removeSafeArtifactFile(path, { artifactClass: ARTIFACT_CLASS, trustedRoot: directory });
+  removeIncidentArtifact(
+    path,
+    directory,
+    expected === undefined
+      ? undefined
+      : (descriptor): boolean =>
+          claimOwnerMatches(descriptor, expected.incidentId) &&
+          (expected.claimedAtMs === undefined ||
+            fstatSync(descriptor).mtimeMs === expected.claimedAtMs),
+  );
+}
+
+function expectedClaimOwner(incidentId: string | undefined): ExpectedClaimOwner | undefined {
+  if (incidentId === undefined) return undefined;
+  if (!isSupportIncidentId(incidentId)) throw new TypeError("Invalid incident claim owner");
+  return { incidentId };
 }
 
 /** Atomically claims the defectFingerprint's dedup slot for `incidentId`, or `false` if held. */
@@ -326,10 +479,12 @@ export function readSupportIncidentFingerprintClaim(
 export function releaseSupportIncidentFingerprintClaim(
   stateDir: string,
   defectFingerprint: string,
+  expectedIncidentId?: string,
 ): void {
   removeClaimIfPresent(
     supportIncidentDirectory(stateDir),
     supportIncidentFingerprintClaimFileName(defectFingerprint),
+    expectedClaimOwner(expectedIncidentId),
   );
 }
 
@@ -347,15 +502,37 @@ export function claimSupportIncidentSlot(
   );
 }
 
-export function releaseSupportIncidentSlot(stateDir: string, slotIndex: number): void {
+/** One occupied slot owner; recovery never needs to open unrelated fingerprint claims. */
+export function readSupportIncidentSlotClaim(
+  stateDir: string,
+  slotIndex: number,
+): SupportIncidentClaim | undefined {
+  const directory = supportIncidentDirectory(stateDir);
+  return readClaim(join(directory, supportIncidentSlotClaimFileName(slotIndex)), directory);
+}
+
+export function releaseSupportIncidentSlot(
+  stateDir: string,
+  slotIndex: number,
+  expectedIncidentId?: string,
+): void {
   removeClaimIfPresent(
     supportIncidentDirectory(stateDir),
     supportIncidentSlotClaimFileName(slotIndex),
+    expectedClaimOwner(expectedIncidentId),
   );
 }
 
 export interface SupportIncidentClaimEntry extends SupportIncidentClaim {
   readonly fileName: string;
+}
+
+/** Occupancy needs names only; a foreign or concurrently released claim is never opened. */
+export function listSupportIncidentSlotIndexes(stateDir: string): readonly number[] {
+  return readDirectoryNames(supportIncidentDirectory(stateDir)).flatMap((name) => {
+    const index = parseSupportIncidentSlotClaimFileName(name);
+    return index === undefined ? [] : [index];
+  });
 }
 
 /** Every fingerprint- and slot-claim file in the store, for the orphan sweep. */
@@ -375,6 +552,10 @@ export function listSupportIncidentClaims(stateDir: string): readonly SupportInc
 }
 
 /** Removes one claim file by its exact, already-validated name (the orphan sweep). */
-export function removeSupportIncidentClaimFile(stateDir: string, fileName: string): void {
-  removeClaimIfPresent(supportIncidentDirectory(stateDir), fileName);
+export function removeSupportIncidentClaimFile(
+  stateDir: string,
+  fileName: string,
+  expected?: SupportIncidentClaim,
+): void {
+  removeClaimIfPresent(supportIncidentDirectory(stateDir), fileName, expected);
 }

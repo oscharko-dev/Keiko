@@ -95,7 +95,15 @@ returns the content-free projection. The exact launcher-to-browser delivery of t
 finalized with the UI plumbing in W1.5; the server-side authority, the session, and the channel are
 complete and independently testable through the port here.
 
-The local-session restore route only confirms an existing valid bearer. Composing a launcher
+The local-session restore route only confirms an existing valid bearer and refreshes its exact
+scoped cookie projections. Their browser Max-Age is bounded by the verified registry lifetime
+remaining on its own clock and the existing cookie lifetime ceiling. The registered confirmation
+records the actual Max-Age and projection count, without bearer material. Less than one full second
+of remaining lifetime cannot repair a cookie: the route returns its content-free acknowledgement
+without cookie headers or a confirmed event. The projection count comes from the serializer's active
+path inventory, excluding retired-cookie deletions. It neither mints a session
+nor extends the server-owned absolute lifetime. This repairs
+missing projections after an upgrade, including the authenticated support-report route. Composing a launcher
 pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.
@@ -133,6 +141,33 @@ of these cases the prior cookie immediately yields the content-free projection. 
 authority per BFF process; this composes with, and does not duplicate, the single-active-run model
 of ADR-0137.
 
+Explicit normal Chat sends verify an optionally presented existing session so active conversation
+refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
+cannot mint, revive or extend an expired or revoked session. Passive SSE, polling and unrelated
+reads do not count as conversation activity. The absolute lifetime remains unchanged; an in-flight
+turn has scoped activity protection only for inactivity, not absolute expiry. The existing session
+registry counts Chat operations only after parsing, validation and turn admission succeed. Unparsed
+bodies, rejected plaintext requests and replay responses do not acquire protection or renew idle
+expiry through this activity path. Existing protected image or workspace authority checks remain
+independent. Pre-admission queue waits do not acquire protection. Completion and request abort release the count
+idempotently. While a valid operation is pending the session is active, even during a long provider
+wait. The last release starts the normal inactivity window from completion. Revocation, rotation,
+process restart, capacity eviction and the absolute lifetime still invalidate authority immediately;
+release cannot revive a removed or replaced session. At capacity, admission first removes expired
+sessions, then prefers the oldest inactive session over a valid active operation. If every session
+is active, the existing bounded capacity remains authoritative and evicts the oldest session. The
+registered pairing result records expired-session count and a closed eviction class, without IDs.
+No timer, polling or passive SSE renews it.
+
+The same admitted-operation protection covers normal Chat regeneration and Git-description work.
+The registered `coding-app-session.operation.state` event records acquisition and idempotent release
+through the existing session activity port: a closed surface and release reason, observed concurrent
+operation count, authority state and elapsed duration. A release records settlement or cancellation,
+not model success. Its authority observation does not refresh idle time; unavailable or custom-port
+counts are omitted rather than invented. No bearer, session ID, folder path or conversation body is
+included. If an injected activity port throws, the existing safe process logger receives the same
+body-free state; telemetry cannot turn completion or cancellation into a new request failure.
+
 ### D6 — Fail closed to the content-free projection, never to an error that reveals content
 
 The absence of a valid session yields the **same content-free projection the routes serve today** —
@@ -155,6 +190,13 @@ pairing or rotation writes no line of its own and stays in the rate-limited aggr
 writes none either, so the log never shows a sign-out that did not happen. A
 pairing fragment that arrives by same-document navigation (after a lane restart, say) is redeemed
 like a boot fragment, and every session read in the window runs again after it.
+
+The browser bounds pairing and existing-session confirmation with the same 15-second local
+session transport deadline. A stalled pairing request therefore releases the shared boot wait;
+the attestation is never replayed. Its failure records the request or echoed response correlation,
+closed error class and body-free original error evidence through the existing client diagnostic
+owner. This deadline applies to local session establishment, not model generation. A later
+content-free confirmation acknowledgement still does not establish that the session was approved.
 
 ### D7 — The CI pairing fake mints read authority and is therefore production-unreachable by construction
 
@@ -275,6 +317,10 @@ independently validate that session before resolving issue content. Cookie issua
 share one explicit path list so sign-out clears every browser projection.
 The exact diagnostics report path uses the same paired authority to export a local, body-free
 support artifact. Other diagnostics routes receive no bearer through this path.
+The exact `/api/chats/messages/grounded` entry point also receives a projection to verify optional
+existing-session activity on admitted normal grounded sends. Plaintext `/api/desktop/chat` sends use
+their existing projection. Neither path grants new authority or requires pairing for ordinary Chat;
+image attachment authority remains separately enforced. Other `/api/chats` routes receive no bearer.
 
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains

@@ -312,6 +312,36 @@ describe("handleGroundedAsk wire summary call site (ADR-0057 D1)", () => {
     expect(JSON.stringify(answer.contextPack.contextSummary)).not.toContain("/");
   });
 
+  it("reports an actual conversation splice without attributing it to source allocation", async () => {
+    const chatId = scopedChat();
+    for (let index = 0; index < 120; index += 1) {
+      store.createMessage({
+        chatId,
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Prior turn ${String(index)}: ${"synthetic conversation reference. ".repeat(30)}`,
+        timestamp: index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    const pack = attachContextBudgetDiagnostics(basePack(), DEFAULT_CONTEXT_PROFILE);
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "investigate MyClass" })),
+      routeDeps(true),
+      runner(pack),
+    );
+    expect(result.status).toBe(200);
+    const answer = asConnected(result);
+    expect(answer.contextPack.contextSummary?.laneCounts["repo-evidence"]).toBe(1);
+    expect(answer.contextPack.contextSummary?.compactionActive).toBe(true);
+    expect(JSON.stringify(answer.contextPack.contextSummary)).not.toContain(
+      "synthetic conversation",
+    );
+  });
+
   it("emits a path-free summary from the configured model when no explicit profile is supplied", async () => {
     const chatId = scopedChat();
     const pack = attachContextBudgetDiagnostics(basePack(), DEFAULT_CONTEXT_PROFILE);

@@ -9,6 +9,54 @@ function run(text: string, maxAnchors = 8): AnchorExtractionResult {
 }
 
 describe("extractAnchors", () => {
+  it.each([4_097, 6_000, 256_000])(
+    "retains technical targets throughout an admitted %i-character question",
+    (length) => {
+      const targets = ["Trace HeadProbe\n", "\nMiddleProbe\n", "\nTailProbe"] as const;
+      const fillerLength = length - targets.join("").length;
+      const first = Math.floor(fillerLength / 2);
+      const filler = "the ".repeat(Math.ceil(fillerLength / 4));
+      const text = `${targets[0]}${filler.slice(0, first)}${targets[1]}${filler.slice(0, fillerLength - first)}${targets[2]}`;
+      expect(text).toHaveLength(length);
+      const result = run(text);
+      expect(result.anchors.map((anchor) => anchor.term)).toEqual(
+        expect.arrayContaining(["headprobe", "middleprobe", "tailprobe"]),
+      );
+      expect(result.truncated).toBe(false);
+    },
+  );
+
+  it("bounds selected literal metadata while continuing to inspect later short targets", () => {
+    const result = run(`"${"a".repeat(2048)}" "${"b".repeat(2048)}" TailProbe`);
+    expect(result.anchors.map((anchor) => anchor.term)).toContain("tailprobe");
+    expect(result.anchors.map((anchor) => anchor.term).join(" ").length).toBeLessThanOrEqual(4096);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("retains valid neighbors without slicing an oversized individual target", () => {
+    const result = run(`HeadProbe "${"a".repeat(5000)}" TailProbe`);
+    expect(result.anchors.map((anchor) => anchor.term)).toEqual(["headprobe", "tailprobe"]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("preserves source spelling only when case-sensitive extraction is requested", () => {
+    const text = 'Find "CaseProbe" and "caseprobe" beside `İzinProbe` and React.';
+    const ordinary = extractAnchors({ text, maxAnchors: 20 });
+    expect(
+      ordinary.anchors.filter((anchor) => anchor.kind === "quoted").map((anchor) => anchor.term),
+    ).toEqual(["caseprobe"]);
+    const sensitive = extractAnchors({ text, maxAnchors: 20, caseSensitive: true });
+    expect(
+      sensitive.anchors.filter((anchor) => anchor.kind === "quoted").map((anchor) => anchor.term),
+    ).toEqual(["CaseProbe", "caseprobe"]);
+    expect(sensitive.anchors.map((anchor) => anchor.term)).toEqual(
+      expect.arrayContaining(["İzinProbe", "React"]),
+    );
+    expect(ordinary.anchors.map((anchor) => anchor.term)).toEqual(
+      expect.arrayContaining(["i̇zinprobe", "react"]),
+    );
+  });
+
   it("preserves ADR and RFC references as high-confidence identifier anchors", () => {
     const result = extractAnchors({
       text: "Vergleiche ADR-0129 mit RFC-9110.",
@@ -30,7 +78,7 @@ describe("extractAnchors", () => {
     expect(result.tokensConsidered).toBe(0);
   });
 
-  it("returns an empty truncated result when input exceeds the safety cap", () => {
+  it("does not slice or retain an oversized individual literal target", () => {
     const result = run("a".repeat(4097));
     expect(result.anchors).toEqual([]);
     expect(result.truncated).toBe(true);
@@ -47,6 +95,26 @@ describe("extractAnchors", () => {
     const result = run("look for 'foo bar' here");
     const quoted = result.anchors.filter((a) => a.kind === "quoted");
     expect(quoted).toEqual([{ term: "foo bar", weight: 1, kind: "quoted" }]);
+  });
+
+  it.each([
+    "What's the format of the user's profile page?",
+    "Describe the user's profile and the team's account page.",
+    "L'utilisateur consulte l'application.",
+    "Як працює з'єднання з базою? Де об'єкт створюється?",
+    "Де п'ять і м'яч лежать?",
+    "Τι σημαίνει απ' το και σ' αυτό;",
+    "איפה ג'ירפה ודג' נמצאים?",
+    "L'équipe compare l'application.",
+  ])("does not interpret apostrophes inside words as quoted targets: %s", (text) => {
+    expect(run(text).anchors.some((anchor) => anchor.kind === "quoted")).toBe(false);
+  });
+
+  it("preserves genuine single-quoted targets beside contractions", () => {
+    const result = run("What's the value of 'UserProfileProbe' in the user's page?");
+    expect(result.anchors.filter((anchor) => anchor.kind === "quoted")).toEqual([
+      { term: "userprofileprobe", weight: 1, kind: "quoted" },
+    ]);
   });
 
   it("captures a path-shaped token as a path anchor at weight 0.95", () => {
@@ -167,6 +235,18 @@ describe("extractAnchors", () => {
     });
   });
 
+  it("preserves an explicit unquoted snake-case manual identifier among natural-language instructions", () => {
+    expect(
+      run(
+        "Suche im verbundenen HTML-Handbuchordner rekursiv nach LAB_MANUAL_SERVICE_INTERVAL. Welches Wartungsintervall steht dort? Nenne die belegte Datei und die Zeile.",
+      ).anchors,
+    ).toContainEqual({
+      term: "lab_manual_service_interval",
+      weight: 0.85,
+      kind: "identifier",
+    });
+  });
+
   it("does not mistake all-caps acronyms or SHOUTING words for camel identifiers", () => {
     const result = run("WHY IS IT BROKEN");
     const camel = result.anchors.filter((a) => a.kind === "identifier" && a.weight === 0.85);
@@ -247,8 +327,7 @@ describe("extractAnchors", () => {
     // to explore every possible split between the repeated group and the trailing atom. Measured
     // empirically: the old unbounded pattern took ~275ms on this exact 20,001-char input and grew
     // quadratically with size; PATH_RE's bounded quantifiers keep it well under budget. Exercised
-    // directly against PATH_RE (not extractAnchors) because MAX_INPUT_LENGTH would otherwise
-    // short-circuit before the regex ever runs.
+    // directly against PATH_RE so the timing proves the pattern itself, independently of intake.
     const adversarial = "a/".repeat(10_000) + "a";
     PATH_RE.lastIndex = 0;
     const start = Date.now();

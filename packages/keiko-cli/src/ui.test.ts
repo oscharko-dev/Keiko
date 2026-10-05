@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -105,6 +106,19 @@ function createRecordingSink(): RecordingSink {
     },
   };
   return sink;
+}
+
+function expectObservedLifecycleFailure(
+  sink: RecordingSink,
+  op: "process.started" | "process.exiting",
+  expectedCount: number,
+): void {
+  const actual = sink.events.filter((event) => event.op === op);
+  expect(actual).toHaveLength(1);
+  const selected = observedFailureQuery(actual).events.filter(
+    (event) => event.parsed.view.op === op,
+  );
+  expect(selected).toHaveLength(expectedCount);
 }
 
 function extraOf(event: ServerLogEvent | undefined): Readonly<Record<string, unknown>> {
@@ -1332,6 +1346,7 @@ describe("runUiCli", () => {
       expect(extra.installMode).toBeUndefined();
       // The class only — the raw message must never reach the line (it is foreign free text).
       expect(extra.installModeErrorKind).toBe("Error");
+      expectObservedLifecycleFailure(sink, "process.started", 1);
       expect(JSON.stringify(started)).not.toContain("install-mode probe boom");
       closeHandlerDeps(captured[0]);
     } finally {
@@ -1365,6 +1380,7 @@ describe("runUiCli", () => {
       const extra = extraOf(started);
       expect(extra.installMode).toBeUndefined();
       expect(extra.installModeErrorKind).toBe("string");
+      expectObservedLifecycleFailure(sink, "process.started", 1);
       expect(JSON.stringify(started)).not.toContain("install-mode probe boom");
       closeHandlerDeps(captured[0]);
     } finally {
@@ -1395,6 +1411,8 @@ describe("runUiCli", () => {
       const extra = extraOf(started);
       expect(extra.installMode).toBe("package-manager");
       expect(extra.installModeErrorKind).toBeUndefined();
+      // Process start is retained as a lifetime anchor even when no probe fails.
+      expectObservedLifecycleFailure(sink, "process.started", 1);
       closeHandlerDeps(captured[0]);
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -2265,6 +2283,7 @@ describe("waitForShutdown", () => {
         expect(onShutdown).toHaveBeenCalledTimes(1);
         const exiting = sink.events.find((event) => event.op === "process.exiting");
         expect(extraOf(exiting).reason).toBe("server-close");
+        expectObservedLifecycleFailure(sink, "process.exiting", 0);
         expect(sink.closeCallCount).toBe(1);
       });
     });
@@ -2292,6 +2311,7 @@ describe("waitForShutdown", () => {
         expect(extraOf(exiting).reason).toBe("sigint");
         // The class only — the raw message must never reach the line (it is foreign free text).
         expect(extraOf(exiting).onShutdownErrorKind).toBe("Error");
+        expectObservedLifecycleFailure(sink, "process.exiting", 1);
         expect(JSON.stringify(exiting)).not.toContain("heartbeat teardown boom");
         expect(sink.closeCallCount).toBe(1);
       });
@@ -2316,6 +2336,7 @@ describe("waitForShutdown", () => {
         await expect(promise).resolves.toBeUndefined();
         const exiting = sink.events.find((event) => event.op === "process.exiting");
         expect(extraOf(exiting).onShutdownErrorKind).toBe("string");
+        expectObservedLifecycleFailure(sink, "process.exiting", 1);
         expect(JSON.stringify(exiting)).not.toContain("heartbeat teardown boom");
       });
     });

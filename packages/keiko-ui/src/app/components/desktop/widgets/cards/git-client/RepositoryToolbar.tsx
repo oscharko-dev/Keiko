@@ -2,8 +2,11 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
+import {
+  useOptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+} from "@/lib/optional-widget-i18n";
 import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import KeikoSelect, { type KeikoSelectProps } from "../../../KeikoSelect";

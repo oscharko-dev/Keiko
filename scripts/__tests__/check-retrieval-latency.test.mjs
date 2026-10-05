@@ -1,6 +1,14 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { evaluateLatencyBudget, percentile } from "../check-retrieval-latency.mjs";
+import {
+  evaluateLatencyBudget,
+  percentile,
+  runRetrievalLatencyCheck,
+} from "../check-retrieval-latency.mjs";
 
 describe("percentile", () => {
   it("returns 0 for an empty sample set", () => {
@@ -33,5 +41,32 @@ describe("evaluateLatencyBudget", () => {
 
   it("fails when observed exceeds the budget", () => {
     expect(evaluateLatencyBudget({ observedMs: 3001, budgetMs: 3000 }).ok).toBe(false);
+  });
+});
+
+describe("runRetrievalLatencyCheck", () => {
+  it("measures real lexical search over the complete streaming fixture", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-lexical-latency-"));
+    try {
+      const budget = JSON.parse(
+        readFileSync(new URL("../check-retrieval-latency.budget.json", import.meta.url), "utf8"),
+      );
+      const budgetPath = join(root, "budget.json");
+      writeFileSync(budgetPath, JSON.stringify({ ...budget, warmupIterations: 0, iterations: 1 }));
+      const logs = [];
+      const failures = [];
+      const result = await runRetrievalLatencyCheck({
+        budgetPath,
+        log: (message) => logs.push(message),
+        fail: (message) => failures.push(message),
+      });
+      expect(result.observedMs).toBeGreaterThan(0);
+      expect(result.budgetMs).toBe(budget.budgetMs);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain(`on a ${String(budget.fixtureFileCount)}-file fixture`);
+      expect(failures).toHaveLength(result.ok ? 0 : 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

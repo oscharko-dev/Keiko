@@ -3,9 +3,8 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import { GlobalSupportReportAction } from "./SupportReportButton";
-import { DiagnosticReadinessBadge } from "./DiagnosticReadinessBadge";
-import { useBackendHealth, type BackendHealth } from "./hooks/useBackendHealth";
+import styles from "./Footer.module.css";
+import type { BackendHealth } from "./hooks/useBackendHealth";
 import { Icons } from "./Icons";
 import { localizedWindowTitle, WIN_TYPES } from "./windows/WindowsRegistry";
 import { subText } from "./windows/connectionUtils";
@@ -36,6 +35,7 @@ interface FooterProps {
   readonly onSelectWindow: (id: string) => void;
   readonly onCloseWindowPalette: () => void;
   readonly statusRef?: (node: HTMLElement | null) => void;
+  readonly backendHealth: BackendHealth;
 }
 
 function FooterImpl({
@@ -46,12 +46,12 @@ function FooterImpl({
   onSelectWindow,
   onCloseWindowPalette,
   statusRef,
+  backendHealth,
 }: FooterProps): ReactNode {
   const t = useTranslate();
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
   const windowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const windowPanelRef = useRef<HTMLDivElement | null>(null);
-  const backendHealth = useBackendHealth();
   const installedVersion = installedVersionLabel(backendHealth, t);
   const windowLabel =
     winCount === 1
@@ -110,20 +110,18 @@ function FooterImpl({
     // A :focus-visible indicator is provided via CSS (see CSS_NEEDED in the a11y audit).
     <footer
       ref={statusRef}
-      className="footer mono"
+      className={`footer mono ${styles.cmpFooter}`}
       tabIndex={-1}
       aria-label={t("footer.status")}
       aria-live="polite"
     >
-      <DiagnosticReadinessBadge
-        snapshot={backendHealth.state === "loaded" ? backendHealth.health.diagnostics : undefined}
-      />
-      <GlobalSupportReportAction />
-      <span className="spacer" />
-      <span className="ft-brand" aria-label={t("footer.version", { version: installedVersion })}>
+      <span
+        className={`ft-brand ${styles.cmpBrand}`}
+        aria-label={t("footer.version", { version: installedVersion })}
+      >
         Keiko | {installedVersion}
       </span>
-      <span className="ft-window-wrap" ref={windowPaletteRef}>
+      <span className={`ft-window-wrap ${styles.cmpWindows}`} ref={windowPaletteRef}>
         <button
           ref={windowTriggerRef}
           type="button"

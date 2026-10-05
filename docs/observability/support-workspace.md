@@ -41,11 +41,130 @@ export records body-free `support.report.started` and `support.report.completed`
 path) in the selected state directory's Activity Log; a refused destination is recorded in the
 CLI control state instead.
 
+## Desktop export and recovery
+
+Use **Create error report** on a visible error, then **Download report** to save the report for
+that error's Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the
+same action. Uncaught browser failures expose the action in the existing shell alert area. The
+footer retains the centered product version; there is no separate Diagnosis window or incident
+counter for customers. A degraded or unavailable diagnostic writer adds a plain-language workspace
+notice with the same report action. Closed technical reasons remain in `/api/health`, `keiko status`,
+the Activity Log and the downloaded report.
+
+Creation has a bounded deadline, blocks duplicate clicks and remains retryable after failure.
+Generation keeps a real browser download link available so the customer can retry a blocked
+save without regenerating evidence. The UI reports that the report is ready; it does not claim
+that the operating system has saved the file. Desktop downloads use a standard `.json.gz`
+attachment whose decompressed bytes are the canonical report. The analyzer accepts that transport
+without changing the report schema or integrity rules.
+
+Prepared reports remain in the existing bounded, transient download cache for at most fifteen
+minutes, without a persistent report archive. The browser cache holds at most 10 MiB of canonical
+report bytes. The server cache reserves at most 20 MiB of retained raw-or-gzip payload and 128
+entries. Full server-evidence attachments require their original authenticated local session on
+every attempt; a download reference alone grants no authority. Validated limited client-only
+attachments may be downloaded without pairing and never grant stored server-log access. Expired downloads can be prepared again.
+Global errors remain until the person dismisses them; successful preparation alone never dismisses
+the only recovery action. A failed preparation keeps the original error and Support ID visible.
+Keiko neither uploads nor sends the file. Share it manually through an approved support channel.
+
+The internal diagnostic candidate store uses the Activity Log retention-byte policy, rather than
+an independent fixed candidate-count limit. Unreported candidates expire after twenty-four hours.
+Under byte pressure, the oldest eligible candidate rolls out and its owned pin and claims are
+released. Pin-ceiling checks, rollover and pin admission use `activeActivityLogPins`: only valid, unexpired pins count, and expired records awaiting cleanup cannot displace live evidence. Successfully preparing an export completes the selected candidate and releases its owned
+artifacts. The retained Activity Log remains subject to its existing byte and age policy. These
+control records support causal reconstruction; they are not a customer-facing count of unresolved
+product defects. Health reports the existing Activity Log readiness and lost-event count. It does
+not enumerate diagnostic records or present candidate-count/capacity figures: those would conflate
+the metadata byte reservation with the separately shared pin pool. Older optional count fields
+remain accepted by the compatibility validator, but current servers do not emit them. Creation,
+rejection and retirement remain recorded by the existing incident lifecycle events.
+
+If the report action says to open Keiko from the launcher, the local application session was refused.
+Open Keiko through its trusted launcher and retry the **same** error's report. Refreshing an old tab
+alone cannot restore a session invalidated by a server restart. Full server-evidence reports wait for application bootstrap and require a valid paired session.
+Limited client-only reports can still be prepared and downloaded from validated body-free browser
+facts without pairing; if the BFF is unavailable, the browser uses the shared canonical producer. Local session
+confirmation restores missing scoped cookie projections of an already valid bearer after an upgrade;
+it never mints authority or extends the server-owned absolute lifetime. Neither recovery nor error reporting
+bypasses that authority.
+
+If Keiko is unavailable, restore the local application, then retry. If report requests are rate
+limited, wait one minute before retrying. When the desktop cannot run, an operator can still use the
+installed CLI on the originating machine without a browser or model provider:
+
+```bash
+keiko support export --correlation-id <support-id> --state-dir <installation-state-directory>
+```
+
+Select the same state directory as the affected installation. Do not send raw logs or configuration
+as a substitute. A support report cannot recover evidence already removed by retention or a log that
+was never durably written; the canonical result records insufficiency or a closed refusal instead
+of claiming a complete reconstruction.
+
+The server records `support.report.ui.delivered` only when the attachment response finishes;
+its `parentCorrelationId` joins report creation and its `reportDigest` identifies the canonical
+artifact. `reportBytes` is canonical size; `transportBytes` is the separate gzip response size.
+Cancellation, compression and response-write failures use `support.report.ui.failed` instead.
+A refusal uses `support.report.ui.download-refused` with a closed reason. These facts never prove
+that the operating system saved the file. Preparation reports the artifact's quality separately
+as `reportCompleteness` and `reportLoss`; the preparation event's own completeness/loss describe
+whether that event was recorded intact. Availability reasons apply only to client-only scope.
+
+The browser's separate `client.support-report.download-started` line records a manual click with
+`source`, `evidenceScope` and an optional `reportDigest`. A browser-produced report has `client-only`
+evidence; a server-produced report may have `server` or `client-only` evidence, including when its
+bytes are offered again through a browser Blob. Incoherent pairs are refused at ingest. These fields
+are browser assertions, not server attestation or proof that the file was saved. Validate the
+received artifact and use matching server preparation/delivery evidence for authoritative checks.
+Legacy string `manual` and `automatic` values remain readable for older clients.
+
+### Local cleanup after preparing a report
+
+Preparing a report retires its temporary incident candidate; it does not prove a download was
+saved. Once the candidate is inspected, `support.incident.retirement-started` records the withdrawal
+attempt under its request correlation and joins the original incident through its parent correlation.
+The terminal `support.incident.dismissed` closes that request and records the intended incident state, explicit `removalStatus`,
+`claimsStatus` and `pinRelease`. A failed removal leaves the candidate and its ownership intact,
+with claims and pin release `not-attempted`. Failed claim cleanup after removal is a distinct
+`dismissed-incomplete` result: the incident is withdrawn, but local cleanup is incomplete. The CLI
+says so and returns a nonzero exit status. Both failure paths retain their reduced error class,
+frames and cause chain on the terminal line at warning level; the dismissal correlation links to
+the incident lifecycle. An already absent owned pin is `not-pinned`, not a cleanup failure.
+
+`retentionDisposition` distinguishes `stored` from `transient` report descriptors. Transient
+descriptors have no retained incident pin, so their summary omits `pinDisposition` instead of
+claiming a rejected pin attempt. Full server evidence still requires the paired session described
+above. A reported completion never carries the `abandoned` retirement reason.
+
+### Recognising a limited report
+
+After validation, `incident.clientReport` identifies a limited artifact with
+`serverEvidence: unavailable`, empty registered server evidence and unverified, validated browser
+failure facts when available. Its closed `availabilityReason` is one of `session-unavailable`,
+`diagnostic-delivery-unavailable`, `service-unavailable`, `client-only-selected` or
+`correlation-unavailable`. The last two describe an explicit scope choice or a missing trustworthy
+original correlation, not an inferred service outage. A structurally complete canonical report
+may still have insufficient diagnostic evidence; integrity and diagnostic sufficiency answer
+different questions. Never treat browser descriptors as authoritative server attribution. The default human
+analysis prints `Limited browser artifact: server evidence unavailable (<availabilityReason>)`
+before the diagnostic sufficiency result, so missing server evidence is explicit.
+
+`.json.gz` is an outer transport. Section/report digests and `sourceArtifactDigest` cover the
+decoded canonical report text, not gzip header metadata or the compressed file bytes. Equivalent
+gzip framing may therefore validate to the same artifact digest. Keep a separate SHA-256 of the
+received file if a custody workflow requires identity of those exact transport bytes. Decompression
+remains bounded and gzip corruption, invalid decoded JSON and changed canonical evidence fail
+validation; transport metadata is never interpreted as report evidence. The CLI Activity Log
+records the observed raw/gzip transport and input byte count, including known facts when decoding
+fails. A successful analysis also records full or client-only evidence scope and the limited
+report availability reason. Unknown facts are omitted rather than inferred from a filename.
+
 ## On the support team's machine
 
 1. Receive the file manually into an access-controlled workspace, under a locally chosen filename.
-   Transfer it byte for byte (binary mode, no line-ending or encoding conversion): any changed byte
-   fails validation. Keep the directory owner-only (0700 on POSIX) and the file owner-only (0600).
+   Preserve the received bytes for chain of custody (binary mode, no line-ending or encoding
+   conversion). Canonical report bytes are integrity checked after transport decompression. Keep the directory owner-only (0700 on POSIX) and the file owner-only (0600).
    Do not grant an agent broader filesystem/network authority just to handle the report. Do not
    preview its raw
    contents in a terminal, editor, model context or automation before validation.
@@ -56,7 +175,7 @@ CLI control state instead.
 
    ```bash
    umask 077
-   keiko support analyze ./received-report.json --json > ./analyzed-report.json
+   keiko support analyze ./received-report.json.gz --json > ./analyzed-report.json
    ```
 
 3. Require exit status 0 before using the generated machine view. A rejected input exits 1 and

@@ -636,6 +636,54 @@ describe("rerankSelection", () => {
     expect(result.diagnostics.candidateCount).toBe(2);
     deps.store.close();
   });
+
+  it("retains the unsubmitted tail and reports total, sent, and retained counts separately", async () => {
+    const deps = depsWith(gatewayConfig(), () =>
+      Promise.resolve(successfulOutcome([{ index: 1 }, { index: 0 }])),
+    );
+    const result = await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: ["a", "b", "c", "d"],
+      providerCandidates: ["a", "b"],
+      preserveUnsubmittedCandidates: true,
+      documentFor: (candidate) => candidate,
+      topN: 2,
+      fallbackMode: "identity",
+    });
+    expect(result.selected).toEqual(["b", "a", "c", "d"]);
+    expect(result.diagnostics).toMatchObject({
+      candidateCount: 4,
+      documentCount: 2,
+      keptCount: 4,
+    });
+    deps.store.close();
+  });
+
+  it("refuses a partial identity-ordering mapping instead of losing submitted evidence", async () => {
+    const deps = depsWith(gatewayConfig(), () =>
+      Promise.resolve(successfulOutcome([{ index: 1 }])),
+    );
+    const candidates = ["a", "b", "c", "d"];
+    const result = await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates,
+      providerCandidates: ["a", "b"],
+      preserveUnsubmittedCandidates: true,
+      documentFor: (candidate) => candidate,
+      topN: 2,
+      fallbackMode: "identity",
+    });
+    expect(result.selected).toBe(candidates);
+    expect(result.diagnostics).toMatchObject({
+      status: "invalid-response",
+      candidateCount: 4,
+      documentCount: 2,
+      keptCount: 4,
+    });
+    deps.store.close();
+  });
 });
 
 describe("rerank facade selection properties", () => {

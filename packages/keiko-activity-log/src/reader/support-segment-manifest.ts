@@ -77,8 +77,9 @@ import {
 } from "./support-segment-manifest-names.js";
 
 export const SEGMENT_MANIFEST_KIND = "keiko.activity-log.segment-manifest";
-// 2 (#3534): `processLossLineCount`. A manifest of another version is rebuilt, never trusted.
-export const SEGMENT_MANIFEST_SCHEMA_VERSION = 2;
+// 3: pin protection failure no longer counts as confirmed process evidence loss.
+// A manifest of another version is rebuilt, never trusted.
+export const SEGMENT_MANIFEST_SCHEMA_VERSION = 3;
 export const MAX_SEGMENT_MANIFEST_BYTES = 256 * 1024;
 const MAX_MANIFEST_PROCESSES = 16;
 const MAX_LIFECYCLE_REFERENCES = 64;

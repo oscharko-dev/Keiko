@@ -1,11 +1,22 @@
 "use client";
 
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  adoptableGitChat,
+  committedGitChat,
+  withGroundingScopeRefresh,
+} from "@/lib/chat-grounding-mutation";
+import type { ClientFilesScopeDecision } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
 // Installs the browser transport for reportClientDiagnostic at module scope, so a diagnostic
 // raised during hydration or an early boot crash is delivered rather than only buffered.
 import "@/lib/install-client-diagnostics";
+import { GlobalSupportReportAction } from "./SupportReportButton";
+import { DiagnosticReadinessNotice } from "./DiagnosticReadinessNotice";
+import { useBackendHealth } from "./hooks/useBackendHealth";
 import { AppShellBoundary } from "./AppShellBoundary";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
@@ -36,10 +47,17 @@ import {
   removeConnectedScope,
   boundScopeOf,
   filesChatBindScope,
+  hasOtherFilesScopeOwner,
+  restoredConnectionScope,
   totalSourceCap,
   type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
 import {
+  connectedScopeFingerprint,
+  isConnectedScopeFingerprint,
+} from "./hooks/workspaceScopeIdentity";
+import {
+  ApiError,
   connectGitChangeToChat,
   fetchChats,
   fetchConfig,
@@ -48,7 +66,14 @@ import {
   updateChatLocalKnowledgeScopes,
 } from "@/lib/api";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
+import {
+  reportClientDiagnostic,
+  reportFilesScopeDecision,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -412,14 +437,294 @@ function isOnlySlashes(value: string): boolean {
 }
 
 function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
-  if (scope?.root === undefined) return null;
-  return [
-    stripTrailingSlashRun(scope.root.replaceAll("\\", "/")),
-    scope.kind,
-    ...scope.relativePaths.map((path) =>
-      stripTrailingSlashRun(stripLeadingSlashRun(path.replaceAll("\\", "/"))),
-    ),
-  ].join("\u0000");
+  return chatConnectedScopeIdentity(scope);
+}
+
+function missingFilesScopeOwnership(
+  connection: Connection | undefined,
+  previousScope: ChatConnectedScope | null,
+  nextScope: ChatConnectedScope,
+  canonicalScopes: readonly ChatConnectedScope[],
+): boolean {
+  return (
+    connection?.boundScopeElided === true &&
+    previousScope === null &&
+    !filesScopeOwnershipProvenAbsent(connection, canonicalScopes) &&
+    canonicalScopes.length > 0 &&
+    !isScopeConnected(canonicalScopes, nextScope)
+  );
+}
+
+function filesScopeOwnershipProvenAbsent(
+  connection: Connection | undefined,
+  canonicalScopes: readonly ChatConnectedScope[],
+): boolean {
+  const fingerprint = connection?.boundScopeFingerprint;
+  return (
+    connection?.boundScopeElided === true &&
+    isConnectedScopeFingerprint(fingerprint) &&
+    !canonicalScopes.some((scope) => connectedScopeFingerprint(scope) === fingerprint)
+  );
+}
+
+function filesScopeOwnershipEvidence(
+  connection: Connection | undefined,
+  scopes: readonly ChatConnectedScope[],
+): { sourceCount: number; candidateCount: number; bindingFingerprint?: string } {
+  const fingerprint = connection?.boundScopeFingerprint;
+  if (!isConnectedScopeFingerprint(fingerprint))
+    return { sourceCount: scopes.length, candidateCount: 0 };
+  return {
+    sourceCount: scopes.length,
+    candidateCount: scopes.filter((scope) => connectedScopeFingerprint(scope) === fingerprint)
+      .length,
+    bindingFingerprint: fingerprint,
+  };
+}
+
+function reportFilesOwnershipDecision(
+  attempt: ChatMutationAttempt,
+  connection: Connection | undefined,
+  scopes: readonly ChatConnectedScope[],
+): void {
+  if (connection?.boundScopeElided !== true) return;
+  const evidence = filesScopeOwnershipEvidence(connection, scopes);
+  if (evidence.bindingFingerprint === undefined) return;
+  reportFilesScopeDecision(attempt.correlationId, {
+    decision: evidence.candidateCount === 0 ? "fingerprint-absent" : "restored",
+    ...evidence,
+  });
+}
+
+function reportMissingTeardownOwnership(
+  attempt: ChatMutationAttempt,
+  connection: Connection | undefined,
+  scopes: readonly ChatConnectedScope[],
+): boolean {
+  const released = scopes.length === 0 || filesScopeOwnershipProvenAbsent(connection, scopes);
+  reportFilesScopeDecision(attempt.correlationId, {
+    decision: released ? "released" : "blocked-ambiguous",
+    ...filesScopeOwnershipEvidence(connection, scopes),
+  });
+  if (!released)
+    reportGroundingMutationFailure(
+      "Files scope ownership unavailable",
+      new Error("Scope ownership is not proven"),
+      attempt.correlationId,
+    );
+  return released;
+}
+
+function currentFilesOwnedScope(
+  connection: Connection | undefined,
+  observedFingerprint: string | undefined,
+  previousScope: ChatConnectedScope | null,
+  canonicalScopes: readonly ChatConnectedScope[],
+): ChatConnectedScope | null {
+  const restored = restoredConnectionScope(connection, canonicalScopes);
+  return observedFingerprint === connection?.boundScopeFingerprint
+    ? (previousScope ?? restored)
+    : restored;
+}
+
+function acknowledgeFilesScope(input: {
+  readonly correlationId: string;
+  readonly edgeKey: string;
+  readonly connectionId: string | undefined;
+  readonly chat: Chat | undefined;
+  readonly nextScope: ChatConnectedScope;
+  readonly connections: readonly Connection[];
+  readonly scopes: Map<string, ChatConnectedScope>;
+  readonly fingerprints: Map<string, string | undefined>;
+  readonly correlations: Map<string, string>;
+}): boolean {
+  const canonicalScopes = input.chat === undefined ? [] : effectiveScopes(input.chat);
+  const acknowledged = canonicalScopes.find((scope) => isScopeConnected([scope], input.nextScope));
+  if (acknowledged === undefined) {
+    reportFilesScopeDecision(input.correlationId, { decision: "ack-missing" });
+    return false;
+  }
+  input.scopes.set(input.edgeKey, acknowledged);
+  input.correlations.set(input.edgeKey, input.correlationId);
+  reportFilesScopeDecision(input.correlationId, {
+    decision: "acknowledged",
+    sourceCount: canonicalScopes.length,
+    candidateCount: 1,
+    bindingFingerprint: connectedScopeFingerprint(acknowledged),
+  });
+  if (input.connectionId !== undefined) {
+    input.fingerprints.set(
+      input.connectionId,
+      input.connections.find((edge) => edge.id === input.connectionId)?.boundScopeFingerprint,
+    );
+  }
+  return true;
+}
+
+function applyAcknowledgedFilesConnection(
+  accepted: boolean,
+  target: ChatBindingTarget,
+  connection: Connection,
+  acknowledgements: ReadonlyMap<string, ChatConnectedScope>,
+  api: WorkspaceApi,
+): void {
+  const acknowledged = acknowledgements.get(`${connection.id}\u0000${target.conversationId}`);
+  if (accepted && target.isCurrent() && acknowledged !== undefined) {
+    api.updateConnBoundScope(connection.id, acknowledged);
+  }
+}
+
+function filesScopeAlreadyCanonical(
+  canonicalScopes: readonly ChatConnectedScope[],
+  nextScope: ChatConnectedScope,
+  ownedScope: ChatConnectedScope | null,
+): boolean {
+  return (
+    isScopeConnected(canonicalScopes, nextScope) &&
+    (ownedScope === null || isScopeConnected([ownedScope], nextScope))
+  );
+}
+
+function filesBindingTargetIsCurrent(
+  connections: readonly Connection[],
+  windows: readonly AppWindow[] | null | undefined,
+  connection: Connection,
+  chatWindowId: string,
+  conversationId: string,
+): boolean {
+  const edgePresent = connections.some(
+    (edge) => edge.id === connection.id && edge.a === connection.a && edge.b === connection.b,
+  );
+  const currentId =
+    chatIdFromWindow(windows?.find((win) => win.id === chatWindowId)) ??
+    chatWindowRuntimeTarget(chatWindowId)?.conversationId;
+  return edgePresent && currentId === conversationId;
+}
+
+function pruneReleasedFilesConnections(
+  released: Set<string>,
+  liveEdges: ReadonlySet<string>,
+): void {
+  for (const id of released) if (!liveEdges.has(id)) released.delete(id);
+}
+
+function filesRequestWasSuperseded(
+  input: FilesScopeRequest,
+  requests: ReadonlyMap<string, symbol>,
+): boolean {
+  const superseded =
+    input.automatic && input.edgeKey !== undefined && requests.get(input.edgeKey) !== input.request;
+  if (superseded)
+    reportFilesScopeDecision(input.attempt.correlationId, { decision: "request-superseded" });
+  return superseded;
+}
+
+function pruneFilesAcknowledgements<T>(
+  acknowledgements: Map<string, T>,
+  liveEdges: ReadonlySet<string>,
+): void {
+  for (const key of acknowledgements.keys()) {
+    if (!liveEdges.has(key.split("\u0000")[0] ?? "")) acknowledgements.delete(key);
+  }
+}
+
+function automaticFilesAmbiguityIdentity(
+  connection: Connection,
+  chat: Chat,
+  nextScope: ChatConnectedScope,
+): string {
+  return JSON.stringify([
+    connection.a,
+    connection.b,
+    connection.boundChatWindowId,
+    connection.boundRoot,
+    connection.boundScopeKind,
+    connection.boundRelativePath,
+    connection.boundScopeElided,
+    connection.boundScopeFingerprint,
+    chat.id,
+    chat.groundingScopeIdentity,
+    connectedScopeKey(nextScope),
+    effectiveScopes(chat).map((scope) => [scope.kind, scope.root, scope.relativePaths]),
+  ]);
+}
+
+function rememberAutomaticFilesAmbiguity(
+  warnings: Map<string, string>,
+  connection: Connection | undefined,
+  chat: Chat,
+  nextScope: ChatConnectedScope,
+  automatic: boolean,
+): boolean {
+  if (!automatic || connection === undefined) return true;
+  const identity = automaticFilesAmbiguityIdentity(connection, chat, nextScope);
+  if (warnings.get(connection.id) === identity) return false;
+  warnings.set(connection.id, identity);
+  return true;
+}
+
+function reconcileFilesAcknowledgementFingerprints(
+  connections: readonly Connection[],
+  acknowledgements: Map<string, ChatConnectedScope>,
+  observed: Map<string, string | undefined>,
+  correlations: Map<string, string>,
+): void {
+  for (const connection of connections) {
+    const fingerprint = connection.boundScopeFingerprint;
+    if (observed.has(connection.id) && observed.get(connection.id) !== fingerprint) {
+      invalidateChangedFilesAcknowledgements(connection, acknowledgements, correlations);
+    }
+    observed.set(connection.id, fingerprint);
+  }
+  const liveEdges = new Set(connections.map((connection) => connection.id));
+  for (const id of observed.keys()) if (!liveEdges.has(id)) observed.delete(id);
+}
+
+function invalidateChangedFilesAcknowledgements(
+  connection: Connection,
+  acknowledgements: Map<string, ChatConnectedScope>,
+  correlations: Map<string, string>,
+): void {
+  for (const [key, scope] of acknowledgements) {
+    if (
+      !key.startsWith(`${connection.id}\u0000`) ||
+      connectedScopeFingerprint(scope) === connection.boundScopeFingerprint
+    )
+      continue;
+    acknowledgements.delete(key);
+    const parentCorrelationId = correlations.get(key);
+    correlations.delete(key);
+    reportFilesScopeDecision(
+      newClientCorrelationId(),
+      {
+        decision: "ack-invalidated",
+        candidateCount: 1,
+        ...(isConnectedScopeFingerprint(connection.boundScopeFingerprint)
+          ? { bindingFingerprint: connection.boundScopeFingerprint }
+          : {}),
+      },
+      parentCorrelationId,
+    );
+  }
+}
+
+function ownedTeardownScope(
+  connection: Connection | undefined,
+  conversationId: string,
+  canonicalScopes: readonly ChatConnectedScope[],
+  trigger: ChatConnectedScope,
+  acknowledgements: ReadonlyMap<string, ChatConnectedScope>,
+): ChatConnectedScope | null {
+  if (connection?.boundScopeElided !== true) return trigger;
+  const acknowledged = acknowledgements.get(`${connection.id}\u0000${conversationId}`);
+  if (
+    isConnectedScopeFingerprint(connection.boundScopeFingerprint) &&
+    (acknowledged === undefined ||
+      connectedScopeFingerprint(acknowledged) !== connection.boundScopeFingerprint)
+  ) {
+    return restoredConnectionScope(connection, canonicalScopes);
+  }
+  return acknowledged ?? restoredConnectionScope(connection, canonicalScopes);
 }
 
 // S3358 — prefer the bind-time snapshot on the Connection; fall back to whichever
@@ -456,6 +761,14 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function chatWindowConversationIds(windows: readonly AppWindow[]): Map<string, string | undefined> {
+  const conversations = new Map<string, string | undefined>();
+  for (const window of windows) {
+    if (window.type === "chat") conversations.set(window.id, chatIdFromWindow(window));
+  }
+  return conversations;
+}
+
 export function persistedChatProjectPath(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const value = win.cfg["projectPath"];
@@ -463,19 +776,79 @@ export function persistedChatProjectPath(win: AppWindow | undefined): string | u
   return value.trim().length > 0 ? value : undefined;
 }
 
-class ChatBindingCompensationFailure extends Error {}
-class ChatMutationTimeoutFailure extends Error {}
+class ChatBindingCompensationFailure extends Error {
+  constructor(
+    cause?: unknown,
+    readonly correlationId?: string,
+  ) {
+    super("Chat binding compensation failed.", { cause });
+  }
+}
+class ChatMutationFailure extends Error {
+  constructor(
+    cause: unknown,
+    readonly correlationId: string,
+  ) {
+    super("Chat grounding mutation failed.", { cause });
+  }
+}
+
+class ChatMutationTimeoutFailure extends Error {
+  constructor(readonly correlationId: string) {
+    super("Chat grounding mutation timed out.");
+  }
+}
 
 interface ChatMutationQueue {
-  readonly blocked: Set<string>;
+  readonly blocked: Map<string, GroundingMutationBlock>;
   readonly tails: Map<string, Promise<void>>;
 }
 
+type GroundingMutationSurface = NonNullable<ClientFilesScopeDecision["mutationSurface"]>;
+interface GroundingMutationBlock {
+  readonly correlationId: string;
+  readonly surface: GroundingMutationSurface;
+  rejectionCount: number;
+}
+
+interface FilesScopeUnbindInput {
+  readonly chatWindowId: string;
+  readonly scope: ChatConnectedScope;
+  readonly target: ChatUnbindTarget | undefined;
+  readonly connectionId: string | undefined;
+}
+
+interface FilesScopeRequest {
+  chatWindowId: string;
+  nextScope: ChatConnectedScope;
+  previousScope: ChatConnectedScope | null;
+  attempt: ChatMutationAttempt;
+  target: ChatBindingTarget | undefined;
+  connectionId: string | undefined;
+  automatic: boolean;
+  edgeKey: string | undefined;
+  chatKey: string;
+  request: symbol;
+}
+
 interface ChatMutationAttempt {
+  readonly correlationId: string;
+  readonly surface: GroundingMutationSurface;
   readonly isCurrent: () => boolean;
+  readonly renewBudget: () => void;
 }
 
 type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
+
+function latestGroundingChat(
+  sessionChat: Chat | undefined,
+  confirmed: Chat | undefined,
+): Chat | undefined {
+  if (confirmed === undefined) return sessionChat;
+  return sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt
+    ? confirmed
+    : sessionChat;
+}
 
 function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string | undefined {
   const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
@@ -484,19 +857,68 @@ function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
-function reportGroundingMutationFailure(message: string, error: unknown): void {
-  const correlationId = correlationIdOf(error);
-  reportClientDiagnostic(
-    `[keiko] ${message}: ${clientErrorSummary(error)}`,
-    correlationId === undefined ? undefined : { correlationId },
-  );
+function groundingFailureIdentity(
+  error: unknown,
+  attemptCorrelationId?: string,
+): Pick<ClientDiagnosticMeta, "correlationId" | "parentCorrelationId"> {
+  const requestCorrelationId = correlationIdOf(error);
+  return {
+    correlationId: requestCorrelationId ?? attemptCorrelationId,
+    ...(requestCorrelationId !== undefined &&
+    attemptCorrelationId !== undefined &&
+    requestCorrelationId !== attemptCorrelationId
+      ? { parentCorrelationId: attemptCorrelationId }
+      : {}),
+  };
+}
+
+function reportGroundingMutationFailure(
+  message: string,
+  error: unknown,
+  originalCorrelationId?: string,
+): void {
+  if (error instanceof ChatBindingCompensationFailure && error.cause !== undefined) {
+    reportGroundingMutationFailure(
+      message,
+      error.cause,
+      originalCorrelationId ?? error.correlationId,
+    );
+    return;
+  }
+  const identity = groundingFailureIdentity(error, originalCorrelationId);
+  const summary = `[keiko] ${message}: ${clientErrorSummary(error)}`;
+  if (originalCorrelationId === undefined) {
+    reportClientDiagnostic(summary, identity.correlationId === undefined ? undefined : identity);
+    return;
+  }
+  reportClientDiagnostic(summary, {
+    ...identity,
+    kind: "other",
+    errorKind: error instanceof ChatMutationTimeoutFailure ? "timeout" : bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 class ChatLookupFailure extends Error {
-  constructor() {
-    super("Chat lookup failed.");
+  readonly correlationId: string | undefined;
+
+  constructor(cause: unknown) {
+    super("Chat lookup failed.", { cause });
     this.name = "ChatLookupFailure";
+    this.correlationId = correlationIdOf(cause);
   }
+}
+
+function reportChatLookupFailure(error: ChatLookupFailure, attemptCorrelationId?: string): void {
+  reportClientDiagnostic("[keiko] Chat lookup failed: ChatLookupFailure", {
+    kind: "other",
+    ...groundingFailureIdentity(
+      error,
+      attemptCorrelationId ?? error.correlationId ?? newClientCorrelationId(),
+    ),
+    errorKind: bffRequestErrorKind(error.cause),
+    errorEvidence: clientErrorEvidence(error.cause),
+  });
 }
 
 function chatLookupTargetIsCurrent(target: ChatLookupTarget | undefined): boolean {
@@ -514,21 +936,71 @@ function groundingMutationFailureKey(
     | "chat.grounding.connectKnowledgeFailed"
     | "chat.grounding.connectGitChangeFailed"
     | "scope.disconnectError",
+  attemptCorrelationId?: string,
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
+  if (error instanceof ChatMutationFailure)
+    return groundingMutationFailureKey(error.cause, mutationFailedKey, error.correlationId);
   if (error instanceof ChatLookupFailure) {
-    reportGroundingMutationFailure("Chat lookup failed", error);
+    reportChatLookupFailure(error, attemptCorrelationId);
     return mutationFailedKey;
   }
   if (error instanceof ChatBindingCompensationFailure) {
-    reportGroundingMutationFailure("Chat binding compensation failed", error);
+    reportGroundingMutationFailure(
+      "Chat binding compensation failed",
+      error,
+      attemptCorrelationId ?? error.correlationId,
+    );
     return "chat.grounding.recoveryRequired";
   }
   if (error instanceof ChatMutationTimeoutFailure) {
-    reportGroundingMutationFailure("Chat grounding timeout", error);
+    reportGroundingMutationFailure(
+      "Chat grounding timeout",
+      error,
+      attemptCorrelationId ?? error.correlationId,
+    );
     return "chat.grounding.timeoutBlocked";
   }
-  reportGroundingMutationFailure("Chat grounding mutation failed", error);
+  reportGroundingMutationFailure("Chat grounding mutation failed", error, attemptCorrelationId);
   return mutationFailedKey;
+}
+
+async function persistScopeSnapshot<T>(
+  persist: (
+    id: string,
+    scopes: readonly T[] | null,
+    expectedIdentity?: string,
+    correlationId?: string,
+  ) => Promise<{ readonly chat: Chat }>,
+  chatId: string,
+  scopes: readonly T[],
+  expectedIdentity: string | undefined,
+  correlationId: string,
+): Promise<{ readonly chat: Chat }> {
+  const next = scopes.length > 0 ? scopes : null;
+  return persist(chatId, next, expectedIdentity, correlationId);
+}
+
+function isGroundingScopeConflict(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 409 && error.code === "GROUNDING_SCOPE_CHANGED"
+  );
+}
+
+async function retryGroundingScopeIntent(
+  mutation: () => Promise<boolean>,
+  attempt: ChatMutationAttempt,
+): Promise<boolean> {
+  try {
+    return await mutation();
+  } catch (error: unknown) {
+    if (!isGroundingScopeConflict(error) || !attempt.isCurrent()) throw error;
+    attempt.renewBudget();
+    reportFilesScopeDecision(attempt.correlationId, {
+      decision: "conflict-retried",
+      mutationSurface: attempt.surface,
+    });
+    return mutation();
+  }
 }
 
 async function persistCurrentChatScopes<T>(
@@ -537,15 +1009,41 @@ async function persistCurrentChatScopes<T>(
   chatId: string,
   previous: readonly T[],
   next: readonly T[],
-  persist: (id: string, scopes: readonly T[] | null) => Promise<{ readonly chat: Chat }>,
-  remember: (chat: Chat) => void,
+  persist: (
+    id: string,
+    scopes: readonly T[] | null,
+    expectedIdentity?: string,
+    correlationId?: string,
+  ) => Promise<{ readonly chat: Chat }>,
+  confirmation: {
+    readonly remember: (chat: Chat) => void;
+    readonly expectedIdentity?: string | undefined;
+    readonly chat?: Chat;
+    readonly refreshed?: (chat: Chat) => void;
+  },
 ): Promise<Chat | undefined> {
+  const { remember, expectedIdentity } = confirmation;
   if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return undefined;
-  const response = await persist(chatId, next.length > 0 ? next : null);
+  const mutation = (): Promise<{ readonly chat: Chat }> =>
+    persistScopeSnapshot(persist, chatId, next, expectedIdentity, attempt.correlationId);
+  const refresh = (chat: Chat): void => {
+    remember(chat);
+    if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) confirmation.refreshed?.(chat);
+  };
+  const response =
+    confirmation.chat === undefined
+      ? await mutation()
+      : await withGroundingScopeRefresh(confirmation.chat, mutation, refresh);
   remember(response.chat);
   if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) return response.chat;
   try {
-    const compensation = await persist(chatId, previous.length > 0 ? previous : null);
+    const compensation = await persistScopeSnapshot(
+      persist,
+      chatId,
+      previous,
+      expectedIdentity === undefined ? undefined : response.chat.groundingScopeIdentity,
+      attempt.correlationId,
+    );
     remember(compensation.chat);
   } catch {
     throw new ChatBindingCompensationFailure();
@@ -553,20 +1051,47 @@ async function persistCurrentChatScopes<T>(
   return undefined;
 }
 
-async function mutationWithTimeout<T>(
+export async function mutationWithTimeout<T>(
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
+  onTimeout: () => void,
+  onLateSuccess: () => void,
+  correlationId: string,
+  surface: GroundingMutationSurface = "files",
 ): Promise<T> {
   let timeoutId: number | undefined;
   let current = true;
-  const attempt: ChatMutationAttempt = { isCurrent: (): boolean => current };
+  let renewBudget = (): void => undefined;
   const timeout = new Promise<never>((_resolve, reject): void => {
-    timeoutId = window.setTimeout((): void => {
-      current = false;
-      reject(new ChatMutationTimeoutFailure());
-    }, CHAT_MUTATION_TIMEOUT_MS);
+    renewBudget = (): void => {
+      if (!current) return;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout((): void => {
+        current = false;
+        onTimeout();
+        reject(new ChatMutationTimeoutFailure(correlationId));
+      }, CHAT_MUTATION_TIMEOUT_MS);
+    };
+    renewBudget();
   });
+  const attempt: ChatMutationAttempt = {
+    correlationId,
+    surface,
+    isCurrent: (): boolean => current,
+    renewBudget,
+  };
+  const pending = Promise.resolve().then(() => mutation(attempt));
+  void pending.then(
+    (): void => {
+      if (!current) onLateSuccess();
+    },
+    (error: unknown): void => {
+      if (!current && !(error instanceof ChatBindingCompensationFailure)) onLateSuccess();
+      if (!current)
+        reportGroundingMutationFailure("Late chat grounding mutation failed", error, correlationId);
+    },
+  );
   try {
-    return await Promise.race([mutation(attempt), timeout]);
+    return await Promise.race([pending, timeout]);
   } finally {
     if (timeoutId !== undefined) window.clearTimeout(timeoutId);
   }
@@ -576,17 +1101,23 @@ async function serializeChatMutation<T>(
   queue: ChatMutationQueue,
   chatKey: string,
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
+  surface: GroundingMutationSurface = "files",
 ): Promise<T> {
-  if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
+  const correlationId = newClientCorrelationId();
+  assertMutationQueueAvailable(queue, chatKey, correlationId, surface);
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
-    if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
-    try {
-      return await mutationWithTimeout(mutation);
-    } catch (error: unknown) {
-      if (error instanceof ChatMutationTimeoutFailure) queue.blocked.add(chatKey);
-      throw error;
-    }
+    assertMutationQueueAvailable(queue, chatKey, correlationId, surface);
+    return mutationWithTimeout(
+      mutation,
+      (): void => {
+        queue.blocked.set(chatKey, { correlationId, surface, rejectionCount: 0 });
+        reportMutationQueueDecision(correlationId, surface, "timeout-blocked");
+      },
+      (): void => recoverMutationQueue(queue, chatKey, correlationId),
+      correlationId,
+      surface,
+    );
   };
   const result = preceding.then(execute, execute);
   const settled = result.then(
@@ -597,7 +1128,57 @@ async function serializeChatMutation<T>(
   void settled.then((): void => {
     if (queue.tails.get(chatKey) === settled) queue.tails.delete(chatKey);
   });
-  return result;
+  return result.catch((cause: unknown): never => {
+    throw new ChatMutationFailure(cause, correlationId);
+  });
+}
+
+function reportMutationQueueDecision(
+  correlationId: string,
+  surface: GroundingMutationSurface,
+  decision: "timeout-blocked" | "timeout-recovered" | "timeout-rejected",
+  parentCorrelationId?: string,
+  rejectionCount?: number,
+): void {
+  reportFilesScopeDecision(
+    correlationId,
+    {
+      decision,
+      mutationSurface: surface,
+      ...(rejectionCount === undefined ? {} : { rejectionCount }),
+    },
+    parentCorrelationId,
+  );
+}
+
+function recoverMutationQueue(
+  queue: ChatMutationQueue,
+  chatKey: string,
+  correlationId: string,
+): void {
+  const block = queue.blocked.get(chatKey);
+  if (block?.correlationId !== correlationId) return;
+  queue.blocked.delete(chatKey);
+  reportMutationQueueDecision(
+    correlationId,
+    block.surface,
+    "timeout-recovered",
+    undefined,
+    block.rejectionCount,
+  );
+}
+
+function assertMutationQueueAvailable(
+  queue: ChatMutationQueue,
+  chatKey: string,
+  correlationId: string,
+  surface: GroundingMutationSurface,
+): void {
+  const block = queue.blocked.get(chatKey);
+  if (block === undefined) return;
+  block.rejectionCount += 1;
+  reportMutationQueueDecision(correlationId, surface, "timeout-rejected", block.correlationId);
+  throw new ChatMutationTimeoutFailure(correlationId);
 }
 
 function isConversationGroundingConnection(
@@ -622,13 +1203,78 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-function appendGitChangeScope(
-  current: readonly ChatGitChangeScope[],
-  scope: ChatGitChangeScope,
-): readonly ChatGitChangeScope[] {
-  return current.some((candidate) => candidate.relationshipId === scope.relationshipId)
-    ? current
-    : [...current, scope];
+async function compensateCommittedGitConnection(
+  chat: Chat,
+  relationshipId: string,
+  attempt: ChatMutationAttempt,
+  remember: (chat: Chat) => void,
+): Promise<void> {
+  try {
+    await retryGroundingScopeIntent(async () => {
+      const response = await fetchChats(chat.projectPath, attempt.correlationId, chat.id);
+      const canonical = response.chats.find((candidate) => candidate.id === chat.id);
+      if (canonical === undefined || canonical.status === "closed") return true;
+      if (canonical.projectPath !== chat.projectPath) {
+        throw new ApiError("CONTRACT_VALIDATION_FAILED", "Git compensation target changed.", 502);
+      }
+      const remaining = removeGitChangeScope(canonical.gitChangeScopes ?? [], relationshipId);
+      if (remaining.length === (canonical.gitChangeScopes ?? []).length) return true;
+      const restored = await updateChatGitChangeScopes(
+        chat.id,
+        remaining.length === 0 ? null : remaining,
+        canonical.groundingScopeIdentity,
+        attempt.correlationId,
+      );
+      remember(restored.chat);
+      return true;
+    }, attempt);
+  } catch (error) {
+    throw new ChatBindingCompensationFailure(error, attempt.correlationId);
+  }
+}
+
+interface CommittedGitBinding {
+  readonly original: Chat;
+  readonly result: { readonly scope: ChatGitChangeScope; readonly chat?: Chat };
+  readonly attempt: ChatMutationAttempt;
+  readonly target: ChatLookupTarget | undefined;
+  readonly latest: () => Chat | undefined;
+  readonly remember: (chat: Chat) => void;
+  readonly publish: (chat: Chat) => void;
+  readonly warn: (confirmed: boolean) => void;
+}
+
+function gitBindingIsCurrent(input: CommittedGitBinding): boolean {
+  return input.attempt.isCurrent() && chatLookupTargetIsCurrent(input.target);
+}
+
+async function settleCommittedGitBinding(
+  input: CommittedGitBinding,
+): Promise<ChatGitChangeScope | false> {
+  const { original, result, attempt, remember } = input;
+  attempt.renewBudget();
+  const compensate = (): Promise<void> =>
+    compensateCommittedGitConnection(original, result.scope.relationshipId, attempt, remember);
+  if (!gitBindingIsCurrent(input)) {
+    await compensate();
+    return false;
+  }
+  const committed = await committedGitChat(original, result, attempt.correlationId);
+  if (!gitBindingIsCurrent(input)) {
+    await compensate();
+    return false;
+  }
+  const latest = input.latest();
+  const adopted =
+    latest === undefined ? undefined : adoptableGitChat(original, latest, committed, result.scope);
+  input.warn(committed.confirmed);
+  if (adopted === undefined) {
+    await compensate();
+    return false;
+  }
+  if (committed.confirmed) remember(adopted);
+  input.publish(adopted);
+  return result.scope;
 }
 
 function removeGitChangeScope(
@@ -862,6 +1508,8 @@ function AppShellInner(): ReactNode {
   const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
   const session = useChatSession({ autoCreate: false });
+  const currentChatSessionRef = useRef(session);
+  currentChatSessionRef.current = session;
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
@@ -886,6 +1534,29 @@ function AppShellInner(): ReactNode {
   }, [shortcutRoot]);
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
+  const wsConnectionsForBindingRef = useRef<readonly Connection[]>([]);
+  const acknowledgedFilesScopesRef = useRef(new Map<string, ChatConnectedScope>());
+  const acknowledgedFilesCorrelationsRef = useRef(new Map<string, string>());
+  const acknowledgedFilesFingerprintsRef = useRef(new Map<string, string | undefined>());
+  const automaticFilesAmbiguitiesRef = useRef(new Map<string, string>());
+  const releasedFilesConnectionsRef = useRef(new Set<string>());
+  const filesScopeOwnedElsewhere = useCallback(
+    (scope: ChatConnectedScope, conversationId: string, excludedConnectionId?: string): boolean =>
+      excludedConnectionId !== undefined &&
+      hasOtherFilesScopeOwner({
+        scope,
+        conversationId,
+        excludedConnectionId,
+        windows: wsWinsForBindingRef.current ?? [],
+        connections: wsConnectionsForBindingRef.current,
+        acknowledgedScopes: acknowledgedFilesScopesRef.current,
+        releasedConnections: releasedFilesConnectionsRef.current,
+        conversationForWindow: (windowId): string | undefined =>
+          chatIdFromWindow(wsWinsForBindingRef.current?.find((window) => window.id === windowId)) ??
+          chatWindowRuntimeTarget(windowId)?.conversationId,
+      }),
+    [],
+  );
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
   // defaults until /api/config resolves (or if an older server omits effectiveGroundingLimits).
   const [groundingLimits, setGroundingLimits] = useState<GroundingLimits>(DEFAULT_GROUNDING_LIMITS);
@@ -907,34 +1578,55 @@ function AppShellInner(): ReactNode {
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
   const [sourceConnectionNotice, setSourceConnectionNotice] = useState<string | null>(null);
+  const [unownedFilesConnectionId, setUnownedFilesConnectionId] = useState<string | null>(null);
   useEffect(() => {
-    if (sourceConnectionNotice === null) return undefined;
+    if (sourceConnectionNotice === null || unownedFilesConnectionId !== null) return undefined;
     const timer = window.setTimeout(() => setSourceConnectionNotice(null), 10_000);
     return (): void => window.clearTimeout(timer);
-  }, [sourceConnectionNotice]);
+  }, [sourceConnectionNotice, unownedFilesConnectionId]);
   const rejectForLimit = useCallback(
     (connectedCount: number, cap: number): false => {
+      setUnownedFilesConnectionId(null);
       setSourceConnectionNotice(t("chat.grounding.sourceLimit", { connectedCount, cap }));
       return false;
     },
     [t],
   );
   const rejectForConnectionFailure = useCallback((message: string): false => {
+    setUnownedFilesConnectionId(null);
     setSourceConnectionNotice(message);
     return false;
   }, []);
   const reportWindowLimit = useCallback(
     (limit: number): void => {
+      setUnownedFilesConnectionId(null);
       setSourceConnectionNotice(t("workspace.windowLimitReached", { limit }));
     },
     [t],
   );
   const confirmedGroundingChatsRef = useRef(new Map<string, Chat>());
   const rememberGroundingChat = useCallback((chat: Chat): void => {
-    confirmedGroundingChatsRef.current.set(chat.id, chat);
+    const previous = confirmedGroundingChatsRef.current.get(chat.id);
+    if (previous === undefined || chat.updatedAt >= previous.updatedAt) {
+      confirmedGroundingChatsRef.current.set(chat.id, chat);
+    }
+  }, []);
+  const publishRefreshedGroundingChat = useCallback((chat: Chat): void => {
+    const currentSession = currentChatSessionRef.current;
+    const current =
+      currentSession.chats.find((candidate) => candidate.id === chat.id) ??
+      (currentSession.activeChat?.id === chat.id ? currentSession.activeChat : undefined);
+    if (current === undefined || chat.updatedAt > current.updatedAt) {
+      currentSession.replaceChat(chat);
+    }
   }, []);
   const resolveChatForWindow = useCallback(
-    async (chatWindowId: string, target?: ChatLookupTarget): Promise<Chat | undefined> => {
+    async (
+      chatWindowId: string,
+      target?: ChatLookupTarget,
+      refresh = false,
+      correlationId?: string,
+    ): Promise<Chat | undefined> => {
       const windowSnapshot = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
       const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
       const chatId =
@@ -945,19 +1637,16 @@ function AppShellInner(): ReactNode {
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
       const confirmed = confirmedGroundingChatsRef.current.get(chatId);
-      const chat =
-        confirmed !== undefined &&
-        (sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt)
-          ? confirmed
-          : sessionChat;
-      if (chat !== undefined) return chat.status === "closed" ? undefined : chat;
+      const chat = latestGroundingChat(sessionChat, confirmed);
+      if (chat !== undefined && !refresh) return chat.status === "closed" ? undefined : chat;
       const projectPath =
+        chat?.projectPath ??
         target?.projectPath ??
         persistedChatProjectPath(windowSnapshot) ??
         runtimeProjectPathForChat(chatWindowId, chatId);
       if (projectPath === undefined) return undefined;
       try {
-        const response = await fetchChats(projectPath);
+        const response = await fetchChats(projectPath, correlationId, chatId);
         if (!chatLookupTargetIsCurrent(target)) return undefined;
         if (chatLookupRequiresMountedWindow(target)) {
           const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
@@ -967,14 +1656,14 @@ function AppShellInner(): ReactNode {
         if (resolved === undefined || resolved.status === "closed") return undefined;
         rememberGroundingChat(resolved);
         return resolved;
-      } catch {
-        throw new ChatLookupFailure();
+      } catch (error: unknown) {
+        throw new ChatLookupFailure(error);
       }
     },
     [rememberGroundingChat, session.activeChat, session.chats],
   );
   const groundingMutationQueueRef = useRef<ChatMutationQueue>({
-    blocked: new Set(),
+    blocked: new Map(),
     tails: new Map(),
   });
   const groundingMutationKey = useCallback(
@@ -983,6 +1672,72 @@ function AppShellInner(): ReactNode {
       chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
       `window:${chatWindowId}`,
     [],
+  );
+  const retainConnectedFilesScope = useCallback(
+    async (
+      chat: Chat,
+      ownedScope: ChatConnectedScope | null,
+      current: readonly ChatConnectedScope[],
+      attempt: ChatMutationAttempt,
+      target: ChatBindingTarget | undefined,
+    ): Promise<boolean> => {
+      rememberGroundingChat(chat);
+      if (ownedScope === null) return true;
+      const persisted = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        effectiveScopes(chat),
+        current,
+        updateChatConnectedScopes,
+        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
+      );
+      if (persisted === undefined) return false;
+      session.replaceChat(persisted);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the stable session member is used
+    [rememberGroundingChat, session.replaceChat],
+  );
+  const rejectMissingFilesScopeOwnership = useCallback(
+    (
+      connection: Connection | undefined,
+      chat: Chat,
+      nextScope: ChatConnectedScope,
+      automatic: boolean,
+      evidence: {
+        readonly attempt: ChatMutationAttempt;
+        readonly scopes: readonly ChatConnectedScope[];
+      },
+    ): false => {
+      if (
+        !rememberAutomaticFilesAmbiguity(
+          automaticFilesAmbiguitiesRef.current,
+          connection,
+          chat,
+          nextScope,
+          automatic,
+        )
+      ) {
+        reportFilesScopeDecision(evidence.attempt.correlationId, {
+          decision: "automatic-suppressed",
+        });
+        return false;
+      }
+      reportFilesScopeDecision(evidence.attempt.correlationId, {
+        decision: "blocked-ambiguous",
+        ...filesScopeOwnershipEvidence(connection, evidence.scopes),
+      });
+      reportGroundingMutationFailure(
+        "Files scope ownership unavailable",
+        new Error("Scope ownership is not proven"),
+        evidence.attempt.correlationId,
+      );
+      rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+      setUnownedFilesConnectionId(connection?.id ?? null);
+      return false;
+    },
+    [rejectForConnectionFailure, t],
   );
   // Files↔Chat edges bind the Files window's visible scope: repository root, opened folder, or
   // previewed file. The green edge is now the only UI affordance for this binding.
@@ -996,24 +1751,51 @@ function AppShellInner(): ReactNode {
       attempt: ChatMutationAttempt,
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
+      connectionId?: string,
+      automatic = false,
     ): Promise<boolean> => {
-      const chat = await resolveChatForWindow(chatWindowId, target);
+      const observedFingerprint = wsConnectionsForBindingRef.current.find(
+        (edge) => edge.id === connectionId,
+      )?.boundScopeFingerprint;
+      const chat = await resolveChatForWindow(chatWindowId, target, true, attempt.correlationId);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
       if ((target?.conversationId ?? chat.id) !== chat.id) return false;
+      const canonicalScopes = effectiveScopes(chat);
+      const connection = wsConnectionsForBindingRef.current.find(
+        (edge) => edge.id === connectionId,
+      );
+      const ownedScope = currentFilesOwnedScope(
+        connection,
+        observedFingerprint,
+        previousScope,
+        canonicalScopes,
+      );
+      if (missingFilesScopeOwnership(connection, ownedScope, nextScope, canonicalScopes)) {
+        return rejectMissingFilesScopeOwnership(connection, chat, nextScope, automatic, {
+          attempt,
+          scopes: canonicalScopes,
+        });
+      }
+      reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
+      if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
+      if (filesScopeAlreadyCanonical(canonicalScopes, nextScope, ownedScope)) {
+        rememberGroundingChat(chat);
+        publishRefreshedGroundingChat(chat);
+        return true;
+      }
+      const ownedElsewhere =
+        ownedScope !== null && filesScopeOwnedElsewhere(ownedScope, chat.id, connectionId);
+      if (ownedElsewhere)
+        reportFilesScopeDecision(attempt.correlationId, { decision: "owned-elsewhere" });
       const current =
-        previousScope === null
-          ? effectiveScopes(chat)
-          : removeConnectedScope(effectiveScopes(chat), previousScope);
+        ownedScope === null || ownedElsewhere
+          ? canonicalScopes
+          : removeConnectedScope(canonicalScopes, ownedScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isScopeConnected(current, nextScope)) {
-        if (previousScope !== null) {
-          const res = await updateChatConnectedScopes(chat.id, current.length > 0 ? current : null);
-          rememberGroundingChat(res.chat);
-          session.replaceChat(res.chat);
-        }
-        return true;
+        return retainConnectedFilesScope(chat, ownedScope, current, attempt, target);
       }
       const cap = totalSourceCap(groundingLimits);
       if (current.length + lkScopes.length >= cap) {
@@ -1027,30 +1809,25 @@ function AppShellInner(): ReactNode {
       if (next === current) {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
-      try {
-        const persisted = await persistCurrentChatScopes(
-          target,
-          attempt,
-          chat.id,
-          current,
-          next,
-          updateChatConnectedScopes,
-          rememberGroundingChat,
-        );
-        if (persisted === undefined) return false;
-        session.replaceChat(persisted);
-        setSourceConnectionNotice(null);
-        // Epic #532 unification — also record the green edge as a governed reads-context
-        // relationship so the connection is validated, audited, and visible in the relationship
-        // graph. Best-effort: never blocks or breaks the grounding scope bind above.
-        const relationshipPath = relationshipPathForScope(scope);
-        if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
-        return true;
-      } catch (error: unknown) {
-        return rejectForConnectionFailure(
-          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
-        );
-      }
+      const persisted = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        effectiveScopes(chat),
+        next,
+        updateChatConnectedScopes,
+        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
+      );
+      if (persisted === undefined) return false;
+      session.replaceChat(persisted);
+      setSourceConnectionNotice(null);
+      // Epic #532 unification — also record the green edge as a governed reads-context
+      // relationship so the connection is validated, audited, and visible in the relationship
+      // graph. Best-effort: never blocks or breaks the grounding scope bind above.
+      const relationshipPath = relationshipPathForScope(scope);
+      if (relationshipPath !== null)
+        recordReadsContextRelationship(chat.id, relationshipPath, attempt.correlationId);
+      return true;
     },
     // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
     // these scope callbacks touch) instead of the whole `session` object, whose identity changes on
@@ -1061,13 +1838,63 @@ function AppShellInner(): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       resolveChatForWindow,
+      rejectMissingFilesScopeOwnership,
+      retainConnectedFilesScope,
       session.replaceChat,
       groundingLimits,
       rejectForLimit,
       rejectForConnectionFailure,
       rememberGroundingChat,
+      publishRefreshedGroundingChat,
+      filesScopeOwnedElsewhere,
       t,
     ],
+  );
+  // A restored edge has no persisted path snapshot. Remember its acknowledged scope before
+  // draining the next queued root change; enqueue-time snapshots may still be elided.
+  const automaticFilesRequestsRef = useRef(new Map<string, symbol>());
+  const applyFilesScopeRequest = useCallback(
+    async (input: FilesScopeRequest): Promise<boolean> => {
+      const {
+        chatWindowId,
+        nextScope,
+        previousScope,
+        attempt,
+        target,
+        connectionId,
+        edgeKey,
+        chatKey,
+      } = input;
+      const confirmed =
+        edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
+      const accepted = await retryGroundingScopeIntent(async (): Promise<boolean> => {
+        if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
+        return replaceFilesScopeNow(
+          chatWindowId,
+          nextScope,
+          attempt,
+          confirmed ?? previousScope,
+          target,
+          connectionId,
+          input.automatic,
+        );
+      }, attempt);
+      if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
+        return acknowledgeFilesScope({
+          correlationId: attempt.correlationId,
+          edgeKey,
+          connectionId,
+          nextScope,
+          chat: confirmedGroundingChatsRef.current.get(chatKey),
+          connections: wsConnectionsForBindingRef.current,
+          scopes: acknowledgedFilesScopesRef.current,
+          fingerprints: acknowledgedFilesFingerprintsRef.current,
+          correlations: acknowledgedFilesCorrelationsRef.current,
+        });
+      }
+      return accepted;
+    },
+    [replaceFilesScopeNow],
   );
   const replaceFilesScope = useCallback(
     async (
@@ -1075,13 +1902,32 @@ function AppShellInner(): ReactNode {
       nextScope: ChatConnectedScope,
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
+      connectionId?: string,
+      automatic = false,
     ): Promise<boolean> => {
       try {
+        const chatKey = groundingMutationKey(chatWindowId, target);
+        const edgeKey = connectionId === undefined ? undefined : `${connectionId}\u0000${chatKey}`;
+        const request = Symbol();
+        if (automatic && edgeKey !== undefined)
+          automaticFilesRequestsRef.current.set(edgeKey, request);
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
-          groundingMutationKey(chatWindowId, target),
-          async (attempt): Promise<boolean> =>
-            replaceFilesScopeNow(chatWindowId, nextScope, attempt, previousScope, target),
+          chatKey,
+          (attempt): Promise<boolean> =>
+            applyFilesScopeRequest({
+              chatWindowId,
+              nextScope,
+              previousScope,
+              attempt,
+              target,
+              connectionId,
+              automatic,
+              edgeKey,
+              chatKey,
+              request,
+            }),
+          "files",
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
@@ -1089,7 +1935,7 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow, t],
+    [groundingMutationKey, rejectForConnectionFailure, applyFilesScopeRequest, t],
   );
   const handleScopeBind = useCallback(
     async (
@@ -1099,53 +1945,93 @@ function AppShellInner(): ReactNode {
     ): Promise<boolean> => replaceFilesScope(chatWindowId, scope, null, target),
     [replaceFilesScope],
   );
+  const unbindFilesScopeNow = useCallback(
+    async (input: FilesScopeUnbindInput, attempt: ChatMutationAttempt): Promise<boolean> => {
+      const { chatWindowId, scope, target, connectionId } = input;
+      const chat = await resolveChatForWindow(chatWindowId, target, true, attempt.correlationId);
+      if (chat === undefined) {
+        return rejectForConnectionFailure(t("scope.disconnectError"));
+      }
+      const current = effectiveScopes(chat);
+      const connection = wsConnectionsForBindingRef.current.find(
+        (edge) => edge.id === connectionId,
+      );
+      const ownedScope = ownedTeardownScope(
+        connection,
+        chat.id,
+        current,
+        scope,
+        acknowledgedFilesScopesRef.current,
+      );
+      if (ownedScope === null) {
+        const released = reportMissingTeardownOwnership(attempt, connection, current);
+        if (released) return true;
+        rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+        setUnownedFilesConnectionId(connection?.id ?? null);
+        return false;
+      }
+      reportFilesOwnershipDecision(attempt, connection, current);
+      if (connectionId !== undefined) releasedFilesConnectionsRef.current.add(connectionId);
+      const next = filesScopeOwnedElsewhere(ownedScope, chat.id, connectionId)
+        ? current
+        : removeConnectedScope(current, ownedScope);
+      const persisted = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        current,
+        next,
+        updateChatConnectedScopes,
+        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
+      );
+      if (persisted === undefined) {
+        if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
+        return false;
+      }
+      reportFilesScopeDecision(attempt.correlationId, {
+        decision: "released",
+        sourceCount: next.length,
+      });
+      session.replaceChat(persisted);
+      setSourceConnectionNotice(null);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      resolveChatForWindow,
+      rejectForConnectionFailure,
+      t,
+      filesScopeOwnedElsewhere,
+      rememberGroundingChat,
+      session.replaceChat,
+    ],
+  );
   const handleScopeUnbind = useCallback(
     async (
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatUnbindTarget,
+      connectionId?: string,
     ): Promise<boolean> => {
       try {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (attempt): Promise<boolean> => {
-            const chat = await resolveChatForWindow(chatWindowId, target);
-            if (chat === undefined) {
-              return rejectForConnectionFailure(t("scope.disconnectError"));
-            }
-            const current = effectiveScopes(chat);
-            const next = removeConnectedScope(current, scope);
-            const persisted = await persistCurrentChatScopes(
-              target,
+          (attempt) =>
+            retryGroundingScopeIntent(
+              () => unbindFilesScopeNow({ chatWindowId, scope, target, connectionId }, attempt),
               attempt,
-              chat.id,
-              current,
-              next,
-              updateChatConnectedScopes,
-              rememberGroundingChat,
-            );
-            if (persisted === undefined) return false;
-            session.replaceChat(persisted);
-            setSourceConnectionNotice(null);
-            return true;
-          },
+            ),
+          "files",
         );
       } catch (error: unknown) {
+        if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
         return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "scope.disconnectError")),
         );
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [
-      groundingMutationKey,
-      rememberGroundingChat,
-      rejectForConnectionFailure,
-      resolveChatForWindow,
-      session.replaceChat,
-      t,
-    ],
+    [groundingMutationKey, rejectForConnectionFailure, unbindFilesScopeNow, t],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -1175,25 +2061,24 @@ function AppShellInner(): ReactNode {
         // Not a duplicate (checked above) → the per-list connector cap rejected the append.
         return rejectForLimit(folderScopes.length + current.length, cap);
       }
-      try {
-        const persisted = await persistCurrentChatScopes(
-          target,
-          attempt,
-          chat.id,
-          current,
-          next,
-          updateChatLocalKnowledgeScopes,
-          rememberGroundingChat,
-        );
-        if (persisted === undefined) return false;
-        session.replaceChat(persisted);
-        setSourceConnectionNotice(null);
-        return true;
-      } catch (error: unknown) {
-        return rejectForConnectionFailure(
-          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
-        );
-      }
+      const persisted = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        current,
+        next,
+        updateChatLocalKnowledgeScopes,
+        {
+          remember: rememberGroundingChat,
+          expectedIdentity: chat.groundingScopeIdentity,
+          chat,
+          refreshed: session.replaceChat,
+        },
+      );
+      if (persisted === undefined) return false;
+      session.replaceChat(persisted);
+      setSourceConnectionNotice(null);
+      return true;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
@@ -1217,7 +2102,11 @@ function AppShellInner(): ReactNode {
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
           async (attempt): Promise<boolean> =>
-            handleConnectorBindNow(chatWindowId, scope, attempt, target),
+            retryGroundingScopeIntent(
+              () => handleConnectorBindNow(chatWindowId, scope, attempt, target),
+              attempt,
+            ),
+          "local-knowledge",
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
@@ -1237,29 +2126,38 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (attempt): Promise<boolean> => {
-            const chat = await resolveChatForWindow(chatWindowId, target);
-            if (chat === undefined) {
-              return rejectForConnectionFailure(t("scope.disconnectError"));
-            }
-            const key =
-              scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
-            const current = effectiveLocalKnowledgeScopes(chat);
-            const next = removeConnectorScope(current, key);
-            const persisted = await persistCurrentChatScopes(
-              target,
-              attempt,
-              chat.id,
-              current,
-              next,
-              updateChatLocalKnowledgeScopes,
-              rememberGroundingChat,
-            );
-            if (persisted === undefined) return false;
-            session.replaceChat(persisted);
-            setSourceConnectionNotice(null);
-            return true;
-          },
+          async (attempt): Promise<boolean> =>
+            retryGroundingScopeIntent(async (): Promise<boolean> => {
+              const chat = await resolveChatForWindow(chatWindowId, target);
+              if (chat === undefined) {
+                return rejectForConnectionFailure(t("scope.disconnectError"));
+              }
+              const key =
+                scope.kind === "capsule"
+                  ? `capsule:${scope.capsuleId}`
+                  : `set:${scope.capsuleSetId}`;
+              const current = effectiveLocalKnowledgeScopes(chat);
+              const next = removeConnectorScope(current, key);
+              const persisted = await persistCurrentChatScopes(
+                target,
+                attempt,
+                chat.id,
+                current,
+                next,
+                updateChatLocalKnowledgeScopes,
+                {
+                  remember: rememberGroundingChat,
+                  expectedIdentity: chat.groundingScopeIdentity,
+                  chat,
+                  refreshed: session.replaceChat,
+                },
+              );
+              if (persisted === undefined) return false;
+              session.replaceChat(persisted);
+              setSourceConnectionNotice(null);
+              return true;
+            }, attempt),
+          "local-knowledge",
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
@@ -1277,6 +2175,17 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
+  const latestGitChat = useCallback(
+    (chatId: string): Chat | undefined =>
+      latestGroundingChat(
+        currentChatSessionRef.current.chats.find((candidate) => candidate.id === chatId) ??
+          (currentChatSessionRef.current.activeChat?.id === chatId
+            ? currentChatSessionRef.current.activeChat
+            : undefined),
+        confirmedGroundingChatsRef.current.get(chatId),
+      ),
+    [],
+  );
   const handleGitChangeBind = useCallback(
     async (
       chatWindowId: string,
@@ -1290,45 +2199,50 @@ function AppShellInner(): ReactNode {
           async (attempt): Promise<ChatGitChangeScope | false> => {
             const chat = await resolveChatForWindow(chatWindowId, target);
             if (chat === undefined) {
-              rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
-              return false;
+              return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
             }
             if ((target?.conversationId ?? chat.id) !== chat.id) return false;
-            const result = await connectGitChangeToChat({
-              chatId: chat.id,
-              mode: "comparison",
-              ...selection,
-            });
+            const result = await connectGitChangeToChat(
+              {
+                chatId: chat.id,
+                mode: "comparison",
+                ...selection,
+              },
+              undefined,
+              attempt.correlationId,
+            );
             if (result.status === "blocked") {
-              rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
-              return false;
+              return rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
             }
-            if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
-            const updated = {
-              ...chat,
-              gitChangeScopes: appendGitChangeScope(chat.gitChangeScopes ?? [], result.scope),
-              updatedAt: Date.now(),
-            };
-            rememberGroundingChat(updated);
-            session.replaceChat(updated);
-            setSourceConnectionNotice(null);
-            return result.scope;
+            return settleCommittedGitBinding({
+              original: chat,
+              result,
+              attempt,
+              target,
+              latest: () => latestGitChat(chat.id),
+              remember: rememberGroundingChat,
+              publish: (updated) => currentChatSessionRef.current.replaceChat(updated),
+              warn: (confirmed) =>
+                setSourceConnectionNotice(
+                  confirmed ? null : t("chat.grounding.gitChangeSavedRefreshUnavailable"),
+                ),
+            });
           },
+          "git-change",
         );
       } catch (error: unknown) {
-        rejectForConnectionFailure(
+        return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "chat.grounding.connectGitChangeFailed")),
         );
-        return false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
       groundingMutationKey,
+      latestGitChat,
       rememberGroundingChat,
       rejectForConnectionFailure,
       resolveChatForWindow,
-      session.replaceChat,
       t,
     ],
   );
@@ -1342,25 +2256,32 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (attempt): Promise<boolean> => {
-            const chat = await resolveChatForWindow(chatWindowId, target);
-            if (chat === undefined) return true;
-            const current = chat.gitChangeScopes ?? [];
-            const next = removeGitChangeScope(current, relationshipId);
-            const persisted = await persistCurrentChatScopes(
-              target,
-              attempt,
-              chat.id,
-              current,
-              next,
-              updateChatGitChangeScopes,
-              rememberGroundingChat,
-            );
-            if (persisted === undefined) return false;
-            session.replaceChat(persisted);
-            setSourceConnectionNotice(null);
-            return true;
-          },
+          async (attempt): Promise<boolean> =>
+            retryGroundingScopeIntent(async (): Promise<boolean> => {
+              const chat = await resolveChatForWindow(chatWindowId, target);
+              if (chat === undefined) return true;
+              const current = chat.gitChangeScopes ?? [];
+              const next = removeGitChangeScope(current, relationshipId);
+              const persisted = await persistCurrentChatScopes(
+                target,
+                attempt,
+                chat.id,
+                current,
+                next,
+                updateChatGitChangeScopes,
+                {
+                  remember: rememberGroundingChat,
+                  expectedIdentity: chat.groundingScopeIdentity,
+                  chat,
+                  refreshed: session.replaceChat,
+                },
+              );
+              if (persisted === undefined) return false;
+              session.replaceChat(persisted);
+              setSourceConnectionNotice(null);
+              return true;
+            }, attempt),
+          "git-change",
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
@@ -1402,6 +2323,14 @@ function AppShellInner(): ReactNode {
     onWindowLimitReached: reportWindowLimit,
   });
   wsWinsForBindingRef.current = ws.wins;
+  wsConnectionsForBindingRef.current = ws.conns;
+  const forgetUnownedFilesConnection = useCallback((): void => {
+    if (unownedFilesConnectionId === null) return;
+    ws.api.removeConn(unownedFilesConnectionId, { unbind: false });
+    reportFilesScopeDecision(newClientCorrelationId(), { decision: "released" });
+    setUnownedFilesConnectionId(null);
+    setSourceConnectionNotice(null);
+  }, [unownedFilesConnectionId, ws.api]);
 
   // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
   // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,
@@ -1417,10 +2346,7 @@ function AppShellInner(): ReactNode {
       changedChatWindowIdsRef.current = new Set();
       return;
     }
-    const current = new Map<string, string | undefined>();
-    for (const win of ws.wins) {
-      if (win.type === "chat") current.set(win.id, chatIdFromWindow(win));
-    }
+    const current = chatWindowConversationIds(ws.wins);
     const previous = chatConversationIdsRef.current;
     const changedWindowIds = new Set<string>();
     chatConversationIdsRef.current = current;
@@ -1441,22 +2367,60 @@ function AppShellInner(): ReactNode {
     // must not retrigger this ownership transition scan.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceLinkRevision, ws.api]);
+  const rebindFilesConnection = (conn: Connection): void => {
+    const a = ws.winsById.get(conn.a);
+    const b = ws.winsById.get(conn.b);
+    if (a === undefined || b === undefined) return;
+    const chatWindowId = chatWindowIdOf(conn, a, b);
+    if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) return;
+    const nextScope = filesChatBindScope(a, b, Date.now());
+    if (nextScope === null) return;
+    const previousScope = boundScopeOf(conn);
+    if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) return;
+    const chatWindow = a.type === "chat" ? a : b;
+    const conversationId =
+      chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
+    if (conversationId === undefined) return;
+    const target: ChatBindingTarget = {
+      conversationId,
+      projectPath:
+        persistedChatProjectPath(chatWindow) ??
+        runtimeProjectPathForChat(chatWindowId, conversationId),
+      isCurrent: (): boolean =>
+        filesBindingTargetIsCurrent(
+          wsConnectionsForBindingRef.current,
+          wsWinsForBindingRef.current,
+          conn,
+          chatWindowId,
+          conversationId,
+        ),
+    };
+    void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id, true).then(
+      (accepted) =>
+        applyAcknowledgedFilesConnection(
+          accepted,
+          target,
+          conn,
+          acknowledgedFilesScopesRef.current,
+          ws.api,
+        ),
+    );
+  };
   useEffect(() => {
     if (ws.wins === null) return;
-    for (const conn of ws.conns) {
-      const a = ws.winsById.get(conn.a);
-      const b = ws.winsById.get(conn.b);
-      if (a === undefined || b === undefined) continue;
-      const chatWindowId = chatWindowIdOf(conn, a, b);
-      if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) continue;
-      const nextScope = filesChatBindScope(a, b, Date.now());
-      if (nextScope === null) continue;
-      const previousScope = boundScopeOf(conn);
-      if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) continue;
-      void replaceFilesScope(chatWindowId, nextScope, previousScope).then((accepted) => {
-        if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
-      });
-    }
+    reconcileFilesAcknowledgementFingerprints(
+      ws.conns,
+      acknowledgedFilesScopesRef.current,
+      acknowledgedFilesFingerprintsRef.current,
+      acknowledgedFilesCorrelationsRef.current,
+    );
+    const liveEdges = new Set(ws.conns.map((conn) => conn.id));
+    pruneReleasedFilesConnections(releasedFilesConnectionsRef.current, liveEdges);
+    pruneFilesAcknowledgements(acknowledgedFilesScopesRef.current, liveEdges);
+    pruneFilesAcknowledgements(acknowledgedFilesCorrelationsRef.current, liveEdges);
+    pruneFilesAcknowledgements(automaticFilesAmbiguitiesRef.current, liveEdges);
+    pruneFilesAcknowledgements(automaticFilesRequestsRef.current, liveEdges);
+    ws.conns.forEach(rebindFilesConnection);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- workspaceLinkRevision is the cfg/conn-change signal; ws.wins/winsById/conns are read fresh when it bumps (geometry-only frames must not re-run the scan)
   }, [replaceFilesScope, ws.api, workspaceLinkRevision]);
 
@@ -1466,6 +2430,7 @@ function AppShellInner(): ReactNode {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteOpener, setCommandPaletteOpener] = useState<HTMLElement | null>(null);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
+  const backendHealth = useBackendHealth();
   const [editorHosts, setEditorHosts] = useState<ReadonlyMap<string, EditorPaletteHost>>(
     () => new Map(),
   );
@@ -1788,19 +2753,28 @@ function AppShellInner(): ReactNode {
                         </Workspace>
                         {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-                        {sourceConnectionNotice !== null && (
-                          <div className="source-limit-alert" role="alert">
-                            <span>{sourceConnectionNotice}</span>
-                            <button
-                              type="button"
-                              className="source-limit-alert-dismiss"
-                              aria-label={t("workspace.notice.dismiss")}
-                              onClick={() => setSourceConnectionNotice(null)}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        )}
+                        <div className={styles.cmpSourceAlertStack}>
+                          <DiagnosticReadinessNotice health={backendHealth} />
+                          <GlobalSupportReportAction />
+                          {sourceConnectionNotice !== null && (
+                            <div className="source-limit-alert" role="alert">
+                              <span>{sourceConnectionNotice}</span>
+                              {unownedFilesConnectionId !== null && (
+                                <button type="button" onClick={forgetUnownedFilesConnection}>
+                                  {t("chat.grounding.forgetConnection")}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="source-limit-alert-dismiss"
+                                aria-label={t("workspace.notice.dismiss")}
+                                onClick={() => setSourceConnectionNotice(null)}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       {needsGatewaySetup ? null : (
                         <RightRail openTools={openTools} onTool={onTool} />
@@ -1814,6 +2788,7 @@ function AppShellInner(): ReactNode {
                       onSelectWindow={selectFooterWindow}
                       onCloseWindowPalette={closeWindowPalette}
                       statusRef={setStatusRef}
+                      backendHealth={backendHealth}
                     />
                   </div>
                   {pending !== null && (

@@ -1,8 +1,10 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { memFs } from "./_memfs.js";
 import { PathDeniedError } from "./errors.js";
 import type {
   WorkspaceDescriptorUtf8Read,
+  WorkspaceDirEntry,
   WorkspaceFileReader,
   WorkspaceFs,
   WorkspaceStat,
@@ -100,6 +102,138 @@ function synchronousOperations(fs: WorkspaceFs): readonly (() => unknown)[] {
 }
 
 describe("executionControlledWorkspaceFs", () => {
+  it.each(["aborted", "timeout"] as const)(
+    "settles a stalled directory next on %s before its queued cleanup can finish",
+    async (reason) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const entered = deferred<undefined>();
+      const releaseRead = deferred<undefined>();
+      const closed = deferred<undefined>();
+      const abort = new AbortController();
+      let closeCount = 0;
+      let outcome: unknown;
+      const fs: WorkspaceFs = {
+        ...memFs(ROOT, {}),
+        iterateDirectory: async function* () {
+          try {
+            entered.resolve(undefined);
+            await releaseRead.promise;
+            yield { name: "late", isDirectory: false, isFile: true, isSymbolicLink: false };
+          } finally {
+            closeCount += 1;
+            closed.resolve(undefined);
+          }
+        },
+      };
+      const controlled = executionControlledWorkspaceFs(fs, {
+        nowMs: () => 0,
+        deadlineAtMs: reason === "timeout" ? 10 : Infinity,
+        signal: abort.signal,
+      });
+      const iterator = controlled.iterateDirectory?.(ROOT)[Symbol.asyncIterator]();
+      if (iterator === undefined) throw new Error("missing controlled iterator");
+      const next = iterator.next().catch((error: unknown) => {
+        outcome = error;
+      });
+      await entered.promise;
+      if (reason === "aborted") abort.abort();
+      else await vi.advanceTimersByTimeAsync(10);
+      await setImmediate();
+      try {
+        expect(outcome).toBeInstanceOf(StructuralExecutionStoppedError);
+        expect(outcome).toMatchObject({ reason });
+        expect(closeCount).toBe(0);
+      } finally {
+        releaseRead.resolve(undefined);
+        await next;
+        await iterator.return?.();
+        await closed.promise;
+      }
+      expect(closeCount).toBe(1);
+    },
+  );
+
+  it("keeps prototype adapter methods bound and does not invent an absent iterator", async () => {
+    class DirectoryAdapter {
+      private readonly name = "prototype.txt";
+      public async *iterateDirectory(path: string): AsyncIterable<WorkspaceDirEntry> {
+        await Promise.resolve();
+        expect(path).toBe(ROOT);
+        yield { name: this.name, isDirectory: false, isFile: true, isSymbolicLink: false };
+      }
+    }
+    const control = { nowMs: (): number => 0, deadlineAtMs: Infinity };
+    const base = { ...memFs(ROOT, {}) };
+    delete base.iterateDirectory;
+    expect(executionControlledWorkspaceFs(base, control).iterateDirectory).toBeUndefined();
+    const fs = Object.assign(new DirectoryAdapter(), base);
+    const wrapped = executionControlledWorkspaceFs(fs, control);
+    const names: string[] = [];
+    for await (const entry of wrapped.iterateDirectory?.(ROOT) ?? []) names.push(entry.name);
+    expect(names).toEqual(["prototype.txt"]);
+  });
+
+  it.each(["aborted", "timeout"] as const)(
+    "stops between directory entries and closes the underlying iterator on %s",
+    async (reason) => {
+      let closed = false;
+      let clock = 0;
+      const abort = new AbortController();
+      const fs: WorkspaceFs = {
+        ...memFs(ROOT, {}),
+        iterateDirectory: async function* () {
+          await Promise.resolve();
+          try {
+            for (const name of ["first", "second"])
+              yield { name, isDirectory: false, isFile: true, isSymbolicLink: false };
+          } finally {
+            closed = true;
+          }
+        },
+      };
+      const controlled = executionControlledWorkspaceFs(fs, {
+        nowMs: () => clock,
+        deadlineAtMs: 10,
+        signal: abort.signal,
+      });
+      const iterator = controlled.iterateDirectory?.(ROOT)[Symbol.asyncIterator]();
+      if (iterator === undefined) throw new Error("missing controlled iterator");
+      expect(await iterator.next()).toMatchObject({ done: false, value: { name: "first" } });
+      if (reason === "aborted") abort.abort();
+      else clock = 10;
+      await expect(iterator.next()).rejects.toMatchObject({ reason });
+      expect(closed).toBe(true);
+    },
+  );
+
+  it("preserves the directory iterator receiver and closes it on early exit", async (): Promise<void> => {
+    let closed = false;
+    const fs: WorkspaceFs = {
+      ...memFs(ROOT, { "entry.txt": "text" }),
+      iterateDirectory: async function* (path) {
+        await Promise.resolve();
+        expect(this).toBe(fs);
+        expect(path).toBe(ROOT);
+        try {
+          yield { name: "entry.txt", isDirectory: false, isFile: true, isSymbolicLink: false };
+        } finally {
+          closed = true;
+        }
+      },
+    };
+    const controlled = executionControlledWorkspaceFs(fs, {
+      nowMs: () => 0,
+      deadlineAtMs: Infinity,
+    });
+    const entries = controlled.iterateDirectory?.(ROOT);
+    if (entries === undefined) throw new Error("missing controlled iterator");
+    for await (const entry of entries) {
+      expect(entry.name).toBe("entry.txt");
+      break;
+    }
+    expect(closed).toBe(true);
+  });
+
   it("preserves exact owned-root authority without authorizing a sibling", () => {
     const root = "/home/user/.keiko/task-workspaces/repo_a/ws_b";
     const source = workspaceFsWithOwnedRootAuthority(memFs(root, {}), root);

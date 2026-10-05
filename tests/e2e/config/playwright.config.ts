@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 import { e2eStateDir } from "../support/e2e-state-dir.js";
+import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "../support/file-history-2531.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
@@ -194,6 +195,7 @@ export default defineConfig({
         KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
         KEIKO_MEMORY_DIR: join(stateDir, "memory"),
         KEIKO_CONFIG_FILE: runtimeConfigPath,
+        KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET,
       },
     },
   ],

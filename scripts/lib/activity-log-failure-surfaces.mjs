@@ -70,6 +70,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "bounded-request-body", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "support-report-evidence", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-activity", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "chat-scope-update-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-compaction-model-summary", surface: "bff" },
   {
     owner: "keiko-server",
@@ -137,6 +138,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   },
   { owner: "keiko-server", emitterPrefix: "grounded-orchestrator", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "grounded-rerank-facade", surface: "memory-knowledge" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "grounded-symbol-diagnostics",
+    surface: "memory-knowledge",
+  },
   { owner: "keiko-server", emitterPrefix: "harness-context-compactor", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "local-knowledge-handlers", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "memory-embedding", surface: "memory-knowledge" },

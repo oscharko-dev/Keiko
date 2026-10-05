@@ -1,3 +1,11 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+  setSupportIncidentTriggerForTests,
+  drainSupportIncidentCandidates,
+} from "../../../tests/support/activity-log-test-support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Tests for the grounded Q&A BFF handler (Issue #185). Drives `handleGroundedAsk` directly
@@ -12,7 +20,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSyn
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
+import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type {
   KnowledgeCapsuleId,
@@ -31,6 +40,7 @@ import * as readiness from "./gateway-readiness.js";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCounts,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -48,11 +58,14 @@ import {
   mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
+  packBudgetSummary,
   promptByteLength,
+  sizeExclusionLines,
   withPromptExcerptBudget,
   withPromptExcerptByteLimit,
   type GroundedRunner,
 } from "./grounded-qa.js";
+import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
@@ -60,11 +73,12 @@ import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
-import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
+import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import {
   CancelledError,
   ContextOverflowError,
@@ -90,16 +104,40 @@ import {
   WorkspaceNotFoundError,
   detectWorkspaceAt,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
-import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
+import {
+  listSupportIncidents,
+  closeFileServerLogSinks,
+  createFileServerLogSink,
+} from "@oscharko-dev/keiko-activity-log";
+import {
+  parseSupportReport,
+  analyzeSupportReport,
+  createDesktopSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import { runSupportReportJob } from "../dist/support-report-job.js";
+import { gunzipSync, inflateSync } from "node:zlib";
+import { handleCreateSupportReport } from "./support-report-routes.js";
+import { handleDownloadSupportReport } from "./support-report-download.js";
+import { STREAMING } from "./route-outcome.js";
+
+// The real worker requires its assembled JavaScript entry point, as in the worker integration suite.
+vi.mock("./support-report-job.js", () => import("../dist/support-report-job.js"));
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
   canonicalChatTurnIdentityContent,
 } from "./chat-turn-identity.js";
 import { handleUpdateChat } from "./store-handlers.js";
+import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { createChatTurnSerializer, type ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   CONVERSATION_MEMORY_FENCE_END,
@@ -110,7 +148,10 @@ import {
   createFakeSessionPairingPort,
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
-import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import {
+  APP_SESSION_COOKIE_NAME,
+  serializeSessionCookies,
+} from "./coding-app-session/sessionCookie.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
@@ -168,6 +209,71 @@ function ctx(body: string, res: RouteContext["res"] = fakeRes(), cookie?: string
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
+}
+
+function pairedReportOwner(stateDir: string): {
+  readonly owner: UiHandlerDeps;
+  readonly cookie: string;
+} {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+  const cookie = serializeSessionCookies(paired.cookieToken, {
+    secure: false,
+    maxAgeSeconds: 43_200,
+  })
+    .find((value) => value.includes("Path=/api/diagnostics/report;"))
+    ?.split(";")[0];
+  if (cookie === undefined) throw new TypeError("Missing diagnostic cookie projection.");
+  return {
+    owner: deps(undefined, { KEIKO_STATE_DIR: stateDir }, { codingAppSessionChannel: channel }),
+    cookie,
+  };
+}
+
+async function assertPairedAdmissionReport(stateDir: string, correlationId: string): Promise<void> {
+  const { owner, cookie } = pairedReportOwner(stateDir);
+  const response = await handleCreateSupportReport(
+    {
+      ...ctx(JSON.stringify({ correlationId }), fakeRes(), cookie),
+      correlationId: "paired-root-report",
+    },
+    owner,
+  );
+  expect(response.status).toBe(200);
+  const report = response.body as DesktopSupportReportResponse;
+  const parsed = parseSupportReport(report.reportJson);
+  expect(parsed.incident).toMatchObject({
+    trigger: "registered-failure",
+    op: "workspace.root.denied",
+  });
+  expect(parsed.incident.clientReport).toBeUndefined();
+  expect(parsed.evidence.recordCount).toBeGreaterThan(0);
+  expect(analyzeSupportReport(report.reportJson).selection.reasons).not.toContain(
+    "no-registered-failure",
+  );
+  expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  const delivery = ctx("", fakeRes(), cookie);
+  const res = new ServerResponse(delivery.req);
+  const end = vi.spyOn(res, "end").mockReturnValue(res);
+  vi.spyOn(res, "writeHead").mockReturnValue(res);
+  expect(
+    await handleDownloadSupportReport(
+      {
+        ...delivery,
+        res,
+        params: { downloadId: report.downloadPath?.split("/").at(-1) ?? "" },
+        correlationId: "paired-root-download",
+      },
+      owner,
+    ),
+  ).toBe(STREAMING);
+  const bytes: unknown = end.mock.calls[0]?.[0];
+  if (!Buffer.isBuffer(bytes)) throw new TypeError("Missing canonical gzip attachment.");
+  expect(gunzipSync(bytes).toString("utf8")).toBe(report.reportJson);
 }
 
 function customModelConfig(
@@ -565,6 +671,40 @@ function assertGroundedEvidenceManifest(
   expect(JSON.stringify(manifest)).not.toContain("function MyClass");
 }
 
+function assertAttributablePackReport(
+  reportJson: string,
+  stateDir: string,
+  correlationId: string,
+  retainedIds: readonly string[],
+): void {
+  const report = parseSupportReport(reportJson);
+  const analyzed = analyzeSupportReport(reportJson);
+  expect(report.incident).toMatchObject({
+    trigger: "registered-failure",
+    op: "server.diagnostic.failure",
+    errorKind: "internal",
+  });
+  expect(report.incident.frameCount).toBeGreaterThan(0);
+  expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ op: "server.diagnostic.failure", errorKind: "internal" }),
+    ]),
+  );
+  expect(report.incident.pin.status).toBe("rejected");
+  expect(analyzed.selection.status).toBe("complete");
+  expect(analyzed.analysis.sufficiency.status).toBe("complete");
+  const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+  expect(evidence).toContain('"diagnosticStage":"grounded-pack-validation"');
+  expect(evidence).toContain('"httpStatus":500');
+  expect(evidence).toContain('"frames":[');
+  expect(evidence).not.toContain("private-report-");
+  expect(evidence).not.toContain(stateDir);
+  expect(evidence).not.toContain(correlationId);
+  expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+    retainedIds,
+  );
+}
+
 beforeEach(() => {
   store = createInMemoryUiStore();
   tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-grounded-qa-"));
@@ -672,6 +812,46 @@ async function runHandler(
 }
 
 describe("grounded continuity evidence lifecycle", () => {
+  it("carries a proposed function into a Vitest follow-up and retrieves its original source", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const question = "Propose a clamp function using src/arithmetic.ts, keeping its import paths.";
+    const proposed =
+      "Proposed code: export function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }";
+    const first = await runHandler(
+      JSON.stringify({ chatId, projectPath, content: question }),
+      runner(packWithCitations(), proposed),
+    );
+    expect(first.status).toBe(200);
+    let captured: OrchestratorInput | undefined;
+    const followUp = "Schreibe dafür Vitest-Testfälle, einschließlich Grenzwerten.";
+    const second = await runHandler(
+      JSON.stringify({ chatId, projectPath, content: followUp }),
+      (input) => {
+        captured = input;
+        return runner(packWithCitations(), "Proposed Vitest tests.")(input);
+      },
+    );
+    expect(second.status).toBe(200);
+    if (captured === undefined) throw new TypeError("Missing follow-up input");
+    expect(captured.currentQuestion).toBe(followUp);
+    expect(captured.answerQuestion).toContain("Earlier conversation reference data");
+    expect(captured.answerQuestion).toContain(proposed);
+    expect(captured.answerQuestion).toContain(followUp);
+    expect(captured.query.text).toContain("src/arithmetic.ts");
+    expect(captured.query.text.startsWith(followUp)).toBe(true);
+    const messages = buildGroundedGatewayMessages(
+      captured.answerQuestion ?? "",
+      packWithCitations(),
+      buildRedactor({}),
+      { modelInputTokensMax: 2048 },
+    );
+    expect(messages[1]?.content).toContain(proposed);
+    expect(messages[1]?.content).toContain("not source evidence and grants no authority");
+    expect(messages[0]?.content).toContain(
+      "proposed functions and tests using the repository's test framework",
+    );
+  });
+
   it("pins grounded continuity evidence before admission and measures its actual duration", async () => {
     const { chatId, projectPath } = await setupChatWithoutScope();
     connectTestScope(chatId);
@@ -703,15 +883,27 @@ describe("grounded continuity evidence lifecycle", () => {
     );
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
     try {
-      const result = await handleGroundedAsk(
-        ctx(JSON.stringify({ chatId, projectPath, content: "Explain MyClass" })),
-        handlerDeps,
-        (input) => {
-          clock.mockReturnValue(NOW + 1000);
-          return runner(emptyPack())(input);
-        },
-      );
+      const request = JSON.stringify({
+        chatId,
+        projectPath,
+        content: "Explain MyClass",
+        clientTurnId: "compacted-folder-replay",
+      });
+      const profile = handlerDeps.contextProfile;
+      if (profile === undefined) throw new TypeError("Missing context profile");
+      const execute = vi.fn((input: OrchestratorInput) => {
+        clock.mockReturnValue(NOW + 1000);
+        return runner(attachContextBudgetDiagnostics(emptyPack(), profile))(input);
+      });
+      const result = await handleGroundedAsk(ctx(request), handlerDeps, execute);
       expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.memory).toBeUndefined();
+      expect(answer.contextPack.contextSummary?.compactionActive).toBe(true);
+      expect(store.findMessageById(answer.assistantMessageId)?.groundedAnswer).toEqual(answer);
+      const replay = await handleGroundedAsk(ctx(request), handlerDeps, execute);
+      expect(replay).toEqual(result);
+      expect(execute).toHaveBeenCalledTimes(1);
       const id = evidenceStore.list().find((entry) => entry.startsWith("chat-"));
       expect(id).toBeDefined();
       if (id === undefined) throw new TypeError("Missing continuity evidence");
@@ -735,10 +927,28 @@ describe("grounded continuity evidence lifecycle", () => {
 });
 
 describe("mappedWorkspaceError", () => {
+  it.each(["EMFILE", "ENFILE", "EIO", "ESTALE", "ETIMEDOUT", "ENOTCONN", "ENXIO"])(
+    "preserves retriable root failure %s instead of blaming the request",
+    (code) => {
+      const error = new WorkspaceNotFoundError("private-root", "/private/customer/root");
+      error.cause = Object.assign(new Error("private-detail"), { code });
+      const activityLog = createBufferedServerLogSink();
+      const result = mappedWorkspaceError(error, { activityLog, correlationId: "root-transient" });
+      expect(result).toMatchObject({
+        status: 503,
+        body: { error: { correlationId: "root-transient" } },
+      });
+      expect(activityLog.events[0]?.extra?.failureKind).toBe(code);
+      expect(JSON.stringify(result)).not.toContain("private");
+    },
+  );
+
   it("maps an unavailable workspace root without exposing its path", () => {
     const unavailablePath = "/private/customer/.aws/workspace";
+    const activityLog = createBufferedServerLogSink();
     const result = mappedWorkspaceError(
       new WorkspaceNotFoundError("root disappeared", unavailablePath, [unavailablePath]),
+      { activityLog, correlationId: "grounded-retrieval-root-unavailable-0001" },
     );
 
     expect(result).toEqual({
@@ -751,10 +961,85 @@ describe("mappedWorkspaceError", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain(unavailablePath);
+    expect(activityLog.events).toMatchObject([
+      {
+        op: "workspace.root.denied",
+        correlationId: "grounded-retrieval-root-unavailable-0001",
+        extra: { reason: "ordinary-root-unavailable", failureKind: "WORKSPACE_NOT_FOUND" },
+      },
+    ]);
+    expect(JSON.stringify(activityLog.events)).not.toContain(unavailablePath);
   });
 });
 
+describe("grounded prompt elapsed budget", () => {
+  it.each([
+    { elapsedMsMax: null, elapsedMs: 37, expected: "elapsed 37 ms (no search time limit)" },
+    { elapsedMsMax: 1000, elapsedMs: 37, expected: "elapsed 37/1000 ms" },
+    { elapsedMsMax: 0, elapsedMs: 0, expected: "elapsed 0/0 ms" },
+  ])(
+    "renders $expected consistently in each folder prompt",
+    ({ elapsedMsMax, elapsedMs, expected }) => {
+      const base = emptyPack();
+      const pack = {
+        ...base,
+        budget: { ...base.budget, modelInputTokensMax: 16_000, elapsedMsMax },
+        usage: { ...base.usage, elapsedMs },
+      };
+      const summary = packBudgetSummary(pack);
+      expect(summary.split("; ").at(-1)).toBe(expected);
+      const redactor = buildRedactor({});
+      const single = buildGroundedGatewayMessages("Review the available evidence", pack, redactor);
+      const multi = buildMultiSourceGatewayMessages(
+        "Review the available evidence",
+        [{ label: "Source", pack }],
+        redactor,
+      );
+      for (const messages of [single, multi]) {
+        expect(JSON.stringify(messages)).toContain(`- budget/usage: ${summary}`);
+        expect(JSON.stringify(messages)).not.toContain("/null ms");
+      }
+    },
+  );
+});
+
 describe("buildGroundedGatewayMessages", () => {
+  it("preserves read-only capabilities and real import paths when fitting coding proposals", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              content: "import { sum } from './arithmetic.js'; export const answer = sum(20, 22);",
+            },
+          ],
+        },
+      ],
+    };
+    const messages = buildGroundedGatewayMessages(
+      "Propose a function and Vitest tests using the connected code.",
+      pack,
+      buildRedactor({}, undefined),
+      { modelInputTokensMax: 2048 },
+    );
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).toContain("ordinary folders without Git");
+    expect(messages[0]?.content).toContain("server-owned retrieval");
+    expect(messages[0]?.content).toContain(
+      "proposed functions and tests using the repository's test framework",
+    );
+    expect(messages[0]?.content).toContain(
+      "never claim that you edited files, executed commands, or ran tests",
+    );
+    expect(messages[1]?.content).toContain("import { sum } from './arithmetic.js'");
+    expect(messages[1]?.content).toContain("src/foo.ts");
+  });
+
   it("derives prompt input budget from the shared capability→context profile (KEIKO-0461)", () => {
     // 64_000 context - 4_096 output - 2_000 safety = 57_904, matching
     // deriveContextProfileFromCapability so both the exploration and final-answer phases
@@ -765,6 +1050,70 @@ describe("buildGroundedGatewayMessages", () => {
     expect(groundedPromptInputTokensForCapability(capability)).toBe(
       deriveContextProfileFromCapability(capability).effectiveInputBudget,
     );
+  });
+
+  it("projects exact source-line offsets and canonical unavailable-source counts", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              atom: { ...excerpt.atom, lineRange: { startLine: 181, endLine: 183 } },
+              content: "<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n",
+            },
+          ],
+        },
+      ],
+      omitted: [{ scopePath: ".env", reason: "tool-unavailable", omittedAtMs: NOW }],
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "tool-unavailable": 7 },
+    };
+    const sent = fittedGroundedGatewayPrompt(
+      "Which interval is documented?",
+      pack,
+      buildRedactor({}),
+      { modelInputTokensMax: 1024 },
+    );
+    const prompt = sent.messages[1]?.content ?? "";
+    expect(prompt).toContain(
+      "181 | <!-- archive -->\n182 | <p>Maintenance: 731 hours.</p>\n183 | ",
+    );
+    expect(prompt).toContain("- tool-unavailable: 7");
+    expect(prompt).toContain("metadata only, not file-content evidence");
+    expect(prompt).not.toContain(".env");
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
+    expect(sent.sentReferenceCount).toBe(1);
+    expect(pack.files[0]?.excerpts[0]?.content).not.toContain("182 |");
+  });
+
+  it("charges numbered line overhead before admitting a small-model prompt", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              atom: { ...excerpt.atom, lineRange: { startLine: 1000, endLine: 3999 } },
+              content: "x\n".repeat(3000),
+            },
+          ],
+        },
+      ],
+    };
+    const sent = fittedGroundedGatewayPrompt("Read the source", pack, buildRedactor({}), {
+      modelInputTokensMax: 1024,
+    });
+    expect(sent.messages[1]?.content).toContain("1000 | x");
+    expect(sent.messages[1]?.content).not.toContain("3999 | x");
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
   });
 
   it("falls back to the shared default-profile budget when contextWindow=0 (KEIKO-0461)", () => {
@@ -895,6 +1244,147 @@ describe("buildGroundedGatewayMessages", () => {
     ).toThrow(ContextOverflowError);
   });
 
+  it("explains safe size exclusions without presenting unread files as evidence", () => {
+    const pack: ConnectedContextPack = {
+      ...packWithCitations(),
+      omitted: [
+        { scopePath: "manuals/above.txt", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: ".env", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: ".e\u200bnv", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: "../escape.txt", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: "src/irrelevant.ts", reason: "low-relevance", omittedAtMs: NOW },
+      ],
+    };
+    const messages = buildGroundedGatewayMessages(
+      "Explain file-size exclusions",
+      pack,
+      buildRedactor({}),
+      { modelInputTokensMax: 2048 },
+    );
+    const systemPrompt = messages[0]?.content;
+    expect(systemPrompt).toContain(
+      `${new Intl.NumberFormat("en-US").format(MAX_RECURSIVE_TEXT_FILE_BYTES)} bytes`,
+    );
+    expect(systemPrompt).toContain("supported text extraction");
+    expect(systemPrompt).toContain("If omission metadata is supplied");
+    expect(systemPrompt).not.toContain("binaries and images are excluded");
+    expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
+    expect(messages[1]?.content).toContain("Files excluded by file-size policy: 1");
+    expect(messages[1]?.content).toContain("not file-content evidence");
+    expect(messages[1]?.content).not.toContain(".env");
+    expect(messages[1]?.content).not.toContain("escape.txt");
+    expect(messages[1]?.content).not.toContain("src/irrelevant.ts");
+    expect(messages[1]?.content).not.toMatch(/\[manuals\/above\.txt(?::|\])/u);
+  });
+
+  it("discloses exact omitted totals when per-path details are retained separately", () => {
+    const pack: ConnectedContextPack = {
+      ...packWithCitations(),
+      omitted: [{ scopePath: "manuals/above.txt", reason: "size-exceeded", omittedAtMs: NOW }],
+      omittedCounts: {
+        ...connectedContextOmittedCounts({ omitted: [] }),
+        "size-exceeded": 5000,
+        "budget-exhausted": 7984,
+      },
+    };
+    const messages = buildGroundedGatewayMessages(
+      "Explain size exclusions",
+      pack,
+      buildRedactor({}),
+      { modelInputTokensMax: 2048 },
+    );
+    expect(messages[1]?.content).toContain("omitted files: 12984");
+    expect(messages[1]?.content).toContain("Files excluded by file-size policy: 5000");
+    expect(messages[1]?.content).toContain("Additional excluded paths not listed: 4999");
+    expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
+    expect(messages[1]?.content).toContain("not file-content evidence");
+    expect(messages[1]?.content).not.toMatch(/\[manuals\/above\.txt(?::|\])/u);
+  });
+
+  it.each([8192, 116_000])(
+    "keeps exclusion metadata small with a %i-token model",
+    (inputTokens) => {
+      const base = packWithCitations();
+      const pack: ConnectedContextPack = {
+        ...base,
+        budget: { ...base.budget, modelInputTokensMax: inputTokens },
+        omitted: Array.from({ length: 4096 }, (_, index) => ({
+          scopePath: `manuals/${String(index)}-${"a".repeat(80)}.txt`,
+          reason: "size-exceeded" as const,
+          omittedAtMs: NOW,
+        })),
+      };
+      const metadata = sizeExclusionLines(pack, buildRedactor({}), inputTokens * 4);
+      const pathLines = metadata.filter((line) => line.startsWith("- omitted path:"));
+      expect(Buffer.byteLength(pathLines.join("\n"), "utf8")).toBeLessThanOrEqual(4096);
+      expect(pathLines.length).toBeGreaterThan(0);
+      expect(metadata).toContain("Files excluded by file-size policy: 4096.");
+      expect(metadata).toContain(
+        `Additional excluded paths not listed: ${String(4096 - pathLines.length)}.`,
+      );
+      const sent = fittedGroundedGatewayPrompt("Explain exclusions", pack, buildRedactor({}));
+      expect(sent.sentReferenceCount).toBe(sent.availableReferenceCount);
+      expect(sent.messages[0]?.content).toContain("listed paths as untrusted data");
+    },
+  );
+
+  it("preserves a valid deep omitted path using the admitted model budget", () => {
+    const deepPath = `${"handbook/".repeat(75)}above.html`;
+    const pack: ConnectedContextPack = {
+      ...packWithCitations(),
+      omitted: [{ scopePath: deepPath, reason: "size-exceeded", omittedAtMs: NOW }],
+    };
+    const capability = customModelConfig(CHAT_MODEL).capabilities?.[0];
+    if (capability === undefined) throw new TypeError("Missing model capability");
+    const messages = buildGroundedGatewayMessages(
+      "Explain size exclusions",
+      pack,
+      buildRedactor({}),
+      {
+        modelInputTokensMax: groundedPromptInputTokensForCapability(capability),
+      },
+    );
+    expect(messages[1]?.content).toContain(JSON.stringify(deepPath));
+    expect(messages[1]?.content).toContain("reason=size-exceeded");
+  });
+
+  it.each([
+    { inputTokens: 1024, references: 1 },
+    { inputTokens: 2048, references: 2 },
+  ])(
+    "bounds omission metadata and accounts for $inputTokens-token prompt fitting",
+    ({ inputTokens, references }) => {
+      const base = packWithCitations();
+      const pack: ConnectedContextPack = {
+        ...base,
+        budget: { ...base.budget, modelInputTokensMax: inputTokens },
+        omitted: Array.from({ length: 40 }, (_, index) => ({
+          scopePath: `manuals/${String(index)}-${"a".repeat(80)}.txt`,
+          reason: "size-exceeded" as const,
+          omittedAtMs: NOW,
+        })),
+      };
+      const sent = fittedGroundedGatewayPrompt("Explain size exclusions", pack, buildRedactor({}));
+      const prompt = sent.messages[1]?.content ?? "";
+      const withoutSources = sent.withoutSources[1]?.content ?? "";
+      const omissionLines = prompt.split("\n").filter((line) => line.startsWith("- omitted path:"));
+      expect(promptByteLength(sent.messages)).toBeLessThanOrEqual(
+        modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
+      );
+      expect(omissionLines.length).toBeLessThan(40);
+      expect(prompt).toContain("Files excluded by file-size policy: 40");
+      expect(prompt).toContain(
+        `Additional excluded paths not listed: ${String(40 - omissionLines.length)}.`,
+      );
+      expect(withoutSources).not.toContain("Files excluded by file-size policy");
+      expect(sentPromptContext(sent, 0, undefined).sourceTokens).toBeGreaterThan(0);
+      expect(sent.availableReferenceCount).toBe(
+        base.files.reduce((total, file) => total + file.excerpts.length, 0),
+      );
+      expect(sent.sentReferenceCount).toBe(references);
+    },
+  );
+
   it("includes incomplete repository coverage warnings in the model prompt", () => {
     const pack: ConnectedContextPack = {
       ...emptyPack(),
@@ -987,6 +1477,491 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each(["ENOTCONN", "EHOSTDOWN", "ENXIO", "EMFILE", "ETIMEDOUT"])(
+    "keeps a healthy connected root when a sibling fails with %s",
+    async (code) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      const badRoot = join(tmp, "temporarily-unavailable");
+      mkdirSync(badRoot);
+      store.updateChat(chatId, {
+        connectedScopes: [projectPath, badRoot].map((root, index) => ({
+          kind: "workspace-root",
+          root,
+          relativePaths: [],
+          connectedAtMs: NOW + index,
+        })),
+      });
+      const original = nodeWorkspaceFs.realPath;
+      const readRoot = vi.spyOn(nodeWorkspaceFs, "realPath").mockImplementation((path) => {
+        if (path === badRoot) throw Object.assign(new Error("private-root-detail"), { code });
+        return original(path);
+      });
+      const seenRequests: GatewayRequest[] = [];
+      try {
+        const result = await handleGroundedAsk(
+          ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+          deps(fakeModel("Healthy source remains available.", seenRequests)),
+        );
+        expect(result.status, JSON.stringify(result.body)).toBe(200);
+        expect(seenRequests).toHaveLength(1);
+        const answer = asConnectedAnswer(result.body as GroundedAnswer);
+        expect(answer.uncertainty.some((entry) => entry.kind === "source-skipped")).toBe(true);
+        expect(JSON.stringify(result)).not.toContain(badRoot);
+        expect(JSON.stringify(result)).not.toContain("private-root-detail");
+      } finally {
+        readRoot.mockRestore();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves transient outage status when every connected root is unavailable (transient first: %s)",
+    async (transientFirst) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      const missingRoot = join(tmp, "missing-root");
+      const roots = transientFirst ? [projectPath, missingRoot] : [missingRoot, projectPath];
+      store.updateChat(chatId, {
+        connectedScopes: roots.map((root, index) => ({
+          kind: "workspace-root",
+          root,
+          relativePaths: [],
+          connectedAtMs: NOW + index,
+        })),
+      });
+      const original = nodeWorkspaceFs.realPath;
+      const readRoot = vi.spyOn(nodeWorkspaceFs, "realPath").mockImplementation((path) => {
+        if (path === projectPath)
+          throw Object.assign(new Error("private-resource-detail"), { code: "EMFILE" });
+        return original(path);
+      });
+      const seenRequests: GatewayRequest[] = [];
+      try {
+        const result = await handleGroundedAsk(
+          {
+            ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+            correlationId: "all-roots-unavailable",
+          },
+          deps(fakeModel("Must not be called.", seenRequests)),
+        );
+        expect(result).toMatchObject({
+          status: 503,
+          body: { error: { code: "UNAVAILABLE", correlationId: "all-roots-unavailable" } },
+        });
+        expect(seenRequests).toHaveLength(0);
+        expect(JSON.stringify(result)).not.toContain(projectPath);
+        expect(JSON.stringify(result)).not.toContain("private-resource-detail");
+      } finally {
+        readRoot.mockRestore();
+      }
+    },
+  );
+
+  it("rethrows unexpected root resolver failures instead of reporting a missing folder", async () => {
+    const { chatId } = await setupChatWithScope();
+    const failure = new TypeError("root-programmer-failure-canary");
+    const root = vi.spyOn(nodeWorkspaceFs, "realPath").mockImplementation(() => {
+      throw failure;
+    });
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    try {
+      await expect(
+        handleGroundedAsk(
+          {
+            ...ctx(JSON.stringify({ chatId, content: "Explain alpha" })),
+            correlationId: "root-programmer-failure",
+          },
+          deps(),
+          runner(emptyPack()),
+        ),
+      ).rejects.toBe(failure);
+      expect(activityLog.events.filter((event) => event.op === "workspace.root.denied")).toEqual(
+        [],
+      );
+    } finally {
+      root.mockRestore();
+      resetServerLogger();
+    }
+  });
+
+  it("exports the actual closed admission cause when a connected ordinary root disappears", async () => {
+    const { chatId } = await setupChatWithoutScope();
+    const selectedRoot = join(tmp, "connected-disposable-root");
+    mkdirSync(selectedRoot);
+    store.updateChat(chatId, {
+      connectedScope: {
+        kind: "workspace-root",
+        root: selectedRoot,
+        relativePaths: [],
+        connectedAtMs: NOW,
+      },
+    });
+    rmSync(selectedRoot, { recursive: true });
+    const stateDir = join(tmp, "diagnostic-state");
+    setServerLogger(
+      createServerLogger({ sink: createFileServerLogSink(stateDir), level: "debug" }),
+    );
+    const correlationId = "c8aa2674-e638-4b33-bac0-bb7842a7f655";
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    setSupportIncidentTriggerForTests(true);
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(JSON.stringify({ chatId, content: "private-admission-question-canary" })),
+          correlationId,
+        },
+        deps(undefined, {}, { env: { KEIKO_STATE_DIR: stateDir } }),
+        scopedRunner,
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(scopedRunner).not.toHaveBeenCalled();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const report = createDesktopSupportReport(stateDir, correlationId);
+      const analysis = analyzeSupportReport(report.reportJson);
+      expect(parseSupportReport(report.reportJson).incident).toMatchObject({
+        trigger: "registered-failure",
+        op: "workspace.root.denied",
+        errorKind: "unavailable",
+      });
+      expect(analysis.selection.reasons).not.toContain("no-registered-failure");
+      const causes = analysis.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .filter((line) => line.op === "workspace.root.denied");
+      expect(causes).toMatchObject([
+        { extra: { reason: "ordinary-root-unavailable", failureKind: "ENOENT" } },
+      ]);
+      expect(report.reportJson).not.toContain(selectedRoot);
+      expect(report.reportJson).not.toContain("private-admission-question-canary");
+      await assertPairedAdmissionReport(stateDir, correlationId);
+    } finally {
+      closeFileServerLogSinks();
+      setSupportIncidentTriggerForTests(undefined);
+      resetServerLogger();
+    }
+  });
+
+  it("records credential-shaped root admission without exposing root or credentials", async () => {
+    const { chatId, projectPath: admittedRoot } = await setupChatWithScope();
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-credential-shaped-root-0001";
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    const handlerDeps = deps(
+      undefined,
+      {},
+      {
+        redactor: (value: unknown): unknown => (value === admittedRoot ? "[REDACTED]" : value),
+      },
+    );
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    try {
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: "private-question-canary" })), correlationId },
+        handlerDeps,
+        scopedRunner,
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(scopedRunner).not.toHaveBeenCalled();
+      const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(denials).toMatchObject([
+        {
+          correlationId,
+          level: "error",
+          errorKind: "permission-denied",
+          extra: { reason: "credential-shaped-root", failureKind: "CREDENTIAL_SHAPED_METADATA" },
+        },
+      ]);
+      expect(JSON.stringify(denials)).not.toContain(admittedRoot);
+      expect(JSON.stringify(denials)).not.toContain("private-question-canary");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("does not acquire session protection for a canonical replay but protects a new admitted turn", async () => {
+    const { chatId } = await setupChatWithScope();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const minted = registry.mint("grounded-replay-test");
+    const channel = createCodingAppSessionChannel({ registry });
+    const handlerDeps = deps(undefined, {}, { codingAppSessionChannel: channel });
+    const cookie = `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}`;
+    const request = {
+      chatId,
+      content: "Inspect this folder.",
+      clientTurnId: "grounded-session-replay-1",
+    };
+    const retrieve = vi.fn(runner(emptyPack()));
+    expect(
+      (
+        await handleGroundedAsk(
+          ctx(JSON.stringify(request), fakeRes(), cookie),
+          handlerDeps,
+          retrieve,
+        )
+      ).status,
+    ).toBe(200);
+    clock = 20 * 60_000;
+    expect(
+      (
+        await handleGroundedAsk(
+          ctx(JSON.stringify(request), fakeRes(), cookie),
+          handlerDeps,
+          retrieve,
+        )
+      ).status,
+    ).toBe(200);
+    expect(retrieve).toHaveBeenCalledOnce();
+    expect(registry.inspect(minted.cookieToken)?.lastSeenAtMs).toBe(0);
+    expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+    const entered = deferred<undefined>();
+    const finish = deferred<undefined>();
+    const res = fakeRes();
+    const outcome = handleGroundedAsk(
+      ctx(JSON.stringify({ ...request, clientTurnId: "grounded-session-replay-2" }), res, cookie),
+      handlerDeps,
+      async (input) => {
+        entered.resolve(undefined);
+        await finish.promise;
+        return runner(emptyPack())(input);
+      },
+    );
+    await entered.promise;
+    clock += 31 * 60_000;
+    const authorityDuringNewTurn = registry.inspect(minted.cookieToken);
+    res.emit("close");
+    expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+    finish.resolve(undefined);
+    expect((await outcome).status).toBe(499);
+    expect(authorityDuringNewTurn).toBeDefined();
+    clock += 31 * 60_000;
+    expect(registry.inspect(minted.cookieToken)).toBeUndefined();
+  });
+
+  it("keeps a paired session active through explicit ordinary-folder grounded turns", async () => {
+    const { chatId } = await setupChatWithScope();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const cookie = serializeSessionCookies(paired.cookieToken, {
+      secure: false,
+      maxAgeSeconds: 43_200,
+    })
+      .find((value) => value.includes("Path=/api/chats/messages/grounded;"))
+      ?.split(";")[0];
+    const handlerDeps = deps(undefined, {}, { codingAppSessionChannel: channel });
+    for (const minutes of [10, 20, 30]) {
+      clock = minutes * 60_000;
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+          fakeRes(),
+          cookie,
+        ),
+        handlerDeps,
+        runner(emptyPack()),
+      );
+      expect(result.status).toBe(200);
+    }
+    clock = 35 * 60_000;
+    expect(channel.verifySession(paired.cookieToken)).toMatchObject({ lastSeenAtMs: clock });
+  });
+
+  it.each(["malformed", "unknown-chat", "scope-changed"] as const)(
+    "does not renew session activity for a rejected %s grounded request",
+    async (kind) => {
+      const { chatId } = await setupChatWithScope();
+      const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
+      let clock = 0;
+      const registry = createSessionRegistry({ now: () => clock });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      if (kind === "scope-changed")
+        store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+      const body =
+        kind === "malformed"
+          ? "{"
+          : JSON.stringify({
+              chatId: kind === "unknown-chat" ? "missing-chat" : chatId,
+              content: "Inspect the connected folder.",
+              expectedGroundingScopeIdentity,
+            });
+      clock = 10 * 60_000;
+      const retrieve = vi.fn(runner(emptyPack()));
+      const result = await handleGroundedAsk(
+        ctx(body, fakeRes(), `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+        deps(undefined, {}, { codingAppSessionChannel: channel }),
+        retrieve,
+      );
+      expect(result.status).toBeGreaterThanOrEqual(400);
+      expect(retrieve).not.toHaveBeenCalled();
+      expect(registry.inspect(paired.cookieToken)?.lastSeenAtMs).toBe(0);
+      clock = 31 * 60_000;
+      expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
+  it("does not protect idle expiry while a grounded request body remains unparsed", async () => {
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
+    const res = fakeRes();
+    const outcome = handleGroundedAsk(
+      { ...ctx("", res), req },
+      deps(undefined, {}, { codingAppSessionChannel: channel }),
+      runner(emptyPack()),
+    );
+    expect(req.listenerCount("data")).toBe(1);
+    (req as unknown as PassThrough).write("{");
+    clock = 31 * 60_000;
+    const authorityWhileUnparsed = registry.inspect(paired.cookieToken);
+    res.emit("close");
+    expect((await outcome).status).toBe(499);
+    expect(authorityWhileUnparsed).toBeUndefined();
+    expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    (req as unknown as PassThrough).destroy();
+  });
+
+  it.each(["success", "failure", "exception"] as const)(
+    "keeps report authority during a long active grounded turn ending in %s",
+    async (outcome) => {
+      const { chatId } = await setupChatWithScope();
+      let clock = 0;
+      const registry = createSessionRegistry({ now: () => clock });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      const started = deferred<undefined>();
+      const completion = deferred<undefined>();
+      const slowRunner: GroundedRunner = async (input) => {
+        started.resolve(undefined);
+        await completion.promise;
+        if (outcome === "failure")
+          throw new RateLimitError("Synthetic deferred gateway failure.", 0);
+        if (outcome === "exception") throw new Error("Synthetic unexpected runner failure.");
+        return runner(emptyPack())(input);
+      };
+      const request = handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+          fakeRes(),
+          `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+        ),
+        deps(undefined, {}, { codingAppSessionChannel: channel }),
+        slowRunner,
+      );
+      await started.promise;
+      clock = 31 * 60_000;
+      const authorityWhilePending = registry.inspect(paired.cookieToken);
+      completion.resolve(undefined);
+      if (outcome === "exception") {
+        await expect(request).rejects.toThrow("Synthetic unexpected runner failure.");
+      } else {
+        expect((await request).status).toBe(outcome === "success" ? 200 : 503);
+      }
+      expect(authorityWhilePending).toBeDefined();
+      expect(channel.verifySession(paired.cookieToken)).toBeDefined();
+      clock = 62 * 60_000;
+      expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
+  it("releases session activity on disconnect before an uncooperative runner completes", async () => {
+    const { chatId } = await setupChatWithScope();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const started = deferred<undefined>();
+    const completion = deferred<OrchestratorOutput>();
+    const res = fakeRes();
+    const request = handleGroundedAsk(
+      ctx(
+        JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+        res,
+        `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+      ),
+      deps(undefined, {}, { codingAppSessionChannel: channel }),
+      () => {
+        started.resolve(undefined);
+        return completion.promise;
+      },
+    );
+    await started.promise;
+    clock = 31 * 60_000;
+    expect(registry.inspect(paired.cookieToken)).toBeDefined();
+    res.emit("close");
+    clock = 62 * 60_000;
+    expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    completion.resolve({ pack: emptyPack(), assistantContent: "late", elapsedMs: 1 });
+    expect((await request).status).toBe(499);
+    expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+  });
+
+  it.each(["absent", "forged", "revoked", "idle-expired", "absolute-expired"] as const)(
+    "keeps ordinary grounded Chat compatible without reviving %s session authority",
+    async (kind) => {
+      const { chatId } = await setupChatWithScope();
+      let clock = 0;
+      const registry = createSessionRegistry({
+        now: () => clock,
+        absoluteTtlMs: kind === "absolute-expired" ? 5 * 60_000 : 43_200_000,
+      });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      const session = registry.inspect(paired.cookieToken);
+      if (session === undefined) throw new TypeError("Missing fixture session.");
+      if (kind === "revoked") registry.revoke(session.sessionId);
+      clock = (kind === "idle-expired" ? 31 : 10) * 60_000;
+      const token = kind === "forged" ? `${session.sessionId}.forged` : paired.cookieToken;
+      const cookie = kind === "absent" ? undefined : `${APP_SESSION_COOKIE_NAME}=${token}`;
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+          fakeRes(),
+          cookie,
+        ),
+        deps(undefined, {}, { codingAppSessionChannel: channel }),
+        runner(emptyPack()),
+      );
+      expect(result.status).toBe(200);
+      if (new Set(["absent", "forged"]).has(kind)) {
+        expect(registry.inspect(paired.cookieToken)?.lastSeenAtMs).toBe(0);
+      } else {
+        expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+      }
+      clock = 35 * 60_000;
+      expect(channel.verifySession(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
   it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
     "rejects a configured but unready %s ask before provider egress",
     async (kind) => {
@@ -1482,26 +2457,193 @@ describe("handleGroundedAsk", () => {
     const { chatId } = await setupChatWithScope();
     const started = deferred<undefined>();
     const answer = deferred<OrchestratorOutput>();
-    const outcome = handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "scope-sensitive request" })),
-      deps(),
-      () => {
-        started.resolve(undefined);
-        return answer.promise;
-      },
-    );
-    await started.promise;
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    try {
+      const outcome = handleGroundedAsk(
+        {
+          ...ctx(JSON.stringify({ chatId, content: "scope-sensitive request" })),
+          correlationId: "scope-changed-during-answer",
+        },
+        deps(undefined, {}, { diagnostics: { record: (record) => diagnostics.push(record) } }),
+        () => {
+          started.resolve(undefined);
+          return answer.promise;
+        },
+      );
+      await started.promise;
 
+      store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+      answer.resolve({ pack: emptyPack(), assistantContent: "stale scoped answer", elapsedMs: 1 });
+
+      await expect(outcome).resolves.toMatchObject({
+        status: 409,
+        body: {
+          error: { code: "GROUNDING_SCOPE_CHANGED", correlationId: "scope-changed-during-answer" },
+        },
+      });
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", content: "scope-sensitive request" },
+      ]);
+      expect(diagnostics).toMatchObject([
+        {
+          correlationId: "scope-changed-during-answer",
+          source: "grounded.qa.scope-changed-during-answer",
+          code: "GROUNDING_SCOPE_CHANGED",
+          diagnosticOutcome: "request-refused",
+          httpStatus: 409,
+        },
+      ]);
+      expect(activityLog.events.filter((event) => event.op === "chat.send.rejected")).toMatchObject(
+        [
+          {
+            level: "warn",
+            correlationId: "scope-changed-during-answer",
+            status: 409,
+            extra: { reason: "grounding-scope" },
+          },
+        ],
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it.each(["scope-identity-mismatch", "grounding-mode-changed"] as const)(
+    "diagnoses grounded %s before retrieval or a model call",
+    async (reason) => {
+      const { chatId } = await setupChatWithScope();
+      const capturedIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
+      store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+      const expectedGroundingScopeIdentity =
+        reason === "scope-identity-mismatch"
+          ? capturedIdentity
+          : deriveChatGroundingScopeIdentity(requiredChat(chatId));
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const seenRequests: GatewayRequest[] = [];
+      const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId,
+              content: "private-scope-refusal-canary",
+              clientTurnId: "scope-refusal-regression",
+              expectedGroundingScopeIdentity,
+            }),
+          ),
+          correlationId: "scope-refusal-correlation",
+        },
+        deps(
+          fakeModel("must not run", seenRequests),
+          {},
+          {
+            diagnostics: { record: (record) => diagnostics.push(record) },
+          },
+        ),
+        scopedRunner,
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: {
+          error: { code: "GROUNDING_SCOPE_CHANGED", correlationId: "scope-refusal-correlation" },
+        },
+      });
+      const persistedMessages = store.listMessages(chatId);
+      expect(persistedMessages).toMatchObject([{ role: "user", turnState: "failed" }]);
+      expect(persistedMessages[0]?.canonicalTurnRef).toEqual(expect.any(String));
+      expect(scopedRunner).not.toHaveBeenCalled();
+      expect(seenRequests).toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId: "scope-refusal-correlation",
+        source: `grounded.qa.${reason}`,
+        code: "GROUNDING_SCOPE_CHANGED",
+        httpStatus: 409,
+        errorClass: "invalid-request",
+        diagnosticOutcome: "request-refused",
+      });
+      expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
+      for (const canary of ["private-scope-refusal-canary", tmp, capturedIdentity])
+        expect(JSON.stringify(diagnostics)).not.toContain(canary);
+    },
+  );
+
+  it("exports the scope admission cause through the real diagnostic sink and worker at full quota", async () => {
+    const { chatId } = await setupChatWithScope();
+    const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
     store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
-    answer.resolve({ pack: emptyPack(), assistantContent: "stale scoped answer", elapsedMs: 1 });
-
-    await expect(outcome).resolves.toMatchObject({
-      status: 409,
-      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
-    });
-    expect(store.listMessages(chatId)).toMatchObject([
-      { role: "user", content: "scope-sensitive request" },
-    ]);
+    const stateDir = join(tmp, "scope-refusal-report-state");
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const correlationId = "quota-scope-refusal-correlation";
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      setSupportIncidentTriggerForTests(true);
+      const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId,
+              content: "private-scope-report-canary",
+              expectedGroundingScopeIdentity,
+            }),
+          ),
+          correlationId,
+        },
+        deps(undefined, {}, { diagnostics: defaultServerDiagnosticSink }),
+        scopedRunner,
+      );
+      expect(result.status).toBe(409);
+      expect(scopedRunner).not.toHaveBeenCalled();
+      drainSupportIncidentCandidates();
+      expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+        retainedIds,
+      );
+      expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+      closeFileServerLogSinks();
+      const response = await runSupportReportJob(stateDir, correlationId);
+      const report = parseSupportReport(response.reportJson);
+      const analyzed = analyzeSupportReport(response.reportJson);
+      expect(report.incident).toMatchObject({
+        op: "server.diagnostic.failure",
+        errorKind: "invalid-request",
+      });
+      expect(report.incident.frameCount).toBeGreaterThan(0);
+      expect(report.incident.pin.status).toBe("rejected");
+      expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+      expect(analyzed.selection.status).toBe("complete");
+      const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+      for (const field of [
+        '"reason":"grounding-scope"',
+        '"httpStatus":409',
+        '"diagnosticOutcome":"request-refused"',
+        '"level":"warn"',
+        '"frames":[',
+      ])
+        expect(evidence).toContain(field);
+      for (const canary of [
+        "private-scope-report-canary",
+        tmp,
+        expectedGroundingScopeIdentity,
+        correlationId,
+      ])
+        expect(response.reportJson + evidence).not.toContain(canary);
+      expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+        retainedIds,
+      );
+    } finally {
+      setSupportIncidentTriggerForTests(undefined);
+      stderr.mockRestore();
+      vi.unstubAllEnvs();
+      closeFileServerLogSinks();
+      resetServerLogger();
+    }
   });
 
   it("rejects a queued grounded turn before memory or retrieval when its captured scope changed", async () => {
@@ -2584,6 +3726,33 @@ describe("handleGroundedAsk", () => {
     expect(userMsg?.content).not.toContain(secret);
   });
 
+  it("diagnoses a closed assembler omission failure under the original request", async () => {
+    const { chatId } = await setupChatWithScope();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const correlationId = "assembler-validation-correlation";
+    const result = await handleGroundedAsk(
+      { ...ctx(JSON.stringify({ chatId, content: "Explain connected source" })), correlationId },
+      deps(undefined, {}, { diagnostics: { record: (record) => diagnostics.push(record) } }),
+      (input) => failInvalidOmissionAssembly(input.scope),
+    );
+    expect(result.status).toBe(500);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId,
+      code: "GROUNDED_PACK_VALIDATION_FAILED",
+      diagnosticStage: "grounded-pack-validation",
+      diagnosticOutcome: "request-failed",
+      originalCode: "CONTEXT_PACK_OMISSIONS_INVALID",
+      validatorThrew: true,
+    });
+    expect(diagnostics[0]?.violationCount).toBeGreaterThan(0);
+    expect(diagnostics[0]?.validationReasons).toContain("omissions-invalid-path");
+    expect(diagnostics[0]?.frames?.some((frame) => frame.includes("contextpack/assemble"))).toBe(
+      true,
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain("escaped-private-file");
+  });
+
   it("fails closed when the runner returns an invalid context pack", async () => {
     const { chatId } = await setupChatWithScope();
     const invalidPack: ConnectedContextPack = {
@@ -2603,6 +3772,80 @@ describe("handleGroundedAsk", () => {
     );
     expect(result.status).toBe(500);
     expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "hello" }]);
+  });
+
+  it.each(["invalid", "malformed"] as const)(
+    "diagnoses a %s context pack under the original request without its body",
+    async (kind) => {
+      const { chatId } = await setupChatWithScope();
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const correlationId = "grounded-context-validation-correlation";
+      const pack =
+        kind === "invalid"
+          ? { ...emptyPack(), stableId: "" }
+          : ({ customerBody: "private-pack-canary" } as unknown as ConnectedContextPack);
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: "private-question-canary" })), correlationId },
+        deps(undefined, {}, { diagnostics: { record: (record) => diagnostics.push(record) } }),
+        runner(pack, "private-model-canary"),
+      );
+      expect(result).toMatchObject({
+        status: 500,
+        body: { error: { code: "INTERNAL", correlationId } },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId,
+        operation: "POST /api/chats/messages/grounded",
+        source: "grounded.qa.pack-validation",
+        errorClass: "TypeError",
+        code: "GROUNDED_PACK_VALIDATION_FAILED",
+        httpStatus: 500,
+        message: "grounded-context-pack-validation-failed",
+        diagnosticOutcome: "request-failed",
+        validatorThrew: false,
+        ...(kind === "invalid" ? { violationCount: 1 } : {}),
+      });
+      expect(diagnostics[0]?.validationReasons).toContain("stable-id");
+      expect(diagnostics[0]?.violationCount).toBeGreaterThan(0);
+      expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
+      expect(JSON.stringify(diagnostics)).not.toContain("private-");
+      expect(JSON.stringify(diagnostics)).not.toContain(tmp);
+      expect(store.listMessages(chatId)).toHaveLength(1);
+    },
+  );
+
+  it("exports an attributable redacted pack-validation report through the real sink and worker at full quota", async () => {
+    const { chatId } = await setupChatWithScope();
+    const stateDir = join(tmp, "diagnostic-report-state");
+    const correlationId = "full-quota-pack-validation-correlation";
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(JSON.stringify({ chatId, content: "private-report-question-canary" })),
+          correlationId,
+        },
+        deps(undefined, {}, { diagnostics: defaultServerDiagnosticSink }),
+        runner({ ...emptyPack(), stableId: "" }, "private-report-answer-canary"),
+      );
+      expect(result.status).toBe(500);
+      closeFileServerLogSinks();
+      const response = await runSupportReportJob(stateDir, correlationId);
+      assertAttributablePackReport(response.reportJson, stateDir, correlationId, retainedIds);
+      expect(parseSupportReport(response.reportJson).incident.pin.status).toBe("rejected");
+      expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+    } finally {
+      stderr.mockRestore();
+      vi.unstubAllEnvs();
+      closeFileServerLogSinks();
+      resetServerLogger();
+    }
   });
 
   it("fails closed when the runner returns a malformed pack that would make validation throw", async () => {
@@ -2754,6 +3997,8 @@ describe("handleGroundedAsk", () => {
   it("reuses one evidence manifest when completion fails after evidence persistence", async () => {
     const { chatId } = await setupChatWithScope();
     const evidenceStore = createInMemoryEvidenceStore();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const correlationId = "grounded-completion-conflict-correlation";
     let failCompletion = true;
     const completionFailingStore: UiStore = {
       ...store,
@@ -2777,11 +4022,28 @@ describe("handleGroundedAsk", () => {
     };
 
     const failed = await handleGroundedAsk(
-      ctx(JSON.stringify(request)),
-      deps(undefined, {}, { evidenceStore, store: completionFailingStore }),
+      { ...ctx(JSON.stringify(request)), correlationId },
+      deps(
+        undefined,
+        {},
+        {
+          evidenceStore,
+          store: completionFailingStore,
+          diagnostics: { record: (record) => diagnostics.push(record) },
+        },
+      ),
       countingRunner,
     );
-    expect(failed.status).toBe(500);
+    expect(failed).toMatchObject({ status: 500, body: { error: { correlationId } } });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId,
+      source: "grounded.qa.turn-completion",
+      code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
+      message: "grounded-turn-completion-conflicted",
+      completionKind: "conflict",
+      httpStatus: 500,
+    });
     expect(store.listMessages(chatId)).toHaveLength(1);
     expect(evidenceStore.list()).toHaveLength(1);
 
@@ -3024,7 +4286,9 @@ describe("handleGroundedAsk", () => {
       get(target, property, receiver): unknown {
         if (property === "listMemoriesByScope") {
           return (): never => {
-            throw new Error("sensitive-memory-backend-detail");
+            throw new Error("sensitive-memory-backend-detail", {
+              cause: new TypeError("private-memory-cause-canary"),
+            });
           };
         }
         const value: unknown = Reflect.get(target, property, receiver);
@@ -3035,23 +4299,26 @@ describe("handleGroundedAsk", () => {
 
     try {
       const result = await handleGroundedAsk(
-        ctx(
-          JSON.stringify({
-            chatId,
-            content: "Which package manager should I use?",
-            memory: {
-              enabled: true,
-              budgetTokens: 1200,
-              mode: "governed-assist",
-              context: {
-                userId: "local-operator",
-                workspaceId: projectPath,
-                projectId: projectPath,
-                conversationId: chatId,
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId,
+              content: "Which package manager should I use?",
+              memory: {
+                enabled: true,
+                budgetTokens: 1200,
+                mode: "governed-assist",
+                context: {
+                  userId: "local-operator",
+                  workspaceId: projectPath,
+                  projectId: projectPath,
+                  conversationId: chatId,
+                },
               },
-            },
-          }),
-        ),
+            }),
+          ),
+          correlationId: "grounded-memory-preparation-request",
+        },
         deps(
           undefined,
           {},
@@ -3068,6 +4335,11 @@ describe("handleGroundedAsk", () => {
       expect(
         (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
       ).toBeUndefined();
+      const memoryFailure = diagnostics.find((record) => record.operation === "grounded.memory");
+      expect(memoryFailure?.correlationId).toBe("grounded-memory-preparation-request");
+      expect(memoryFailure?.frames?.length).toBeGreaterThan(0);
+      expect(memoryFailure?.causeChain).toEqual(["Error", "TypeError"]);
+      expect(JSON.stringify(diagnostics)).not.toContain("private-memory-cause-canary");
       // Two records: the semantic-retrieval signal (now a diagnostic, never console.warn — audit of
       // #3233) and the enrichment failure this test is about.
       expect(diagnostics.map((record) => record.operation)).toEqual([
@@ -3172,7 +4444,9 @@ describe("handleGroundedAsk", () => {
       get(target, property, receiver): unknown {
         if (property === "insertMemory") {
           return (): never => {
-            throw new Error("sensitive-canonical-memory-capture-detail");
+            throw new Error("sensitive-canonical-memory-capture-detail", {
+              cause: new TypeError("private-memory-cause-canary"),
+            });
           };
         }
         const value: unknown = Reflect.get(target, property, receiver);
@@ -3199,7 +4473,7 @@ describe("handleGroundedAsk", () => {
 
     try {
       const result = await handleGroundedAsk(
-        ctx(JSON.stringify(request)),
+        { ...ctx(JSON.stringify(request)), correlationId: "grounded-memory-capture-request" },
         deps(
           undefined,
           {},
@@ -3214,6 +4488,11 @@ describe("handleGroundedAsk", () => {
       expect(result.status).toBe(200);
       expect((result.body as GroundedAnswer).content).toContain("Dark mode");
       expect(store.listMessages(chatId)).toHaveLength(2);
+      const memoryFailure = diagnostics.find((record) => record.operation === "grounded.memory");
+      expect(memoryFailure?.correlationId).toBe("grounded-memory-capture-request");
+      expect(memoryFailure?.frames?.length).toBeGreaterThan(0);
+      expect(memoryFailure?.causeChain).toEqual(["TypeError"]);
+      expect(JSON.stringify(diagnostics)).not.toContain("private-memory-cause-canary");
       // The semantic-retrieval signal precedes the capture failure (audit of #3233).
       expect(diagnostics.map((record) => record.operation)).toEqual([
         "memory.retrieval.semantic-disabled",
@@ -3659,7 +4938,7 @@ describe("handleGroundedAsk", () => {
     const abstainRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       return Promise.resolve({
         pack: noEvidencePack,
-        assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
+        assistantContent: connectedSearchNoEvidenceAnswer(_input.query.text),
         elapsedMs: 1,
         noEvidence: true,
       });
@@ -3673,7 +4952,7 @@ describe("handleGroundedAsk", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     // The abstention answer is surfaced, but with NO citations, NO evidence run id, and NO persisted
     // grounded-evidence manifest — there is nothing to ground, so nothing may be recorded as grounded.
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.content).toBe("No matching evidence was found for this search.");
     expect(answer.citations).toEqual([]);
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);

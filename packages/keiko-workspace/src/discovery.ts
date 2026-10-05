@@ -1,12 +1,14 @@
-// Recursive, bounded, deterministic file discovery and a single boundary-checked read path.
+// Recursive discovery and a single boundary-checked read path.
 // Security invariants (ADR-0005 D2/D3):
 //   - every directory descent and every read goes through resolveWithinWorkspace first;
 //   - always-on DENY patterns are applied before the optional .gitignore subset;
 //   - a symlink whose realpath escapes the root is skipped (never followed);
-//   - recursion is capped by maxDepth and total results by maxFiles;
-//   - every directory read is capped, so one huge directory cannot be materialized in full.
+//   - inventory discovery honors its explicit depth/result/directory-entry budgets;
+//   - complete search uses native directory streaming and closes each handle before descent;
+//   - directory streaming is required for complete search; legacy ports keep bounded inventories.
 
 import { relative } from "node:path";
+import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
 import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
@@ -17,6 +19,11 @@ import {
 } from "./fs.js";
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
+import {
+  admittedSearchScopeEntry,
+  canonicalSearchScopeRelativePaths,
+  resolveEntryWalkRoot,
+} from "./repoSearchEntries.js";
 import {
   containedRealPathInfo,
   isAllowedContainedPathParent,
@@ -31,6 +38,7 @@ import {
   WorkspaceReadError,
 } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_READ_OPTIONS,
@@ -44,6 +52,7 @@ import {
 import {
   StructuralExecutionStoppedError,
   structuralExecutionStopped,
+  assertStructuralExecutionActive,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import {
@@ -63,13 +72,16 @@ interface Walk {
   readonly directorySnapshots: Map<string, WorkspaceDirectorySnapshot>;
   readonly skippedSymbolicLinks: string[];
   readonly failOnReadError: boolean;
+  readonly retainMembership?: boolean;
   readonly entryLimit?: number | undefined;
   readonly executionControl?: StructuralExecutionControl | undefined;
   entriesVisited: number;
   denied: number;
+  unrepresentablePaths: number;
   ignored: number;
   depthPruned: number;
   maxFilesPruned: number;
+  ioErrors?: number;
 }
 
 function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
@@ -112,6 +124,10 @@ function toRelative(root: string, absolutePath: string): string {
 // Returns false when the entry must be skipped for any security or noise reason, recording
 // which tier rejected it for the discovery stats.
 function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
+  if (!isValidScopePath(relPath, { mustBeRelative: true })) {
+    walk.unrepresentablePaths += 1;
+    return false;
+  }
   if (isDenied(relPath)) {
     walk.denied += 1;
     return false;
@@ -127,6 +143,50 @@ function childRelative(relativeDir: string, name: string): string {
   return relativeDir === "" ? name : `${relativeDir}/${name}`;
 }
 
+function assertRecoveryRootUnchanged(
+  fs: WorkspaceFs,
+  root: string,
+  expected: string | undefined,
+): void {
+  try {
+    if (fs.realPath(root) === expected) return;
+  } catch (error) {
+    const failure = new PathDeniedError("workspace root unavailable during read", ".");
+    failure.cause = error;
+    throw failure;
+  }
+  throw new PathDeniedError("workspace root changed during read", ".");
+}
+
+// Process-wide descriptor exhaustion and identity changes remain fatal; only local availability
+// failures can preserve previously verified files and continue into unrelated sibling directories.
+const UNAVAILABLE_DIRECTORY_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+  "EIO",
+  "ESTALE",
+]);
+
+function skipUnavailableStreamingDirectory(
+  walk: Walk,
+  relativeDir: string,
+  error: unknown,
+): boolean {
+  if (relativeDir === "" || walk.retainMembership !== false) return false;
+  if (
+    !(error instanceof Error) ||
+    !("code" in error) ||
+    typeof error.code !== "string" ||
+    !UNAVAILABLE_DIRECTORY_CODES.has(error.code)
+  )
+    return false;
+  assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
+  walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+  return true;
+}
+
 function currentContainedDirectory(
   walk: Walk,
   absoluteDir: string,
@@ -137,6 +197,7 @@ function currentContainedDirectory(
   try {
     contained = containedRealPathInfo(walk.fs, walk.root, lexicalPath);
   } catch (error) {
+    if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return undefined;
     rejectContainedEntry(walk, relativeDir, error);
     return undefined;
   }
@@ -159,6 +220,19 @@ function currentContainedDirectory(
   return contained.path;
 }
 
+function directoryReadFailure(relativeDir: string, error: unknown): Error {
+  if (
+    error instanceof PathDeniedError ||
+    error instanceof StructuralExecutionStoppedError ||
+    error instanceof PathEscapeError ||
+    error instanceof WorkspaceReadError
+  )
+    return error;
+  const failure = new WorkspaceReadError("Cannot read the selected directory.", relativeDir);
+  failure.cause = error;
+  return failure;
+}
+
 function failedDirectoryRead(
   walk: Walk,
   relativeDir: string,
@@ -168,11 +242,7 @@ function failedDirectoryRead(
     throw error;
   }
   if (!walk.failOnReadError) return [];
-  if (error instanceof PathEscapeError || error instanceof WorkspaceReadError) throw error;
-  throw new WorkspaceReadError(
-    `cannot read directory: ${relativeDir || "."} (${describe(error)})`,
-    relativeDir,
-  );
+  throw directoryReadFailure(relativeDir, error);
 }
 
 // #3347 (owner P1): a single directory must never be materialized (and then sorted) in full before
@@ -253,6 +323,7 @@ function currentEntryStat(
     if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
       throw error;
     }
+    if (skipDisappearedStreamingEntry(walk, relativePath, error)) return undefined;
     if (walk.failOnReadError) {
       throw new WorkspaceReadError(
         `cannot stat discovered path: ${relativePath} (${describe(error)})`,
@@ -263,7 +334,24 @@ function currentEntryStat(
   }
 }
 
+function skipDisappearedStreamingEntry(walk: Walk, relativePath: string, error: unknown): boolean {
+  if (
+    relativePath === "" ||
+    walk.retainMembership !== false ||
+    !(error instanceof Error) ||
+    !("code" in error) ||
+    error.code !== "ENOENT"
+  )
+    return false;
+  walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+  return true;
+}
+
 function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
+  if (walk.retainMembership === false) {
+    walk.denied += 1;
+    return;
+  }
   if (walk.skippedSymbolicLinks.length >= walk.opts.maxFiles) {
     walk.maxFilesPruned += 1;
   } else {
@@ -281,6 +369,7 @@ function rejectContainedEntry(walk: Walk, relativePath: string, error: unknown):
   if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
     throw error;
   }
+  if (skipDisappearedStreamingEntry(walk, relativePath, error)) return undefined;
   if (walk.failOnReadError) {
     if (error instanceof PathEscapeError) throw error;
     throw new WorkspaceReadError(
@@ -492,6 +581,7 @@ function createWalk(
     ...(executionControl === undefined ? {} : { executionControl }),
     entriesVisited: 0,
     denied: 0,
+    unrepresentablePaths: 0,
     ignored: 0,
     depthPruned: 0,
     maxFilesPruned: 0,
@@ -533,6 +623,7 @@ function discoveryResult(walk: Walk): DiscoveryResult {
     stats: {
       discovered: walk.out.length,
       denied: walk.denied,
+      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
       ignored: walk.ignored,
       depthPruned: walk.depthPruned,
       maxFilesPruned: walk.maxFilesPruned,
@@ -587,6 +678,208 @@ export async function discoverCandidateInventoryAsync(
   const entryLimit = Math.max(opts.maxFiles * 2, opts.maxFiles + opts.maxDepth + 1);
   const walk = await runWalkAsync(workspace, opts, fs, true, executionControl, entryLimit);
   return candidateDiscoveryResult(walk);
+}
+
+export interface StreamingDiscoveryStats {
+  readonly unrepresentablePaths?: number | undefined;
+  readonly filesDiscovered: number;
+  readonly ignored: number;
+  readonly denied: number;
+  readonly ioErrors: number;
+}
+
+interface StreamingWalk {
+  entriesSinceYield: number;
+  readonly walk: Walk;
+  readonly onFile: (file: DiscoveredFile) => Promise<void>;
+  filesDiscovered: number;
+}
+
+interface PendingStreamingDirectory {
+  readonly absolute: string;
+  readonly relativeDir: string;
+}
+
+async function visitStreamingEntry(
+  state: StreamingWalk,
+  relativeDir: string,
+  entry: WorkspaceDirEntry,
+  directories: PendingStreamingDirectory[],
+): Promise<void> {
+  await yieldToEventLoop(state);
+  const walk = state.walk;
+  const path = childRelative(relativeDir, entry.name);
+  if (!isAllowed(walk, path, entry.isDirectory)) return;
+  if (entry.isSymbolicLink) {
+    recordSkippedSymbolicLink(walk, path);
+    return;
+  }
+  const current = currentContainedEntry(walk, path);
+  if (current === undefined || !isAllowed(walk, path, current.stat.isDirectory)) return;
+  if (current.stat.isDirectory)
+    directories.push({ absolute: current.absolutePath, relativeDir: path });
+  else if (current.stat.isFile) {
+    state.filesDiscovered += 1;
+    await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
+  }
+}
+
+async function* admittedStreamingDirectoryEntries(
+  walk: Walk,
+  absolute: string,
+  relativeDir: string,
+): AsyncIterable<WorkspaceDirEntry> {
+  try {
+    if (walk.executionControl !== undefined) assertStructuralExecutionActive(walk.executionControl);
+    const current = currentContainedDirectory(walk, absolute, relativeDir);
+    if (current === undefined) return;
+    if (walk.fs.iterateDirectory === undefined) {
+      throw new WorkspaceReadError("Directory streaming is unavailable.", relativeDir);
+    }
+    yield* walk.fs.iterateDirectory(current);
+    currentContainedDirectory(walk, current, relativeDir);
+  } catch (error) {
+    if (
+      error instanceof WorkspaceDescriptorReadError &&
+      error.reason === "directory-membership-changed"
+    ) {
+      walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+      return;
+    }
+    if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return;
+    throw directoryReadFailure(relativeDir, error);
+  }
+}
+
+async function collectStreamingDirectory(
+  state: StreamingWalk,
+  absolute: string,
+  relativeDir: string,
+  directories: PendingStreamingDirectory[],
+): Promise<void> {
+  for await (const entry of admittedStreamingDirectoryEntries(state.walk, absolute, relativeDir)) {
+    if (state.walk.executionControl !== undefined)
+      assertStructuralExecutionActive(state.walk.executionControl);
+    // Collector and path-policy failures belong to the file operation, not the directory reader.
+    await visitStreamingEntry(state, relativeDir, entry, directories);
+  }
+}
+
+// Each result is produced only after the directory descriptor has closed.
+async function* streamingDirectoryChildren(
+  state: StreamingWalk,
+  pending: PendingStreamingDirectory[],
+): AsyncIterable<PendingStreamingDirectory[]> {
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) break;
+    const children: PendingStreamingDirectory[] = [];
+    yield collectStreamingDirectory(
+      state,
+      directory.absolute,
+      directory.relativeDir,
+      children,
+    ).then(() => children);
+  }
+}
+
+async function visitStreamingDirectory(
+  state: StreamingWalk,
+  absolute: string,
+  relativeDir: string,
+): Promise<void> {
+  const pending: PendingStreamingDirectory[] = [{ absolute, relativeDir }];
+  for await (const children of streamingDirectoryChildren(state, pending)) {
+    // Finish and close the current descriptor before descending. Only directory paths are queued;
+    // file contents and file inventories are never retained by discovery.
+    children.reverse();
+    for (const child of children) pending.push(child);
+  }
+}
+
+function streamingScopeWalk(
+  workspace: WorkspaceInfo,
+  relativePaths: readonly string[],
+  applyGitignore: boolean,
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+): Walk {
+  const selectedRoot =
+    relativePaths.length === 0 ? workspace.root : resolveEntryWalkRoot(fs, workspace.root);
+  const selectedFs =
+    relativePaths.length === 0 ? fs : workspaceFsBoundToCanonicalRoot(fs, selectedRoot);
+  return {
+    ...createWalk(
+      { ...workspace, root: selectedRoot },
+      { maxDepth: Infinity, maxFiles: Infinity, applyGitignore },
+      selectedFs,
+      true,
+      control,
+    ),
+    retainMembership: false,
+  };
+}
+
+async function visitSelectedStreamingPath(state: StreamingWalk, path: string): Promise<void> {
+  const walk = state.walk;
+  if (path === "") {
+    await visitStreamingDirectory(state, walk.root, "");
+    return;
+  }
+  if (!isAllowed(walk, path, false)) return;
+  const current = admittedSearchScopeEntry(walk.fs, walk.root, path);
+  if (current?.stat.isDirectory) await visitStreamingDirectory(state, current.path, path);
+  else if (current?.stat.isFile) {
+    state.filesDiscovered += 1;
+    await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
+  }
+}
+
+async function* selectedStreamingVisits(
+  state: StreamingWalk,
+  selected: readonly string[],
+): AsyncIterable<void> {
+  for (const path of selected) {
+    if (selected.some((other) => other !== path && (other === "" || path.startsWith(`${other}/`))))
+      continue;
+    yield visitSelectedStreamingPath(state, path);
+  }
+}
+
+/** Visit an admitted scope without retaining a path inventory or imposing a file-count ceiling. */
+export async function visitWorkspaceFiles(
+  workspace: WorkspaceInfo,
+  relativePaths: readonly string[],
+  applyGitignore: boolean,
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+  onFile: (file: DiscoveredFile) => Promise<void>,
+  onStats?: (stats: StreamingDiscoveryStats) => void,
+): Promise<StreamingDiscoveryStats> {
+  const walk = streamingScopeWalk(workspace, relativePaths, applyGitignore, fs, control);
+  const state: StreamingWalk = { walk, onFile, filesDiscovered: 0, entriesSinceYield: 0 };
+  const selected =
+    relativePaths.length === 0 ? [""] : canonicalSearchScopeRelativePaths(relativePaths);
+  try {
+    for await (const _visit of selectedStreamingVisits(state, selected)) {
+      // Drain one selected root at a time; traversal records its counts in state.
+    }
+    return {
+      filesDiscovered: state.filesDiscovered,
+      ignored: walk.ignored,
+      denied: walk.denied,
+      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
+      ioErrors: walk.ioErrors ?? 0,
+    };
+  } finally {
+    onStats?.({
+      filesDiscovered: state.filesDiscovered,
+      ignored: walk.ignored,
+      denied: walk.denied,
+      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
+      ioErrors: walk.ioErrors ?? 0,
+    });
+  }
 }
 
 function candidateDiscoveryResult(walk: Walk): CandidateDiscoveryResult {
@@ -769,6 +1062,15 @@ function postReadStat(
   fs: WorkspaceFs,
   target: ReadableWorkspaceFile,
 ): WorkspaceStat {
+  let stat: WorkspaceStat;
+  try {
+    stat = statFile(fs, target.resolvedPath, target.normalizedRel);
+  } catch (error) {
+    // A removed child is availability loss, not evidence that it redirected outside the root.
+    // Revalidate the root before allowing the existing unreadable-file recovery to handle it.
+    assertRecoveryRootUnchanged(fs, workspace.root, target.realBase);
+    throw error;
+  }
   const contained = containedRealPathInfo(fs, workspace.root, target.resolvedPath);
   const realRelative = contained.realRelative.replaceAll("\\", "/");
   if (
@@ -782,7 +1084,7 @@ function postReadStat(
       target.normalizedRel,
     );
   }
-  return statFile(fs, contained.path, target.normalizedRel);
+  return stat;
 }
 
 function readRawContent(
@@ -888,6 +1190,33 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
   return { bytes, stat, complete: bytes.byteLength === stat.size };
 }
 
+export interface InternalWorkspaceTextByteRead extends InternalWorkspaceByteRead {
+  readonly binary: boolean;
+}
+
+/** Internal text-admission seam. Reuse complete small files; reject binary heads before full I/O. */
+export async function readWorkspaceFileBytesForTextInspection(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+): Promise<InternalWorkspaceTextByteRead> {
+  const head = await readWorkspaceFileBytesPrefixForInternalUse(
+    workspace,
+    relPath,
+    Math.min(maxBytes, DEFAULT_BINARY_PROBE.maxProbeBytes),
+    fs,
+  );
+  // Keep size exclusions authoritative even if an oversized file also has a binary header.
+  const binary = head.stat.size <= maxBytes && looksBinary(head.bytes);
+  if (head.complete || head.stat.size > maxBytes || binary) return { ...head, binary };
+  const full = await readWorkspaceFileBytesPrefixForInternalUse(workspace, relPath, maxBytes, fs);
+  if (!sameFileSnapshot(head.stat, full.stat)) {
+    throw new WorkspaceReadError(`file changed during text inspection: ${relPath}`, relPath);
+  }
+  return { ...full, binary: false };
+}
+
 /** Internal redacted prefix seam for oversized code-intelligence sources. */
 export function readWorkspaceFilePrefixForEvidence(
   workspace: WorkspaceInfo,
@@ -905,7 +1234,7 @@ export function readWorkspaceFilePrefixForEvidence(
     mapPrefixReadFailure(error, target, maxBytes);
   }
   assertStablePrefixRead(workspace, fs, target);
-  return redact(rawText);
+  return redact(rawText, [], { preserveSourceLineBreaks: true });
 }
 
 /** Internal text seam that keeps stable read metadata attached until index persistence. */
@@ -1026,7 +1355,7 @@ export function readWorkspaceFile(
   return {
     relativePath: raw.relativePath,
     sizeBytes: raw.sizeBytes,
-    text: redact(raw.rawText),
+    text: redact(raw.rawText, [], { preserveSourceLineBreaks: true }),
     truncated: raw.truncated,
   };
 }

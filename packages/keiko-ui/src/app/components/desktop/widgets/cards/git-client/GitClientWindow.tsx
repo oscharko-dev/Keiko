@@ -31,11 +31,13 @@ import {
   isGitWireUnavailableReason,
   type GitWireUnavailableReason,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
 import type {
   GitChangedFile,

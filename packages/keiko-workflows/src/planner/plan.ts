@@ -1,9 +1,11 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Exploration plan factory and retrieval-ring composition (Epic #177, Issue #181).
 // Consumes #178 contracts and #179 search-limits surface. Produces a JSON-safe ExplorationPlan
 // BEFORE any retrieval work runs. Deterministic planId via node:crypto SHA-256. No IO, no
 // network. Execution and persistence of plans land in #182/#183/#187.
 
 import { createHash } from "node:crypto";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -16,9 +18,15 @@ import {
 // The symbol-relation vocabulary is owned by keiko-workspace (repoSearchPolicy.ts), where the
 // retrieval ranker applies the same source-over-prose bias to the same question shape. One
 // definition, imported inward, so planner classification and candidate ranking cannot drift.
-import { SYMBOL_RELATION_TERMS, type SearchLimits } from "@oscharko-dev/keiko-workspace";
+import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/keiko-workspace";
 
-import { extractAnchors, type SearchAnchor, type SearchAnchorKind } from "./anchors.js";
+import {
+  extractAnchors,
+  queryContextOutsideQuotes,
+  queryShapeOutsideTargets,
+  type SearchAnchor,
+  type SearchAnchorKind,
+} from "./anchors.js";
 import {
   classifyRetrievalIntent,
   type RetrievalIntent,
@@ -57,9 +65,11 @@ export interface ExplorationPlan {
   readonly planId: string;
   readonly state: ExplorationPlanState;
   readonly retrievalIntent: RetrievalIntent;
+  readonly directEvidenceLookup: boolean;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
+  readonly targetDecision?: QueryTargetDecision;
   readonly rings: readonly RetrievalRing[];
   readonly budget: ExplorationBudget;
   readonly clarification: ClarificationPrompt | undefined;
@@ -87,24 +97,14 @@ const RING_WEIGHTS: Readonly<Record<RetrievalRingKind, number>> = {
   "git-history": 0.15,
 };
 
-// Lexical/structural scanning is transient — each candidate file is read to match lines, then
-// discarded — so its breadth is bounded by elapsedMsMax, NOT by the excerpt-byte budget the model
-// context is built from. Deriving maxFilesScanned from the excerpt slice capped the scan at ~4
-// files and starved multi-file connected scopes (Epic #177 retrieval defect): the search could
-// never reach the file a question was actually about. These ceilings let a ring examine the
-// connected scope broadly while the excerpt READ phase keeps enforcing filesReadMax/excerptBytesMax.
-const SCAN_FILE_CEILING = 2048;
-// Evidence atoms returned for ranking. With the search facade's per-file match cap this represents
-// many candidate files (well beyond filesReadMax) so the ranker has real choice before the excerpt
-// phase reads the top files.
+// Lexical corpus traversal has no default file-count or elapsed-time cap. Cancellation and
+// explicit caller deadlines remain authoritative; retained matches are bounded separately by the
+// accepted byte/token capacity. Optional structural/history enrichment keeps a finite file slice.
+// Scan breadth is independent of the excerpt budget that bounds evidence sent to the model.
+const STRUCTURAL_SCAN_FILE_CEILING = 2048;
+// Structural/history enrichment retains its existing bounded output. Lexical retained metadata
+// is derived from the accepted byte/token capacity below, independently of corpus traversal.
 const MATCH_RETURN_CEILING = 256;
-// Per-file scan read cap (2 MiB). A connected file up to this size is fully read and matched so it
-// is never skipped as size-exceeded regardless of format; only files larger than this are omitted.
-// This bounds the transient per-file read during line matching, NOT the excerpt content that enters
-// the pack (Epic #177 retrieval fix — the prior excerpt-byte-derived cap of ~18 KiB silently dropped
-// larger files from the search entirely).
-const SCAN_BYTES_PER_FILE = 2_097_152;
-
 const RING_LABELS: Readonly<Record<RetrievalRingKind, string>> = {
   lexical: "Lexical scan across the selected scope",
   structural: "Structural lookups around identifier and path anchors",
@@ -112,7 +112,8 @@ const RING_LABELS: Readonly<Record<RetrievalRingKind, string>> = {
 };
 
 const RING_RATIONALES: Readonly<Record<RetrievalRingKind, string>> = {
-  lexical: "Lexical anchors are always cheap to scan first and bound the working set.",
+  lexical:
+    "Lexical anchors scan the selected scope; retained evidence is bounded by the accepted context capacity.",
   structural:
     "Identifier or path anchors warrant structural lookups so callers are reached without a full text scan.",
   "git-history":
@@ -145,18 +146,36 @@ function atLeastOne(value: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-function sliceLimits(budget: ExplorationBudget, weight: number): SearchLimits {
-  // Scanning is transient — each file is read to match lines, then discarded — and is bounded by
-  // elapsedMsMax, NOT by the excerpt-byte budget the model context is built from. Both the per-file
-  // read cap and the scan breadth are therefore decoupled from excerptBytesMax (Epic #177 retrieval
-  // fix); deriving them from the excerpt slice capped scanning at ~4 files of ~18 KiB and silently
-  // skipped any larger or later-sorted file. The excerpt READ phase still enforces filesReadMax /
-  // excerptBytesMax when it incorporates file content into the pack.
+function ringMatchReturnLimit(kind: RetrievalRingKind, budget: ExplorationBudget): number {
+  if (kind === "lexical") {
+    // Each independently citable nonempty fact needs at least one excerpt byte and one input
+    // token. This conservative finite capacity bounds retained metadata, not corpus traversal;
+    // actual excerpts and prompt accounting still decide which evidence fits.
+    return atLeastOne(Math.min(budget.excerptBytesMax, budget.modelInputTokensMax));
+  }
+  return atLeastOne(MATCH_RETURN_CEILING * RING_WEIGHTS[kind]);
+}
+
+/** Accepted default context capacity bounds retained results, independently of corpus size. */
+export const DEFAULT_LEXICAL_MATCH_LIMIT = ringMatchReturnLimit(
+  "lexical",
+  DEFAULT_EXPLORATION_BUDGET,
+);
+
+function sliceLimits(
+  budget: ExplorationBudget,
+  weight: number,
+  kind: RetrievalRingKind,
+): SearchLimits {
+  // Lexical traverses the entire eligible scope unless an explicit deadline or cancellation stops
+  // it. Structural/history enrichment has a weighted finite file count. All rings keep per-file
+  // byte eligibility and finite retained-match capacity; neither derives corpus breadth from the
+  // excerpt grant. Final source reads enforce the separate accepted file/byte/token budgets.
   return {
-    maxFilesScanned: atLeastOne(SCAN_FILE_CEILING * weight),
-    maxMatchesReturned: atLeastOne(MATCH_RETURN_CEILING * weight),
-    maxBytesPerFileScanned: SCAN_BYTES_PER_FILE,
-    elapsedMsMax: atLeastOne(budget.elapsedMsMax * weight),
+    maxFilesScanned: kind === "lexical" ? null : atLeastOne(STRUCTURAL_SCAN_FILE_CEILING * weight),
+    maxMatchesReturned: ringMatchReturnLimit(kind, budget),
+    maxBytesPerFileScanned: MAX_RECURSIVE_TEXT_FILE_BYTES,
+    elapsedMsMax: budget.elapsedMsMax === null ? null : atLeastOne(budget.elapsedMsMax * weight),
   };
 }
 
@@ -179,7 +198,7 @@ function buildRing(
     kind,
     label: RING_LABELS[kind],
     anchorTerms: anchorTerms(anchors),
-    searchLimits: sliceLimits(budget, RING_WEIGHTS[kind]),
+    searchLimits: sliceLimits(budget, RING_WEIGHTS[kind], kind),
     rationale: RING_RATIONALES[kind],
   };
 }
@@ -246,7 +265,11 @@ function hasQueryTerm(text: string, terms: ReadonlySet<string>): boolean {
 }
 
 function hasHistoryQuery(text: string): boolean {
-  return hasQueryTerm(text, HISTORY_QUERY_TERMS);
+  return [...queryContextOutsideQuotes(text).toLowerCase().matchAll(QUERY_TERM_RE)].some(
+    (match) =>
+      HISTORY_QUERY_TERMS.has(match[0]) ||
+      /^histor(?:ical(?:ly)?|isch(?:e[nmrs]?)?)$/u.test(match[0]),
+  );
 }
 
 function hasDefinitionLookup(text: string): boolean {
@@ -254,7 +277,7 @@ function hasDefinitionLookup(text: string): boolean {
 }
 
 function hasSymbolRelation(text: string): boolean {
-  return hasQueryTerm(text, SYMBOL_RELATION_TERMS);
+  return hasSymbolRelationshipQuery(text);
 }
 
 function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
@@ -278,7 +301,7 @@ function isDirectRouteLookup(query: RetrievalQuery): boolean {
   );
 }
 
-function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
+export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
   return (
     hasHistoryQuery(query.text) ||
     hasSymbolRelation(query.text) ||
@@ -286,24 +309,232 @@ function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
   );
 }
 
-export function directDefinitionSymbol(
+const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
+const REQUESTED_TEST_RELATION_RE =
+  /\b(?:tests?|testing|tested|specs?|integration|integrations|integrationstests?|testet|getestet)\b/iu;
+export interface QueryTargetDecision {
+  readonly kind: "literal-search" | "direct-fact" | "contextual";
+  readonly targets: readonly SearchAnchor[];
+  readonly definitionSymbol: string | undefined;
+  readonly definitionRequested: boolean;
+}
+
+const SEARCH_COMMANDS = new Set(["find", "search", "locate", "suche", "finde", "lokalisiere"]);
+const SEARCH_MODIFIERS = new Set([
+  "for",
+  "nach",
+  "recursively",
+  "rekursiv",
+  "the",
+  "der",
+  "die",
+  "das",
+  "den",
+  "exact",
+  "literal",
+  "phrase",
+  "identifier",
+  "symbol",
+  "kennung",
+  "suchbegriff",
+  "exakten",
+  "exakte",
+  "exakter",
+  "exaktes",
+  "wörtlichen",
+  "wörtliche",
+]);
+const DEFINITION_GRAMMAR_WORDS = new Set([
+  "is",
+  "are",
+  "do",
+  "we",
+  "ist",
+  "sind",
+  "wir",
+  "the",
+  "and",
+  "und",
+]);
+const SHAPE_TOKEN_RE = /\0|[\p{L}\p{N}_$-]+/gu;
+const ENGLISH_VALUE_REQUEST_RE =
+  /^what\s+(?:value\s+is\s+documented\s+for|is\s+(?:the\s+)?value\s+of)\s+\0$/iu;
+const GERMAN_VALUE_REQUEST_RE = /^welche\s+werte\s+stehen\s+zu\s+\0$/iu;
+const GERMAN_INFORMATION_REQUEST_RE =
+  /^welche\s+information\s+ist\s+(?:für\s+\0|dazu)\s+in\s+diesem\s+ordner\s+belegt$/iu;
+
+function requestContentTargets(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
-): string | undefined {
-  if (
-    !hasDefinitionLookup(query.text) ||
-    hasHistoryQuery(query.text) ||
-    hasSymbolRelation(query.text)
-  ) {
-    return undefined;
-  }
-  const identifiers = anchors.filter(
-    (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
+): readonly SearchAnchor[] {
+  const original = query.text.toLowerCase();
+  return anchors.filter(
+    (anchor) =>
+      (anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.weight >= 0.85)) &&
+      original.includes(anchor.term),
   );
+}
+
+function shapeWords(text: string): readonly string[] {
+  return [...text.toLowerCase().matchAll(SHAPE_TOKEN_RE)].map((match) => match[0]);
+}
+
+function isSearchClause(words: readonly string[]): boolean {
+  const start = words[0] === "please" || words[0] === "bitte" ? 1 : 0;
+  if (!SEARCH_COMMANDS.has(words[start] ?? "")) return false;
+  const target = words.indexOf("\0", start + 1);
+  const targetWords = literalTargetWords(words.slice(target));
+  return (
+    target > start &&
+    words.slice(start + 1, target).every((word) => SEARCH_MODIFIERS.has(word)) &&
+    targetWords.every((word) => word === "\0" || ["and", "und", "or", "oder"].includes(word))
+  );
+}
+
+function literalTargetWords(words: readonly string[]): readonly string[] {
+  if (words.slice(-3).join(" ") === "and its value") return words.slice(0, -3);
+  if (["exactly", "exakt", "wörtlich"].includes(words.at(-1) ?? "")) return words.slice(0, -1);
+  return words;
+}
+
+function isDefinitionClause(words: readonly string[]): boolean {
+  return (
+    (words[0] === "where" || words[0] === "wo") &&
+    words.includes("\0") &&
+    words.some((word) => DEFINITION_LOOKUP_TERMS.has(word)) &&
+    words
+      .slice(1)
+      .every(
+        (word) =>
+          word === "\0" || DEFINITION_LOOKUP_TERMS.has(word) || DEFINITION_GRAMMAR_WORDS.has(word),
+      )
+  );
+}
+
+function isFactClause(words: readonly string[]): boolean {
+  const clause = words.join(" ");
+  return (
+    isDefinitionClause(words) ||
+    isCompoundDefinitionFact(words) ||
+    ENGLISH_VALUE_REQUEST_RE.test(clause) ||
+    GERMAN_VALUE_REQUEST_RE.test(clause) ||
+    GERMAN_INFORMATION_REQUEST_RE.test(clause)
+  );
+}
+
+function isCompoundDefinitionFact(words: readonly string[]): boolean {
+  const separator = words.lastIndexOf("and");
+  if (separator < 0 || !isDefinitionClause(words.slice(0, separator))) return false;
+  const returnedValue = words.slice(separator + 1).join(" ");
+  return (
+    /^what values? do (?:they|\0(?: and \0)*) return$/iu.test(returnedValue) ||
+    /^what does \0 return$/iu.test(returnedValue)
+  );
+}
+
+function positiveRequestKind(shape: string): QueryTargetDecision["kind"] {
+  const clauses = shape
+    .split(/[.!?:;]+/u)
+    .map(shapeWords)
+    .filter((words) => words.length > 0);
+  if (
+    clauses.length === 0 ||
+    clauses.some(
+      (words) =>
+        !isSearchClause(words) &&
+        !isFactClause(words) &&
+        !(words.length === 1 && words[0] === "\0"),
+    )
+  )
+    return "contextual";
+  if (clauses.some(isSearchClause)) return "literal-search";
+  return clauses.some(isFactClause) ? "direct-fact" : "contextual";
+}
+
+/** Only fully parsed positive request shapes authorize narrowing; all unknown prose stays broad. */
+function definitionTarget(
+  query: RetrievalQuery,
+  kind: QueryTargetDecision["kind"],
+  targets: readonly SearchAnchor[],
+  definitionRequested: boolean,
+): string | undefined {
+  if (kind === "contextual" || query.kind === "exact-symbol" || !definitionRequested)
+    return undefined;
+  const identifiers = targets.filter((anchor) => anchor.kind === "identifier");
   const symbol = identifiers[0]?.term;
   return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol)
     ? symbol
     : undefined;
+}
+
+export function resolveQueryTargetDecision(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  maxTargets = query.text.length,
+): QueryTargetDecision {
+  // Inspect the full question, but never certify a literal-only request after target clipping.
+  const requested = extractAnchors({ text: query.text, maxAnchors: maxTargets });
+  const strongTargets = requestContentTargets(query, requested.anchors);
+  const possibleTargets =
+    strongTargets.length > 0
+      ? strongTargets
+      : anchors.filter((anchor) => anchor.kind === "literal" && /^\d+$/u.test(anchor.term));
+  let kind: QueryTargetDecision["kind"] = "contextual";
+  if (query.kind === "exact-symbol") kind = "literal-search";
+  else if (!requested.truncated && possibleTargets.length > 0)
+    kind = positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
+  const targets = kind === "literal-search" ? possibleTargets : strongTargets;
+  const definitionRequested = hasDefinitionLookup(queryContextOutsideQuotes(query.text));
+  return {
+    kind,
+    targets,
+    definitionSymbol: definitionTarget(query, kind, targets, definitionRequested),
+    definitionRequested,
+  };
+}
+
+// Direct named evidence needs definition/document discovery, while requested relationships and
+// diagnostics retain their structural/history routing. The single-symbol narrowing API below
+// remains separate so a multi-target question cannot accidentally become a one-symbol query.
+export function isDirectEvidenceLookup(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  decision = resolveQueryTargetDecision(query, anchors),
+): boolean {
+  if (
+    requiresRelationshipOrHistoryRings(query) ||
+    REQUESTED_TEST_RELATION_RE.test(query.text) ||
+    decision.kind === "contextual"
+  )
+    return false;
+  const targets = anchors.filter(
+    (anchor) =>
+      (anchor.kind === "identifier" || anchor.kind === "quoted") &&
+      anchor.weight >= 0.85 &&
+      /^[a-z_$][a-z0-9_$-]*$/iu.test(anchor.term),
+  );
+  if (targets.length === 0) return false;
+  return hasDefinitionLookup(query.text)
+    ? targets.every((anchor) => !isTestIdentifier(query.text, anchor.term))
+    : targets.every((anchor) => DIRECT_DOCUMENT_REFERENCE_RE.test(anchor.term));
+}
+
+export function directDefinitionSymbol(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  decision = resolveQueryTargetDecision(query, anchors),
+): string | undefined {
+  const symbol = decision.definitionSymbol;
+  return anchors.some(
+    (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term === symbol,
+  )
+    ? symbol
+    : undefined;
+}
+
+interface PlannedRings {
+  readonly rings: readonly RetrievalRing[];
+  readonly directEvidenceLookup: boolean;
 }
 
 function composeRings(
@@ -311,10 +542,11 @@ function composeRings(
   scope: SelectedScope,
   query: RetrievalQuery,
   budget: ExplorationBudget,
-): readonly RetrievalRing[] {
+  targetDecision: QueryTargetDecision,
+): PlannedRings {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
   const directLookup =
-    isDirectRouteLookup(query) || directDefinitionSymbol(query, anchors) !== undefined;
+    isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors, targetDecision);
   if (!directLookup && (hasKind(anchors, "identifier") || hasKind(anchors, "path"))) {
     rings.push(buildRing("structural", anchors, budget));
   }
@@ -324,7 +556,7 @@ function composeRings(
   ) {
     rings.push(buildRing("git-history", anchors, budget));
   }
-  return rings;
+  return { rings, directEvidenceLookup: directLookup };
 }
 
 // ─── Clarification helpers ────────────────────────────────────────────────────
@@ -352,33 +584,20 @@ interface ClarificationDecision {
   readonly clarification: ClarificationPrompt | undefined;
 }
 
-function explicitConnectionIsReady(scope: SelectedScope, intent: RetrievalIntent): boolean {
-  if (scope.explicitConnection !== true) {
-    return false;
-  }
-  if (scope.kind !== "workspace-root") {
-    return true;
-  }
-  return intent === "project-metadata" || intent === "repository-overview";
-}
-
 function decideClarification(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
   intent: RetrievalIntent,
-  query: RetrievalQuery,
 ): ClarificationDecision {
-  if (anchors.length === 0) {
+  if (anchors.length === 0 || intent === "clarification-needed") {
     return {
       state: "clarification-needed",
       clarification: buildClarification("no-anchors", NO_ANCHOR_QUESTIONS, 1),
     };
   }
-  // When the user EXPLICITLY connected a folder/files to the chat (a Files↔Chat edge or a scope
-  // pill), they have already narrowed the search to a bounded area. The "too-generic" and
-  // "scope-empty" gates exist to stop vague questions burning budget over the broad workspace;
-  // keep those gates for workspace-root connections even when they were explicitly selected.
-  if (explicitConnectionIsReady(scope, intent)) {
+  // An explicit connection is the human-selected search boundary, including a whole repository.
+  // Precision controls ranking, not permission to read. The governor still bounds every scan.
+  if (scope.explicitConnection === true) {
     return { state: "ready", clarification: undefined };
   }
   // Threshold is <= literal weight so a prompt yielding only `literal` anchors (weight 0.5,
@@ -390,9 +609,6 @@ function decideClarification(
     };
   }
   if (scope.relativePaths.length === 0 && anchors.length < 2) {
-    if (scope.explicitConnection === true && directDefinitionSymbol(query, anchors) !== undefined) {
-      return { state: "ready", clarification: undefined };
-    }
     return {
       state: "clarification-needed",
       clarification: buildClarification("scope-empty", SCOPE_EMPTY_QUESTIONS, 2),
@@ -419,8 +635,8 @@ function canonicalize(seed: PlanSeed): string {
     seed.queryKind,
     seed.queryText,
     seed.retrievalIntent,
-    [...seed.anchorTerms].sort((left, right) => left.localeCompare(right)),
-    [...seed.ringKinds].sort((left, right) => left.localeCompare(right)),
+    [...seed.anchorTerms].sort(compareStrings),
+    [...seed.ringKinds].sort(compareStrings),
   ]);
 }
 
@@ -464,6 +680,7 @@ function buildScopeInvalidPlan(
     planId: derivePlanId(seed),
     state: "scope-invalid",
     retrievalIntent: classification.intent,
+    directEvidenceLookup: false,
     scope: input.scope,
     query: input.query,
     anchors: [],
@@ -488,16 +705,16 @@ export function createExplorationPlan(
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
-  const decision = decideClarification(
-    extraction.anchors,
-    input.scope,
-    classification.intent,
+  const targetDecision = resolveQueryTargetDecision(
     input.query,
+    extraction.anchors,
+    input.maxAnchors,
   );
-  const rings =
+  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
+  const { rings, directEvidenceLookup } =
     decision.state === "ready"
-      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget)
-      : [];
+      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget, targetDecision)
+      : { rings: [], directEvidenceLookup: false };
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
@@ -511,9 +728,11 @@ export function createExplorationPlan(
     planId: derivePlanId(seed),
     state: decision.state,
     retrievalIntent: classification.intent,
+    directEvidenceLookup,
     scope: input.scope,
     query: input.query,
     anchors: extraction.anchors,
+    targetDecision,
     rings,
     budget: resolved.budget,
     clarification: decision.clarification,

@@ -1,10 +1,19 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { computeDefectFingerprint } from "../defect-fingerprint.js";
+import { serverLogProcessIdentity, reportServerLogFailure } from "../server-log.js";
 import {
+  clientOnlySupportReportSections,
+  normalizeSupportReportCorrelationId,
+  parseSupportIncidentRecord,
+  supportIncidentBuild,
+  supportIncidentEffectiveExpiry,
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   supportIncidentPrivateProjection,
   supportReportFileName,
   type DesktopSupportReportResponse,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentRecord,
   type SupportReport,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -12,23 +21,19 @@ import {
   listSupportIncidents,
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
+  prepareUnretainedUserReportDescriptor,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
 } from "../support-incident.js";
-import { listSupportIncidentEntries } from "../support-incident-store.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   type SupportQuerySelection,
   type SupportQueryResult,
 } from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
+import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
 import {
-  resolveSupportIncident,
-  resolveSelectedSupportIncident,
-  unresolvedSupportIncident,
-  SupportIncidentWindowError,
-} from "./support-incident-resolution.js";
-import {
+  sealSupportReport,
   buildSupportReport,
   serializeSupportReport,
   SupportReportError,
@@ -46,7 +51,9 @@ export class DesktopSupportReportPreparationError extends Error {
   }
 }
 
-function correlationSelection(correlationId: string): SupportQuerySelection {
+function correlationSelection(
+  correlationId: string,
+): Extract<SupportQuerySelection, { kind: "closure" }> {
   return {
     kind: "closure",
     queryClass: "correlation",
@@ -57,33 +64,39 @@ function correlationSelection(correlationId: string): SupportQuerySelection {
   };
 }
 
-function createReportIncident(stateDir: string, correlationId: string): SupportIncidentRecord {
-  const created = recordUserReportedIncident(stateDir, { correlationId });
-  if (created.status === "rejected") throw new DesktopSupportReportPreparationError(created.reason);
+export function prepareManualSupportReportIncident(
+  stateDir: string,
+  correlationId: string,
+  onCreated?: (record: SupportIncidentRecord) => void,
+): SupportIncidentDescriptorRecord {
+  const safeCorrelationId = normalizeSupportReportCorrelationId(correlationId) ?? randomUUID();
+  const created = recordUserReportedIncident(stateDir, { correlationId: safeCorrelationId });
+  if (created.status === "rejected") {
+    if (
+      created.reason === "quota-exhausted" ||
+      created.reason === "store-unavailable" ||
+      created.reason === "record-too-large"
+    ) {
+      return prepareUnretainedUserReportDescriptor(safeCorrelationId);
+    }
+    throw new DesktopSupportReportPreparationError(created.reason);
+  }
   if (created.record === undefined) throw new SupportReportError("selection-unavailable");
+  if (created.status === "created") onCreated?.(created.record);
   return created.record;
 }
 
 function incidentDescriptor(
-  stateDir: string,
-  record: SupportIncidentRecord,
-  selected?: SupportQueryResult,
+  record: SupportIncidentDescriptorRecord,
+  selected: SupportQueryResult,
 ): SupportReport["incident"] {
-  const segments = selected === undefined ? supportIncidentSegmentFiles(stateDir, record) : [];
-  if (selected !== undefined) {
-    return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
-  }
-  try {
-    return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
-  } catch (error) {
-    if (!(error instanceof SupportIncidentWindowError)) throw error;
-    return supportIncidentPrivateProjection(
-      unresolvedSupportIncident(record, segments, error.reason),
-    );
-  }
+  return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
 }
 
-function incidentSelection(stateDir: string, record: SupportIncidentRecord): SupportQuerySelection {
+function incidentSelection(
+  stateDir: string,
+  record: SupportIncidentDescriptorRecord,
+): SupportQuerySelection {
   const segmentIds = new Set(
     supportIncidentSegmentFiles(stateDir, record).map((segment) => segment.segmentId),
   );
@@ -97,32 +110,62 @@ function incidentSelection(stateDir: string, record: SupportIncidentRecord): Sup
   };
 }
 
-/** Only the owner thread creates incidents and retention pins. No log-content scan runs here. */
+/** Read a manual descriptor's bounded window without requiring a persistent candidate slot. */
+export function readManualSupportReportEvidence(
+  stateDir: string,
+  record: SupportIncidentDescriptorRecord,
+): ReturnType<typeof executeLocalSupportQuery> {
+  return executeLocalSupportQuery(
+    stateDir,
+    incidentSelection(stateDir, record),
+    REPORT_QUERY_LIMITS,
+    {
+      trigger: "export",
+      persist: false,
+    },
+  );
+}
+
+function retainedReportCandidates(
+  stateDir: string,
+  correlationId?: string,
+): readonly SupportIncidentRecord[] {
+  try {
+    return listSupportIncidents(stateDir, { readOnly: true });
+  } catch (error) {
+    // Candidate storage is optional for exporting separately guarded, readable Activity Log
+    // evidence. Retain the failed lookup's cause; the creation attempt records its own refusal.
+    reportServerLogFailure(error, { op: "support.incident.rejected", correlationId });
+    return [];
+  }
+}
+
+/** Only the owner creates incidents/pins; the legacy third argument never supplies an incident root. */
 export function prepareDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
-  requestCorrelationId?: string,
-): SupportIncidentRecord {
+  _requestCorrelationId?: string,
+  onCreated?: (record: SupportIncidentRecord) => void,
+): SupportIncidentDescriptorRecord {
+  const selected = normalizeSupportReportCorrelationId(correlationId);
   const existing =
-    correlationId === undefined
+    selected === undefined
       ? undefined
-      : listSupportIncidents(stateDir).find(
-          (record) => record.correlation.rootCorrelationId === correlationId,
+      : retainedReportCandidates(stateDir, selected).find(
+          (record) => record.correlation.rootCorrelationId === selected,
         );
   return (
-    existing ??
-    createReportIncident(stateDir, correlationId ?? requestCorrelationId ?? randomUUID())
+    existing ?? prepareManualSupportReportIncident(stateDir, selected ?? randomUUID(), onCreated)
   );
 }
 
 function recentFailureCorrelation(stateDir: string): string | undefined {
   const now = Date.now();
-  const records = listSupportIncidentEntries(stateDir)
-    .flatMap((entry) => {
-      const record = entry.record;
-      return record?.trigger === "registered-failure" &&
+  const records = retainedReportCandidates(stateDir)
+    .flatMap((record) => {
+      return record.trigger === "registered-failure" &&
         !record.fingerprint.op.startsWith("support.report.") &&
-        record.expiresAtMs > now &&
+        supportIncidentEffectiveExpiry(record) > now &&
         record.createdAtMs >= now - SUPPORT_INCIDENT_WINDOW_BEFORE_MS
         ? [record]
         : [];
@@ -140,7 +183,10 @@ export function readDesktopSupportReportSelection(
   stateDir: string,
   correlationId?: string,
 ): DesktopSupportReportSelection {
-  const selected = correlationId ?? recentFailureCorrelation(stateDir);
+  const normalized = normalizeSupportReportCorrelationId(correlationId);
+  if (correlationId !== undefined && normalized === undefined)
+    throw new SupportReportError("selection-unavailable");
+  const selected = normalized ?? recentFailureCorrelation(stateDir);
   if (selected === undefined) return { correlationId: undefined };
   const evidence = executeLocalSupportQuery(
     stateDir,
@@ -163,7 +209,7 @@ export function validateDesktopSupportReportSelection(
 /** Read-only composition: safe to run off the server request event loop. */
 export function createPreparedDesktopSupportReport(
   stateDir: string,
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   correlationId?: string,
   selectedEvidence?: ReturnType<typeof executeLocalSupportQuery>,
 ): DesktopSupportReportResponse {
@@ -177,27 +223,12 @@ export function createPreparedDesktopSupportReport(
       trigger: "export",
       persist: false,
     });
-  const report = buildSupportReport(
-    incidentDescriptor(stateDir, record, correlationId === undefined ? undefined : evidence.result),
-    evidence.result,
-  );
-  return {
-    fileName: supportReportFileName(
-      report.schemaVersion,
-      report.incident.incidentId,
-      report.incident.createdAtMs,
-    ),
-    reportJson: serializeSupportReport(report),
-    summary: {
-      status: report.selection.status,
-      reasons: report.selection.reasons,
-      recordCount: report.evidence.recordCount,
-      reportDigest: report.integrity.reportDigest,
-      incidentId: report.incident.incidentId,
-      manifestUnreadableCount: evidence.manifestStats.unreadableCount,
-      manifestReusedCount: evidence.manifestStats.reusedCount,
-    },
-  };
+  const report = buildSupportReport(incidentDescriptor(record, evidence.result), evidence.result);
+  return desktopReportResponse(report, {
+    manifestUnreadableCount: evidence.manifestStats.unreadableCount,
+    manifestReusedCount: evidence.manifestStats.reusedCount,
+    retentionDisposition: parseSupportIncidentRecord(record) === undefined ? "transient" : "stored",
+  });
 }
 
 export function createDesktopSupportReport(
@@ -211,4 +242,71 @@ export function createDesktopSupportReport(
     selected.correlationId,
     selected.evidence,
   );
+}
+
+/** Canonical browser availability artifact. No private state directory or log is consulted. */
+export function createClientOnlySupportReport(
+  correlationId: string | undefined,
+  availabilityReason: NonNullable<SupportReport["incident"]["clientReport"]>["availabilityReason"],
+  failure?: NonNullable<SupportReport["incident"]["clientReport"]>["failure"],
+): DesktopSupportReportResponse {
+  const identity = serverLogProcessIdentity();
+  const sections = clientOnlySupportReportSections({
+    incidentId: randomBytes(16).toString("hex"),
+    nowMs: Date.now(),
+    build: supportIncidentBuild(identity.productVersion, identity.platformClass),
+    defectFingerprint: computeDefectFingerprint(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
+    availabilityReason,
+    ...(failure === undefined ? {} : { failure }),
+    correlationId,
+  });
+  const report = sealSupportReport(sections.incident, sections.selection, sections.evidence);
+  return desktopReportResponse(report, {
+    manifestUnreadableCount: 0,
+    manifestReusedCount: 0,
+    evidenceScope: "client-only",
+  });
+}
+
+interface DesktopReportResponseOptions {
+  readonly manifestUnreadableCount: number;
+  readonly manifestReusedCount: number;
+  readonly evidenceScope?: "client-only";
+  readonly retentionDisposition?: NonNullable<
+    DesktopSupportReportResponse["summary"]
+  >["retentionDisposition"];
+}
+
+function desktopReportResponse(
+  report: SupportReport,
+  options: DesktopReportResponseOptions,
+): DesktopSupportReportResponse {
+  const { manifestUnreadableCount, manifestReusedCount, evidenceScope, retentionDisposition } =
+    options;
+  return {
+    ...(evidenceScope === undefined ? {} : { evidenceScope }),
+    fileName: supportReportFileName(
+      report.schemaVersion,
+      report.incident.incidentId,
+      report.incident.createdAtMs,
+    ),
+    reportJson: serializeSupportReport(report),
+    summary: {
+      status: report.selection.status,
+      reasons: report.selection.reasons,
+      recordCount: report.evidence.recordCount,
+      reportDigest: report.integrity.reportDigest,
+      incidentId: report.incident.incidentId,
+      incidentTrigger: report.incident.trigger,
+      manifestUnreadableCount,
+      manifestReusedCount,
+      completeness: report.incident.completeness,
+      loss: report.incident.loss,
+      ...(retentionDisposition === "stored" ? { pinDisposition: report.incident.pin.status } : {}),
+      ...(retentionDisposition === undefined ? {} : { retentionDisposition }),
+      ...(report.incident.clientReport === undefined
+        ? {}
+        : { availabilityReason: report.incident.clientReport.availabilityReason }),
+    },
+  };
 }

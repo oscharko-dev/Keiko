@@ -8,6 +8,7 @@ import {
   GatewayError,
   ProviderError,
   RateLimitError,
+  TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   activityLogEvent,
@@ -107,6 +108,12 @@ const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
+    retryAfterHeader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "valid", "unparseable", "elapsed"],
+    },
   },
   causal: "none",
   lifecycle: "failure",
@@ -137,6 +144,12 @@ const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
     remainingMs: { type: "number", dataClass: "duration", required: false },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
+    retryAfterHeader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "valid", "unparseable", "elapsed"],
+    },
   },
   causal: "none",
   lifecycle: "failure",
@@ -160,6 +173,12 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
     delayMs: { type: "number", dataClass: "duration", required: true },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
+    retryAfterHeader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "valid", "unparseable", "elapsed"],
+    },
   },
   causal: "none",
   lifecycle: "state",
@@ -295,6 +314,7 @@ export const systemClock: Clock = {
 
 export interface RetryConfig {
   readonly shouldRetry?: (error: Error) => boolean;
+  readonly jitterProviderCooldown?: boolean;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   // The end-to-end budget of the whole call: every attempt and every backoff sleep together.
@@ -324,12 +344,20 @@ function isRetryableError(error: Error): boolean {
   return error instanceof GatewayError && error.retryable;
 }
 
-// A RateLimitError with an explicit retryAfterMs is honoured VERBATIM (the server
-// told us when to come back — jitter would only delay recovery), capped at 30 s;
-// every other retryable error takes the jittered backoff step.
-function retryDelayMs(error: Error, attempt: number, base: number, random: () => number): number {
-  if (error instanceof RateLimitError && error.retryAfterMs !== null && error.retryAfterMs > 0) {
-    return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
+// A provider cooldown is a minimum wait, not the exponential backoff ceiling. Honour it
+// within the remaining request budget and platform timer bound; retrying early can consume
+// every attempt while the same overloaded provider is still unavailable.
+function retryDelayMs(
+  error: Error,
+  attempt: number,
+  base: number,
+  random: () => number,
+  jitterProviderCooldown = false,
+): number {
+  const retryAfterMs = providerErrorDetail(error).retryAfterMs;
+  if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    const jitter = jitterProviderCooldown ? Math.max(1, backoffDelayMs(attempt, base, random)) : 0;
+    return Math.min(retryAfterMs + jitter, MAX_TIMER_DELAY_MS);
   }
   return backoffDelayMs(attempt, base, random);
 }
@@ -352,7 +380,13 @@ function retryDecision(
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
     return { stop: "terminal" };
   if (attempt > config.maxRetries) return { stop: "max-retries" };
-  const delayMs = retryDelayMs(lastError, attempt, config.retryBaseDelayMs, random);
+  const delayMs = retryDelayMs(
+    lastError,
+    attempt,
+    config.retryBaseDelayMs,
+    random,
+    config.jitterProviderCooldown,
+  );
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
   return { sleepMs: delayMs };
 }
@@ -433,20 +467,28 @@ function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string
 // rate-limited call is always HTTP 429 by definition, and a consumer building a replay/reproduction
 // artifact from these lines (e.g. `GatewayReplayAttempt.httpStatus`) should never have to infer the
 // status from `errorKind === GATEWAY_RATE_LIMIT` when the error itself already carries it —
-// restating it here costs one field and removes that inference entirely. `retryAfterMs` stays
-// `RateLimitError`-only: `ProviderError` never carries a server-supplied retry delay.
+// restating it here costs one field and removes that inference entirely. Both error types
+// preserve a provider cooldown as a duration; neither contributes provider response content.
 export interface ProviderErrorDetail {
   readonly httpStatus?: number;
   readonly retryAfterMs?: number;
+  readonly retryAfterHeader?: NonNullable<RateLimitError["retryAfterHeader"]>;
 }
 
 export function providerErrorDetail(error: unknown): ProviderErrorDetail {
   const httpStatus = providerErrorHttpStatus(error);
   const retryAfterMs =
-    error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined;
+    error instanceof RateLimitError || error instanceof ProviderError
+      ? (error.retryAfterMs ?? undefined)
+      : undefined;
+  const retryAfterHeader =
+    error instanceof RateLimitError || error instanceof ProviderError
+      ? error.retryAfterHeader
+      : undefined;
   return {
     ...(httpStatus === undefined ? {} : { httpStatus }),
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    ...(retryAfterHeader === undefined ? {} : { retryAfterHeader }),
   };
 }
 
@@ -551,49 +593,121 @@ function logRetryScheduled(
   );
 }
 
-export async function executeWithRetry<T>(
+// Admission did not call the provider: retrying this refusal would invent another attempt.
+// Retry callers retain their actual provider failure; fresh callers receive the existing
+// non-retryable circuit error taxonomy. The wait event carries the closed refusal reason.
+class CircuitAdmissionRefusal extends CircuitOpenError {
+  constructor(readonly originalError: Error | undefined) {
+    super("request budget cannot accommodate provider admission");
+  }
+}
+
+class AdmissionBudgetExhausted extends TimeoutError {
+  constructor(readonly originalError: Error | undefined) {
+    super("request budget exhausted before provider admission");
+  }
+}
+
+function rethrowTerminalAdmission(error: unknown): void {
+  if (error instanceof CircuitAdmissionRefusal || error instanceof AdmissionBudgetExhausted)
+    throw error.originalError ?? error;
+}
+
+type RetryOperation<T> = (
+  attemptTimeoutMs?: number,
+  remainingBudgetMs?: number,
+  previousError?: Error,
+) => Promise<T>;
+
+interface RetryState {
+  readonly config: RetryConfig;
+  readonly clock: Clock;
+  readonly signal: AbortSignal | undefined;
+  readonly random: () => number;
+  readonly context: RetryLogContext;
+  readonly sink: ModelGatewayLogSink;
+  readonly elapsed: () => number;
+  readonly start: number;
+  attempt: number;
+  lastError: Error | undefined;
+}
+
+type RetryAttemptResult<T> = { readonly done: true; readonly value: T } | { readonly done: false };
+
+async function executeRetryAttempt<T>(
+  operation: RetryOperation<T>,
+  state: RetryState,
+): Promise<RetryAttemptResult<T>> {
+  const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
+  const maxAttempts = config.maxRetries + 1;
+  if (Number.isNaN(maxAttempts) || attempt > maxAttempts)
+    throw state.lastError ?? new CancelledError("request timeout budget exhausted after retries");
+  assertNotAborted(signal);
+  const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
+  if (remaining <= 0)
+    throw budgetExhaustedError(state.lastError, sink, context, attempt, elapsed());
+  try {
+    const value = await operation(attemptTimeoutFor(config, remaining), remaining, state.lastError);
+    return { done: true, value };
+  } catch (error) {
+    rethrowTerminalAdmission(error);
+    state.lastError = asError(error);
+    const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
+    const decision = retryDecision(state.lastError, attempt, config, remainingMs, random);
+    const failureLog: RetryFailureLogInput = {
+      sink,
+      context,
+      attempt,
+      maxRetries: config.maxRetries,
+      error: state.lastError,
+      durationMs: elapsed(),
+    };
+    if (!("sleepMs" in decision)) {
+      logRetryExhausted(failureLog, decision);
+      throw state.lastError;
+    }
+    logRetryScheduled(failureLog, decision);
+    await sleepWithCancellation(clock, decision.sleepMs, signal);
+    return { done: false };
+  }
+}
+
+export function executeWithRetry<T>(
   // Each attempt gets its own bound and what is left of the call's budget, which a streamed read
   // may spend while the provider keeps producing (ADR-0003).
-  operation: (attemptTimeoutMs?: number, remainingBudgetMs?: number) => Promise<T>,
+  operation: RetryOperation<T>,
   config: RetryConfig,
   clock: Clock,
   signal?: AbortSignal,
   random: () => number = Math.random,
   logContext: RetryLogContext = {},
 ): Promise<T> {
-  const sink = resolveLogSink(logContext.sink);
-  const elapsed = logTimer();
-  let lastError: Error | undefined;
-  const start = clock.now();
-  for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
-    assertNotAborted(signal);
-    const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
-    if (remaining <= 0) {
-      throw budgetExhaustedError(lastError, sink, logContext, attempt, elapsed());
-    }
-    try {
-      return await operation(attemptTimeoutFor(config, remaining), remaining);
-    } catch (error) {
-      lastError = asError(error);
-      const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
-      const decision = retryDecision(lastError, attempt, config, remainingMs, random);
-      const failureLog: RetryFailureLogInput = {
-        sink,
-        context: logContext,
-        attempt,
-        maxRetries: config.maxRetries,
-        error: lastError,
-        durationMs: elapsed(),
-      };
-      if (!("sleepMs" in decision)) {
-        logRetryExhausted(failureLog, decision);
-        throw lastError;
-      }
-      logRetryScheduled(failureLog, decision);
-      await sleepWithCancellation(clock, decision.sleepMs, signal);
-    }
-  }
-  throw lastError ?? new CancelledError("request timeout budget exhausted after retries");
+  return new Promise<T>((resolve, reject) => {
+    const state: RetryState = {
+      config,
+      clock,
+      signal,
+      random,
+      context: logContext,
+      sink: resolveLogSink(logContext.sink),
+      elapsed: logTimer(),
+      start: clock.now(),
+      attempt: 1,
+      lastError: undefined,
+    };
+    const advance = (): void => {
+      // Return no successor promise: completed attempts are released rather than retained in a
+      // recursive promise chain. Only the current provider attempt or its backoff is pending.
+      void executeRetryAttempt(operation, state).then((result) => {
+        if (result.done) resolve(result.value);
+        else {
+          state.attempt += 1;
+          advance();
+        }
+      }, reject);
+    };
+    advance();
+  });
 }
 
 // The provider settings a retry policy is made of.
@@ -615,14 +729,10 @@ function chatAttemptTimeoutMs(provider: ProviderRetryPolicy): number {
   return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
 }
 
-// The end-to-end budget of one buffered call to `provider`: every attempt its full `timeoutMs`
-// (ADR-0003), and before every retry the longest sleep the loop honours. The backoff cap and the
-// cap on a provider's Retry-After are both MAX_BACKOFF_MS, so a rate-limited provider keeps all its
-// configured attempts and the cool-down it asked for. The one derivation: the gateway's retry loop
-// and every deadline a caller builds around a gateway call (the coding sidecar route) take it from
-// here, so the two cannot drift apart again. They had: the provider's `timeoutMs` was passed to
-// the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
-// `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
+// One end-to-end buffered budget reserves every configured attempt and capped backoff sleep.
+// A longer provider cooldown consumes this same budget and may leave fewer attempts; it is never
+// shortened to retry before recovery. Gateway retries and surrounding route deadlines share this
+// derivation so an outer deadline cannot interrupt the provider's own bounded wait.
 //
 // The per-attempt bound is floored first (`chatAttemptTimeoutMs`, now the SAME buffered floor this
 // function floors to), so the trailing `Math.max` below is a provable no-op today — kept as an
@@ -650,8 +760,51 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
 
 export interface CircuitBreakerAdmission {
   readonly halfOpen: boolean;
-  settle(outcome: "success" | "failure" | "non-provider-fault"): void;
+  settle(outcome: "success" | "failure" | "non-provider-fault", error?: unknown): void;
 }
+
+interface CircuitAdmissionWait {
+  readonly remainingMs: number;
+  readonly previousError?: Error | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly correlationId?: string | undefined;
+  readonly jitterMs: number | (() => number);
+}
+
+type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
+
+const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.circuit.wait",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.CircuitBreaker.logWait",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-cooldown", "circuit-cooldown", "probe-saturated"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started", "changed", "timer", "cancelled", "failed", "budget-refused"],
+    },
+    delayMs: { type: "number", dataClass: "duration", required: true },
+    remainingMs: { type: "number", dataClass: "duration", required: false },
+  },
+  diagnosticWhen: [{ field: "outcome", values: ["cancelled", "failed", "budget-refused"] }],
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-circuit-breaker"],
+  proofIds: ["gateway.circuit.wait.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export class CircuitBreaker {
   private state: CircuitState = "closed";
@@ -661,6 +814,8 @@ export class CircuitBreaker {
   private probesRemaining = 0;
   // Tracks how many half-open probe slots are currently in-flight.
   private probesInFlight = 0;
+  private providerCooldownUntil = 0;
+  private readonly waiters = new Set<() => void>();
   // Calls refused since the last state change. See `noteRejection` — this is both the rate limiter
   // and the number the transition lines report, so the volume survives the demotion.
   private rejectedSinceTransition = 0;
@@ -735,22 +890,200 @@ export class CircuitBreaker {
     return this.createAdmission(correlationId);
   }
 
-  // Each admission settles once and only within the circuit generation that admitted it.
-  // A late response or cancellation from a previous outage cannot touch another call's probe.
+  waitForAdmission(options: CircuitAdmissionWait): Promise<{
+    readonly admission: CircuitBreakerAdmission;
+    readonly remainingMs: number;
+  }> {
+    return new Promise((resolve, reject) => {
+      const start = this.clock.now();
+      const announced = this.providerCooldownUntil > start;
+      const recovering =
+        announced ||
+        (options.previousError !== undefined &&
+          providerErrorDetail(options.previousError).retryAfterMs !== undefined);
+      const advance = async (): Promise<void> => {
+        assertNotAborted(options.signal);
+        const remainingMs = Math.max(0, options.remainingMs - (this.clock.now() - start));
+        const blocked = this.blockedWait(recovering, options.jitterMs);
+        if (remainingMs <= 0) throw this.waitBudgetError(options, blocked, remainingMs);
+        if (blocked === undefined) {
+          resolve({ admission: this.assertAllowed(options.correlationId), remainingMs });
+          return;
+        }
+        if (blocked.delayMs >= remainingMs && blocked.reason !== "probe-saturated")
+          throw this.waitBudgetError(options, blocked, remainingMs);
+        await this.waitForChange(Math.min(blocked.delayMs, remainingMs), blocked.reason, options);
+        // Rearm only after this wait has disposed its listener and timer; do not retain it by
+        // awaiting or returning the next admission attempt.
+        void advance().catch(reject);
+      };
+      void advance().catch(reject);
+    });
+  }
+
+  private waitBudgetError(
+    options: CircuitAdmissionWait,
+    blocked: { readonly reason: CircuitWaitReason; readonly delayMs: number } | undefined,
+    remainingMs: number,
+  ): Error {
+    if (blocked === undefined) return new AdmissionBudgetExhausted(options.previousError);
+    this.logWait(
+      blocked.reason,
+      "budget-refused",
+      blocked.reason === "probe-saturated"
+        ? remainingMs
+        : Math.min(blocked.delayMs, MAX_TIMER_DELAY_MS),
+      options.correlationId,
+      remainingMs,
+    );
+    return new CircuitAdmissionRefusal(options.previousError);
+  }
+
+  private blockedWait(
+    allowCircuitWait: boolean,
+    jitterMs: CircuitAdmissionWait["jitterMs"],
+  ): { readonly reason: CircuitWaitReason; readonly delayMs: number } | undefined {
+    const cooldown = this.providerCooldownUntil - this.clock.now();
+    if (cooldown > 0) {
+      const jitter = typeof jitterMs === "number" ? jitterMs : jitterMs();
+      return {
+        reason: "provider-cooldown",
+        delayMs: Math.min(cooldown + Math.max(1, jitter), MAX_TIMER_DELAY_MS),
+      };
+    }
+    if (!allowCircuitWait) return undefined;
+    if (this.state === "open" && this.openedAt !== null) {
+      const remaining = this.config.cooldownMs - (this.clock.now() - this.openedAt);
+      if (remaining > 0) return { reason: "circuit-cooldown", delayMs: remaining };
+    }
+    return this.state === "half-open" && this.probesInFlight >= this.config.halfOpenProbes
+      ? { reason: "probe-saturated", delayMs: Number.POSITIVE_INFINITY }
+      : undefined;
+  }
+
+  private async waitForChange(
+    delayMs: number,
+    reason: CircuitWaitReason,
+    options: CircuitAdmissionWait,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const abort = (): void => {
+      controller.abort();
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    let notify: (() => void) | undefined;
+    const changed = new Promise<"changed">((resolve) => {
+      notify = (): void => {
+        resolve("changed");
+      };
+      this.waiters.add(notify);
+    });
+    try {
+      this.logWait(reason, "started", delayMs, options.correlationId);
+      assertNotAborted(options.signal);
+      const outcome = await Promise.race([
+        changed,
+        this.clock.sleep(delayMs, controller.signal).then(() => "timer" as const),
+      ]);
+      assertNotAborted(options.signal);
+      this.logWait(reason, outcome, delayMs, options.correlationId);
+    } catch (error) {
+      this.logWait(
+        reason,
+        options.signal?.aborted === true ? "cancelled" : "failed",
+        delayMs,
+        options.correlationId,
+      );
+      if (options.signal?.aborted === true)
+        throw new CancelledError("request cancelled while waiting for provider admission");
+      throw error;
+    } finally {
+      if (notify !== undefined) this.waiters.delete(notify);
+      options.signal?.removeEventListener("abort", abort);
+      controller.abort();
+    }
+  }
+
+  private logWait(
+    reason: CircuitWaitReason,
+    outcome: "started" | "changed" | "timer" | "cancelled" | "failed" | "budget-refused",
+    delayMs: number,
+    correlationId: string | undefined,
+    remainingMs?: number,
+  ): void {
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_CIRCUIT_WAIT_OPERATION,
+        { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+        {
+          modelId: logModelId(this.modelId),
+          reason,
+          outcome,
+          delayMs,
+          ...(remainingMs === undefined ? {} : { remainingMs }),
+        },
+      ),
+    );
+  }
+
+  // Each admission settles once. Circuit state and probe ownership stay generation-bound;
+  // parallel recovery minima may extend only the open outage caused by that generation.
   private createAdmission(correlationId: string | undefined): CircuitBreakerAdmission {
-    const generation = this.generation;
+    const origin = { generation: this.generation, halfOpen: this.state === "half-open" };
     let settled = false;
     return {
-      halfOpen: this.state === "half-open",
-      settle: (outcome): void => {
+      halfOpen: origin.halfOpen,
+      settle: (outcome, error): void => {
         if (settled) return;
         settled = true;
-        if (generation !== this.generation) return;
-        if (outcome === "success") this.recordSuccess(correlationId);
-        else if (outcome === "failure") this.recordFailure(correlationId);
-        else this.recordNonProviderFault();
+        this.settleAdmission(origin, outcome, error, correlationId);
       },
     };
+  }
+
+  private settleAdmission(
+    origin: { readonly generation: number; readonly halfOpen: boolean },
+    outcome: "success" | "failure" | "non-provider-fault",
+    error: unknown,
+    correlationId: string | undefined,
+  ): void {
+    const current = origin.generation === this.generation;
+    // Parallel responses from the generation that opened this outage still announce recovery
+    // minima. Once a probe generation has begun, earlier responses have no authority over it.
+    if (!current && !this.canExtendClosedGenerationOutage(origin)) return;
+    const before = this.admissionState();
+    this.announceProviderCooldown(outcome, error);
+    if (current) {
+      if (outcome === "success") this.recordSuccess(correlationId);
+      else if (outcome === "failure") this.recordFailure(correlationId);
+      else this.recordNonProviderFault();
+    }
+    if (before !== this.admissionState()) {
+      for (const notify of this.waiters) notify();
+    }
+  }
+
+  private canExtendClosedGenerationOutage(origin: {
+    readonly generation: number;
+    readonly halfOpen: boolean;
+  }): boolean {
+    return !origin.halfOpen && this.state === "open" && this.generation === origin.generation + 1;
+  }
+
+  private announceProviderCooldown(outcome: string, error: unknown): void {
+    if (outcome !== "failure") return;
+    if (!(error instanceof ProviderError || error instanceof RateLimitError) || !error.retryable)
+      return;
+    const cooldown = error.retryAfterMs;
+    if (cooldown === null || !Number.isFinite(cooldown) || cooldown <= 0) return;
+    this.providerCooldownUntil = Math.max(
+      this.providerCooldownUntil,
+      this.clock.now() + Math.min(cooldown, MAX_TIMER_DELAY_MS),
+    );
+  }
+
+  private admissionState(): string {
+    return [this.state, this.openedAt, this.probesInFlight, this.providerCooldownUntil].join(":");
   }
 
   private enterHalfOpenOrReject(correlationId: string | undefined): void {

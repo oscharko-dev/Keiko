@@ -9,6 +9,32 @@ import {
 import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
+  it("explains changed connected sources in the selected locale and preserves support attribution", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const error = new ApiError(
+        "GROUNDING_SCOPE_CHANGED",
+        "The grounded source scope changed before the turn could run.",
+        409,
+      );
+      error.correlationId = "scope-support-id";
+      const notice = toUserErrorNotice(error, "Could not send message.");
+      expect(notice.title).toBe("Verbundene Quellen wurden geändert");
+      expect(notice.message).toBe(
+        "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
+      );
+      expect(notice.remediation).toBe(
+        "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
+      );
+      expect(notice.code).toBe("GROUNDING_SCOPE_CHANGED");
+      expect(notice.correlationId).toBe("scope-support-id");
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+
   it("keeps user-facing API messages first while preserving the support code", () => {
     expect(
       formatUserError(new ApiError("GATEWAY_UPSTREAM_FAILURE", "Model timed out", 502), "Retry"),

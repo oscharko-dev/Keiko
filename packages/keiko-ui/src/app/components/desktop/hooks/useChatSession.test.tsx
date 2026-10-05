@@ -25,6 +25,7 @@ import {
   regenerateDesktopChat,
   resetModelRequestCache,
   sendDesktopChat,
+  sendDesktopChatStream,
   uploadConversationAttachment,
 } from "@/lib/api";
 import {
@@ -64,55 +65,45 @@ import {
   notifyGatewayModelReadinessUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
 });
 
-vi.mock("@/lib/api", () => ({
-  ApiError: class ApiError extends Error {
-    constructor(
-      public readonly code: string,
-      message: string,
-      public readonly status: number,
-    ) {
-      super(message);
-    }
-  },
-  StreamingUnavailableError: class StreamingUnavailableError extends Error {
-    constructor(
-      public readonly code: string,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
-  askGrounded: vi.fn(),
-  createDesktopChat: vi.fn(),
-  createProject: vi.fn(),
-  projectResponseWarningMessage: (response: {
-    readonly warning?: { readonly message: string; readonly correlationId: string };
-  }): string | undefined =>
-    response.warning === undefined
-      ? undefined
-      : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
-  fetchChatMessages: vi.fn(),
-  fetchChats: vi.fn(),
-  fetchEvidenceManifest: vi.fn(),
-  fetchRunReport: vi.fn(),
-  fetchModels: vi.fn(),
-  fetchProjects: vi.fn(),
-  patchChatMessage: vi.fn(),
-  regenerateDesktopChat: vi.fn(),
-  resetModelRequestCache: vi.fn(),
-  sendDesktopChat: vi.fn(),
-  sendDesktopChatStream: vi.fn(),
-  uploadConversationAttachment: vi.fn().mockResolvedValue({
-    attachmentRef: `chat-attachment:${"a".repeat(64)}`,
-    expiresAt: 60_000,
-  }),
-  deleteConversationAttachment: vi.fn().mockResolvedValue(undefined),
-  updateChat: vi.fn(),
-}));
+vi.mock("@/lib/api", async (original) => {
+  const api = await original<typeof import("@/lib/api")>();
+  return {
+    ApiError: api.ApiError,
+    StreamingUnavailableError: api.StreamingUnavailableError,
+    askGrounded: vi.fn(),
+    createDesktopChat: vi.fn(),
+    createProject: vi.fn(),
+    projectResponseWarningMessage: (response: {
+      readonly warning?: { readonly message: string; readonly correlationId: string };
+    }): string | undefined =>
+      response.warning === undefined
+        ? undefined
+        : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
+    fetchChatMessages: vi.fn(),
+    fetchChats: vi.fn(),
+    fetchEvidenceManifest: vi.fn(),
+    fetchRunReport: vi.fn(),
+    fetchModels: vi.fn(),
+    fetchProjects: vi.fn(),
+    patchChatMessage: vi.fn(),
+    regenerateDesktopChat: vi.fn(),
+    resetModelRequestCache: vi.fn(),
+    sendDesktopChat: vi.fn(),
+    sendDesktopChatStream: vi.fn(),
+    uploadConversationAttachment: vi.fn().mockResolvedValue({
+      attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+      expiresAt: 60_000,
+    }),
+    deleteConversationAttachment: vi.fn().mockResolvedValue(undefined),
+    updateChat: vi.fn(),
+  };
+});
 
 vi.mock("@/lib/memory-session-api", () => ({
   acceptMemoryProposal: vi.fn(),
@@ -1800,6 +1791,249 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
 
     expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
     expect(askGrounded).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "recovers an unpersisted scope-refused typed draft (live text: %s)",
+    async (live) => {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValue(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+      );
+      act(() => result.current.setDraft("Original typed question"));
+      await act(async () => {
+        await result.current.sendMessage(
+          live ? { text: "Live typed question", clearDraftOnAdmission: true } : undefined,
+        );
+      });
+      expect(result.current.draft).toBe(live ? "Live typed question" : "Original typed question");
+      expect(result.current.messages).toHaveLength(0);
+      expect(askGrounded).toHaveBeenCalledOnce();
+      expect(result.current.error).toContain("GROUNDING_SCOPE_CHANGED");
+    },
+  );
+
+  it.each(["failed", "cancelled"] as const)(
+    "recovers an exact persisted %s scope refusal and refreshes the next send",
+    async (turnState) => {
+      const { result } = await setupGroundedSession();
+      const refreshed = {
+        ...result.current.activeChat!,
+        groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      };
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [refreshed] });
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+        messages: [
+          await canonicalMessage("typed-recoverable-scope", { chatId: "chat-grounded", turnState }),
+        ],
+      });
+      vi.mocked(askGrounded).mockRejectedValueOnce(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "Scope changed.", 409),
+      );
+      act(() => result.current.setDraft("Keep my refused question"));
+      await act(async () => {
+        await result.current.sendMessage({ clientTurnId: "typed-recoverable-scope" });
+      });
+      expect(result.current.draft).toBe("Keep my refused question");
+      expect(result.current.activeChat?.groundingScopeIdentity).toBe(
+        refreshed.groundingScopeIdentity,
+      );
+      await act(async () => {
+        await result.current.sendMessage();
+      });
+      expect(askGrounded).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          expectedGroundingScopeIdentity: refreshed.groundingScopeIdentity,
+        }),
+        expect.any(AbortSignal),
+        undefined,
+      );
+    },
+  );
+
+  it.each(["newer chat", "new draft", "cancel"] as const)(
+    "preserves %s while the refused chat refresh is pending",
+    async (change) => {
+      const { result } = await setupGroundedSession();
+      const original = result.current.activeChat!;
+      const refresh = deferred<Awaited<ReturnType<typeof fetchChats>>>();
+      vi.mocked(fetchChats).mockReturnValueOnce(refresh.promise);
+      vi.mocked(fetchChats).mockClear();
+      const refusal = new ApiError("GROUNDING_SCOPE_CHANGED", "Scope changed.", 409);
+      refusal.correlationId = "scope-refusal-test";
+      vi.mocked(askGrounded).mockRejectedValueOnce(refusal);
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        act(() => result.current.setDraft("Private draft canary"));
+        let sending: Promise<unknown> | undefined;
+        act(() => {
+          sending = result.current.sendMessage();
+        });
+        await waitFor(() => expect(fetchChats).toHaveBeenCalledOnce());
+        const newer = {
+          ...original,
+          title: "New title",
+          updatedAt: original.updatedAt + 1,
+          groundingScopeIdentity: `gsi-v1:${"c".repeat(64)}`,
+        };
+        act(() => {
+          if (change === "newer chat") notifyChatUpsert(newer);
+          else if (change === "new draft") result.current.setDraft("New question");
+          else result.current.cancelSend();
+        });
+        await act(async () => {
+          refresh.resolve({
+            chats: [{ ...original, groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}` }],
+          });
+          await sending;
+        });
+        if (change === "newer chat") expect(result.current.activeChat).toEqual(newer);
+        const expectedDraft = {
+          "newer chat": "Private draft canary",
+          "new draft": "New question",
+          cancel: "",
+        };
+        expect(result.current.draft).toBe(expectedDraft[change]);
+        const activities = {
+          "newer chat": "scope-refusal-restored",
+          "new draft": "scope-refusal-skipped-draft",
+          cancel: "scope-refusal-skipped-owner",
+        };
+        expect(diagnostic).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            correlationId: "scope-refusal-test",
+            composerActivity: activities[change],
+          }),
+        );
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private draft canary");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it.each(["new draft", "edit then clear", "chat switch", "cancel"] as const)(
+    "does not restore scope-refused text after %s",
+    async (change) => {
+      const { result } = await setupGroundedSession();
+      const reconciliation = deferred<Awaited<ReturnType<typeof fetchChatMessages>>>();
+      vi.mocked(fetchChatMessages).mockReturnValueOnce(reconciliation.promise);
+      vi.mocked(askGrounded).mockRejectedValue(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+      );
+      act(() => result.current.setDraft("Original typed question"));
+      let sending: Promise<unknown> | undefined;
+      act(() => {
+        sending = result.current.sendMessage();
+      });
+      await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
+      if (change === "chat switch") {
+        vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+        await act(async () => result.current.openChat(chat({ id: "other-chat" })));
+      } else {
+        act(() => {
+          if (change === "cancel") result.current.cancelSend();
+          else {
+            result.current.setDraft("Newer question");
+            if (change === "edit then clear") result.current.setDraft("");
+          }
+        });
+      }
+      await act(async () => {
+        reconciliation.resolve({ messages: [] });
+        await sending;
+      });
+      expect(result.current.draft).toBe(change === "new draft" ? "Newer question" : "");
+      expect(askGrounded).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["persisted", "unknown"] as const)(
+    "does not restore a scope-refused typed draft with %s persistence",
+    async (persistence) => {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValue(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+      );
+      if (persistence === "unknown")
+        vi.mocked(fetchChatMessages).mockRejectedValueOnce(new TypeError("unavailable"));
+      else
+        vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+          messages: [await canonicalMessage("typed-scope-turn", { chatId: "chat-grounded" })],
+        });
+      act(() => result.current.setDraft("Original typed question"));
+      await act(async () => {
+        await result.current.sendMessage({ clientTurnId: "typed-scope-turn" });
+      });
+      expect(result.current.draft).toBe("");
+      expect(askGrounded).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves an independent typed draft after an explicit spoken scope refusal", async () => {
+    const { result } = await setupGroundedSession();
+    vi.mocked(askGrounded).mockRejectedValue(
+      new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+    );
+    act(() => result.current.setDraft("Independent typed question"));
+    await act(async () => {
+      await result.current.sendMessage({ text: "Spoken question" });
+    });
+    expect(result.current.draft).toBe("Independent typed question");
+    expect(askGrounded).toHaveBeenCalledOnce();
+  });
+
+  it.each(["INTERNAL", "GROUNDING_SCOPE_CHANGED"])(
+    "does not restore a typed draft for a non409 %s failure",
+    async (code) => {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValue(new ApiError(code, "Internal error.", 500));
+      act(() => result.current.setDraft("Original typed question"));
+      await act(async () => {
+        await result.current.sendMessage();
+      });
+      expect(result.current.draft).toBe("");
+      expect(askGrounded).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("uses the confirmed folder replacement token for the next typed grounded turn", async (): Promise<void> => {
+    const { result } = await setupGroundedSession([], {
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: "/manual-old", connectedAtMs: 1 },
+      ],
+    });
+    const persisted = chat({
+      ...result.current.activeChat,
+      id: "chat-grounded",
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: "/manual-new", connectedAtMs: 2 },
+      ],
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      updatedAt: 3,
+    });
+    act(() => {
+      notifyChatUpsert(persisted);
+    });
+    vi.mocked(askGrounded).mockResolvedValue({
+      answer: "manual answer",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [persisted] });
+    await act(async () => {
+      await result.current.sendMessage({ text: "Find the compressor maintenance interval" });
+    });
+    expect(askGrounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: persisted.id,
+        expectedGroundingScopeIdentity: persisted.groundingScopeIdentity,
+      }),
+      expect.any(AbortSignal),
+      undefined,
+    );
+    expect(result.current.activeChat?.connectedScopes).toEqual(persisted.connectedScopes);
   });
 
   // GEN-PERF-CHAT-008 (keiko-ui side) — a grounded turn must issue EXACTLY ONE messages fetch and
@@ -4887,4 +5121,338 @@ describe("useChatSession memory autonomy hydration", () => {
     warnSpy.mockRestore();
     errorSpy.mockRestore();
   });
+});
+
+describe("useChatSession original streamed failure evidence", () => {
+  it("retains the original structured SSE failure before formatting the displayed notice", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "stream-model" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "stream-model" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChatStream).mockImplementation(async (_input, _signal, handlers) => {
+      handlers.onError({
+        code: "GATEWAY_PROVIDER_ERROR",
+        message: "Private upstream body",
+        correlationId: "original-stream-failure",
+      });
+    });
+    try {
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      await act(async () => {
+        await result.current.openProject(project("/repo"));
+      });
+      expect(result.current.selectedModel).toBe("stream-model");
+      await act(async () => {
+        await result.current.sendMessage({ text: "Synthetic question" });
+      });
+      expect(sendDesktopChatStream).toHaveBeenCalledTimes(1);
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          correlationId: "original-stream-failure",
+          kind: "sse-error",
+          errorKind: "unknown",
+          errorEvidence: expect.objectContaining({ errorClass: "ApiError" }),
+        }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private upstream body");
+      expect(result.current.error).toContain("original-stream-failure");
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+});
+
+describe("ungrounded streaming refusal recovery", () => {
+  async function streamingSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model()] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it.each([
+    "CHAT_TURN_IN_PROGRESS",
+    "CHAT_CLOSED",
+    "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+    "GROUNDING_SCOPE_CHANGED",
+  ])("does not retain an expected %s admission refusal as a stream failure", async (code) => {
+    const { result } = await streamingSession();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new ApiError(code, "Private refusal", 409),
+    );
+    try {
+      await act(async () => {
+        await result.current.sendMessage({ text: "Private prompt" });
+      });
+      expect(diagnostic.mock.calls.filter(([, meta]) => meta?.errorKind !== undefined)).toEqual([]);
+      expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it.each([
+    [422, "invalid-request", "REFUSAL"],
+    [429, "rate-limited", "REFUSAL"],
+    [503, "unavailable", "REFUSAL"],
+    [200, "internal", "INTERNAL"],
+    [504, "timeout", "DESKTOP_CHAT_STREAM_STALLED"],
+  ] as const)(
+    "retains an unexpected HTTP %s refusal once with its actual class and correlation",
+    async (status, errorKind, code) => {
+      const { result } = await streamingSession();
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      const error = new ApiError(code, "Private upstream body", status);
+      error.correlationId = "stream-startup-refusal";
+      vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(error);
+      try {
+        await act(async () => {
+          await result.current.sendMessage({ text: "Private prompt" });
+        });
+        expect(diagnostic).toHaveBeenCalledExactlyOnceWith("ApiError", {
+          kind: "other",
+          correlationId: error.correlationId,
+          errorKind,
+          errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+        });
+        expect(sendDesktopChat).not.toHaveBeenCalled();
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains a native transport failure once (SSE started: %s)",
+    async (started) => {
+      const { result } = await streamingSession();
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      const error = new TypeError("Private transport body", {
+        cause: new RangeError("Private cause"),
+      });
+      vi.mocked(sendDesktopChatStream).mockImplementation(async (_input, _signal, handlers) => {
+        if (started) handlers.onStarted?.("stream-reader-response");
+        throw error;
+      });
+      try {
+        await act(async () => {
+          await result.current.sendMessage({
+            text: "Private prompt",
+            ...(started ? { correlationId: "retained-chat-request" } : {}),
+          });
+        });
+        const requestCorrelation = vi.mocked(sendDesktopChatStream).mock.calls[0]?.[3];
+        expect(requestCorrelation).toEqual(expect.any(String));
+        if (started) expect(requestCorrelation).toBe("retained-chat-request");
+        expect(diagnostic).toHaveBeenCalledExactlyOnceWith("TypeError", {
+          kind: started ? "sse-error" : "other",
+          correlationId: started ? "stream-reader-response" : requestCorrelation,
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: ["RangeError"] },
+        });
+        expect(sendDesktopChat).not.toHaveBeenCalled();
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("does not retain deliberate transport cancellation as a failed chat request", async () => {
+    const { result } = await streamingSession();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new DOMException("Private stop", "AbortError"),
+    );
+    try {
+      await act(async () => {
+        await result.current.sendMessage({ text: "Private prompt" });
+      });
+      expect(diagnostic).not.toHaveBeenCalled();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+      expect(result.current.error).toBeUndefined();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("refreshes sources and restores a scope-refused streaming draft without replay", async () => {
+    const { result } = await streamingSession();
+    const refreshed = chat({ groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}` });
+    vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [refreshed] });
+    const refusal = new ApiError("GROUNDING_SCOPE_CHANGED", "Private refusal", 409);
+    refusal.correlationId = "stream-scope-refusal";
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(refusal);
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    try {
+      act(() => result.current.setDraft("Private draft canary"));
+      await act(async () => {
+        expect(await result.current.sendMessage()).toEqual({ status: "failed", retryable: false });
+      });
+      expect(result.current.draft).toBe("Private draft canary");
+      expect(result.current.activeChat?.groundingScopeIdentity).toBe(
+        refreshed.groundingScopeIdentity,
+      );
+      expect(fetchChats).toHaveBeenLastCalledWith("/repo", "stream-scope-refusal", "chat-1");
+      expect(diagnostic).toHaveBeenCalledWith("Keiko scope-refused composer recovery.", {
+        correlationId: "stream-scope-refusal",
+        composerActivity: "scope-refusal-restored",
+      });
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private draft canary");
+      expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("keeps an admitted streaming turn in progress without an error banner or replay", async () => {
+    const { result } = await streamingSession();
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new ApiError("CHAT_TURN_IN_PROGRESS", "Already processing", 409),
+    );
+    await act(async () => {
+      await result.current.sendMessage({ text: "Question" });
+    });
+    expect(result.current.error).toBeUndefined();
+    expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["CHAT_CLOSED", 409, { status: "failed", suspend: true }],
+    ["CHAT_TURN_IDEMPOTENCY_CONFLICT", 409, { status: "failed", retryable: false }],
+    ["BAD_REQUEST", 422, { status: "failed", retryable: false }],
+  ] as const)(
+    "preserves %s terminal classification on the stream transport",
+    async (code, status, expected) => {
+      const { result } = await streamingSession();
+      vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(new ApiError(code, "Refused", status));
+      await act(async () => {
+        const outcome = await result.current.sendMessage({
+          text: "Question",
+          clientTurnId: "stream-terminal",
+          canonicalVoiceTarget: {
+            chat: chat(),
+            project: { path: "/repo" },
+            modelId: "chat-a",
+            attachments: [],
+            memory: { context: { userId: "local-operator", conversationId: "chat-1" } },
+          },
+        });
+        expect(outcome).toEqual(expected);
+      });
+      expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not report composer ownership loss for an explicit non-composer scope refusal", async () => {
+    const { result } = await streamingSession();
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new ApiError("GROUNDING_SCOPE_CHANGED", "Refused", 409),
+    );
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    try {
+      act(() => result.current.setDraft("Independent typed question"));
+      await act(async () => {
+        await result.current.sendMessage({ text: "Spoken question" });
+      });
+      expect(result.current.draft).toBe("Independent typed question");
+      expect(diagnostic.mock.calls.some(([, meta]) => meta?.composerActivity !== undefined)).toBe(
+        false,
+      );
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+  it.each(["unavailable", "absent"] as const)(
+    "restores a refused draft when refreshed chat is %s",
+    async (mode) => {
+      const { result } = await streamingSession();
+      const refusal = new ApiError("GROUNDING_SCOPE_CHANGED", "Refused", 409);
+      refusal.correlationId = "refused-refresh-test";
+      vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(refusal);
+      if (mode === "unavailable")
+        vi.mocked(fetchChats).mockRejectedValueOnce(new TypeError("Private refresh canary"));
+      else vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [] });
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        act(() => result.current.setDraft("Private refused draft"));
+        await act(async () => {
+          await result.current.sendMessage();
+        });
+        expect(result.current.draft).toBe("Private refused draft");
+        expect(result.current.activeChat?.id).toBe("chat-1");
+        if (mode === "unavailable")
+          expect(diagnostic).toHaveBeenCalledWith(
+            "Scope-refused chat refresh failed.",
+            expect.objectContaining({
+              correlationId: "refused-refresh-test",
+              kind: "other",
+              errorKind: "unavailable",
+              errorEvidence: expect.objectContaining({ errorClass: "TypeError" }),
+            }),
+          );
+        expect(diagnostic).toHaveBeenCalledWith("Keiko scope-refused composer recovery.", {
+          correlationId: "refused-refresh-test",
+          composerActivity: "scope-refusal-restored",
+        });
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it.each(["persisted", "unknown"] as const)(
+    "records why a %s refused draft cannot be restored",
+    async (mode) => {
+      const { result } = await streamingSession();
+      const refusal = new ApiError("GROUNDING_SCOPE_CHANGED", "Refused", 409);
+      refusal.correlationId = "refused-proof-test";
+      vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(refusal);
+      if (mode === "unknown")
+        vi.mocked(fetchChatMessages).mockRejectedValueOnce(new TypeError("Private unavailable"));
+      else
+        vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+          messages: [await canonicalMessage("typed-proof")],
+        });
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        act(() => result.current.setDraft("Private refused draft"));
+        await act(async () => {
+          await result.current.sendMessage({ clientTurnId: "typed-proof" });
+        });
+        expect(result.current.draft).toBe("");
+        expect(diagnostic).toHaveBeenCalledWith("Keiko scope-refused composer recovery.", {
+          correlationId: "refused-proof-test",
+          composerActivity: "scope-refusal-skipped-unproven",
+        });
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
 });

@@ -447,6 +447,11 @@ system that exists, never beside it:
   interrupted publication, and degraded capability in focused fault-injection tests. A missing
   transition or proof is a contract failure, not an optional follow-up; this proof set is the
   fault-injection gate for the change.
+- **Declare informational failure facts at their owner.** If a closed failure outcome or positive
+  failure counter would otherwise be optional report context, declare its exact `diagnosticWhen`
+  condition on the existing operation. Prove retention through the actual producer, registered
+  writer and incident query with zero optional context; include healthy controls. Ordinary file
+  eligibility exclusions and budget limits are not technical failures.
 - **Thread the correlation.** Every line of one logical operation carries that operation's
   `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
@@ -485,7 +490,9 @@ system that exists, never beside it:
   available; otherwise use the existing independent body-free diagnostic fallbacks and state their
   loss ceiling honestly. Every lost event is counted in the closed loss ledger and persisted as
   `activity-log.loss`, and diagnostic readiness (`ready`, `degraded`, `unavailable`) is reported in
-  `/api/health`, `keiko status` and the UI. An explicit `silent` log level suppresses ordinary events
+  `/api/health`, `keiko status` and the UI. The workspace shows a plain-language notice for
+  degraded or unavailable readiness; closed technical reasons stay in health, logs and reports,
+  and the footer keeps its installed-version display. An explicit `silent` log level suppresses ordinary events
   only: lifecycle, loss and readiness evidence is still written, and readiness reports `degraded`
   (`level-silent`) so a silent interval never passes for an active complete writer.
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
@@ -538,6 +545,22 @@ system that exists, never beside it:
   names its check, rule, site, and remediation. Run it before every pull request that changes
   product runtime behaviour.
 
+`client.citation.activated` records a citation click and its source selection under the
+activation correlation. `reason` describes the source fingerprint: `matched` (one root),
+`unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
+`opened`, `open-refused`, `picker-opened`, `picker-dismissed`, or `refused`; an opened picker
+is not a successfully opened file. `rootCount` and `matchCount` explain the choice without
+recording the fingerprint, file path, source label or citation text. The registered server
+projection retains these closed fields on the existing Activity Log timeline.
+
+`chat.scope.update` records a serialized source update as `applied` or `conflict` under the
+request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
+`resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH
+validate a supplied `expectedGroundingScopeIdentity` against the current server-issued identity;
+a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description authority is
+checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
+scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
@@ -550,6 +573,15 @@ Gateway admission additionally records `imageCount`, the selected `imageAccounti
 `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+Circuit admission that cannot fit a caller's remaining budget emits `gateway.circuit.wait` with
+`budget-refused`, `remainingMs` and `delayMs`; it does not fabricate a provider attempt or retry.
+Parallel retryable responses may extend the recovery minimum of the same open outage, while probe
+ownership and later circuit generations remain protected. Unchanged admission state does not wake
+every waiting caller.
+For a saturated probe, `delayMs` records the remaining request budget (zero at expiry), not a
+fabricated cooldown. A stream records its start before admission waiting and its zero-chunk failure
+if admission is refused or cancelled. Late sibling probes cannot extend a reopened outage.
 
 On retries, `reportedPromptTokens` always describes only the current counter response and is
 absent when that response has no count. `providerPromptTokens` adds the current response-schema
@@ -573,16 +605,22 @@ to fit the model (`trimmed`) or could not fit a single one (`refused`), with the
 the prompt size and the input budget.
 `client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
 no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
-`search.citations.reconciled` records how a Knowledge Pod answer's markers met its sent references
-(`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) with the reference,
-attached, weak-overlap, grouped and dangling counts. `gateway.discovery.alias-intersection` carries
+`search.citations.reconciled` records numeric-reference and file-location reconciliation for
+Knowledge Pod, connected-folder, multi-source and hybrid answers under the request correlation.
+`citationKind` distinguishes `numeric` from `file`; hybrid answers may emit one line of each kind.
+The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) and
+reference, attached and dangling counts describe the actual reconciliation. File lines also carry
+ambiguous-marker and dropped-implicit counts. Weak-overlap and grouped-marker counts are optional:
+absence means they were not measured on that path, not zero. `gateway.discovery.alias-intersection` carries
 the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
 `gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
 `wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe
 counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
 counts: stored and projected history, knowledge-source tokens, the sent and available reference
 counts, the last knowledge request (measured and estimated), the system, summary and message shares,
-the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+the automatic-compaction trigger, and the assumed-window and pending-probe flags. Grounded
+readings also carry the conversation lane budget and unused source capacity separately; a
+conversation checkpoint is validated against that lane, not against the entire model window.
 `search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
 undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
 `hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
@@ -603,6 +641,13 @@ Before you read code, form a hypothesis, or ask a human for a screenshot, read w
 already recorded:
 
 1. **Get the artifact.** Use `keiko support export --incident <id>` or a correlation selector.
+   Manual UI and CLI export must also work at retained incident capacity through the canonical
+   transient descriptor, without stealing in-flight reservations or widening retention. At byte
+   pressure, completed candidates may roll over; in-flight reservations remain protected.
+   Exporting stored server evidence requires an authenticated app session; scoped-cookie refresh
+   reuses its verified bearer and absolute expiry. An unpaired or offline browser can still create
+   and download a limited report from validated body-free client failure facts. That fallback
+   grants no access to stored server evidence.
    Received evidence is one canonical private report; raw logs, legacy open bundles and inclusion
    flags are not accepted at the support-report boundary. For local debugging, use
    `keiko support query --correlation-id <id> --json` on the existing Activity Log.

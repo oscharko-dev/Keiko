@@ -169,6 +169,7 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "chat.context.selected",
+  diagnosticWhen: [{ field: "omittedSummaryCategories", positive: true }],
   category: "gateway",
   owner: "keiko-server",
   emitter: "chat-activity.logChatContextSelection",

@@ -12,6 +12,8 @@ import { I18nProvider } from "@/lib/i18n";
 import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { EditorWidgetProps } from "./cards/EditorWidget";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
+import { createInitialLayout } from "./cards/editorPaneGeometry";
+import { serializeEditorLayoutStateV2 } from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 
 const disposeRoot = vi.fn();
 const useWorkspaceTrustMock = vi.fn((_root: string) => ({ status: undefined }));
@@ -319,6 +321,48 @@ describe("MultiRootEditorHost", () => {
     expect(cfgPatch["revealLineEnd"]).toBeUndefined();
     expect(cfgPatch["revealRequestId"]).toBeUndefined();
   });
+
+  it.each(["src/original.ts", "src/changed.ts"])(
+    "clears persisted source reveal only when the active file changes from %s",
+    async (file) => {
+      const updateCfg = vi.fn<(patch: Record<string, unknown>) => void>();
+      const layoutJson = serializeEditorLayoutStateV2(
+        createInitialLayout({ root: "/repo-a", file, openFiles: [file], layoutJson: undefined }),
+      );
+      render(
+        <I18nProvider>
+          <MultiRootEditorHost
+            manifest={manifest()}
+            workspace={workspace(manifest())}
+            configuredRoot="/repo-a"
+            cfg={{
+              root: "/repo-a",
+              layoutJson,
+              revealLineStart: 58_000,
+              revealRequestId: "citation",
+            }}
+            buildBaseProps={() => ({ windowId: "editor-window" })}
+            updateCfg={updateCfg}
+          />
+        </I18nProvider>,
+      );
+      expect(updateCfg.mock.calls.some(([patch]) => Object.hasOwn(patch, "revealRequestId"))).toBe(
+        false,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Change layout" }));
+      const patch = updateCfg.mock.calls.find(([value]) => value["file"] === "src/changed.ts")?.[0];
+      if (file === "src/original.ts") {
+        expect(patch).toMatchObject({
+          revealLineStart: undefined,
+          revealLineEnd: undefined,
+          revealRequestId: undefined,
+        });
+      } else {
+        expect(patch).toBeDefined();
+        expect(Object.keys(patch ?? {})).not.toContain("revealRequestId");
+      }
+    },
+  );
 });
 
 // Issue #2768 — `role="tablist"`/`role="tab"` is a contract: arrow-key traversal, ONE tab stop, and

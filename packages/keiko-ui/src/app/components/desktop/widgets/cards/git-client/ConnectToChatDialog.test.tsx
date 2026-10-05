@@ -9,6 +9,8 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { ConnectGitChangeInput, GitChangeConnectResponse } from "@/lib/api";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import type { Chat, ChatsResponse } from "@/lib/types";
 import { ConnectToChatDialog, type ConnectToChatDialogProps } from "./ConnectToChatDialog";
 
@@ -46,7 +48,127 @@ async function selectFirstChat(user: ReturnType<typeof userEvent.setup>): Promis
   await user.click(await screen.findByRole("option", { name: "Release notes" }));
 }
 
+function connectedScope(): import("@/lib/types").ChatGitChangeScope {
+  return {
+    kind: "git-change",
+    relationshipId: "relationship-1",
+    remoteDigest: "d".repeat(64),
+    comparisonLabel: "main...feature/x",
+    baseRef: "main",
+    headRef: "feature/x",
+    baseSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    mergeBaseSha: "a".repeat(40),
+    snapshotDigest: "c".repeat(64),
+    fileCount: 1,
+    totalFiles: 1,
+    omittedFiles: 0,
+    truncatedFiles: 0,
+    descriptionStatus: "current",
+    connectedAtMs: 3,
+  } as const;
+}
+
 describe("ConnectToChatDialog", () => {
+  it("adopts a committed response without requiring a second chat read", async () => {
+    const scope = connectedScope();
+    const canonical = {
+      ...makeChat("chat-1", "Server title"),
+      gitChangeScopes: [scope],
+      updatedAt: 4,
+    };
+    const listChats = vi
+      .fn()
+      .mockResolvedValueOnce(oneChat())
+      .mockRejectedValue(new TypeError("unavailable"));
+    const connect = vi.fn().mockResolvedValue({ status: "connected", scope, chat: canonical });
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectToChatDialog
+        {...baseProps()}
+        listChats={listChats}
+        connect={connect}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
+    );
+    await selectFirstChat(user);
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(canonical));
+    expect(listChats).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer a duplicate POST after a committed legacy connection and a failed read", async () => {
+    const scope = connectedScope();
+    const listChats = vi
+      .fn()
+      .mockResolvedValueOnce(oneChat())
+      .mockRejectedValue(new TypeError("private read failure"));
+    const connect = vi.fn().mockResolvedValue({ status: "connected", scope });
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConnectToChatDialog
+        {...baseProps()}
+        listChats={listChats}
+        connect={connect}
+        onConnected={onConnected}
+        onClose={onClose}
+      />,
+    );
+    await selectFirstChat(user);
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(
+      await screen.findByText("Git change saved. The chat view could not be fully refreshed."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(onConnected).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "chat-1", gitChangeScopes: [scope] }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    const correlation = connect.mock.calls[0]?.[2];
+    expect(correlation).toEqual(expect.any(String));
+    expect(listChats).toHaveBeenLastCalledWith("/repos/alpha", correlation, "chat-1");
+  });
+
+  it("explains a committed connection with an unavailable read in German without exposing the exception", async () => {
+    await Promise.all([loadLocaleMessages("de"), loadOptionalWidgetMessages("de")]);
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const listChats = vi
+        .fn()
+        .mockResolvedValueOnce(oneChat())
+        .mockRejectedValue(new TypeError("private-path-token"));
+      const connect = vi.fn().mockResolvedValue({ status: "connected", scope: connectedScope() });
+      const user = userEvent.setup();
+      render(
+        <I18nProvider>
+          <ConnectToChatDialog
+            {...baseProps()}
+            listChats={listChats}
+            connect={connect}
+            onConnected={vi.fn()}
+          />
+        </I18nProvider>,
+      );
+      await selectFirstChat(user);
+      await user.click(screen.getByRole("button", { name: "Verbinden" }));
+      expect(
+        await screen.findByText(
+          "Git-Änderung gespeichert. Die Chat-Ansicht konnte nicht vollständig aktualisiert werden.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Verbinden" })).toBeDisabled();
+      expect(screen.queryByText(/private-path-token/u)).not.toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+
   it("loads chats for the repository and lists them in the picker", async () => {
     const listChats = vi.fn(async (): Promise<ChatsResponse> => ({
       chats: [makeChat("chat-1", "Release notes"), makeChat("chat-2", "Bug triage")],
@@ -107,30 +229,29 @@ describe("ConnectToChatDialog", () => {
 
   it("connects an exact comparison using the default base branch", async () => {
     const onConnected = vi.fn();
-    const scope = {
-      kind: "git-change",
-      relationshipId: "relationship-1",
-      remoteDigest: "d".repeat(64),
-      comparisonLabel: "main...feature/x",
-      baseRef: "main",
-      headRef: "feature/x",
-      baseSha: "a".repeat(40),
-      headSha: "b".repeat(40),
-      mergeBaseSha: "a".repeat(40),
-      snapshotDigest: "c".repeat(64),
-      fileCount: 1,
-      totalFiles: 1,
-      omittedFiles: 0,
-      truncatedFiles: 0,
-      descriptionStatus: "current",
-      connectedAtMs: 3,
-    } as const;
+    const scope = connectedScope();
     const connect = vi.fn(async (): Promise<GitChangeConnectResponse> => ({
       status: "connected",
       scope,
     }));
     const onClose = vi.fn();
-    const listChats = vi.fn(async (): Promise<ChatsResponse> => oneChat());
+    const selected = oneChat().chats[0];
+    if (selected === undefined) throw new Error("Missing fixture chat.");
+    const original = {
+      ...selected,
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    };
+    const canonical = {
+      ...original,
+      title: "Renamed on the server",
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      gitChangeScopes: [scope],
+      updatedAt: 4,
+    };
+    const listChats = vi
+      .fn()
+      .mockResolvedValueOnce({ chats: [original] })
+      .mockResolvedValue({ chats: [canonical] });
     const user = userEvent.setup();
     render(
       <ConnectToChatDialog
@@ -145,16 +266,19 @@ describe("ConnectToChatDialog", () => {
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => {
-      expect(connect).toHaveBeenCalledWith({
-        chatId: "chat-1",
-        mode: "comparison",
-        headRef: "feature/x",
-        baseRef: "main",
-      } satisfies ConnectGitChangeInput);
+      expect(connect).toHaveBeenCalledWith(
+        {
+          chatId: "chat-1",
+          mode: "comparison",
+          headRef: "feature/x",
+          baseRef: "main",
+        } satisfies ConnectGitChangeInput,
+        undefined,
+        expect.any(String),
+      );
     });
-    expect(onConnected).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "chat-1", gitChangeScopes: [scope] }),
-    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(canonical));
+    expect(listChats).toHaveBeenLastCalledWith("/repos/alpha", expect.any(String), "chat-1");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -173,11 +297,15 @@ describe("ConnectToChatDialog", () => {
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => {
-      expect(connect).toHaveBeenCalledWith({
-        chatId: "chat-1",
-        mode: "pull-request",
-        headRef: "feature/x",
-      } satisfies ConnectGitChangeInput);
+      expect(connect).toHaveBeenCalledWith(
+        {
+          chatId: "chat-1",
+          mode: "pull-request",
+          headRef: "feature/x",
+        } satisfies ConnectGitChangeInput,
+        undefined,
+        expect.any(String),
+      );
     });
   });
 
@@ -293,12 +421,16 @@ describe("ConnectToChatDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Connect" }));
     await waitFor(() => {
-      expect(connect).toHaveBeenCalledWith({
-        chatId: "chat-1",
-        mode: "comparison",
-        headRef: "feature/x",
-        baseRef: "upstream/main",
-      } satisfies ConnectGitChangeInput);
+      expect(connect).toHaveBeenCalledWith(
+        {
+          chatId: "chat-1",
+          mode: "comparison",
+          headRef: "feature/x",
+          baseRef: "upstream/main",
+        } satisfies ConnectGitChangeInput,
+        undefined,
+        expect.any(String),
+      );
     });
   });
 

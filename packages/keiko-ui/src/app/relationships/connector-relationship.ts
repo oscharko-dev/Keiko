@@ -9,7 +9,10 @@
 // It is strictly best-effort and fire-and-forget: a failure here (engine unreachable, endpoint not
 // yet live, validation denial) must NEVER break the scope bind that actually makes grounding work.
 
-import { createRelationship, RelationshipApiError } from "./api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
+import { ApiError } from "@/lib/api-shared-primitives";
 
 // Deterministic, regex-safe (`[A-Za-z0-9._-]{8,64}`) idempotency key per (chat, folder) pair, so
 // reconnecting the same folder dedups to one relationship within the idempotency window instead of
@@ -23,22 +26,50 @@ function stableKey(chatId: string, workspacePath: string): string {
   return `rc-${(h >>> 0).toString(36)}-${(input.length & 0xffff).toString(36)}`;
 }
 
-export function recordReadsContextRelationship(chatId: string, workspacePath: string): void {
+function relationshipRecordErrorKind(
+  error: unknown,
+  api: typeof import("./api") | undefined,
+): ReturnType<typeof bffRequestErrorKind> {
+  if (api !== undefined && error instanceof api.RelationshipApiError)
+    return bffRequestErrorKind(
+      new ApiError(error.code, "Relationship request failed.", error.status),
+    );
+  return bffRequestErrorKind(error);
+}
+
+async function persistReadsContextRelationship(
+  chatId: string,
+  workspacePath: string,
+  correlationId: string,
+): Promise<void> {
+  let api: typeof import("./api") | undefined;
+  try {
+    api = await import("./api");
+    await api.createRelationship(
+      {
+        type: "reads-context",
+        source: { kind: "chat", id: chatId },
+        target: { kind: "workspace-path", id: workspacePath },
+      },
+      stableKey(chatId, workspacePath),
+    );
+  } catch (error) {
+    reportClientDiagnostic("Files relationship recording failed.", {
+      kind: "other",
+      correlationId,
+      errorKind: relationshipRecordErrorKind(error, api),
+      errorEvidence: clientErrorEvidence(error),
+    });
+  }
+}
+
+export function recordReadsContextRelationship(
+  chatId: string,
+  workspacePath: string,
+  correlationId: string,
+): void {
   if (chatId.length === 0 || workspacePath.length === 0) return;
-  void createRelationship(
-    {
-      type: "reads-context",
-      source: { kind: "chat", id: chatId },
-      target: { kind: "workspace-path", id: workspacePath },
-    },
-    stableKey(chatId, workspacePath),
-  ).catch((error: unknown) => {
-    // Swallow: the connection still works for grounding even if the governance record fails. A
-    // RelationshipApiError (e.g. a future cardinality/policy change) is an expected, non-fatal path.
-    if (!(error instanceof RelationshipApiError) && !(error instanceof Error)) {
-      // Non-Error rejection — nothing actionable; ignore.
-    }
-  });
+  void persistReadsContextRelationship(chatId, workspacePath, correlationId);
 }
 
 // Issue #3400 (epic #3384) — a git-change target does NOT use this best-effort, fire-and-forget

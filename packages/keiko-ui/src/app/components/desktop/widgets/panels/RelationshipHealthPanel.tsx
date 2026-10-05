@@ -1,3 +1,9 @@
+"use client";
+
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 // Issue #542 (Epic #532) — Graph health panel.
 //
 // Surfaces the categorized health findings exposed by GET /api/relationships/health: orphaned
@@ -26,8 +32,6 @@
 //
 // No new third-party dependency. No new CSS variable or @keyframes.
 
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { RelationshipLifecycleState } from "@oscharko-dev/keiko-contracts";
@@ -40,7 +44,6 @@ import {
   type HealthEndpointRef,
   type HealthResult,
 } from "../../../../relationships/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 // UI-side render cap per category (the server already bounds the query). Stated to the user.
 const UI_RENDER_CAP = 50;

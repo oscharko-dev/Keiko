@@ -180,6 +180,7 @@ async function executeGatewayToolCallingProbe(
   provider: ModelProviderConfig,
   fetchImpl?: typeof fetch,
   spend?: GatewayProbeSpendContext,
+  signal?: AbortSignal,
 ): Promise<GatewayToolCallingProbeStatus> {
   const reservation = reserveGatewayProbeSpend(provider, spend);
   let response: Response;
@@ -191,6 +192,7 @@ async function executeGatewayToolCallingProbe(
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
+      ...(signal === undefined ? {} : { signal }),
       // Every attempt and compatibility retry of this probe is recorded under its correlation.
       log: processServerLogSink(),
       ...(spend === undefined ? {} : { correlationId: spend.correlationId }),
@@ -221,10 +223,12 @@ export async function probeGatewayToolCalling(
   fetchImpl?: typeof fetch,
   reportFailure?: GatewayToolCallingProbeFailureReporter,
   spend?: GatewayProbeSpendContext,
+  signal?: AbortSignal,
 ): Promise<GatewayToolCallingProbeStatus> {
   try {
-    return await executeGatewayToolCallingProbe(config, provider, fetchImpl, spend);
+    return await executeGatewayToolCallingProbe(config, provider, fetchImpl, spend, signal);
   } catch (error) {
+    signal?.throwIfAborted();
     reportFailure?.(error);
     return "unverified";
   }

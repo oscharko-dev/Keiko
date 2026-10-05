@@ -295,6 +295,7 @@ function ctx(
   const req = Readable.from([
     Buffer.from(JSON.stringify(body), "utf8"),
   ]) as unknown as IncomingMessage;
+  req.complete = true;
   (req as unknown as { method: string }).method = method;
   (req as unknown as { headers: Record<string, string> }).headers = {
     "content-type": "application/json",

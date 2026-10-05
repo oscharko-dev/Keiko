@@ -17,7 +17,8 @@ import type { ModelCapability } from "./gateway.js";
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
 import {
-  CANDIDATE_OMISSION_REASONS,
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateOmissionReason,
   type ConnectedContextPack,
@@ -85,6 +86,39 @@ export interface ChatConnectedScope {
   // `relativePaths` against THIS root instead of the chat's projectPath. Absent (legacy chats) →
   // the chat's projectPath is used. Always an already-validated, deny-list-cleared absolute path.
   readonly root?: string;
+}
+
+function normalizedConnectedRoot(root: string): string {
+  const forward = root.replaceAll("\\", "/");
+  if (/^[A-Za-z]:\/?$/u.test(forward)) return forward;
+  let end = forward.length;
+  while (end > 0 && forward.charAt(end - 1) === "/") end -= 1;
+  return forward.slice(0, end);
+}
+
+function normalizedConnectedRelativePath(path: string): string {
+  const forward = path.replaceAll("\\", "/");
+  let start = 0;
+  let end = forward.length;
+  while (start < end && forward.charAt(start) === "/") start += 1;
+  while (end > start && forward.charAt(end - 1) === "/") end -= 1;
+  return forward.slice(start, end);
+}
+
+/** Comparison identity only; it never authorizes a workspace read. */
+export function chatConnectedScopeIdentity(scope: ChatConnectedScope | null): string | null {
+  if (scope?.root === undefined) return null;
+  return JSON.stringify([
+    normalizedConnectedRoot(scope.root),
+    scope.kind,
+    scope.relativePaths.map(normalizedConnectedRelativePath),
+  ]);
+}
+
+/** Shared input for existing SHA-256 adapters; excludes timestamps and display labels. */
+export function chatConnectedScopeFingerprintInput(scope: ChatConnectedScope): string | undefined {
+  const identity = chatConnectedScopeIdentity(scope);
+  return identity === null ? undefined : `keiko-files-scope-reference-v1\u0000${identity}`;
 }
 
 // ─── Grounding limits (operator-configurable fan-out caps) ───────────────────────
@@ -277,6 +311,17 @@ export interface Chat {
   readonly updatedAt: number;
 }
 
+/** Current producers return the committed chat; older servers may require a canonical read. */
+export type GitChangeConnectResponse =
+  | { readonly status: "connected"; readonly scope: ChatGitChangeScope; readonly chat?: Chat }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
+/** A returned chat carries the store-owned grounding identity, never a client projection. */
+export type GitChangeRefreshResponse =
+  | { readonly status: "current"; readonly scope: ChatGitChangeScope; readonly chat?: Chat }
+  | { readonly status: "stale"; readonly scope: ChatGitChangeScope; readonly chat?: Chat }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
 export type ChatRole = "user" | "assistant" | "system";
 
 /** A durable coding conversation; workspace references never confer execution authority. */
@@ -348,6 +393,11 @@ export interface UpdateProjectPatch {
 // leaves it untouched. The BFF PATCH handler is responsible for validating each scopePath via
 // isValidScopePath; this shape carries the post-validation values across the wire.
 export interface UpdateChatPatch {
+  /**
+   * When supplied, reject any patch if its scope identity is stale, including title-only,
+   * status-only and precondition-only updates. This precondition never grants source access.
+   */
+  readonly expectedGroundingScopeIdentity?: string;
   readonly title?: string;
   readonly selectedModel?: string;
   readonly branchLabel?: string;
@@ -447,7 +497,9 @@ export interface ChatsResponse {
  *   messages          — the conversation messages the next request carries verbatim
  *   knowledge         — retrieved Knowledge Pod / folder excerpts (never compacted; trimmed by rank)
  *   free              — room left before automatic compaction starts
- *   compaction-buffer — the usable input above the 90 % automatic-compaction threshold
+ *   compaction-buffer — remaining conversation capacity above its automatic-compaction threshold
+ *   source-capacity   — additional usable input reserved for freshly retrieved grounded sources
+ *   input-capacity-unavailable — window capacity excluded by the independent input ceiling
  *   output-reserve    — tokens reserved for the answer
  *   safety-margin     — estimation headroom that is never planned for input
  */
@@ -458,6 +510,8 @@ export type ChatContextSegmentId =
   | "knowledge"
   | "free"
   | "compaction-buffer"
+  | "source-capacity"
+  | "input-capacity-unavailable"
   | "output-reserve"
   | "safety-margin";
 
@@ -471,6 +525,8 @@ export interface ChatContextSegmentWire {
 export interface ChatContextStatusWire {
   readonly modelId: string;
   readonly contextWindowTokens: number;
+  /** Optional independently declared input ceiling of the selected model. */
+  readonly inputLimitTokens?: number | undefined;
   /**
    * The gateway declared no window for this model and Keiko has not measured it yet, so the window
    * above is the planning assumption, replaced automatically once the provider states its window.
@@ -530,7 +586,9 @@ export interface ChatContextStatusWire {
    * Absent from servers that predate the breakdown.
    */
   readonly segments?: readonly ChatContextSegmentWire[] | undefined;
-  /** Input tokens at which Keiko compacts automatically before the next request (90 %). */
+  /** The bounded conversation lane in a grounded chat; sources use the remaining usable input. */
+  readonly conversationInputBudgetTokens?: number | undefined;
+  /** Input tokens at which Keiko compacts its conversation lane before the next request (90 %). */
   readonly autoCompactionAtTokens?: number | undefined;
   /**
    * True while the probe that asks the deployment for its undeclared window is still running: the
@@ -1230,6 +1288,9 @@ export interface GroundedEvidenceCitation {
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
   readonly source?: string;
+  // Navigation attribution only, matched against current connected scopes before opening.
+  // Missing or ambiguous identity requires the existing explicit source picker.
+  readonly sourceScopeFingerprint?: string | undefined;
   // Global evidence marker in the hybrid reranked prompt ([n]); absent for non-hybrid
   // (folder-only) answers.
   readonly marker?: number;
@@ -1365,19 +1426,6 @@ export interface LocalKnowledgeIndexLifecycleSummary {
   readonly staleCapsuleIds?: readonly KnowledgeCapsuleId[] | undefined;
 }
 
-function buildOmittedCounts(
-  pack: ConnectedContextPack,
-): Readonly<Record<CandidateOmissionReason, number>> {
-  const counts = {} as Record<CandidateOmissionReason, number>;
-  for (const reason of CANDIDATE_OMISSION_REASONS) {
-    counts[reason] = 0;
-  }
-  for (const entry of pack.omitted) {
-    counts[entry.reason] += 1;
-  }
-  return counts;
-}
-
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -1426,7 +1474,8 @@ function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingS
 
 // Derives the path-free context aggregate from the assembly diagnostics. laneCounts is built over
 // the full CONTEXT_LANE_IDS list so every lane has a count (lanes absent from diagnostics default to
-// 0); compactionActive is true when any lane recorded a compactionReason. Reads only counts and the
+// 0); compactionActive records conversation history compaction only. Source exclusion is not
+// conversation compaction. Reads only counts and the
 // budget-pressure enum — never a scopePath, scopeId, excerpt, or score.
 function buildContextSummary(
   diagnostics: ContextAssemblyDiagnostics,
@@ -1443,7 +1492,9 @@ function buildContextSummary(
     totalEstimatedTokens: diagnostics.totalEstimatedTokens,
     budgetPressure: diagnostics.budgetPressure,
     laneCounts,
-    compactionActive: diagnostics.lanes.some((lane) => lane.compactionReason !== undefined),
+    compactionActive: diagnostics.lanes.some(
+      (lane) => lane.laneId === "history-summary" && lane.compactionReason !== undefined,
+    ),
   };
 }
 
@@ -1471,8 +1522,8 @@ export function buildGroundedAnswerContextPackSummary(
     usage: pack.usage,
     budget: pack.budget,
     citationCount,
-    omittedCount: pack.omitted.length,
-    omittedCounts: buildOmittedCounts(pack),
+    omittedCount: connectedContextOmittedCount(pack),
+    omittedCounts: connectedContextOmittedCounts(pack),
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
@@ -1611,6 +1662,8 @@ export interface HybridGroundedAnswer {
  * window. The context meter shows this and plans the next grounded question with it.
  */
 export interface GroundedPromptContextWire {
+  /** Answering model identity; older persisted answers may not carry it. */
+  readonly modelId?: string | undefined;
   readonly promptTokens: number;
   readonly promptTokensMeasured: boolean;
   /** Keiko's admission estimate of the same prompt; absent from answers that predate it. */
@@ -1626,6 +1679,9 @@ export interface GroundedPromptContextWire {
    * Absent from answers that predate it.
    */
   readonly contextWindowTokens?: number | undefined;
+  /** Usable input and reserved output at admission; absent from legacy observations. */
+  readonly inputBudgetTokens?: number | undefined;
+  readonly reservedOutputTokens?: number | undefined;
 }
 
 export type GroundedAnswer = (
@@ -1956,7 +2012,11 @@ export type FilesPreviewResponse =
   | (FilesPreviewBase & {
       readonly kind: "text";
       readonly content: string;
+      /** Raw bytes supplied to the preview decoder, before text redaction; absent on older servers. */
+      readonly sourceTextBytesRead?: number;
       readonly truncated: boolean;
+      /** Editing remains independently admitted through the UTF-8 editor route. */
+      readonly canEdit?: boolean;
       readonly maxBytes: number;
     })
   | (FilesPreviewBase & {

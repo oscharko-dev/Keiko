@@ -1,3 +1,6 @@
+"use client";
+
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 // Issue #540 (Epic #532) — Relationship list panel.
 //
 // Fetches /api/relationships via the BFF client and renders a bounded list.
@@ -18,8 +21,6 @@
 //
 // WCAG 2.2 AA: <button aria-pressed>, 24×24 min touch target, focus-visible ring.
 // Suspense boundary wrapping required (visual-density-rules.md §"Suspense boundary").
-
-"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
@@ -47,7 +48,6 @@ import {
   NATIVE_FIELDSET_RESET_STYLE,
   NATIVE_LIST_STYLE,
 } from "../../native-element-styles";
-import { useTranslate } from "@/lib/i18n";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
 

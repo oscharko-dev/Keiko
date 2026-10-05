@@ -74,6 +74,7 @@ export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = Object.freeze({
 });
 
 export interface DiscoveryStats {
+  readonly unrepresentablePaths?: number | undefined;
   readonly discovered: number;
   readonly denied: number;
   readonly ignored: number;

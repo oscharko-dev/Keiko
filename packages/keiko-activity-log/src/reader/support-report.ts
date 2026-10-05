@@ -6,6 +6,10 @@ import {
 import { isRedactedLogLabel, projectSupportLogFields } from "../log-redaction.js";
 import { deflateSync, inflateSync } from "node:zlib";
 import {
+  buildSupportReportEnvelope,
+  clientOnlySupportReportSections,
+  sealSupportReportEnvelope,
+  serializeSupportReport,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   SUPPORT_REPORT_KIND,
   SUPPORT_REPORT_SCHEMA_VERSION,
@@ -139,26 +143,18 @@ export function sealSupportReport(
   evidence: SupportReportEvidence,
   minimumAnalyzerVersion: string = KEIKO_PRODUCT_VERSION,
 ): SupportReport {
-  const integrity = {
-    algorithm: "sha256" as const,
-    authenticity: "unknown" as const,
-    incidentDigest: supportReportDigest(canonicalSupportJson(incident)),
-    selectionDigest: supportReportDigest(canonicalSupportJson(selection)),
-    evidenceDigest: supportReportDigest(canonicalSupportJson(evidence)),
-  };
-  const unsigned = {
-    kind: SUPPORT_REPORT_KIND as typeof SUPPORT_REPORT_KIND,
-    schemaVersion: SUPPORT_REPORT_SCHEMA_VERSION as typeof SUPPORT_REPORT_SCHEMA_VERSION,
-    minimumAnalyzerVersion,
+  const unsigned = buildSupportReportEnvelope(
     incident,
     selection,
     evidence,
-    integrity,
-  };
-  return {
-    ...unsigned,
-    integrity: { ...integrity, reportDigest: supportReportDigest(canonicalSupportJson(unsigned)) },
-  };
+    {
+      incidentDigest: supportReportDigest(canonicalSupportJson(incident)),
+      selectionDigest: supportReportDigest(canonicalSupportJson(selection)),
+      evidenceDigest: supportReportDigest(canonicalSupportJson(evidence)),
+    },
+    minimumAnalyzerVersion,
+  );
+  return sealSupportReportEnvelope(unsigned, supportReportDigest(canonicalSupportJson(unsigned)));
 }
 
 function queryEvents(query: SupportQueryResult): readonly SupportReportEvent[] {
@@ -318,6 +314,12 @@ function validateReportInput(
   return registry;
 }
 
+function recordCountRequirement(
+  requiredRecordCount: number,
+): Pick<SupportReportSelection, "requiredRecordCount"> {
+  return requiredRecordCount > 0 ? { requiredRecordCount } : {};
+}
+
 /** Generates only the canonical private projection and registered causal evidence. */
 export function buildSupportReport(
   incident: SupportIncidentPrivateProjection,
@@ -337,11 +339,13 @@ export function buildSupportReport(
     status: diagnosticSufficiencyStatus(selectedReasons),
     reasons: selectedReasons,
     requiredBytes,
+    ...recordCountRequirement(query.truncation.requiredRecordCount),
     lifetimes,
   };
   let report = sealSupportReport(privateIncident, selection, evidence);
-  const completeBytes = Buffer.byteLength(serializeSupportReport(report));
-  if (completeBytes > maxBytes) {
+  let serialized = serializeSupportReport(report);
+  let reportBytes = Buffer.byteLength(serialized);
+  if (reportBytes > maxBytes) {
     const budgetReasons = reasons([
       ...selectedReasons,
       "report-budget-exceeded",
@@ -354,21 +358,21 @@ export function buildSupportReport(
       {
         status: "insufficient",
         reasons: budgetReasons,
-        requiredBytes: completeBytes,
+        requiredBytes: reportBytes,
+        ...recordCountRequirement(query.truncation.requiredRecordCount),
         lifetimes: [],
       },
       encodeSupportReportEvidence([]),
     );
+    serialized = serializeSupportReport(report);
+    reportBytes = Buffer.byteLength(serialized);
   }
-  if (Buffer.byteLength(serializeSupportReport(report)) > maxBytes)
-    throw new SupportReportError("report-budget-exceeded");
-  parseSupportReport(serializeSupportReport(report));
+  if (reportBytes > maxBytes) throw new SupportReportError("report-budget-exceeded");
+  parseSupportReport(serialized);
   return report;
 }
 
-export function serializeSupportReport(report: SupportReport): string {
-  return `${canonicalSupportJson(report)}\n`;
-}
+export { serializeSupportReport };
 
 // A newer schema may add sections, so its declared minimum analyzer and schema are judged before
 // the closed section set: an unsupported report names the analyzer it needs instead of "unsafe".
@@ -417,10 +421,20 @@ function validLifetimes(value: unknown): boolean {
   );
 }
 
+function selectionKeys(value: Record<string, unknown>): readonly string[] {
+  return [
+    "status",
+    "reasons",
+    "requiredBytes",
+    "lifetimes",
+    ...(Object.hasOwn(value, "requiredRecordCount") ? ["requiredRecordCount"] : []),
+  ];
+}
+
 function validSelection(value: unknown): value is SupportReportSelection {
   if (
     !reportObject(value) ||
-    !reportKeys(value, ["status", "reasons", "requiredBytes", "lifetimes"]) ||
+    !reportKeys(value, selectionKeys(value)) ||
     !validLifetimes(value.lifetimes)
   )
     return false;
@@ -436,7 +450,8 @@ function validSelection(value: unknown): value is SupportReportSelection {
   return (
     canonicalSupportJson(safe) === canonicalSupportJson(reasons(safe)) &&
     value.status === diagnosticSufficiencyStatus(safe) &&
-    reportCount(value.requiredBytes)
+    reportCount(value.requiredBytes) &&
+    (!Object.hasOwn(value, "requiredRecordCount") || reportCount(value.requiredRecordCount))
   );
 }
 
@@ -651,6 +666,26 @@ function validateIncidentProvenance(
   validateRegisteredIdentity(incident, events);
 }
 
+function validateClientOnlyProvenance(report: SupportReport): void {
+  const clientReport = report.incident.clientReport;
+  if (clientReport === undefined) return;
+  const expected = clientOnlySupportReportSections({
+    incidentId: report.incident.incidentId,
+    nowMs: report.incident.createdAtMs,
+    build: report.incident.build,
+    defectFingerprint: report.incident.defectFingerprint,
+    correlationId: report.incident.correlation.rootCorrelationId,
+    availabilityReason: clientReport.availabilityReason,
+    failure: clientReport.failure,
+  });
+  if (
+    report.evidence.recordCount !== 0 ||
+    canonicalSupportJson(report.selection) !== canonicalSupportJson(expected.selection) ||
+    canonicalSupportJson(report.incident) !== canonicalSupportJson(expected.incident)
+  )
+    throw new SupportReportError("unsafe-report");
+}
+
 // A canonical report is exactly one line. The retired open JSONL bundle starts with its
 // `$section` manifest and a raw Activity Log with a timestamped record: both are refused by name,
 // so the receiver regenerates on the originating installation instead of suspecting tampering.
@@ -692,6 +727,7 @@ function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   const events = decodeEvidence(value.evidence, registry);
   validateIncidentProvenance(incident, events);
   const report = value as unknown as SupportReport;
+  validateClientOnlyProvenance(report);
   validateLifetimeProvenance(report.selection, events);
   const analysis = eventAnalysis(events, registry);
   const selection = effectiveSelection(report, events, registry, analysis);
@@ -852,6 +888,9 @@ function effectiveSelection(
     status: diagnosticSufficiencyStatus(effective),
     reasons: effective,
     requiredBytes: report.selection.requiredBytes,
+    ...(report.selection.requiredRecordCount === undefined
+      ? {}
+      : { requiredRecordCount: report.selection.requiredRecordCount }),
     lifetimes: report.selection.lifetimes,
   };
 }
@@ -870,18 +909,18 @@ export interface AnalyzedSupportReport {
   readonly analysis: AnalyzeAllResult;
 }
 
-export function analyzeSupportReport(
+function analyzedReportArtifact(
   text: string,
-  options: SupportAnalyzeOptions = {},
+  validated: ValidatedSupportReport,
+  options: SupportAnalyzeOptions,
 ): AnalyzedSupportReport {
-  const validated = parseValidatedSupportReport(text);
   const { report, events, registry, selection } = validated;
   const analysis =
     Object.keys(options).length === 0
       ? validated.analysis
       : eventAnalysis(events, registry, options);
   const sourceArtifactDigest = supportReportDigest(text);
-  const artifact: AnalyzedSupportReport = {
+  return {
     kind: "keiko.support.report-analysis",
     schemaVersion: 1,
     authenticity: "unknown",
@@ -892,8 +931,52 @@ export function analyzeSupportReport(
     selection,
     analysis,
   };
+}
+
+function withReportSeed(
+  artifact: AnalyzedSupportReport,
+  options: SupportAnalyzeOptions,
+): AnalyzedSupportReport {
   const seed = prepareSupportReportSeed(artifact, undefined, options);
   return seed === undefined ? artifact : { ...artifact, seed };
+}
+
+type SupportReportOptionsResolver = (
+  validated: AnalyzedSupportReport,
+) => SupportAnalyzeOptions | Promise<SupportAnalyzeOptions>;
+
+async function resolveReportAnalysis(
+  text: string,
+  resolveOptions: SupportReportOptionsResolver,
+): Promise<AnalyzedSupportReport> {
+  const validated = parseValidatedSupportReport(text);
+  const basic = analyzedReportArtifact(text, validated, {});
+  const options = await resolveOptions(basic);
+  const artifact =
+    Object.keys(options).length === 0
+      ? basic
+      : { ...basic, analysis: eventAnalysis(validated.events, validated.registry, options) };
+  return withReportSeed(artifact, options);
+}
+
+export function analyzeSupportReport(
+  text: string,
+  resolveOptions: SupportReportOptionsResolver,
+): Promise<AnalyzedSupportReport>;
+export function analyzeSupportReport(
+  text: string,
+  options?: SupportAnalyzeOptions,
+): AnalyzedSupportReport;
+/** Lazy dependencies see only a validated analysis; report bytes are parsed and inflated once. */
+export function analyzeSupportReport(
+  text: string,
+  options: SupportAnalyzeOptions | SupportReportOptionsResolver = {},
+): AnalyzedSupportReport | Promise<AnalyzedSupportReport> {
+  if (typeof options === "function") return resolveReportAnalysis(text, options);
+  return withReportSeed(
+    analyzedReportArtifact(text, parseValidatedSupportReport(text), options),
+    options,
+  );
 }
 
 // A projection narrows the report, never its known loss: the effective selection's reasons stay on

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { URL } from "node:url";
 import { expect, test } from "vitest";
 
 import {
@@ -56,6 +57,145 @@ const matchingCatalogs = {
   [DE_CATALOG]:
     'import type { MessageCatalog } from "./i18n-messages.en";\n\nexport const DE_MESSAGES = {\n  "feature.title": "Titel",\n} satisfies MessageCatalog;\n',
 };
+
+test.each([
+  ["locale", true],
+  ['"en"', false],
+  ["undefined", false],
+])(
+  "recognizes selected-locale number formatting, not fixed locale %s",
+  async (locale, accepted) => {
+    const file = "packages/keiko-ui/src/lib/format.ts";
+    await withFixture(
+      {
+        ...matchingCatalogs,
+        [file]: `export function formatMs(value, locale) {\n  return \`${"${"}new Intl.NumberFormat(${locale}, { maximumFractionDigits: 1 }).format(value)} s\`;\n}\n`,
+      },
+      (repoRoot) => {
+        const result = checkUiI18nGuard({
+          repoRoot,
+          changedFiles: [file, EN_CATALOG, DE_CATALOG],
+        });
+        expect(result.ok, result.problems.join("; ")).toBe(accepted);
+        expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+          !accepted,
+        );
+      },
+    );
+  },
+);
+
+test.each([
+  ["t", "", "Intl.NumberFormat(t.locale)", true],
+  ["resolvedLocale", "", "new Intl.DateTimeFormat(resolvedLocale)", true],
+  ["locale", "", "Intl.PluralRules(locale)", true],
+  ["locale", "", "new Intl.NumberFormat(locale)", true],
+  ["locale", "", 'new Intl.NumberFormat("en")', false],
+  ["unused", 'const locale = "en";', "new Intl.NumberFormat(locale)", false],
+  ["unused", 'const fixed = "en"; const locale = fixed;', "new Intl.NumberFormat(locale)", false],
+  [
+    "selectedLocale",
+    "const resolvedLocale = selectedLocale;",
+    "Intl.NumberFormat(resolvedLocale)",
+    true,
+  ],
+  ["locale", "", 'new Intl.NumberFormat(locale ?? "en")', true],
+  [
+    "locale",
+    'const resolvedLocale = locale ?? "en";',
+    "new Intl.NumberFormat(resolvedLocale)",
+    true,
+  ],
+  [
+    "unused",
+    'const fixed = "de"; const resolvedLocale = fixed ?? "en";',
+    "new Intl.NumberFormat(resolvedLocale)",
+    false,
+  ],
+  ["locale", "", 'new Intl.NumberFormat("en" ?? locale)', false],
+  ["locale", "", 'new Intl.NumberFormat(locale + "-DE")', false],
+  ["locale", "", 'new Intl.NumberFormat(locale || "en")', false],
+])(
+  "recognizes dynamic Intl at file scope: %s %s %s",
+  async (parameter, binding, formatter, accepted) => {
+    const file = "packages/keiko-ui/src/lib/format.ts";
+    await withFixture(
+      {
+        ...matchingCatalogs,
+        [file]: `export function format(value, ${parameter}) { ${binding}\n  return \`${"${"}${formatter}.${formatter.includes("PluralRules") ? "select" : "format"}(value)} s\`;\n}`,
+      },
+      (repoRoot) => {
+        const result = checkUiI18nGuard({ repoRoot, changedFiles: [file, EN_CATALOG, DE_CATALOG] });
+        expect(result.ok, result.problems.join("; ")).toBe(accepted);
+        expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+          !accepted,
+        );
+      },
+    );
+  },
+);
+
+test("recognizes the real cached numeric presenter and rejects its fixed-locale counterfactual", async () => {
+  const file = "packages/keiko-ui/src/lib/format.ts";
+  const source = await readFile(new URL(`../../${file}`, import.meta.url), "utf8");
+  const baseline = await readFile(new URL(`../../${LITERAL_BASELINE}`, import.meta.url), "utf8");
+  const counterfactual = source.replace('locale ?? "en"', '"en"');
+  expect(counterfactual).not.toBe(source);
+  for (const [contents, accepted] of [
+    [source, true],
+    [counterfactual, false],
+  ]) {
+    await withFixture(
+      { ...matchingCatalogs, [LITERAL_BASELINE]: baseline, [file]: contents },
+      (repoRoot) => {
+        const result = checkUiI18nGuard({ repoRoot, changedFiles: [file, EN_CATALOG, DE_CATALOG] });
+        expect(result.ok, result.problems.join("; ")).toBe(accepted);
+        expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+          !accepted,
+        );
+      },
+    );
+  }
+});
+
+test("pure number formatting changes do not require catalog edits", async () => {
+  const file = "packages/keiko-ui/src/lib/format.ts";
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [file]:
+        "export function format(value, locale) { return new Intl.NumberFormat(locale).format(value); }",
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [file] });
+      expect(result.ok, result.problems.join("; ")).toBe(true);
+    },
+  );
+});
+
+test("Intl formatting is file usage rather than a new translated-message signature", () => {
+  const line = "return new Intl.NumberFormat(locale).format(value);";
+  expect(hasNewI18nSignature([line], [])).toBe(false);
+  expect(hasI18nRelevantAddedLine(line)).toBe(false);
+});
+
+test("selected-locale number formatting does not excuse untranslated adjacent copy", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        'const formatter = new Intl.NumberFormat(locale);\nexport const rows = [{ label: "Private status" }];\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain("Private status");
+    },
+  );
+});
 
 test("recognizes production UI source under the Keiko UI app tree", () => {
   expect(isUiProductionSource(UI_FILE)).toBe(true);

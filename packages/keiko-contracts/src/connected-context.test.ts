@@ -4,6 +4,7 @@
 // on top of these.
 
 import { describe, it, expect } from "vitest";
+import { DEFAULT_CONTEXT_PROFILE } from "./context-engineering.js";
 import {
   CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -159,21 +160,27 @@ describe("CONNECTED_CONTEXT_SCHEMA_VERSION", () => {
 
 // ─── Default budget ──────────────────────────────────────────────────────────
 describe("DEFAULT_EXPLORATION_BUDGET", () => {
-  it("has seven independent dimensions, all integer and non-negative", () => {
+  it("has finite content budgets and no default source-time cutoff", () => {
     const dims: readonly number[] = [
       DEFAULT_EXPLORATION_BUDGET.searchCallsMax,
-      DEFAULT_EXPLORATION_BUDGET.filesReadMax,
       DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
       DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
-      DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
       DEFAULT_EXPLORATION_BUDGET.rerankCallsMax,
     ];
-    expect(dims).toHaveLength(7);
+    expect(DEFAULT_EXPLORATION_BUDGET.elapsedMsMax).toBeNull();
+    expect(DEFAULT_EXPLORATION_BUDGET.filesReadMax).toBeNull();
+    expect(dims).toHaveLength(5);
     for (const value of dims) {
       expect(Number.isInteger(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it("uses the default profile's actual admissible model input budget", () => {
+    expect(DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax).toBe(
+      DEFAULT_CONTEXT_PROFILE.effectiveInputBudget,
+    );
   });
 
   it("rerankCallsMax defaults to 1 (one bounded rerank pass enabled)", () => {
@@ -303,14 +310,84 @@ describe("isValidLineRange", () => {
 
 // ─── isWithinBudget ───────────────────────────────────────────────────────────
 describe("isWithinBudget", () => {
+  it.each([
+    ["searchCallsMax", false],
+    ["filesReadMax", true],
+    ["excerptBytesMax", false],
+    ["modelInputTokensMax", false],
+    ["modelOutputTokensMax", false],
+    ["elapsedMsMax", true],
+    ["rerankCallsMax", false],
+  ] as const)("agrees with pack validation on null %s", (field, accepted) => {
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, [field]: null };
+    expect(isWithinBudget(happyUsage(), budget)).toBe(accepted);
+    expect(validateConnectedContextPack({ ...happyPack(), budget }).ok).toBe(accepted);
+  });
+
+  it.each(["elapsedMs", "filesRead"] as const)(
+    "accepts finite fractional %s consistently with pack validation",
+    (dimension) => {
+      const usage = { ...happyUsage(), [dimension]: 12.5 };
+      for (const cap of [null, 13]) {
+        const budget = { ...DEFAULT_EXPLORATION_BUDGET, [`${dimension}Max`]: cap };
+        expect(validateConnectedContextPack({ ...happyPack(), usage, budget })).toEqual({
+          ok: true,
+        });
+        expect(isWithinBudget(usage, budget)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["elapsedMs", "filesRead"] as const)(
+    "enforces finite %s equality and overflow in both budget validators",
+    (dimension) => {
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, [`${dimension}Max`]: 13 };
+      for (const [used, accepted] of [
+        [13, true],
+        [13.5, false],
+        [14, false],
+      ] as const) {
+        const usage = { ...happyUsage(), [dimension]: used };
+        expect(isWithinBudget(usage, budget)).toBe(accepted);
+        expect(validateConnectedContextPack({ ...happyPack(), usage, budget }).ok).toBe(accepted);
+      }
+    },
+  );
+
+  it.each(["filesReadMax", "elapsedMsMax"] as const)(
+    "rejects missing and invalid nullable %s in both budget validators",
+    (field) => {
+      for (const cap of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY, 1.5]) {
+        const budget = { ...DEFAULT_EXPLORATION_BUDGET, [field]: cap };
+        expect(isWithinBudget(happyUsage(), budget)).toBe(false);
+        expectInvalidWithReason(
+          validateConnectedContextPack({ ...happyPack(), budget }),
+          `budget.${field}`,
+        );
+      }
+    },
+  );
+
+  it("allows default file counts while retaining explicit finite read budgets", () => {
+    const usage = { ...happyUsage(), filesRead: 40 };
+    expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);
+    expect(isWithinBudget(usage, { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 })).toBe(false);
+  });
+
+  it("keeps a complete source scan beyond 30 seconds within the default time policy", () => {
+    expect(isWithinBudget({ ...happyUsage(), elapsedMs: 34_700 }, DEFAULT_EXPLORATION_BUDGET)).toBe(
+      true,
+    );
+  });
+
   it("returns true when every dimension equals its cap", () => {
     const usage: ExplorationUsage = {
       searchCalls: DEFAULT_EXPLORATION_BUDGET.searchCallsMax,
-      filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax,
+      filesRead: 40,
       excerptBytes: DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
       modelInputTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       modelOutputTokens: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
-      elapsedMs: DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
+      elapsedMs: 0,
       rerankCalls: DEFAULT_EXPLORATION_BUDGET.rerankCallsMax,
     };
     expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);
@@ -1300,6 +1377,80 @@ describe("validateConnectedContextPack", () => {
 
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
+  it("accepts closed IO-error coverage without content or raw error details", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({ reasons: ["io-error"] }),
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("accepts complete streamed coverage with no count or time ceiling", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({
+          incomplete: false,
+          truncated: false,
+          reasons: [],
+          limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+        }),
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it.each([0, 1, 100_000])("accepts the additive unsupported-entry count %s", (count) => {
+    const pack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({
+          reasons: ["unrepresentable-path"],
+          unrepresentablePathsByDiscovery: count,
+        }),
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
+    "rejects an invalid unsupported-entry count %s",
+    (count) => {
+      const pack = {
+        ...happyPack(),
+        diagnostics: {
+          rankedCandidates: [],
+          coverage: coverageDiagnostics({ unrepresentablePathsByDiscovery: count }),
+        },
+      };
+      expectInvalidWithReason(
+        validateConnectedContextPack(pack),
+        "coverage.unrepresentablePathsByDiscovery invalid",
+      );
+    },
+  );
+
+  it.each(["maxFilesScanned", "elapsedMsMax"] as const)(
+    "rejects missing and invalid nullable coverage %s",
+    (field) => {
+      for (const cap of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY, 1.5]) {
+        const coverage = coverageDiagnostics();
+        const pack = {
+          ...happyPack(),
+          diagnostics: {
+            rankedCandidates: [],
+            coverage: { ...coverage, limits: { ...coverage.limits, [field]: cap } },
+          },
+        };
+        expectInvalidWithReason(validateConnectedContextPack(pack), `coverage.${field} invalid`);
+      }
+    },
+  );
 
   it("rejects incomplete coverage without a closed truncation reason", () => {
     const pack: ConnectedContextPack = {

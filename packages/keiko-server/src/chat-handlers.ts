@@ -11,11 +11,10 @@ import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 
 import type { IncomingMessage } from "node:http";
 import {
-  captureChatHistory,
+  captureChatHistoryWithCheckpoint,
   stampHistoryRevision,
   type GatewayHistorySnapshot,
 } from "./chat-history-snapshot.js";
-import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
@@ -48,7 +47,6 @@ import {
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   isConversationMemoryCaptureSurfaceWire,
-  isGroundingScopeIdentity,
   type ConversationMemoryCaptureSurfaceWire,
   type ConversationMemoryActionWire,
   type ConversationMemoryRequestWire,
@@ -107,7 +105,11 @@ import {
   type ConversationAttachment,
 } from "./conversation-validation.js";
 import { validateProjectPath } from "./store/validation.js";
-import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import {
+  deriveChatGroundingScopeIdentity,
+  parseExpectedGroundingScopeIdentity,
+} from "./store/chat-grounding-scope-identity.js";
+export { parseExpectedGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 // Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
@@ -237,7 +239,10 @@ import {
   withGatewayConversationImages,
 } from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
-import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  beginAppSessionOperation,
+  resolveAppSessionReadAuthority,
+} from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
 export {
   MAX_CONTEXT_MESSAGES,
@@ -818,21 +823,6 @@ export function parseClientTurnId(value: unknown): string | RouteResult | undefi
     });
   }
   return asParsedOrRouteResult<string>(value);
-}
-
-export function parseExpectedGroundingScopeIdentity(
-  value: unknown,
-): string | RouteResult | undefined {
-  if (value === undefined) return undefined;
-  return isGroundingScopeIdentity(value)
-    ? value
-    : {
-        status: 400,
-        body: errorBody(
-          "BAD_REQUEST",
-          "expectedGroundingScopeIdentity must be a valid server-issued identity.",
-        ),
-      };
 }
 
 // eslint-disable-next-line complexity
@@ -1802,25 +1792,15 @@ export function captureGatewayTurnSnapshot(
   correlationId?: string,
   rehydrate = true,
 ): GatewayTurnSnapshot {
-  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
-  const checkpoint = loadChatContinuityCheckpoint(
-    deps.evidenceStore,
-    request.chatId,
-    deps.store.chatHistoryRevision(request.chatId),
+  const snapshot = captureChatHistoryWithCheckpoint({
+    store: deps.store,
+    evidenceStore: deps.evidenceStore,
+    chatId: request.chatId,
+    currentUserMessageId: userMessage.id,
+    profile: currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    redactionSecrets: currentRedactionSecrets(deps),
     correlationId,
-    (disposition) => {
-      checkpointDisposition = disposition;
-    },
-  );
-  const snapshot = captureChatHistory(
-    deps.store,
-    request.chatId,
-    userMessage.id,
-    currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    currentRedactionSecrets(deps),
-    checkpoint,
-    { correlationId, checkpointDisposition },
-  );
+  });
   return snapshot.earlierCompaction === undefined || !rehydrate
     ? snapshot
     : {
@@ -1905,12 +1885,14 @@ function stampGatewayCompaction(
   snapshot: GatewayTurnSnapshot,
 ): GatewayPromptAssembly | undefined {
   if (selected === undefined) return undefined;
+  const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   return {
     ...selected,
     compaction: stampHistoryRevision(
       selected.compaction,
       snapshot.historyRevision ?? 0,
-      (currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE).maxInputTokens,
+      profile.maxInputTokens,
+      profile.effectiveInputBudget,
     ),
   };
 }
@@ -2322,12 +2304,14 @@ async function persistModelChatTurn(
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
   correlationId: string | undefined,
+  httpRequest: IncomingMessage,
 ): Promise<RouteResult> {
   const { request } = prepared;
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
   // compaction-evidence runId is collision-free and matches the streaming path's lifecycle moment.
   const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
   const startedAt = Date.now();
+  let releaseSession = (): void => undefined;
   try {
     return await executeBufferedModelTurn(
       deps,
@@ -2336,6 +2320,12 @@ async function persistModelChatTurn(
       messageCountBeforeTurn,
       startedAt,
       correlationId,
+      (): void => {
+        releaseSession = beginAppSessionOperation(deps, httpRequest, abortSignal, {
+          correlationId,
+          surface: "desktop-chat",
+        });
+      },
     );
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
@@ -2343,6 +2333,8 @@ async function persistModelChatTurn(
     return cancelled
       ? requestCancelledResult()
       : desktopChatErrorResult(error, deps, correlationId);
+  } finally {
+    releaseSession();
   }
 }
 
@@ -2482,10 +2474,12 @@ async function executeBufferedModelTurn(
   messageCountBeforeTurn: number,
   startedAt: number,
   correlationId: string | undefined,
+  onAdmitted: () => void,
 ): Promise<RouteResult> {
   const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
+  onAdmitted();
   const { admitted } = outcome;
   const { userMessage } = admitted;
   const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
@@ -2788,35 +2782,64 @@ function rejectUnavailableGitChangeGeneration(
   return gitChangeGenerationFailure(reason);
 }
 
+function gitDescriptionScopeFailure(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const failure = expectedGroundingScopeFailure(prepared.request, prepared.chat);
+  if (failure !== undefined) {
+    logChatRejection(
+      "chat.send.rejected",
+      correlationId,
+      prepared.modelId,
+      deps,
+      failure.status,
+      "grounding-scope",
+    );
+  }
+  return failure;
+}
+
 export async function persistGitChangeDescriptionTurn(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
 ): Promise<RouteResult> {
+  const scopeFailure = gitDescriptionScopeFailure(deps, prepared, ctx.correlationId);
+  if (scopeFailure !== undefined) return scopeFailure;
   const scope = activeGitChangeScope(prepared.chat);
   if (scope === undefined)
     return { status: 409, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;
-  const memory = await resolveBufferedMemory(
-    deps,
-    prepared,
-    admission,
-    abortSignal,
-    ctx.correlationId,
-  );
-  if (isRouteResult(memory)) return memory;
-  return completeGitChangeDescriptionTurn(
-    ctx,
-    deps,
-    prepared,
-    scope,
-    admission,
-    memory,
-    abortSignal,
-  );
+  const releaseSession = beginAppSessionOperation(deps, ctx.req, abortSignal, {
+    correlationId: ctx.correlationId,
+    surface: "git-description",
+  });
+  try {
+    const memory = await resolveBufferedMemory(
+      deps,
+      prepared,
+      admission,
+      abortSignal,
+      ctx.correlationId,
+    );
+    if (isRouteResult(memory)) return memory;
+    return await completeGitChangeDescriptionTurn(
+      ctx,
+      deps,
+      prepared,
+      scope,
+      admission,
+      memory,
+      abortSignal,
+    );
+  } finally {
+    releaseSession();
+  }
 }
 
 async function completeGitChangeDescriptionTurn(
@@ -3051,24 +3074,32 @@ export function validateDesktopChatSend(
   };
 }
 
+function expectedGroundingScopeFailure(
+  request: SendDesktopChatRequest,
+  chat: Chat,
+): RouteResult | undefined {
+  if (
+    request.expectedGroundingScopeIdentity === undefined ||
+    request.expectedGroundingScopeIdentity === deriveChatGroundingScopeIdentity(chat)
+  )
+    return undefined;
+  return {
+    status: 409,
+    body: errorBody(
+      "GROUNDING_SCOPE_CHANGED",
+      "The grounded source scope changed before the turn could run.",
+    ),
+  };
+}
+
 export function validateDesktopChatExecution(
   request: SendDesktopChatRequest,
   chat: Chat,
   modelId: string,
   deps: UiHandlerDeps,
 ): RouteResult | undefined {
-  if (
-    request.expectedGroundingScopeIdentity !== undefined &&
-    request.expectedGroundingScopeIdentity !== deriveChatGroundingScopeIdentity(chat)
-  ) {
-    return {
-      status: 409,
-      body: errorBody(
-        "GROUNDING_SCOPE_CHANGED",
-        "The grounded source scope changed before the turn could run.",
-      ),
-    };
-  }
+  const scopeFailure = expectedGroundingScopeFailure(request, chat);
+  if (scopeFailure !== undefined) return scopeFailure;
   if (hasGroundingScope(chat)) {
     return {
       status: 409,
@@ -3280,6 +3311,23 @@ export function admitGitChangeScopedTurn(
       "The description authority for this connected Git change is missing or has expired.",
     ),
   };
+}
+
+export function admitPreparedGitChangeTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (activeGitChangeScope(prepared.chat) === undefined) return undefined;
+  return (
+    gitDescriptionScopeFailure(deps, prepared, correlationId) ??
+    admitGitChangeScopedTurn(
+      deps,
+      prepared.chat,
+      acceptedGitChangeChatMode(deps, prepared.request),
+      correlationId,
+    )
+  );
 }
 
 export function acceptedGitChangeChatMode(
@@ -3629,6 +3677,17 @@ export const createHandleGitChangeReviewDescription = (
   };
 };
 
+async function admitPreparedDesktopChatSend(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+): Promise<RouteResult | undefined> {
+  if (activeGitChangeScope(prepared.chat) === undefined) {
+    await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
+  }
+  return admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
+}
+
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -3640,15 +3699,7 @@ export async function handleSendDesktopChat(
     if (isRouteResult(parsed)) return parsed;
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
-    if (activeGitChangeScope(prepared.chat) === undefined) {
-      await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
-    }
-    const gitChangeDenial = admitGitChangeScopedTurn(
-      deps,
-      prepared.chat,
-      acceptedGitChangeChatMode(deps, prepared.request),
-      ctx.correlationId,
-    );
+    const gitChangeDenial = await admitPreparedDesktopChatSend(ctx, deps, prepared);
     if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
     if (inspection.kind === "replay")
@@ -3663,15 +3714,10 @@ export async function handleSendDesktopChat(
         if (isRouteResult(current)) return current;
         // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
         // a queued turn may wait long enough for the authority to expire in between.
-        const gitChangeDenial = admitGitChangeScopedTurn(
-          deps,
-          current.chat,
-          acceptedGitChangeChatMode(deps, current.request),
-          ctx.correlationId,
-        );
+        const gitChangeDenial = admitPreparedGitChangeTurn(deps, current, ctx.correlationId);
         if (gitChangeDenial !== undefined) return gitChangeDenial;
         return activeGitChangeScope(current.chat) === undefined
-          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId)
+          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId, ctx.req)
           : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
     );
@@ -3969,6 +4015,24 @@ async function parseDesktopChatRegenerate(
   return { request, chat };
 }
 
+function regenerationScopeFailure(
+  chat: Chat,
+  modelId: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (!hasGroundingScope(chat) && activeGitChangeScope(chat) === undefined) return undefined;
+  logChatRejection(
+    "chat.regeneration.rejected",
+    correlationId,
+    modelId,
+    deps,
+    409,
+    "grounding-scope",
+  );
+  return groundedRegenerateResult();
+}
+
 function prepareDesktopChatRegenerateRequest(
   request: RegenerateDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -3980,8 +4044,9 @@ function prepareDesktopChatRegenerateRequest(
   if (chat === undefined) return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
   const closed = chatClosedResult(chat);
   if (closed !== undefined) return closed;
-  if (hasGroundingScope(chat)) return groundedRegenerateResult();
   const modelId = request.modelId ?? chat.selectedModel;
+  const scopeFailure = regenerationScopeFailure(chat, modelId, deps, correlationId);
+  if (scopeFailure !== undefined) return scopeFailure;
   const invalidModel = invalidRegenerationModelResult(modelId, deps, correlationId);
   if (invalidModel !== undefined) return invalidModel;
   const executionAdmission = captureGatewayGeneration(deps);
@@ -4160,8 +4225,13 @@ async function persistRegeneratedChatTurn(
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
+  httpRequest: IncomingMessage,
 ): Promise<RouteResult> {
   const { modelId } = prepared;
+  const releaseSession = beginAppSessionOperation(deps, httpRequest, signal, {
+    correlationId,
+    surface: "desktop-chat",
+  });
   try {
     const memory = await resolveRegenerateMemory(deps, prepared);
     const response = await withAdoptedContextWindowRetry(
@@ -4176,6 +4246,8 @@ async function persistRegeneratedChatTurn(
     return signal.aborted
       ? requestCancelledResult()
       : desktopChatErrorResult(error, deps, correlationId);
+  } finally {
+    releaseSession();
   }
 }
 
@@ -4206,7 +4278,13 @@ export async function handleRegenerateDesktopChat(
         );
         return isRouteResult(current)
           ? current
-          : persistRegeneratedChatTurn(deps, current, cancellation.signal, ctx.correlationId);
+          : persistRegeneratedChatTurn(
+              deps,
+              current,
+              cancellation.signal,
+              ctx.correlationId,
+              ctx.req,
+            );
       },
     );
     const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;

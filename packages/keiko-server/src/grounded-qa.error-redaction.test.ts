@@ -296,22 +296,25 @@ describe("grounded hybrid path redacts gateway error messages (#154)", () => {
     assertScrubbed(errorEnvelope(result).message);
   });
 
-  it("scrubs the provider base URL in a non-gateway Error fallback", async () => {
+  it("preserves a non-gateway failure for the owning HTTP diagnostic and opaque response", async () => {
     const chatId = await hybridChat();
+    const failure = new Error(`connection to ${PROVIDER_BASE_URL} refused`, {
+      cause: new TypeError("private-provider-failure"),
+    });
     const hybrid: HybridSeam = {
-      folderRetriever: (_input: OrchestratorInput) =>
-        Promise.reject(new Error(`connection to ${PROVIDER_BASE_URL} refused`)),
+      folderRetriever: (_input: OrchestratorInput) => Promise.reject(failure),
     };
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain" })),
-      deps(),
-      undefined,
-      undefined,
-      hybrid,
-    );
-    expect(result.status).toBe(500);
-    expect(errorEnvelope(result).code).toBe("INTERNAL");
-    assertScrubbed(errorEnvelope(result).message);
+    // The real top-level route-error cases in server.test.ts pin HTTP opacity and correlation.
+    // This handler must preserve the original cause for that owner instead of swallowing it.
+    await expect(
+      handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "explain" })),
+        deps(),
+        undefined,
+        undefined,
+        hybrid,
+      ),
+    ).rejects.toBe(failure);
   });
 });
 
@@ -319,8 +322,7 @@ describe("grounded hybrid path redacts gateway error messages (#154)", () => {
 // SAME redact-the-dynamic-message fix (local-knowledge-grounded-qa.ts, redactText(deps, …)). Its
 // state-failure branch already redacted before this change. Driving its model-call catch-all over
 // HTTP requires aligning a seeded capsule's embedding model with a configured embedding provider
-// (the #532 matching constraint); the redaction pattern itself is the identical one the hybrid
-// "non-gateway Error fallback" test above pins as mutation-robust, so it is not re-fixtured here.
+// (the #532 matching constraint), so this file keeps its scope to the grounded folder family.
 
 // ─── gatewayErrorStatus branch coverage ───────────────────────────────────────
 // The AuthenticationError case (401) is already exercised end-to-end above via the folder path.

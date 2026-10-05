@@ -1,5 +1,6 @@
 "use client";
 
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { canConnect, snapMap } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
@@ -18,6 +19,7 @@ import {
   resolveWorkspaceFileIdentifier,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type {
+  ConnectionOutcome,
   ChatBindingTarget,
   ChatUnbindTarget,
   FilesWindowContext,
@@ -40,6 +42,7 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
+import { connectedScopeFingerprint, isConnectedScopeFingerprint } from "./workspaceScopeIdentity";
 
 function addPosition(
   vp: ViewportWorld,
@@ -181,8 +184,9 @@ function editorOpenLayoutPatch(
 function revealCfg(
   lineStart: number | undefined,
   lineEnd: number | undefined,
-): Record<string, string | number> {
-  if (lineStart === undefined) return {};
+): Record<string, string | number | undefined> {
+  if (lineStart === undefined)
+    return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
   const safeStart = Math.max(1, Math.floor(lineStart));
   const safeEnd = Math.max(safeStart, Math.floor(lineEnd ?? safeStart));
   return {
@@ -1021,6 +1025,7 @@ export function makeSnapActions({
 }
 
 interface ConnectArgs {
+  readonly onConnectionOutcome?: ((outcome: ConnectionOutcome) => void) | undefined;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly viewRef: RefObject<View>;
   readonly winsRef: RefObject<AppWindow[]>;
@@ -1050,6 +1055,7 @@ interface ConnectArgs {
         chatWindowId: string,
         scope: ChatConnectedScope,
         target?: ChatUnbindTarget,
+        connectionId?: string,
       ) => boolean | Promise<boolean>)
     | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
@@ -1083,7 +1089,7 @@ interface ConnectArgs {
         target?: ChatUnbindTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onConnectionUnbindFailure?: (() => void) | undefined;
+  readonly onConnectionUnbindFailure?: ((error?: unknown) => void) | undefined;
 }
 
 export interface GitChangeBindSelection {
@@ -1127,6 +1133,7 @@ interface BindAcceptanceInput {
 }
 
 interface ConnectionUnbindAcceptanceInput {
+  readonly connectionId: string;
   readonly chatWindowId: string;
   readonly boundScope: ChatConnectedScope | null;
   readonly connectorScope: ChatLocalKnowledgeScope | null;
@@ -1313,12 +1320,14 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
     onScopeUnbind,
     onConnectorUnbind,
     onGitChangeUnbind,
-    onConnectionUnbindFailure,
+    onConnectionUnbindFailure: reportConnectionUnbindFailure,
   } = input;
   try {
     const results: Promise<boolean>[] = [];
     if (boundScope !== null && onScopeUnbind !== undefined) {
-      results.push(Promise.resolve(onScopeUnbind(chatWindowId, boundScope, target)));
+      results.push(
+        Promise.resolve(onScopeUnbind(chatWindowId, boundScope, target, input.connectionId)),
+      );
     }
     if (connectorScope !== null && onConnectorUnbind !== undefined) {
       results.push(Promise.resolve(onConnectorUnbind(chatWindowId, connectorScope, target)));
@@ -1330,8 +1339,8 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
     }
     const resolved = await Promise.all(results);
     return resolved.every(Boolean);
-  } catch {
-    onConnectionUnbindFailure?.();
+  } catch (error) {
+    reportConnectionUnbindFailure?.(error);
     return false;
   }
 }
@@ -1369,6 +1378,7 @@ function connectionScopeFields(
     | "boundChatWindowId"
     | "boundRoot"
     | "boundScopeKind"
+    | "boundScopeFingerprint"
     | "boundRelativePath"
     | "boundConnectorKind"
     | "boundConnectorId"
@@ -1383,6 +1393,7 @@ function connectionScopeFields(
       ? {
           boundRoot: boundScope.root,
           boundScopeKind: boundScope.kind,
+          boundScopeFingerprint: connectedScopeFingerprint(boundScope),
           boundRelativePath: boundScope.relativePaths[0],
         }
       : {}),
@@ -1598,8 +1609,18 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onConnectorUnbind,
     onGitChangeBind,
     onGitChangeUnbind,
-    onConnectionUnbindFailure,
+    onConnectionUnbindFailure: reportConnectionUnbindFailure,
+    onConnectionOutcome,
   } = args;
+  const reportConnectionOutcome = (outcome: ConnectionOutcome): void => {
+    onConnectionOutcome?.(outcome);
+  };
+  const reportAttemptOutcome = (attempt: ConnectionAttempt, accepted: boolean): void =>
+    reportConnectionOutcome(
+      accepted
+        ? { kind: "connected", fromId: attempt.fromId, toId: attempt.toId }
+        : { kind: "rejected" },
+    );
 
   const winById = (id: string): AppWindow | undefined =>
     winsByIdRef?.current.get(id) ?? winsRef.current.find((w) => w.id === id);
@@ -1623,7 +1644,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return otherId === null ? null : (winById(otherId) ?? null);
   };
 
-  const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
+  const clearConnect = (): void => {
     if (connectCleanupRef.current !== null) {
       connectCleanupRef.current();
       connectCleanupRef.current = null;
@@ -1631,12 +1652,20 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connectingRef.current = null;
     setConnecting(null);
   };
+  const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
+    const cancelled = connectingRef.current !== null;
+    if (cancelled) {
+      reportConnectionOutcome({ kind: "cancelled" });
+    }
+    clearConnect();
+    return cancelled;
+  };
 
   // Applies a confirmed connect gesture once the bind veto has resolved: re-checks both endpoints
   // are still live, appends the Connection (with its bind-time scope snapshot) unless it's a
   // duplicate, and focuses the target. Split out of confirmConnect so the promise continuation
   // doesn't add nested branches to confirmConnect's own complexity.
-  const applyConnection = (input: ApplyConnectionInput): void => {
+  const applyConnection = (input: ApplyConnectionInput): boolean => {
     const {
       binding,
       fromId,
@@ -1647,9 +1676,9 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectorScope,
       gitChangeSelection,
     } = input;
-    if (!binding.accepted) return;
+    if (!binding.accepted) return false;
     if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById))
-      return;
+      return false;
     // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
     // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
     // the user navigated the Files window or re-selected another capsule.
@@ -1673,6 +1702,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
           ],
     );
     focus(toId);
+    return true;
   };
 
   const updateConnectionScope = (
@@ -1706,45 +1736,56 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     });
   };
 
-  const settleOptimisticGitConnection = (
+  const releaseAcceptedGitConnection = (
+    attempt: ConnectionAttempt,
     binding: BindAcceptance,
-    fromId: string,
-    toId: string,
-    chatWindowId: string | null,
-    chatConversationIdAtBind: string | undefined,
-    gitChangeSelection: GitChangeBindSelection,
-    removeIfRejected: boolean,
   ): void => {
+    const relationshipId = binding.gitChangeRelationshipId;
+    const conversationId = attempt.chatConversationIdAtBind;
     if (
-      !binding.accepted ||
-      !endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById)
-    ) {
-      if (removeIfRejected) removeStoredConnectionBetween(fromId, toId);
+      relationshipId === undefined ||
+      conversationId === undefined ||
+      attempt.chatWindowId === null
+    )
+      return;
+    const target: ChatUnbindTarget = {
+      conversationId,
+      projectPath: attempt.bindingTarget?.projectPath,
+    };
+    if (onGitChangeUnbind === undefined) {
+      reportConnectionUnbindFailure?.();
       return;
     }
-    // #3506 review — the operator can remove the optimistic edge before onGitChangeBind
-    // resolves; the edge disappears with no `boundGitChangeRelationshipId` yet, so `removeConn`
-    // cannot ask the server to release it. When the accept finally arrives, the edge is gone
-    // and no local update work remains — but the server just minted a relationship and unless
-    // we hand it back through `onGitChangeUnbind` the relationship leaks.
-    if (
-      binding.gitChangeRelationshipId !== undefined &&
-      chatWindowId !== null &&
-      !isDuplicate(connsRef.current, fromId, toId)
-    ) {
-      const target = chatUnbindTarget(winById(chatWindowId));
-      const relationshipId = binding.gitChangeRelationshipId;
-      if (onGitChangeUnbind !== undefined) {
-        try {
-          void Promise.resolve(onGitChangeUnbind(chatWindowId, relationshipId, target)).catch(
-            () => {
-              onConnectionUnbindFailure?.();
-            },
-          );
-        } catch {
-          onConnectionUnbindFailure?.();
-        }
-      }
+    try {
+      void Promise.resolve(onGitChangeUnbind(attempt.chatWindowId, relationshipId, target)).then(
+        (accepted) => {
+          if (!accepted) reportConnectionUnbindFailure?.();
+        },
+        (error: unknown) => {
+          reportConnectionUnbindFailure?.(error);
+        },
+      );
+    } catch (error) {
+      reportConnectionUnbindFailure?.(error);
+    }
+  };
+
+  const settleOptimisticGitConnection = (
+    attempt: ConnectionAttempt,
+    binding: BindAcceptance,
+  ): void => {
+    const { fromId, toId, chatWindowId, chatConversationIdAtBind, gitChangeSelection } = attempt;
+    if (!binding.accepted) {
+      if (!attempt.hadGitConnectionBeforeBind) removeStoredConnectionBetween(fromId, toId);
+      return;
+    }
+    if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById)) {
+      if (!attempt.hadGitConnectionBeforeBind) removeStoredConnectionBetween(fromId, toId);
+      releaseAcceptedGitConnection(attempt, binding);
+      return;
+    }
+    if (!isDuplicate(connsRef.current, fromId, toId)) {
+      releaseAcceptedGitConnection(attempt, binding);
       return;
     }
     updateConnectionScope(
@@ -1764,9 +1805,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const connectionAttemptFor = (
     fromId: string,
     toId: string,
-    from: AppWindow,
-    to: AppWindow,
-  ): ConnectionAttempt | null => {
+    from: AppWindow | undefined,
+    to: AppWindow | undefined,
+  ): ConnectionAttempt | "already-connected" | null => {
+    if (from === undefined || to === undefined || !canConnect(from.type, to.type)) return null;
     const selection = connectionBindingSelection(from, to);
     if (selection === null) return null;
     const { boundScope, chatWindowId, connectorScope, gitChangeSelection } = selection;
@@ -1775,7 +1817,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // overwrite the edge's `boundGitChangeRelationshipId`, orphaning the original relationship
     // on the server (disconnect only unbinds the id currently on the edge). One edge, one
     // relationship — reject the duplicate before the callback is ever called.
-    if (gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId)) return null;
+    if (gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId))
+      return "already-connected";
     const chatConversationIdAtBind =
       chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
     return {
@@ -1794,23 +1837,30 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     };
   };
 
+  const attemptEndpointsCurrent = (attempt: ConnectionAttempt): boolean =>
+    endpointsStillCurrent(
+      attempt.fromId,
+      attempt.toId,
+      attempt.chatWindowId,
+      attempt.chatConversationIdAtBind,
+      winById,
+    );
+
   const applyAcceptedConnectionAttempt = (
     attempt: ConnectionAttempt,
     binding: BindAcceptance,
   ): void => {
     if (attempt.gitChangeSelection !== null) {
-      settleOptimisticGitConnection(
-        binding,
-        attempt.fromId,
-        attempt.toId,
-        attempt.chatWindowId,
-        attempt.chatConversationIdAtBind,
-        attempt.gitChangeSelection,
-        !attempt.hadGitConnectionBeforeBind,
+      settleOptimisticGitConnection(attempt, binding);
+      reportAttemptOutcome(
+        attempt,
+        binding.accepted &&
+          attemptEndpointsCurrent(attempt) &&
+          isDuplicate(connsRef.current, attempt.fromId, attempt.toId),
       );
       return;
     }
-    applyConnection({
+    const applied = applyConnection({
       binding,
       fromId: attempt.fromId,
       toId: attempt.toId,
@@ -1820,9 +1870,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectorScope: attempt.connectorScope,
       gitChangeSelection: null,
     });
+    reportAttemptOutcome(attempt, applied);
   };
 
   const rollbackRejectedConnectionAttempt = (attempt: ConnectionAttempt): void => {
+    reportAttemptOutcome(attempt, false);
     if (attempt.gitChangeSelection !== null && !attempt.hadGitConnectionBeforeBind) {
       removeStoredConnectionBetween(attempt.fromId, attempt.toId);
     }
@@ -1862,13 +1914,16 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     e.stopPropagation();
     const c = connectingRef.current;
     if (c === null) return;
-    const from = winById(c.from);
-    const to = winById(toId);
-    if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
-      const attempt = connectionAttemptFor(c.from, toId, from, to);
-      if (attempt !== null) beginConnectionAttempt(attempt);
+    const attempt = connectionAttemptFor(c.from, toId, winById(c.from), winById(toId));
+    if (attempt === "already-connected") {
+      reportConnectionOutcome({ kind: "connected", fromId: c.from, toId });
+    } else if (attempt === null) {
+      reportConnectionOutcome({ kind: "not-connected" });
+    } else {
+      reportConnectionOutcome({ kind: "pending" });
+      beginConnectionAttempt(attempt);
     }
-    cancelConnect();
+    clearConnect();
   };
 
   const startConnect: WorkspaceApi["startConnect"] = (fromId, e) => {
@@ -1936,9 +1991,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
     const target = chatUnbindTarget(chatWindowId === null ? undefined : winById(chatWindowId));
-    const boundScope =
-      boundScopeOf(conn) ??
-      (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
+    const boundScope = bothLive ? connectionTeardownScope(conn, a, b) : boundScopeOf(conn);
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
     const gitChangeRelationshipId = boundGitChangeRelationshipIdOf(conn);
@@ -1957,6 +2010,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     if (pendingConnectionRemovals.has(id)) return;
     pendingConnectionRemovals.add(id);
     void connectionUnbindAccepted({
+      connectionId: id,
       chatWindowId,
       boundScope,
       connectorScope,
@@ -1965,7 +2019,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       onScopeUnbind,
       onConnectorUnbind,
       onGitChangeUnbind,
-      onConnectionUnbindFailure,
+      onConnectionUnbindFailure: reportConnectionUnbindFailure,
     }).then((accepted): void => {
       pendingConnectionRemovals.delete(id);
       if (accepted) removeStoredConnection(id);
@@ -2235,14 +2289,19 @@ function normaliseRelativePath(path: string): string {
 }
 
 function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
-  if (a.root === undefined || b.root === undefined) return false;
-  if (normaliseRoot(a.root) !== normaliseRoot(b.root)) return false;
-  if (a.kind !== b.kind) return false;
-  if (a.relativePaths.length !== b.relativePaths.length) return false;
-  return a.relativePaths.every(
-    (path, index) =>
-      normaliseRelativePath(path) === normaliseRelativePath(b.relativePaths[index] ?? ""),
-  );
+  const identity = chatConnectedScopeIdentity(a);
+  return identity !== null && identity === chatConnectedScopeIdentity(b);
+}
+
+/** Only canonical Chat scopes can restore a private persisted edge snapshot. */
+export function restoredConnectionScope(
+  connection: Pick<Connection, "boundScopeFingerprint"> | undefined,
+  canonicalScopes: readonly ChatConnectedScope[],
+): ChatConnectedScope | null {
+  const digest = connection?.boundScopeFingerprint;
+  if (!isConnectedScopeFingerprint(digest)) return null;
+  const matching = canonicalScopes.filter((scope) => connectedScopeFingerprint(scope) === digest);
+  return matching.length === 1 ? (matching[0] ?? null) : null;
 }
 
 export function filesVisibleScope(w: AppWindow, connectedAtMs: number): ChatConnectedScope | null {
@@ -2333,6 +2392,20 @@ export function boundScopeOf(conn: {
   };
 }
 
+/** A rootless trigger carries no authority; the shell must resolve elided ownership. */
+export function connectionTeardownScope(
+  connection: Connection,
+  a: AppWindow,
+  b: AppWindow,
+): ChatConnectedScope | null {
+  if (windowOfType(a, b, "files") === null || windowOfType(a, b, "chat") === null) return null;
+  const known = boundScopeOf(connection) ?? filesChatBindScope(a, b, Date.now());
+  if (known !== null) return known;
+  return connection.boundScopeElided === true
+    ? { kind: "workspace-root", relativePaths: [], connectedAtMs: Date.now() }
+    : null;
+}
+
 /** True when `root` (after trailing-separator normalisation) is already in the scopes list. */
 export function isRootConnected(current: readonly ChatConnectedScope[], root: string): boolean {
   const normRoot = normaliseRoot(root);
@@ -2344,6 +2417,56 @@ export function isScopeConnected(
   scope: ChatConnectedScope,
 ): boolean {
   return current.some((candidate) => scopeMatches(candidate, scope));
+}
+
+interface FilesScopeOwnershipInput {
+  readonly windows: readonly AppWindow[];
+  readonly connections: readonly Connection[];
+  readonly scope: ChatConnectedScope;
+  readonly conversationId: string;
+  readonly excludedConnectionId: string | undefined;
+  readonly releasedConnections: ReadonlySet<string>;
+  readonly acknowledgedScopes: ReadonlyMap<string, ChatConnectedScope>;
+  readonly conversationForWindow: (windowId: string) => string | undefined;
+}
+
+function connectionScopeMatches(
+  input: FilesScopeOwnershipInput,
+  connection: Connection,
+  a: AppWindow,
+  b: AppWindow,
+): boolean {
+  const scope =
+    input.acknowledgedScopes.get(`${connection.id}\u0000${input.conversationId}`) ??
+    boundScopeOf(connection);
+  if (scope !== null) return scopeMatches(scope, input.scope);
+  if (isConnectedScopeFingerprint(connection.boundScopeFingerprint))
+    return connection.boundScopeFingerprint === connectedScopeFingerprint(input.scope);
+  const visible = filesChatBindScope(a, b, 0);
+  return (
+    connection.boundScopeElided !== true && visible !== null && scopeMatches(visible, input.scope)
+  );
+}
+
+function isFilesScopeOwner(input: FilesScopeOwnershipInput, connection: Connection): boolean {
+  const a = input.windows.find((window) => window.id === connection.a);
+  const b = input.windows.find((window) => window.id === connection.b);
+  if (a === undefined || b === undefined) return false;
+  const chatWindowId = chatWindowIdInPair(a, b);
+  if (chatWindowId === null || input.conversationForWindow(chatWindowId) !== input.conversationId)
+    return false;
+  return windowOfType(a, b, "files") !== null && connectionScopeMatches(input, connection, a, b);
+}
+
+export function hasOtherFilesScopeOwner(input: FilesScopeOwnershipInput): boolean {
+  return input.connections.some((connection) => {
+    if (
+      connection.id === input.excludedConnectionId ||
+      input.releasedConnections.has(connection.id)
+    )
+      return false;
+    return isFilesScopeOwner(input, connection);
+  });
 }
 
 /**

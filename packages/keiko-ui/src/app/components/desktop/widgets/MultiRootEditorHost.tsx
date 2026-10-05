@@ -28,7 +28,8 @@ import {
 import type { WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import { WorkspaceTrustBadge } from "../workspace-trust/WorkspaceTrustSurfaces";
 import { useWorkspaceTrust } from "../workspace-trust/useWorkspaceTrust";
-import { rovingTabTargetFile } from "./cards/editorPaneGeometry";
+import { createInitialLayout, rovingTabTargetFile } from "./cards/editorPaneGeometry";
+import { activeEditorPane } from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import { editorPaneWindowId } from "./cards/editorPaneWindowId";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import styles from "./MultiRootEditorHost.module.css";
@@ -108,6 +109,23 @@ function initialSessionProps(
     ...(openFiles === undefined ? {} : { openFiles }),
     ...(layoutJson === undefined ? {} : { layoutJson }),
   };
+}
+
+function clearedRevealForChangedFile(
+  cfg: Readonly<Record<string, unknown>>,
+  previous: EditorRootSession | undefined,
+  patch: EditorWidgetWorkspacePatch,
+): Record<string, undefined> {
+  if (typeof cfg["revealLineStart"] !== "number") return {};
+  if (previous === undefined || !Object.hasOwn(patch, "file")) return {};
+  const layout = createInitialLayout({
+    root: previous.root,
+    file: "",
+    openFiles: [],
+    layoutJson: previous.layoutJson,
+  });
+  if (activeEditorPane(layout).activeFile === (patch.file ?? "")) return {};
+  return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
 }
 
 function parsedSessionsWithLegacyFallback(
@@ -247,9 +265,11 @@ export function MultiRootEditorHost({
   const activeRootRef = useRef(activeRoot.rootRef);
   const manifestRef = useRef(manifest);
   const updateCfgRef = useRef(updateCfg);
+  const cfgRef = useRef(cfg);
   activeRootRef.current = activeRoot.rootRef;
   manifestRef.current = manifest;
   updateCfgRef.current = updateCfg;
+  cfgRef.current = cfg;
   useEffect(() => setSessions(parsedSessions), [parsedSessions]);
   // openEditorFile targets an existing editor window by writing root/file/openFiles/layoutJson into
   // its cfg. Per-root sessions take precedence over cfg, so once a root had a session that request
@@ -296,6 +316,7 @@ export function MultiRootEditorHost({
   const updateSession = useCallback(
     (root: WorkspaceRootDescriptor, patch: EditorWidgetWorkspacePatch): void => {
       if (patch.layoutJson === undefined) return;
+      const previous = sessionsRef.current.get(root.rootRef);
       const next = new Map(sessionsRef.current);
       next.set(root.rootRef, {
         rootRef: root.rootRef,
@@ -307,7 +328,13 @@ export function MultiRootEditorHost({
       const currentManifest = manifestRef.current;
       updateCfgRef.current({
         rootSessionsJson: serializeEditorRootSessions(next, currentManifest, root.rootRef),
-        ...(activeRootRef.current === root.rootRef ? { root: root.canonicalRoot, ...patch } : {}),
+        ...(activeRootRef.current === root.rootRef
+          ? {
+              root: root.canonicalRoot,
+              ...patch,
+              ...clearedRevealForChangedFile(cfgRef.current, previous, patch),
+            }
+          : {}),
       });
     },
     [],

@@ -123,6 +123,35 @@ function autoCompactionAt(
   return Math.min(budget, beside + lane);
 }
 
+function availableSegments(
+  input: ContextBreakdownInput,
+  used: readonly ChatContextSegmentWire[],
+  free: number,
+): readonly ChatContextSegmentWire[] {
+  const remaining = input.profile.effectiveInputBudget - tokensOf(used) - free;
+  if (input.grounded === undefined) return [{ id: "compaction-buffer", tokens: remaining }];
+  const conversation = tokensOf(
+    used.filter((segment) => segment.id === "summary" || segment.id === "messages"),
+  );
+  const buffer = Math.min(
+    remaining,
+    Math.max(0, input.grounded.historyLaneTokens - conversation - free),
+  );
+  return [
+    { id: "compaction-buffer", tokens: buffer },
+    { id: "source-capacity", tokens: remaining - buffer },
+  ];
+}
+
+function unavailableInputCapacity(profile: ContextProfile): readonly ChatContextSegmentWire[] {
+  const unavailable =
+    profile.maxInputTokens -
+    profile.reservedOutputTokens -
+    profile.safetyMarginTokens -
+    profile.effectiveInputBudget;
+  return unavailable > 0 ? [{ id: "input-capacity-unavailable", tokens: unavailable }] : [];
+}
+
 export function contextBreakdown(input: ContextBreakdownInput): ContextBreakdown {
   const { profile } = input;
   const budget = profile.effectiveInputBudget;
@@ -136,7 +165,8 @@ export function contextBreakdown(input: ContextBreakdownInput): ContextBreakdown
     segments: [
       ...used,
       { id: "free", tokens: free },
-      { id: "compaction-buffer", tokens: budget - usedTokens - free },
+      ...availableSegments(input, used, free),
+      ...unavailableInputCapacity(profile),
       { id: "output-reserve", tokens: profile.reservedOutputTokens },
       { id: "safety-margin", tokens: profile.safetyMarginTokens },
     ],

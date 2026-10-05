@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertNeverFilesTreeEntryKind,
   buildGroundedAnswerContextPackSummary,
+  chatConnectedScopeFingerprintInput,
+  chatConnectedScopeIdentity,
   canonicalDesktopChatTurnReferenceSeed,
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   classifyAttachmentMime,
@@ -177,6 +179,38 @@ function pack(overrides: Partial<ConnectedContextPack> = {}): ConnectedContextPa
     ...overrides,
   };
 }
+
+describe("connected source comparison identity", () => {
+  it("preserves the existing Files identity and normalizes root and relative separators", () => {
+    const scope = {
+      kind: "directory" as const,
+      root: "C:\\manuals\\",
+      relativePaths: ["\\src\\guide\\"],
+      connectedAtMs: 1,
+    };
+    const identity = chatConnectedScopeIdentity(scope);
+    if (identity === null) throw new TypeError("Missing fixture identity");
+    expect(identity).toBe('["C:/manuals","directory",["src/guide"]]');
+    expect(chatConnectedScopeFingerprintInput(scope)).toBe(
+      `keiko-files-scope-reference-v1\u0000${identity}`,
+    );
+    expect(chatConnectedScopeIdentity({ ...scope, connectedAtMs: 999 })).toBe(identity);
+    expect(chatConnectedScopeIdentity({ ...scope, kind: "workspace-root" })).not.toBe(identity);
+    expect(chatConnectedScopeIdentity({ ...scope, relativePaths: ["docs"] })).not.toBe(identity);
+    expect(chatConnectedScopeIdentity({ ...scope, root: "C:\\other" })).not.toBe(identity);
+  });
+
+  it("does not invent a root identity for legacy unresolved scope or absent binding", () => {
+    expect(chatConnectedScopeIdentity(null)).toBeNull();
+    expect(
+      chatConnectedScopeFingerprintInput({
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 1,
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("parseUpdateMemoryAutonomyPolicyWire", () => {
   it("accepts a canonical policy update at revision zero", () => {
@@ -633,6 +667,18 @@ describe("buildGroundedAnswerContextPackSummary contextSummary (ADR-0057 D1)", (
       }),
     );
     expect(withCompaction.contextSummary?.compactionActive).toBe(true);
+  });
+
+  it("does not label source eviction as conversation compaction", () => {
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack(),
+      0,
+      0,
+      assemblyDiagnostics({
+        lanes: [laneDiag("repo-evidence", 7, "drop-lowest-score")],
+      }),
+    );
+    expect(summary.contextSummary?.compactionActive).toBe(false);
   });
 
   it("structural path-free: contextSummary JSON contains no '/' and no fixture scopePath", () => {

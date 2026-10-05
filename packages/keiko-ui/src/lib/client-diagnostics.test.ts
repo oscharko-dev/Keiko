@@ -1,11 +1,15 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // The client diagnostic sink: the redaction rule it makes enforceable, and the reason its default
 // buffers instead of dropping.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  clientDiagnosticFailureFacts,
   recordClientDiagnosticLoss,
   reportClientDiagnostic,
+  reportFilesScopeDecision,
+  currentGlobalClientFailure,
   resetClientDiagnosticWriter,
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
@@ -220,5 +224,76 @@ describe("clientErrorSummary", () => {
     expect(clientErrorSummary("s3cr3t-token-value")).toBe("string");
     expect(clientErrorSummary({ token: "s3cr3t" })).toBe("object");
     expect(clientErrorSummary(undefined)).toBe("undefined");
+  });
+});
+
+it("routes Files ownership decisions without replacing a real global failure", async () => {
+  const priorFailure = currentGlobalClientFailure();
+  const written: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+  setClientDiagnosticWriter((message, meta) => written.push({ message, meta }));
+  reportFilesScopeDecision("ui_scope-decision-0001", {
+    decision: "restored",
+    sourceCount: 3,
+    candidateCount: 2,
+    bindingFingerprint: "a".repeat(64),
+  });
+  await expectDiagnosticWireAccepted(written);
+  expect(written).toEqual([
+    {
+      message: "Keiko Files scope ownership decision.",
+      meta: {
+        correlationId: "ui_scope-decision-0001",
+        filesScopeDecision: {
+          decision: "restored",
+          sourceCount: 3,
+          candidateCount: 2,
+          bindingFingerprint: "a".repeat(64),
+        },
+      },
+    },
+  ]);
+  expect(currentGlobalClientFailure()).toBe(priorFailure);
+});
+
+it("links a refused scope action to its blocker without making the routine event a global error", () => {
+  const priorFailure = currentGlobalClientFailure();
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  reportFilesScopeDecision(
+    "ui_refused-action-0001",
+    {
+      decision: "timeout-rejected",
+      mutationSurface: "git-change",
+    },
+    "ui_blocking-action-0001",
+  );
+  expect(writer).toHaveBeenCalledExactlyOnceWith("Keiko Files scope ownership decision.", {
+    correlationId: "ui_refused-action-0001",
+    parentCorrelationId: "ui_blocking-action-0001",
+    filesScopeDecision: { decision: "timeout-rejected", mutationSurface: "git-change" },
+  });
+  expect(currentGlobalClientFailure()).toBe(priorFailure);
+});
+
+describe("clientDiagnosticFailureFacts", () => {
+  it.each([
+    [{}, []],
+    [{ kind: "window-error" }, ["kind:window-error"]],
+    [{ renderFailure: "shell" }, ["render:shell"]],
+    [{ moduleLoadFailure: "git-sync" }, ["module:git-sync"]],
+    [{ moduleLoadFailure: "git-read" }, ["module:git-read"]],
+    [{ moduleLoadFailure: "widget-locale" }, ["module:widget-locale"]],
+    [{ failureStage: "files source preview" }, ["stage:files-source-preview"]],
+  ] as const)("retains only the canonical closed context for %j", (meta, context) => {
+    expect(clientDiagnosticFailureFacts(meta)).toEqual({ errorKind: "unknown", context });
+  });
+
+  it("preserves classified errors and bounded frames without the diagnostic prose", () => {
+    const errorEvidence = { errorClass: "TypeError" as const, frames: [], causeChain: [] };
+    expect(clientDiagnosticFailureFacts({ errorKind: "internal", errorEvidence })).toEqual({
+      errorKind: "internal",
+      context: [],
+      errorEvidence,
+    });
   });
 });

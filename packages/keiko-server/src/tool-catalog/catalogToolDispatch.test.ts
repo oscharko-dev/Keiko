@@ -28,6 +28,49 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("bound catalog dispatch", () => {
+  it.each([4_000, 60_000])(
+    "forwards the effective invocation deadline and owning clock to its private guard (%i)",
+    async (authorityDeadline) => {
+      const fixture = catalogToolFixture();
+      let observed: CatalogHandlerContext["mutationGuard"]["executionBudget"];
+      const binder = createCatalogToolBinder(
+        {
+          ...fixture.input,
+          handlerBindings: [
+            {
+              ...fixture.handler,
+              execute: (args, context): Promise<CatalogHandlerResult> => {
+                observed = context.mutationGuard.executionBudget;
+                return fixture.handler.execute(args, context);
+              },
+            },
+          ],
+        },
+        {
+          ...fixture.options,
+          context: () => ({
+            ...fixture.context,
+            deadlineAt: new Date(authorityDeadline).toISOString(),
+          }),
+        },
+      );
+      const offer = binder.offer();
+      await binder.dispatch(
+        {
+          kind: "bound",
+          toolRef: fixture.pure.descriptor.toolRef,
+          projectionDigest: offer.binding.projectionDigest,
+          offerId: offer.offerId,
+          arguments: { path: "fixture.ts" },
+        },
+        identity,
+      );
+      expect(observed?.deadlineAtMs).toBe(authorityDeadline === 4_000 ? 4_000 : 6_000);
+      fixture.now.mockReturnValue(2_000);
+      expect(observed?.nowMs()).toBe(2_000);
+    },
+  );
+
   it("runs a ready handler, validates the result, and replays only its body-free receipt", async () => {
     const fixture = setup();
     const result = await fixture.binder.dispatch(fixture.invocation, identity);

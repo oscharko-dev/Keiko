@@ -407,44 +407,52 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// #2902 audit finding 3: memory-handlers.ts, memory-conv-handlers.ts and memory-consolidation-
-// handlers.ts each hand-rolled a byte-identical "read a bounded body, then parse+validate it as a
-// JSON object" wrapper on top of `readBoundedRequestBody` — differing only in a catch-variable
-// name and which (identically-valued, 64_000) max-bytes constant they read. This is the ONE owner
-// for that wrapper layer; callers keep their own max-bytes constant (there is no reason to force
-// them to share one, only the logic), pass it in, and get back either the parsed JSON object or the
-// RouteResult (413/400) their handler should return as-is.
-export async function readJsonRequestBody(
+// One bounded JSON-object reader. Parsed request fields never act as transport-control fields.
+interface JsonBodyRejection {
+  readonly status: 400 | 413;
+  readonly body: unknown;
+}
+export type JsonRequestBodyOutcome =
+  | { readonly kind: "parsed"; readonly value: Record<string, unknown> }
+  | { readonly kind: "rejected"; readonly response: JsonBodyRejection };
+
+function rejectedJsonBody(
+  status: 400 | 413,
+  code: "BAD_REQUEST" | "PAYLOAD_TOO_LARGE",
+  message: string,
+): JsonRequestBodyOutcome {
+  return { kind: "rejected", response: { status, body: { error: { code, message } } } };
+}
+
+async function readJsonRequestBody(
   req: IncomingMessage,
   maxBytes: number,
   correlationId?: string,
-): Promise<Record<string, unknown> | { readonly status: number; readonly body: unknown }> {
+): Promise<JsonRequestBodyOutcome> {
   let raw: string;
   try {
     raw = await readBoundedRequestBody(req, maxBytes, undefined, correlationId);
   } catch (error) {
-    if (error instanceof RequestBodyTooLargeError) {
-      return {
-        status: 413,
-        body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
-      };
-    }
+    if (error instanceof RequestBodyTooLargeError)
+      return rejectedJsonBody(413, "PAYLOAD_TOO_LARGE", "Request body too large.");
     throw error;
   }
   let parsed: unknown;
   try {
     parsed = raw.length === 0 ? {} : JSON.parse(raw);
   } catch {
-    return {
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
-    };
+    return rejectedJsonBody(400, "BAD_REQUEST", "Request body is not valid JSON.");
   }
-  if (!isPlainRecord(parsed)) {
-    return {
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
-    };
-  }
-  return parsed;
+  if (!isPlainRecord(parsed))
+    return rejectedJsonBody(400, "BAD_REQUEST", "Request body must be a JSON object.");
+  return { kind: "parsed", value: parsed };
+}
+
+/** Tagged outcome prevents a parsed customer's `status`/`body` fields impersonating a refusal. */
+export function readJsonRequestBodyOutcome(
+  req: IncomingMessage,
+  maxBytes: number,
+  correlationId?: string,
+): Promise<JsonRequestBodyOutcome> {
+  return readJsonRequestBody(req, maxBytes, correlationId);
 }

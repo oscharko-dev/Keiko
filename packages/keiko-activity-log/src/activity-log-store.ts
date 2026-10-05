@@ -30,6 +30,7 @@ import {
 import { join } from "node:path";
 import {
   SafeArtifactFileError,
+  assertSafeArtifactAncestors,
   openSafeArtifactFile,
   removeSafeArtifactFile,
 } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -491,11 +492,23 @@ function policyRecordPath(directory: string): string {
   return join(directory, ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
 }
 
-/** Reads the store's governing policy record, or `undefined` when absent, unreadable, or corrupt. */
-export function readActivityLogPolicyRecord(
-  directory: string,
-  trustedRoot: string,
-): ActivityLogPolicyRecord | undefined {
+function policyBootstrapAbsent(directory: string, error: unknown): boolean {
+  if (!(error instanceof SafeArtifactFileError)) return false;
+  if (error.kind !== "open-failed" && error.kind !== "unsafe-ancestor") return false;
+  const parent = lstatSync(directory, { throwIfNoEntry: false });
+  if (parent === undefined) {
+    assertSafeArtifactAncestors(policyRecordPath(directory), "activity-log");
+    return true;
+  }
+  return (
+    error.kind === "open-failed" &&
+    parent.isDirectory() &&
+    !parent.isSymbolicLink() &&
+    lstatSync(policyRecordPath(directory), { throwIfNoEntry: false }) === undefined
+  );
+}
+
+function readPolicyValueOnce(directory: string, trustedRoot: string): unknown {
   let descriptor: number | undefined;
   try {
     descriptor = openSafeArtifactFile(policyRecordPath(directory), {
@@ -504,13 +517,47 @@ export function readActivityLogPolicyRecord(
       trustedRoot,
     });
     const text = readBoundedText(descriptor, fstatSync(descriptor).size);
-    if (text === undefined) return undefined;
+    if (text === undefined) throw new SafeArtifactFileError("activity-log", "read-failed");
     const value: unknown = JSON.parse(text);
-    return isActivityLogPolicyRecord(value) ? value : undefined;
-  } catch {
-    return undefined;
+    return value;
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function readPolicyValue(directory: string, trustedRoot: string): unknown {
+  try {
+    return readPolicyValueOnce(directory, trustedRoot);
+  } catch (error) {
+    if (
+      error instanceof SyntaxError ||
+      (error instanceof SafeArtifactFileError && error.kind === "read-failed")
+    ) {
+      // A peer may have finished its exclusive-create publication since the first read.
+      // Retry once through the same guards; never wait or retry unsafe filesystem failures.
+      return readPolicyValueOnce(directory, trustedRoot);
+    }
+    throw error;
+  }
+}
+
+/** The default reader tolerates unavailable policy; admission can require a readable existing one. */
+export function readActivityLogPolicyRecord(
+  directory: string,
+  trustedRoot: string,
+  options: { readonly requireReadable?: boolean } = {},
+): ActivityLogPolicyRecord | undefined {
+  try {
+    const value = readPolicyValue(directory, trustedRoot);
+    if (!isActivityLogPolicyRecord(value))
+      throw new SafeArtifactFileError("activity-log", "read-failed");
+    return value;
+  } catch (error) {
+    if (options.requireReadable !== true) return undefined;
+    if (policyBootstrapAbsent(directory, error)) return undefined;
+    throw error instanceof SafeArtifactFileError
+      ? error
+      : new SafeArtifactFileError("activity-log", "read-failed");
   }
 }
 
@@ -787,6 +834,8 @@ export interface ActivityLogRetentionOutcome {
   readonly prunedSegmentCount: number;
   readonly prunedLegacyFileCount: number;
   readonly prunedBytes: number;
+  readonly prunedUnprotectedPinnedSegmentCount: number;
+  readonly prunedUnprotectedPinnedBytes: number;
   readonly prunedByAgeCount: number;
   readonly prunedByBudgetCount: number;
   readonly failedNames: readonly string[];
@@ -939,11 +988,16 @@ function retentionOutcome(
   usage: number,
 ): ActivityLogRetentionOutcome {
   const retained = input.files.filter((entry) => !tally.prunedNames.has(entry.file.name));
+  const prunedPinned = protection.unprotected.filter((entry) =>
+    tally.prunedNames.has(entry.file.name),
+  );
   return {
     protection,
     prunedSegmentCount: tally.prunedSegmentCount,
     prunedLegacyFileCount: tally.prunedLegacyFileCount,
     prunedBytes: tally.prunedBytes,
+    prunedUnprotectedPinnedSegmentCount: prunedPinned.length,
+    prunedUnprotectedPinnedBytes: prunedPinned.reduce((total, entry) => total + entry.sizeBytes, 0),
     prunedByAgeCount: tally.prunedByAgeCount,
     prunedByBudgetCount: tally.prunedByBudgetCount,
     failedNames: tally.failedNames,

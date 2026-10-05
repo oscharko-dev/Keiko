@@ -272,6 +272,19 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
   };
 }
 
+async function renderReadyBranchWindow(): Promise<void> {
+  const client = makeClient();
+  // Flush the mock-backed repository admission and subsequent Git reads before exercising the
+  // menu. Polling the final DOM alone can expire while React yields under coverage load.
+  await act(async () => {
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+  });
+  expect(client.listRepositories).toHaveBeenCalledOnce();
+  expect(client.getStatus).toHaveBeenCalledOnce();
+  expect(client.listBranches).toHaveBeenCalledOnce();
+  expect(client.getSummary).toHaveBeenCalledOnce();
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 afterEach(() => {
@@ -540,7 +553,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
     it("branch selector exposes searchable menu controls", async () => {
       const user = userEvent.setup();
-      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await renderReadyBranchWindow();
       expect(await screen.findByRole("button", { name: "Branch: main" })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Branch: main" }));
@@ -555,7 +568,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
     it("branch popup restores focus and exposes the selected branch value", async () => {
       const user = userEvent.setup();
-      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await renderReadyBranchWindow();
       const trigger = await screen.findByRole("button", { name: "Branch: main" });
 
       await user.click(trigger);
@@ -774,7 +787,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
         </I18nProvider>,
       );
 
-      const dialog = screen.getByRole("dialog", { name: "Repository hinzufügen" });
+      const dialog = await screen.findByRole("dialog", { name: "Repository hinzufügen" });
       expect(within(dialog).getAllByRole("button", { name: "Repository klonen" })).toHaveLength(2);
       expect(
         within(dialog).getByRole("button", { name: "Lokales Repository öffnen" }),

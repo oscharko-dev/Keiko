@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+
 import {
   useCallback,
   useEffect,
@@ -15,7 +17,7 @@ import type {
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import { fetchProjects } from "../../../../../lib/api";
-import { useTranslate } from "@/lib/i18n";
+
 import type { WorkspaceManifestView } from "../../hooks/useWorkspaceManifest";
 import { Icons } from "../../Icons";
 

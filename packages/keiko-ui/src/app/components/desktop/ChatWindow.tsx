@@ -1,5 +1,7 @@
 "use client";
 
+import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
+
 /**
  * ChatWindow — the desktop chat surface (composer + conversation thread + voice/attachment controls).
  *
@@ -69,6 +71,8 @@ import dynamic from "next/dynamic";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
+  repositoryReferenceRootsForScopes,
+  repositoryRootLabel,
   sanitizeRepositoryEvidenceText,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
@@ -144,17 +148,22 @@ import type {
   OpenEditorFileResult,
   WorkspaceLinkedGitChangeComparison,
 } from "./hooks/useWorkspace.types";
-import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { fetchFilesSearch } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
 import { copyTextToClipboard } from "@/lib/clipboard";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { ComposerShell, composerEnterSubmits } from "./composer/ComposerShell";
 import { MarkdownComposer } from "./composer/MarkdownComposer";
 import type { ComposerInputHandle, ComposerKeyEvent } from "./composer/composer-editor-types";
-import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import {
+  presentChatSessionError,
+  useOptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import type {
   CapsuleListEntry,
@@ -1136,7 +1145,11 @@ function ChatBubbleImpl({
           <ChatBubbleFooterActions
             isUser={isUser}
             message={displayedMessage}
-            showRegenerate={showRegenerate}
+            showRegenerate={
+              showRegenerate &&
+              message.groundedAnswer === undefined &&
+              !hasGroundingScope(activeChat)
+            }
             regenerating={regenerating}
             onRegenerate={onRegenerate}
             onCancelRegenerate={onCancelRegenerate}
@@ -1549,11 +1562,6 @@ const ConversationThread = memo(ConversationThreadImpl);
 const REPOSITORY_FILE_SEARCH_LIMIT = 24;
 const MAX_REPOSITORY_FOCUS_PATHS = 50;
 
-interface RepositoryRootOption {
-  readonly root: string;
-  readonly label: string;
-}
-
 interface ComposerRepositoryReference {
   readonly id: string;
   readonly root: string;
@@ -1569,58 +1577,28 @@ function effectiveConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
   return chat.connectedScope !== undefined ? [chat.connectedScope] : [];
 }
 
-// Plain backward scan instead of a `/\/+$/`-style regex (SonarCloud S8786): an
-// unbounded quantifier anchored only at the end (no leading `^`) retries from
-// every offset inside a long slash run that turns out not to reach the true
-// end, which is O(n^2) under backtracking. A manual scan is O(n).
-function trimTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.charAt(end - 1) === "/") {
-    end -= 1;
-  }
-  return value.slice(0, end);
-}
+// Retained as a compatibility export for callers; labels have one shared implementation.
+export { repositoryRootLabel as rootDisplayName } from "./repositoryReferences";
 
-// Exported test-referenced helper (same rationale as `copyableMessageText` above): pure,
-// DOM-free, and otherwise only reachable through full ChatWindow rendering.
-export function rootDisplayName(root: string): string {
-  const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
-  const parts = normalized.split("/").filter((part) => part.length > 0);
-  return parts.at(-1) ?? root;
-}
-
-function connectedRepositoryRoots(
-  chat: Chat | undefined,
-  activeProjectPath: string | undefined,
-): readonly RepositoryRootOption[] {
+function connectedRepositoryRoots(chat: Chat | undefined): readonly RepositoryReferenceRoot[] {
   if (chat === undefined) return [];
-  const fallbackRoot = activeProjectPath ?? chat.projectPath;
-  const seen = new Set<string>();
-  const roots: RepositoryRootOption[] = [];
-  for (const scope of effectiveConnectedScopes(chat)) {
-    const root = scope.root ?? fallbackRoot;
-    if (root.length === 0 || seen.has(root)) continue;
-    seen.add(root);
-    roots.push({ root, label: rootDisplayName(root) });
-  }
-  return roots;
+  return repositoryReferenceRootsForScopes(effectiveConnectedScopes(chat), chat.projectPath);
 }
 
-function repositoryReferenceRootPaths(args: {
+function repositoryReferencesForChat(args: {
   readonly chat: Chat | undefined;
-  readonly activeProjectPath: string | undefined;
   readonly linkedRoot: string | null;
   readonly linkedRoots: readonly string[];
-}): readonly string[] {
-  const roots = connectedRepositoryRoots(args.chat, args.activeProjectPath).map(
-    (root) => root.root,
+}): readonly RepositoryReferenceRoot[] {
+  const connected = connectedRepositoryRoots(args.chat);
+  const connectedPaths = new Set(connected.map(({ root }) => root));
+  const fallbackLinked = args.linkedRoot === null ? [] : [args.linkedRoot];
+  const linked = args.linkedRoots.length > 0 ? args.linkedRoots : fallbackLinked;
+  const fallback = repositoryReferenceRoots(
+    omitAncestorRepositoryRoots([...connectedPaths, ...linked]),
   );
-  if (args.linkedRoots.length > 0) {
-    roots.push(...args.linkedRoots);
-  } else if (args.linkedRoot !== null) {
-    roots.push(args.linkedRoot);
-  }
-  return omitAncestorRepositoryRoots(roots);
+  // Connected source identities remain authoritative even when a descendant is also connected.
+  return [...connected, ...fallback.filter(({ root }) => !connectedPaths.has(root))];
 }
 
 function repositoryReferenceFromResult(
@@ -1641,7 +1619,7 @@ function repositoryReferenceFromResult(
 function syntheticRepositoryReferenceFromPath(
   path: string,
   selectedRoot: string,
-  roots: readonly RepositoryRootOption[],
+  roots: readonly RepositoryReferenceRoot[],
 ): ComposerRepositoryReference | null {
   const normalized = normalizedRepositoryPath(path);
   if (normalized.length === 0 || normalized.includes("..")) return null;
@@ -1673,7 +1651,7 @@ function synchronizeComposerRepositoryReferences(args: {
   readonly current: readonly ComposerRepositoryReference[];
   readonly draft: string;
   readonly selectedRoot: string;
-  readonly roots: readonly RepositoryRootOption[];
+  readonly roots: readonly RepositoryReferenceRoot[];
   readonly searchResults: readonly FilesSearchResult[];
 }): readonly ComposerRepositoryReference[] {
   return repositoryReferenceMentionPaths(args.draft)
@@ -1924,7 +1902,7 @@ function useRepositoryFileSearch(
 }
 
 interface RepositoryFilePickerPanelProps {
-  readonly roots: readonly RepositoryRootOption[];
+  readonly roots: readonly RepositoryReferenceRoot[];
   readonly selectedRoot: string;
   readonly onRootChange: (root: string) => void;
   readonly search: RepositoryFileSearchState;
@@ -2101,7 +2079,7 @@ function RepositoryReferenceStrip({
             <span className="repo-token-name">{reference.name}</span>
             <span className="repo-token-path">
               {reference.directory.length === 0
-                ? rootDisplayName(reference.root)
+                ? repositoryRootLabel(reference.root)
                 : reference.directory}
             </span>
           </span>
@@ -2588,7 +2566,7 @@ export function sendStatusLabel(status: SendStatus): string {
     case "queued":
       return "Submitting your message…";
     case "contacting":
-      return "Contacting model…";
+      return "Preparing response…";
     case "streaming":
       return "Receiving response…";
     case "completed":
@@ -3201,7 +3179,6 @@ function ComposerCoreImpl({
     error,
     messages,
     activeChat,
-    activeProject,
     replaceChat,
   } = session;
   const taRef = inputRef;
@@ -3568,10 +3545,7 @@ function ComposerCoreImpl({
     });
   }, [effectiveVoicePhase, voiceDialogActive]);
 
-  const repositoryRoots = useMemo(
-    () => connectedRepositoryRoots(activeChat, activeProject?.path),
-    [activeChat, activeProject?.path],
-  );
+  const repositoryRoots = useMemo(() => connectedRepositoryRoots(activeChat), [activeChat]);
   const repositoryRootKey = repositoryRoots.map((root) => root.root).join("\u0001");
   const [selectedRepositoryRoot, setSelectedRepositoryRoot] = useState(
     repositoryRoots[0]?.root ?? "",
@@ -3638,8 +3612,12 @@ function ComposerCoreImpl({
       try {
         const merged = mergeRepositoryFileScope(activeChat, result.root, result.path);
         if (merged.changed) {
-          const response = await updateChat(activeChat.id, { connectedScopes: merged.scopes });
-          replaceChat(response.chat);
+          const updated = await updateGroundingScopes(
+            activeChat,
+            { connectedScopes: merged.scopes },
+            replaceChat,
+          );
+          replaceChat(updated);
         }
         const fallbackCursor = taRef.current?.selectionStart ?? draft.length;
         const mention = repositoryMention ?? repositoryMentionAtCursor(draft, fallbackCursor);
@@ -4123,10 +4101,7 @@ function isSelectableGroundingCapsuleSet(capsuleSet: CapsuleSetListEntry): boole
   );
 }
 
-// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Model only"
-// branch. #2 — permanently discards ALL active grounding sources (folder scopes + connectors);
-// when sources are present, asks for explicit confirmation. On cancel, returns without mutating
-// the chat (the caller's finally still releases the busy lock).
+// The "Model only" branch clears active sources after explicit confirmation.
 async function disconnectAllGroundingScopes(
   chat: Chat,
   t: I18nTranslate,
@@ -4143,8 +4118,12 @@ async function disconnectAllGroundingScopes(
     );
     if (!confirmed) return;
   }
-  const response = await updateChat(chat.id, { connectedScopes: null, localKnowledgeScopes: null });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(
+    chat,
+    { connectedScopes: null, localKnowledgeScopes: null },
+    onChatChanged,
+  );
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Live files"
@@ -4153,8 +4132,8 @@ async function connectLiveFilesScope(
   chat: Chat,
   onChatChanged: (chat: Chat) => void,
 ): Promise<void> {
-  const response = await updateChat(chat.id, { localKnowledgeScopes: null });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(chat, { localKnowledgeScopes: null }, onChatChanged);
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the
@@ -4181,8 +4160,8 @@ async function connectCapsuleSetScope(
   )
     ? current
     : [...current, scope];
-  const response = await updateChat(chat.id, { localKnowledgeScopes: next });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(chat, { localKnowledgeScopes: next }, onChatChanged);
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "capsule:"
@@ -4204,8 +4183,8 @@ async function connectCapsuleScope(
   const next = current.some((s) => s.kind === "capsule" && s.capsuleId === scope.capsuleId)
     ? current
     : [...current, scope];
-  const response = await updateChat(chat.id, { localKnowledgeScopes: next });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(chat, { localKnowledgeScopes: next }, onChatChanged);
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the classifier
@@ -5689,7 +5668,6 @@ export function ChatWindow({
     regenerateMessage,
     cancelSend,
     cancelGrounded,
-    activeProject,
     activeChat,
     canonicalVoiceTurnRequiresRetry,
     retryPendingCanonicalVoiceTurn,
@@ -5727,16 +5705,10 @@ export function ChatWindow({
   const visible = useMemo(() => visibleOnly(messages), [messages]);
   const hasLiveStreamingAssistant = hasLiveStreamingAssistantContent(streamingAssistantMessage);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const repositoryRoots = useMemo(() => {
-    return repositoryReferenceRoots(
-      repositoryReferenceRootPaths({
-        chat: activeChat,
-        activeProjectPath: activeProject?.path,
-        linkedRoot,
-        linkedRoots,
-      }),
-    );
-  }, [activeChat, activeProject?.path, linkedRoot, linkedRoots]);
+  const repositoryRoots = useMemo(
+    () => repositoryReferencesForChat({ chat: activeChat, linkedRoot, linkedRoots }),
+    [activeChat, linkedRoot, linkedRoots],
+  );
   const openRepositoryReference: OpenRepositoryReference | undefined = openEditorFile;
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the

@@ -7,7 +7,6 @@
 import type {
   BffError,
   ChatConnectedScope,
-  ChatGitChangeDescriptionStatus,
   ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   ChatResponse,
@@ -158,16 +157,11 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
+  classifyInvalidActivityLogReadiness,
+  type ClientModuleLoadFailure,
+  type HealthDiagnosticsInvalidReason,
   type HealthResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import {
-  validateGitRemotesResponse,
-  validateGitRepositorySummary,
-} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
-import {
-  validateGitRepositoryDiffResponse,
-  validateGitRepositoryStatusResponse,
-} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { PrDescriptionLanguage } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type {
@@ -176,16 +170,16 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
+import { readStoredLocale, translate } from "./i18n";
 import {
   buildBffHeaders,
   CORRELATION_HEADER,
   newClientCorrelationId,
   recordResponseCorrelationId,
+  responseCorrelationIdOf,
 } from "./bff-correlation";
 import {
-  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
-  GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
   type ChatContextStatusWire,
   type DesktopChatSendRequestWire,
@@ -194,7 +188,8 @@ import {
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
-  type GitChangeBlockedReason,
+  type GitChangeConnectResponse,
+  type GitChangeRefreshResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -213,10 +208,10 @@ import {
   GITHUB_ISSUE_BINDING_ID_MAX_CHARS,
   isBoundedText,
   isRecordValue,
-  SHA256_HEX,
 } from "./api-shared-primitives";
 
-export { ApiError, GITHUB_ISSUE_BINDING_ID_MAX_CHARS, isBoundedText, isRecordValue, SHA256_HEX };
+export { ApiError, GITHUB_ISSUE_BINDING_ID_MAX_CHARS, isBoundedText, isRecordValue };
+export { SHA256_HEX } from "./api-shared-primitives";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -405,18 +400,30 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
 
 /**
  * `GET /api/health` as the UI trusts it. `diagnostics` is kept only when it passes the closed
- * readiness contract (#3532); anything else is dropped rather than rendered, so the footer never
- * shows a readiness the server did not report.
+ * readiness contract (#3532). Present invalid diagnostics retain a body-free marker, so the
+ * workspace can report degraded evidence without rendering an untrusted server value.
  */
 export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
   readonly diagnostics?: HealthResponse["diagnostics"];
+  readonly diagnosticsInvalid?: true;
+  readonly diagnosticsInvalidReason?: HealthDiagnosticsInvalidReason;
 };
 
-export async function fetchHealth(): Promise<HealthSnapshot> {
-  const { diagnostics, ...health } = await fetchJson<
+export async function fetchHealth(correlationId?: string): Promise<HealthSnapshot> {
+  const response = await fetchJson<
     Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
-  >("/api/health");
-  return isActivityLogReadinessSnapshot(diagnostics) ? { ...health, diagnostics } : health;
+  >("/api/health", undefined, undefined, correlationId);
+  const { diagnostics, ...health } = response;
+  let snapshot: HealthSnapshot = health;
+  if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...health, diagnostics };
+  else if (diagnostics !== undefined)
+    snapshot = {
+      ...health,
+      diagnosticsInvalid: true,
+      diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
+    };
+  recordResponseCorrelationId(snapshot, responseCorrelationIdOf(response) ?? null);
+  return snapshot;
 }
 
 // The Coding Workbench provider profile fetchers (sidecar gateway + Codex subscription) used
@@ -1169,9 +1176,11 @@ export async function deleteProject(path: string): Promise<void> {
 export async function fetchChats(
   projectPath: string,
   correlationId?: string,
+  chatId?: string,
 ): Promise<ChatsResponse> {
+  const selected = chatId === undefined ? "" : `&id=${encodeURIComponent(chatId)}`;
   return fetchJson(
-    `/api/chats?projectPath=${encodeURIComponent(projectPath)}`,
+    `/api/chats?projectPath=${encodeURIComponent(projectPath)}${selected}`,
     undefined,
     undefined,
     correlationId,
@@ -1190,6 +1199,7 @@ export async function createChat(input: CreateChatInput): Promise<ChatResponse> 
 }
 
 export interface UpdateChatInput {
+  expectedGroundingScopeIdentity?: string;
   title?: string;
   selectedModel?: string;
   branchLabel?: string;
@@ -1216,11 +1226,21 @@ export async function updateChat(id: string, patch: UpdateChatInput): Promise<Ch
 export async function updateChatConnectedScopes(
   chatId: string,
   scopes: readonly ChatConnectedScope[] | null,
+  expectedGroundingScopeIdentity?: string,
+  correlationId?: string,
 ): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ connectedScopes: scopes }),
-  });
+  return fetchJson(
+    `/api/chats?id=${encodeURIComponent(chatId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        connectedScopes: scopes,
+        ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+      }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function updateChatLocalKnowledgeScope(
@@ -1239,11 +1259,21 @@ export async function updateChatLocalKnowledgeScope(
 export async function updateChatLocalKnowledgeScopes(
   chatId: string,
   scopes: readonly ChatLocalKnowledgeScope[] | null,
+  expectedGroundingScopeIdentity?: string,
+  correlationId?: string,
 ): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ localKnowledgeScopes: scopes }),
-  });
+  return fetchJson(
+    `/api/chats?id=${encodeURIComponent(chatId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        localKnowledgeScopes: scopes,
+        ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+      }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 // Issue #3400 — disconnects a git-change scope by removing it from the chat's list (or clearing
@@ -1253,11 +1283,21 @@ export async function updateChatLocalKnowledgeScopes(
 export async function updateChatGitChangeScopes(
   chatId: string,
   scopes: readonly ChatGitChangeScope[] | null,
+  expectedGroundingScopeIdentity?: string,
+  correlationId?: string,
 ): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ gitChangeScopes: scopes }),
-  });
+  return fetchJson(
+    `/api/chats?id=${encodeURIComponent(chatId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        gitChangeScopes: scopes,
+        ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+      }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function deleteChat(
@@ -1433,6 +1473,7 @@ export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
 export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
+  readonly onStarted?: (correlationId: string) => void;
   readonly onToken: (text: string) => void;
   readonly onDone: (payload: SseDonePayload) => void;
   readonly onError: (payload: SseErrorPayload) => void;
@@ -1650,20 +1691,20 @@ async function consumeSseStream(
 
 // Issue #152 Layer 3 — POST to /api/desktop/chat/stream with the same
 // headers/body as sendDesktopChat. If the response is NOT text/event-stream
-// (BFF returned a JSON pre-stream error), throws StreamingUnavailableError
-// so the caller can fall back. Otherwise reads the stream and dispatches to
+// (BFF returned a JSON pre-stream error), only an explicit STREAMING_UNSUPPORTED
+// permits a buffered fallback. Other refusals retain their status and correlation. Reads SSE via
 // handlers. Respects `signal` (abort stops reading immediately).
 //
 // RB-6 / ADR-0173 D5 — rebuilt on the same buildBffHeaders/newClientCorrelationId path
 // bffFetchJson (./http) uses, instead of a hand-built header object, so a streamed chat request
 // carries X-Keiko-Correlation-Id exactly like every other BFF call and a pre-stream failure is
-// traceable by the same id (attached to the thrown StreamingUnavailableError below).
+// traceable by the same id on the thrown ApiError or explicit capability fallback.
 export async function sendDesktopChatStream(
   input: SendDesktopChatInput,
   signal: AbortSignal,
   handlers: StreamHandlers,
+  correlationId = newClientCorrelationId(),
 ): Promise<void> {
-  const correlationId = newClientCorrelationId();
   const requestInit: RequestInit = {
     method: "POST",
     body: JSON.stringify(input),
@@ -1679,30 +1720,21 @@ export async function sendDesktopChatStream(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
-    // Pre-stream error — parse the JSON envelope and throw typed.
-    let code = "STREAMING_UNSUPPORTED";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as { error?: { code?: string; message?: string } };
-      code = envelope.error?.code ?? code;
-      message = envelope.error?.message ?? message;
-    } catch {
-      // parse failure — keep generic values, never log body
-    }
-    const streamingError = new StreamingUnavailableError(code, message);
-    streamingError.correlationId = responseCorrelationId;
-    throw streamingError;
+    const failure = await bffFailure(res);
+    failure.correlationId ??= responseCorrelationId;
+    if (failure.code !== "STREAMING_UNSUPPORTED") throw failure;
+    const unavailable = new StreamingUnavailableError(failure.code, failure.message);
+    unavailable.correlationId = failure.correlationId;
+    throw unavailable;
   }
 
   if (res.body === null) {
-    const streamingError = new StreamingUnavailableError(
-      "STREAMING_UNSUPPORTED",
-      "Response body was null.",
-    );
+    const streamingError = new ApiError("INTERNAL", "Response body was null.", res.status);
     streamingError.correlationId = responseCorrelationId;
     throw streamingError;
   }
 
+  handlers.onStarted?.(responseCorrelationId);
   await consumeSseStream(res.body, signal, handlers, responseCorrelationId);
 }
 
@@ -1803,11 +1835,17 @@ export async function fetchFilesPreview(
   root: string,
   path: string,
   correlationId?: string,
+  signal?: AbortSignal,
 ): Promise<FilesPreviewResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/preview?${params.toString()}`, undefined, undefined, correlationId);
+  return fetchJson(
+    `/api/files/preview?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function fetchFilesContent(
@@ -1971,7 +2009,7 @@ export async function copyFilesEntry(input: {
   return fetchJson("/api/files/copy", { method: "POST", body: JSON.stringify(input) });
 }
 
-// The three Git reads accept the caller's correlation id: a manual Retry sends the id its attempt
+// The Git reads accept the caller's correlation id: a manual Retry sends the id its attempt
 // line already carries, so the server's lines for that request join the retry's attempt and
 // settlement lines on one timeline (PR #3625 review).
 interface GitReadRequestOptions {
@@ -1982,15 +2020,8 @@ export async function fetchGitStatus(
   root: string,
   options?: GitReadRequestOptions & { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  if (options?.includeIgnored === true) params.set("includeIgnored", "true");
-  return fetchJson(
-    `/api/git/status?${params.toString()}`,
-    undefined,
-    validateGitRepositoryStatusResponse,
-    options?.correlationId,
-  );
+  const api = await loadGitWorkbenchApi("git-read", options?.correlationId);
+  return api.fetchGitStatus(fetchJson, root, options);
 }
 
 // #2906 review (comment 3865167732): KEIKO-0897 threaded an AbortSignal through
@@ -2082,14 +2113,8 @@ export async function fetchGitSummary(
   root: string,
   options?: GitReadRequestOptions,
 ): Promise<GitRepositorySummary> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  return fetchJson(
-    `/api/git/summary?${params.toString()}`,
-    undefined,
-    validateGitRepositorySummary,
-    options?.correlationId,
-  );
+  const api = await loadGitWorkbenchApi("git-read", options?.correlationId);
+  return api.fetchGitSummary(fetchJson, root, options);
 }
 
 export async function fetchGitHistory(input: {
@@ -2102,9 +2127,8 @@ export async function fetchGitHistory(input: {
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  return fetchJson(`/api/git/remotes?${params.toString()}`, undefined, validateGitRemotesResponse);
+  const api = await loadGitWorkbenchApi("git-read");
+  return api.fetchGitRemotes(fetchJson, root);
 }
 
 export async function fetchGitDiff(input: {
@@ -2112,15 +2136,8 @@ export async function fetchGitDiff(input: {
   readonly path?: string;
   readonly scope?: GitDiffScope;
 }): Promise<GitRepositoryDiffResponse> {
-  const params = new URLSearchParams();
-  params.set("root", input.root);
-  if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
-  if (input.scope !== undefined) params.set("scope", input.scope);
-  return fetchJson(
-    `/api/git/diff?${params.toString()}`,
-    undefined,
-    validateGitRepositoryDiffResponse,
-  );
+  const api = await loadGitWorkbenchApi("git-read");
+  return api.fetchGitDiff(fetchJson, input);
 }
 
 // Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,
@@ -3243,20 +3260,22 @@ export interface GitDeliverySyncInput {
 }
 
 async function loadGitWorkbenchApi(
-  moduleLoadFailure: "git-sync" | "git-history" = "git-sync",
+  moduleLoadFailure: ClientModuleLoadFailure = "git-sync",
+  correlationId?: string,
 ): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
   try {
     return await import("./coding-workbench-lazy-fetchers");
   } catch (cause) {
     const error = new ApiError(
       "MODULE_LOAD_FAILED",
-      "Git could not start. Reload Keiko and try again.",
+      translate(readStoredLocale(), "git.error.moduleLoadFailed"),
       0,
     );
-    error.correlationId = newClientCorrelationId();
+    error.correlationId = correlationId ?? newClientCorrelationId();
     error.cause = cause;
     reportClientDiagnostic("git:module-load-failed", {
       kind: "other",
+      errorKind: "unavailable",
       correlationId: error.correlationId,
       moduleLoadFailure,
       errorEvidence: clientErrorEvidence(cause),
@@ -3666,103 +3685,8 @@ export async function updateGitHubIssueReaderAuthorization(
 
 // ─── Issue #3400 — Git-to-Chat connect/refresh (server-resolved comparison, never a browser root)
 
-// The 11-member closed reason set is owned once by keiko-contracts (bff-wire.ts) and imported
-// here rather than restated — the server route (gitChangeRoutes.ts) imports the same constant
-// (F30 in the epic #3384 final audit).
-const GIT_CHANGE_BLOCKED_REASON_SET: ReadonlySet<string> = new Set(GIT_CHANGE_BLOCKED_REASONS);
-
-// Owner audit b1-12 — the closed `descriptionStatus` vocabulary is owned once by keiko-contracts
-// (bff-wire.ts) and imported here rather than restated, mirroring the blocked-reason set above.
-const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<string> = new Set(
-  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
-);
-
-export type { GitChangeBlockedReason };
-
-export type GitChangeConnectResponse =
-  | { readonly status: "connected"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
-
-export type GitChangeRefreshResponse =
-  | { readonly status: "current"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "stale"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
-
-const GIT_COMMIT_SHA_HEX = /^[0-9a-f]{40}$/u;
-
-function isSha256Hex(value: unknown): value is string {
-  return typeof value === "string" && SHA256_HEX.test(value);
-}
-
-function isGitCommitShaHex(value: unknown): value is string {
-  return typeof value === "string" && GIT_COMMIT_SHA_HEX.test(value);
-}
-
-// Owner audit b1-12 — the sibling `blocked` reason is checked against the closed set below; this
-// mirrors it for `descriptionStatus` instead of accepting any bounded string, so an unrecognised
-// value is rejected here rather than reaching the pill's status-badge lookup and throwing.
-function isChatGitChangeDescriptionStatus(value: unknown): value is ChatGitChangeDescriptionStatus {
-  return typeof value === "string" && CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value);
-}
-
-function hasChatGitChangeScopeTextFields(value: Record<string, unknown>): boolean {
-  return (
-    isBoundedText(value.relationshipId, 256) &&
-    isSha256Hex(value.remoteDigest) &&
-    isBoundedText(value.comparisonLabel, 240) &&
-    isBoundedText(value.baseRef, 512) &&
-    isBoundedText(value.headRef, 512) &&
-    isGitCommitShaHex(value.baseSha) &&
-    isGitCommitShaHex(value.headSha) &&
-    isGitCommitShaHex(value.mergeBaseSha) &&
-    isSha256Hex(value.snapshotDigest) &&
-    isChatGitChangeDescriptionStatus(value.descriptionStatus)
-  );
-}
-
-function hasChatGitChangeScopeCountFields(value: Record<string, unknown>): boolean {
-  return (
-    Number.isSafeInteger(value.fileCount) &&
-    Number.isSafeInteger(value.totalFiles) &&
-    Number.isSafeInteger(value.omittedFiles) &&
-    Number.isSafeInteger(value.truncatedFiles) &&
-    Number.isSafeInteger(value.connectedAtMs)
-  );
-}
-
-function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
-  if (!isRecordValue(value) || value.kind !== "git-change") return false;
-  return hasChatGitChangeScopeTextFields(value) && hasChatGitChangeScopeCountFields(value);
-}
-
-function validateGitChangeConnectResponse(value: unknown): GitRepositoryValidation {
-  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "blocked") {
-    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
-      ? { ok: true }
-      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
-  }
-  if (value.status === "connected" && isChatGitChangeScope(value.scope)) {
-    return { ok: true };
-  }
-  return { ok: false, reasons: ["response does not match GitChangeConnectResponse"] };
-}
-
-function validateGitChangeRefreshResponse(value: unknown): GitRepositoryValidation {
-  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "blocked") {
-    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
-      ? { ok: true }
-      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
-  }
-  if (
-    (value.status === "current" || value.status === "stale") &&
-    isChatGitChangeScope(value.scope)
-  ) {
-    return { ok: true };
-  }
-  return { ok: false, reasons: ["response does not match GitChangeRefreshResponse"] };
-}
+export type { GitChangeBlockedReason } from "@oscharko-dev/keiko-contracts/bff-wire";
+export type { GitChangeConnectResponse, GitChangeRefreshResponse };
 
 export interface ConnectGitChangeComparisonInput {
   readonly chatId: string;
@@ -3789,37 +3713,21 @@ export type ConnectGitChangeInput =
 export async function connectGitChangeToChat(
   input: ConnectGitChangeInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitChangeConnectResponse> {
-  return fetchJson(
-    "/api/git-change/connect",
-    {
-      method: "POST",
-      body: JSON.stringify({ schemaVersion: "1", ...input }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitChangeConnectResponse,
-  );
+  const api = await loadGitWorkbenchApi("git-sync", correlationId);
+  return api.connectGitChangeToChat(fetchJson, input, signal, correlationId);
 }
 
-/**
- * Re-checks a connected git-change scope against the live repository. `reads-context` is
- * immutable and non-reconnectable, so a drifted comparison archives the existing relationship and
- * creates a new one server-side; the chat's scope list is updated in the same call.
- */
+/** Refreshes a connected comparison through the same validated Git request boundary. */
 export async function refreshGitChangeScope(
   chatId: string,
   relationshipId: string,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitChangeRefreshResponse> {
-  return fetchJson(
-    "/api/git-change/refresh",
-    {
-      method: "POST",
-      body: JSON.stringify({ schemaVersion: "1", chatId, relationshipId }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitChangeRefreshResponse,
-  );
+  const api = await loadGitWorkbenchApi("git-sync", correlationId);
+  return api.refreshGitChangeScope(fetchJson, chatId, relationshipId, signal, correlationId);
 }
 
 // ─── Governed PR mark-ready intent (#3389, epic #3384, ADR-0086) ──────────────────────────────────

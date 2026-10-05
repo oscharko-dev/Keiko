@@ -158,6 +158,22 @@ function orCombinedAllowlists(text) {
 
 const repositoryConfig = readFileSync(new URL("../../.gitleaks.toml", import.meta.url), "utf8");
 
+function syntheticWorkbenchJwtException() {
+  const table = allowlistTables(repositoryConfig).find((entry) =>
+    entry.get("description")?.includes("synthetic Workbench JWT"),
+  );
+  expect(table).toBeDefined();
+  if (table === undefined) throw new TypeError("Missing synthetic Workbench JWT exception");
+  return table;
+}
+
+function literalArrayPattern(table, key) {
+  const pattern = table.get(key)?.match(/'''(.*)'''/u)?.[1];
+  expect(pattern).toBeDefined();
+  if (pattern === undefined) throw new TypeError("Missing scoped exception pattern");
+  return new RegExp(pattern, "u");
+}
+
 describe(".gitleaks.toml allowlists", () => {
   it("are found by this reader", () => {
     expect(allowlistTables(repositoryConfig).length).toBeGreaterThan(0);
@@ -169,6 +185,30 @@ describe(".gitleaks.toml allowlists", () => {
 
   it("combine several criteria with AND, never gitleaks' default OR", () => {
     expect(orCombinedAllowlists(repositoryConfig)).toEqual([]);
+  });
+
+  it("limits the synthetic Workbench JWT exception in history and squash-equivalent scans", () => {
+    const table = syntheticWorkbenchJwtException();
+    expect(table.get("condition")).toBe('"AND"');
+    expect(table.get("targetrules")).toBe('["jwt"]');
+    // Squash-equivalent CI probes have a fresh commit id. Content and path, rather than the
+    // temporary history shape, identify this one public synthetic test vector.
+    expect(table.has("commits")).toBe(false);
+    const path =
+      "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx";
+    const pathRegex = literalArrayPattern(table, "paths");
+    expect(pathRegex.test(path)).toBe(true);
+    expect(pathRegex.test(`${path}.other`)).toBe(false);
+    const fixture = readFileSync(new URL(`../../${path}`, import.meta.url), "utf8")
+      .split("\n")
+      .find((line) => /"ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",/u.test(line));
+    expect(fixture).toBeDefined();
+    if (fixture === undefined) throw new TypeError("Missing synthetic Workbench JWT fixture");
+    const lineRegex = literalArrayPattern(table, "regexes");
+    expect(lineRegex.test(fixture)).toBe(true);
+    expect(lineRegex.test(fixture.replace(/\.[A-Za-z0-9_-]+",/u, '.another-signature",'))).toBe(
+      false,
+    );
   });
 });
 

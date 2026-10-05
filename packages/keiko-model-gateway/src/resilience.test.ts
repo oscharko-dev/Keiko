@@ -49,23 +49,96 @@ function stubClock(): { clock: Clock; sleeps: number[]; advance: (ms: number) =>
   };
 }
 
+function controlledPromise<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: Error) => void;
+} {
+  let resolve: (value: T) => void = () => {
+    throw new Error("uninitialized promise");
+  };
+  let reject: (error: Error) => void = () => {
+    throw new Error("uninitialized promise");
+  };
+  const promise = new Promise<T>((fulfill, fail) => {
+    resolve = fulfill;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 const RETRY_CONFIG = { maxRetries: 3, retryBaseDelayMs: 500 } as const;
 
 describe("executeWithRetry", () => {
-  it("returns immediately on first success without sleeping", async () => {
-    const { clock, sleeps } = stubClock();
-    let calls = 0;
-    const result = await executeWithRetry(
-      () => {
-        calls += 1;
-        return Promise.resolve("ok");
+  it.each([Number.NaN, Number.NEGATIVE_INFINITY])(
+    "does not issue a provider attempt for an unusable retry limit %s",
+    async (maxRetries) => {
+      const { clock, sleeps } = stubClock();
+      let calls = 0;
+      await expect(
+        executeWithRetry(
+          () => {
+            calls += 1;
+            return Promise.resolve("unexpected");
+          },
+          { ...RETRY_CONFIG, maxRetries },
+          clock,
+        ),
+      ).rejects.toBeInstanceOf(CancelledError);
+      expect(calls).toBe(0);
+      expect(sleeps).toEqual([]);
+    },
+  );
+
+  it.each([3, Number.POSITIVE_INFINITY])(
+    "returns immediately on first success with retry limit %s",
+    async (maxRetries) => {
+      const { clock, sleeps } = stubClock();
+      let calls = 0;
+      const result = await executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.resolve("ok");
+        },
+        { ...RETRY_CONFIG, maxRetries },
+        clock,
+      );
+      expect(result).toBe("ok");
+      expect(calls).toBe(1);
+      expect(sleeps).toEqual([]);
+    },
+  );
+
+  it("starts the next attempt only after the failed provider and its backoff settle", async () => {
+    const first = controlledPromise<string>();
+    const backoff = controlledPromise<undefined>();
+    const sleeping = controlledPromise<undefined>();
+    const previousErrors: (Error | undefined)[] = [];
+    const clock: Clock = {
+      now: () => 0,
+      sleep: () => {
+        sleeping.resolve(undefined);
+        return backoff.promise;
+      },
+    };
+    const pending = executeWithRetry(
+      (_timeout, _remaining, previousError) => {
+        previousErrors.push(previousError);
+        return previousErrors.length === 1 ? first.promise : Promise.resolve("recovered");
       },
       RETRY_CONFIG,
       clock,
     );
-    expect(result).toBe("ok");
-    expect(calls).toBe(1);
-    expect(sleeps).toEqual([]);
+    expect(previousErrors).toEqual([undefined]);
+    await Promise.resolve();
+    expect(previousErrors).toEqual([undefined]);
+    const failure = new TransportError("synthetic provider failure");
+    first.reject(failure);
+    await sleeping.promise;
+    expect(previousErrors).toEqual([undefined]);
+    backoff.resolve(undefined);
+    await expect(pending).resolves.toBe("recovered");
+    expect(previousErrors).toEqual([undefined, failure]);
   });
 
   it("retries transient failures then succeeds, with exponential backoff", async () => {
@@ -203,7 +276,7 @@ describe("executeWithRetry", () => {
     expect(sleeps).toEqual([2000]);
   });
 
-  it("caps RateLimitError.retryAfterMs at 30 seconds", async () => {
+  it("waits for a queued provider cooldown beyond exponential backoff", async () => {
     const { clock, sleeps } = stubClock();
     await expect(
       executeWithRetry(
@@ -212,7 +285,24 @@ describe("executeWithRetry", () => {
         clock,
       ),
     ).rejects.toBeInstanceOf(RateLimitError);
-    expect(sleeps).toEqual([30_000]);
+    expect(sleeps).toEqual([120_000]);
+  });
+
+  it("does not shorten a cooldown that exceeds the remaining request budget", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new RateLimitError("queued", 120_000));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000 },
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 
   it("does not sleep or retry after the end-to-end timeout budget is exhausted", async () => {
@@ -416,11 +506,14 @@ describe("executeWithRetry", () => {
     });
   });
 
-  it("propagates cancellation while sleeping between retries", async () => {
+  it("cancels a long provider cooldown without issuing another request", async () => {
     const controller = new AbortController();
+    let calls = 0;
+    const sleeps: number[] = [];
     const clock: Clock = {
       now: () => 0,
-      sleep: (_ms, signal) => {
+      sleep: (ms, signal) => {
+        sleeps.push(ms);
         controller.abort();
         return signal?.aborted === true
           ? Promise.reject(new DOMException("cancelled", "AbortError"))
@@ -429,12 +522,17 @@ describe("executeWithRetry", () => {
     };
     await expect(
       executeWithRetry(
-        () => Promise.reject(new TransportError("retry me")),
+        () => {
+          calls += 1;
+          return Promise.reject(new ProviderError("queued", 503, [], 120_000));
+        },
         { maxRetries: 1, retryBaseDelayMs: 500 },
         clock,
         controller.signal,
       ),
     ).rejects.toBeInstanceOf(CancelledError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([120_000]);
   });
 });
 

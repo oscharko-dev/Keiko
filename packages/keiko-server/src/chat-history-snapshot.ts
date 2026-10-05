@@ -1,3 +1,8 @@
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  loadChatContinuityCheckpoint,
+  type CheckpointLoadDisposition,
+} from "./chat-compaction-resurfacing.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -24,6 +29,56 @@ export interface GatewayHistorySnapshot {
   readonly rehydratedContext?: string | undefined;
 }
 
+export interface LoadedHistoryCheckpoint {
+  readonly record: ContextCompactionRecord | undefined;
+  readonly disposition: CheckpointLoadDisposition;
+}
+
+interface HistoryCheckpointInput {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly chatId: string;
+  readonly correlationId?: string | undefined;
+}
+
+interface CheckpointCaptureInput extends HistoryCheckpointInput {
+  readonly currentUserMessageId: string;
+  readonly profile: ContextProfile;
+  readonly redactionSecrets: readonly string[];
+  readonly loadedCheckpoint?: LoadedHistoryCheckpoint;
+}
+
+/** Reuse only within a synchronous read phase; reload after checkpoint persistence. */
+export function loadHistoryCheckpoint(input: HistoryCheckpointInput): LoadedHistoryCheckpoint {
+  let checkpointDisposition: CheckpointLoadDisposition = "none";
+  const checkpoint = loadChatContinuityCheckpoint(
+    input.evidenceStore,
+    input.chatId,
+    input.store.chatHistoryRevision(input.chatId),
+    input.correlationId,
+    (disposition) => {
+      checkpointDisposition = disposition;
+    },
+  );
+  return { record: checkpoint, disposition: checkpointDisposition };
+}
+
+/** Load the unfiltered checkpoint so every caller retains its actual capture disposition. */
+export function captureChatHistoryWithCheckpoint(
+  input: CheckpointCaptureInput,
+): GatewayHistorySnapshot {
+  const loaded = input.loadedCheckpoint ?? loadHistoryCheckpoint(input);
+  return captureChatHistory(
+    input.store,
+    input.chatId,
+    input.currentUserMessageId,
+    input.profile,
+    input.redactionSecrets,
+    loaded.record,
+    { correlationId: input.correlationId, checkpointDisposition: loaded.disposition },
+  );
+}
+
 interface HistoryAccumulator {
   readonly units: ChatMessage[][];
   tokens: number;
@@ -39,7 +94,7 @@ interface HistoryAccumulator {
 
 export interface HistoryCaptureOptions {
   readonly correlationId?: string | undefined;
-  readonly checkpointDisposition?: "none" | "revision-mismatch" | "available" | undefined;
+  readonly checkpointDisposition?: CheckpointLoadDisposition | undefined;
 }
 
 // The database visitor retains canonical turn eligibility and reads bounded pages. Keep a bounded
@@ -81,6 +136,8 @@ export function captureChatHistory(
       foldedItems: state.compactedCount,
       retainedItems: history.length,
       contextWindowTokens: profile.maxInputTokens,
+      effectiveInputBudgetTokens: profile.effectiveInputBudget,
+      ...checkpointBudgetEvidence(checkpoint),
     },
     options.correlationId,
   );
@@ -88,12 +145,15 @@ export function captureChatHistory(
     history,
     currentUserMessageId,
     historyRevision,
-    earlierCompaction: stampHistoryRevision(
-      earlierRecord(state, profile),
-      historyRevision,
-      profile.maxInputTokens,
-    ),
+    earlierCompaction: stampProfileBudget(earlierRecord(state, profile), historyRevision, profile),
   };
+}
+
+function checkpointBudgetEvidence(checkpoint: ContextCompactionRecord | undefined): {
+  readonly checkpointInputBudgetTokens?: number;
+} {
+  const tokens = checkpoint?.conversationCoverage?.effectiveInputBudget;
+  return tokens === undefined ? {} : { checkpointInputBudgetTokens: tokens };
 }
 
 function historyUnitVisitor(
@@ -136,11 +196,23 @@ function initialCheckpointDisposition(
 ): CheckpointDisposition {
   if (supplied !== undefined && checkpoint === undefined) return "revision-mismatch";
   if (checkpoint === undefined)
-    return options.checkpointDisposition === "revision-mismatch" ? "revision-mismatch" : "none";
+    return options.checkpointDisposition === "available"
+      ? "none"
+      : (options.checkpointDisposition ?? "none");
+  return expandedCheckpointDisposition(checkpoint, profile);
+}
+
+function expandedCheckpointDisposition(
+  checkpoint: ContextCompactionRecord,
+  profile: ContextProfile,
+): CheckpointDisposition {
+  const originalBudget = checkpoint.conversationCoverage?.effectiveInputBudget;
+  if (originalBudget !== undefined && profile.effectiveInputBudget <= originalBudget)
+    return "boundary-missing";
   const originalWindow = checkpoint.conversationCoverage?.contextWindowTokens;
-  return originalWindow !== undefined && profile.maxInputTokens > originalWindow
-    ? "window-expanded"
-    : "boundary-missing";
+  if (originalWindow !== undefined && profile.maxInputTokens > originalWindow)
+    return "window-expanded";
+  return originalBudget === undefined ? "boundary-missing" : "input-budget-expanded";
 }
 
 function consumeHistoryUnit(
@@ -221,6 +293,7 @@ export function stampHistoryRevision(
   record: ContextCompactionRecord | undefined,
   historyRevision: number,
   contextWindowTokens?: number,
+  effectiveInputBudget?: number,
 ): ContextCompactionRecord | undefined {
   return record?.conversationCoverage === undefined
     ? record
@@ -230,6 +303,7 @@ export function stampHistoryRevision(
           ...record.conversationCoverage,
           historyRevision,
           ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+          ...(effectiveInputBudget === undefined ? {} : { effectiveInputBudget }),
         },
       };
 }
@@ -240,7 +314,7 @@ function shouldRestoreCheckpoint(
   profile: ContextProfile,
 ): boolean {
   const originalWindow = record.conversationCoverage?.contextWindowTokens;
-  if (originalWindow !== undefined) return profile.maxInputTokens <= originalWindow;
+  if (originalWindow !== undefined) return checkpointFitsProfile(record, profile);
   return state.tokens + record.tokensBefore > profile.effectiveInputBudget;
 }
 
@@ -257,4 +331,29 @@ function emptyHistoryAccumulator(): HistoryAccumulator {
     unitsVisited: 0,
     checkpointDisposition: "none",
   };
+}
+
+/** Legacy checkpoints retain their window-only identity until a current capture stamps the budget. */
+export function checkpointFitsProfile(
+  record: ContextCompactionRecord,
+  profile: ContextProfile,
+): boolean {
+  const coverage = record.conversationCoverage;
+  if (coverage?.contextWindowTokens === undefined) return false;
+  return coverage.effectiveInputBudget === undefined
+    ? profile.maxInputTokens <= coverage.contextWindowTokens
+    : profile.effectiveInputBudget <= coverage.effectiveInputBudget;
+}
+
+function stampProfileBudget(
+  record: ContextCompactionRecord | undefined,
+  historyRevision: number,
+  profile: ContextProfile,
+): ContextCompactionRecord | undefined {
+  return stampHistoryRevision(
+    record,
+    historyRevision,
+    profile.maxInputTokens,
+    profile.effectiveInputBudget,
+  );
 }

@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #2129 — MemoriaViva health scan: orphaned memories, missing cross-references,
 // stale-but-not-archived records, and dangling consolidation review items surfaced by
 // GET /api/memory/health-scan.
@@ -23,7 +28,7 @@ import type {
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
 import { fetchMemoryHealthScan } from "@/lib/memory-api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { formatError } from "./format-error";
 
 function findingKindLabel(kind: MemoryHealthScanFindingKindWire, t: I18nTranslate): string {

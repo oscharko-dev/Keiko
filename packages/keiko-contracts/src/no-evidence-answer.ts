@@ -24,9 +24,38 @@
 //     fact about the subject.
 
 import { findCitationMarkerGroups } from "./citation-markers.js";
+import {
+  CONNECTED_SEARCH_ABSTENTION_DE,
+  CONNECTED_SEARCH_ABSTENTION_EN,
+} from "./connected-search-abstention.js";
+
+export {
+  LEGACY_CONNECTED_SEARCH_ABSTENTION,
+  isCanonicalConnectedSearchAbstention,
+} from "./connected-search-abstention.js";
 
 /** Longest answer (after whitespace collapse) that can still be read as a bare refusal. */
 export const NO_EVIDENCE_ANSWER_MAX_CHARS = 240;
+
+// Shared English/German words such as "was", "die" and "den", or an umlaut in a source
+// identifier, cannot determine the question language by themselves.
+const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
+  /\b(?:bitte|wie|warum|welche|welcher|welches|wieviel|wieso|wo)\b/iu,
+  /\b(?:erkläre|erklaere|prüfe|pruefe|zeige|gibt|ist|sind|bedeutet|suche|finde)\b/iu,
+  /\b(?:und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu,
+];
+
+/** Shared language selection for deterministic system answers, independent of model invocation. */
+export function shouldUseGermanForSystemAnswer(question: string | undefined): boolean {
+  return question !== undefined && GERMAN_QUERY_PATTERNS.some((pattern) => pattern.test(question));
+}
+
+/** Reports a search outcome without claiming that an arbitrary fact is absent from the scope. */
+export function connectedSearchNoEvidenceAnswer(question?: string): string {
+  return shouldUseGermanForSystemAnswer(question)
+    ? CONNECTED_SEARCH_ABSTENTION_DE
+    : CONNECTED_SEARCH_ABSTENTION_EN;
+}
 
 // Explicit "there is not enough evidence/information" statements. They stay unconditional (bar the
 // length and marker guards): no answer about a subject is phrased this way.

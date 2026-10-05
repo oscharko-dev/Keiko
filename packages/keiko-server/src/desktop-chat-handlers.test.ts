@@ -12,6 +12,13 @@ import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { serializeSessionCookies } from "./coding-app-session/sessionCookie.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "./coding-app-session/_support.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   GatewayCallRequest,
@@ -298,6 +305,38 @@ afterEach(async () => {
 });
 
 describe("desktop chat routes", () => {
+  it("keeps an existing paired session active through explicit plaintext chat sends", async () => {
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const cookie = serializeSessionCookies(paired.cookieToken, {
+      secure: false,
+      maxAgeSeconds: 43_200,
+    })
+      .find((value) => value.includes("Path=/api/desktop/chat;"))
+      ?.split(";")[0];
+    if (cookie === undefined) throw new TypeError("Missing desktop cookie projection.");
+    await restartWithDeps(deps(fakeModel("A response."), { codingAppSessionChannel: channel }));
+    const chat = store.createChat(projectDir, "Session activity", CHAT_MODEL);
+    for (const minutes of [10, 20, 30]) {
+      clock = minutes * 60_000;
+      const result = await fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: { ...POST_JSON_HEADERS, Cookie: cookie },
+        body: JSON.stringify({ chatId: chat.id, projectPath: projectDir, content: "Hello." }),
+      });
+      expect(result.status).toBe(200);
+      await result.text();
+    }
+    clock = 35 * 60_000;
+    expect(channel.verifySession(paired.cookieToken)).toMatchObject({ lastSeenAtMs: clock });
+  });
+
   it("creates a GPTOSS chat scoped to a validated local project", async () => {
     const res = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",

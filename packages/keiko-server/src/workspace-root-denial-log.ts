@@ -1,5 +1,6 @@
 import {
   PathDeniedError,
+  WorkspaceNotFoundError,
   resolveExistingAllowedWorkspaceRealRoot,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
@@ -10,11 +11,18 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "./correlation.js";
 import type { ServerLogSink } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  keikoStackFrames,
+  errorKindOf,
+  safeProperty,
+} from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 
 export type WorkspaceRootDenialReason =
   | "denied-locus"
+  | "ordinary-root-unavailable"
+  | "credential-shaped-root"
   | "managed-root-session-authority-missing"
   | "managed-authority-unavailable"
   | "managed-root-ownership"
@@ -46,6 +54,8 @@ const WORKSPACE_ROOT_DENIED_OPERATION = defineActivityLogOperation({
       required: true,
       values: [
         "denied-locus",
+        "ordinary-root-unavailable",
+        "credential-shaped-root",
         "managed-root-session-authority-missing",
         "managed-authority-unavailable",
         "managed-root-ownership",
@@ -105,7 +115,11 @@ export function recordWorkspaceRootDenied(
     activityLogEvent(
       WORKSPACE_ROOT_DENIED_OPERATION,
       {
-        level: "warn",
+        level:
+          evidence.reason === "ordinary-root-unavailable" ||
+          evidence.reason === "credential-shaped-root"
+            ? "error"
+            : "warn",
         correlationId: correlationIdOrUnknown(context.correlationId),
         errorKind: evidence.errorKind,
       },
@@ -133,6 +147,88 @@ export function recordWorkspaceRootDenial(
       reason: "denied-locus",
       failureKind: error.code,
       errorKind: "permission-denied",
+      ...(frames.length === 0 ? {} : { frames }),
+      ...(causes.length === 0 ? {} : { causeChain: causes }),
+    },
+    context,
+  );
+}
+
+// Expected filesystem availability failures may be surfaced as an inaccessible connected root.
+// Everything else must retain its original exception and reach the server failure boundary.
+const WORKSPACE_ROOT_FILESYSTEM_FAILURES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "EINVAL",
+]);
+const WORKSPACE_ROOT_TRANSIENT_FAILURES: ReadonlySet<string> = new Set([
+  "EIO",
+  "ESTALE",
+  "EMFILE",
+  "ENFILE",
+  "ETIMEDOUT",
+  "ENOTCONN",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ENXIO",
+  "ENODEV",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENETRESET",
+  "EBUSY",
+  "EAGAIN",
+]);
+const WORKSPACE_ROOT_PERMISSION_FAILURES: ReadonlySet<string> = new Set(["EACCES", "EPERM"]);
+const WORKSPACE_ROOT_RESOURCE_FAILURES: ReadonlySet<string> = new Set(["EMFILE", "ENFILE"]);
+
+function isKnownWorkspaceFilesystemFailure(kind: string): boolean {
+  return (
+    WORKSPACE_ROOT_FILESYSTEM_FAILURES.has(kind) || WORKSPACE_ROOT_TRANSIENT_FAILURES.has(kind)
+  );
+}
+
+export function isExpectedWorkspaceRootFailure(error: unknown): boolean {
+  return (
+    error instanceof WorkspaceNotFoundError || isKnownWorkspaceFilesystemFailure(errorKindOf(error))
+  );
+}
+
+function workspaceRootFailureKind(error: unknown): string {
+  const causeKind = errorKindOf(safeProperty(error, "cause"));
+  return error instanceof WorkspaceNotFoundError && isKnownWorkspaceFilesystemFailure(causeKind)
+    ? causeKind
+    : errorKindOf(error);
+}
+
+export function workspaceRootFailureStatus(error: unknown): 400 | 503 {
+  return WORKSPACE_ROOT_TRANSIENT_FAILURES.has(workspaceRootFailureKind(error)) ? 503 : 400;
+}
+
+function workspaceRootErrorKind(error: unknown, failureKind: string): ActivityLogErrorKind {
+  if (WORKSPACE_ROOT_PERMISSION_FAILURES.has(failureKind)) return "permission-denied";
+  if (WORKSPACE_ROOT_RESOURCE_FAILURES.has(failureKind)) return "internal";
+  if (failureKind === "ETIMEDOUT") return "timeout";
+  return isExpectedWorkspaceRootFailure(error) ? "unavailable" : "internal";
+}
+
+export function recordWorkspaceRootUnavailable(
+  error: unknown,
+  context: WorkspaceRootDenialLogContext,
+): void {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  const failureKind = workspaceRootFailureKind(error);
+  recordWorkspaceRootDenied(
+    {
+      reason: "ordinary-root-unavailable",
+      failureKind,
+      errorKind: workspaceRootErrorKind(error, failureKind),
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },

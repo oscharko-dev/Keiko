@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CircuitOpenError,
+  CancelledError,
   ConfigInvalidError,
   ProviderEmptyAnswerError,
   TimeoutError,
@@ -104,7 +105,7 @@ function streamingFake(failures: readonly Error[] = []): StreamingFake {
     adapter: {
       call,
       callStream: async function* (
-        _request: GatewayRequest,
+        request: GatewayRequest,
         _config: ModelProviderConfig,
         read?: StreamReadBounds,
       ): AsyncGenerator<GatewayStreamChunk> {
@@ -113,6 +114,7 @@ function streamingFake(failures: readonly Error[] = []): StreamingFake {
         const failure = pending.shift();
         if (failure !== undefined) throw failure;
         yield { type: "delta", token: "answer" };
+        if (request.cancellationSignal?.aborted) throw new CancelledError("request cancelled");
         yield { type: "done", response: ANSWER };
       },
     },
@@ -429,6 +431,9 @@ describe("a completed but empty model answer (#3610)", () => {
 
 // Exercise the OpenAI-compatible wire used by LiteLLM, without an Azure endpoint.
 describe("stream startup resilience", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it("retries a temporary proxy rejection before delivering any answer", async () => {
     let calls = 0;
     const log = recorder();
@@ -458,6 +463,48 @@ describe("stream startup resilience", () => {
       { type: "delta", token: "one answer" },
     ]);
     expect(log.events.some((event) => event.op === "gateway.retry.scheduled")).toBe(true);
+  });
+
+  it.each([429, 503])("waits for HTTP%d proxy recovery and delivers one answer", async (status) => {
+    const clock = createScriptedGatewayClock();
+    const recoveryAt = clock.now() + 120_000;
+    const calls: number[] = [];
+    const log = recorder();
+    const gateway = new Gateway(config(true), {
+      clock,
+      log,
+      random: (): number => 1,
+      fetchImpl: (): Promise<Response> => {
+        calls.push(clock.now());
+        return Promise.resolve(
+          clock.now() < recoveryAt
+            ? new Response("{}", { status, headers: { "retry-after": "120" } })
+            : new Response(
+                encoder.encode(deltaLine("recovered once") + finishLine("stop") + DONE_LINE),
+                {
+                  headers: { "content-type": "text/event-stream" },
+                },
+              ),
+        );
+      },
+    });
+    const received: string[] = [];
+    for await (const chunk of gateway.chatStream(REQUEST)) {
+      if (chunk.type === "delta") received.push(chunk.token);
+    }
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe(recoveryAt + PROVIDER.retryBaseDelayMs);
+    expect(received).toEqual(["recovered once"]);
+    expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra).toMatchObject(
+      {
+        httpStatus: status,
+        retryAfterMs: 120_000,
+      },
+    );
+    expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra?.delayMs).toBe(
+      120_000 + PROVIDER.retryBaseDelayMs,
+    );
+    expect(JSON.stringify(log.events)).not.toContain("recovered once");
   });
 
   it("recovers from a silent first connection within the shared stream budget", async () => {
@@ -515,6 +562,7 @@ describe("stream startup resilience", () => {
   });
 
   it("never replays text after a proxy drops a partially delivered answer", async () => {
+    vi.useFakeTimers();
     let calls = 0;
     const gateway = new Gateway(config(true), {
       clock: createScriptedGatewayClock(),
@@ -528,13 +576,23 @@ describe("stream startup resilience", () => {
       },
     });
     const received: string[] = [];
+    const activeTimerCounts: number[] = [];
     const consume = async (): Promise<void> => {
       for await (const chunk of gateway.chatStream(REQUEST)) {
-        if (chunk.type === "delta") received.push(chunk.token);
+        if (chunk.type === "delta") {
+          received.push(chunk.token);
+          activeTimerCounts.push(vi.getTimerCount());
+        }
       }
     };
-    await expect(consume()).rejects.toThrow();
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_PROVIDER_ERROR" });
+    expect(activeTimerCounts).toHaveLength(1);
+    expect(activeTimerCounts[0]).toBeGreaterThan(0);
     expect(received).toEqual(["partial answer"]);
+    expect(calls).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(providerRequestBudgetMs(PROVIDER));
+    expect(vi.getTimerCount()).toBe(0);
     expect(calls).toBe(1);
   });
 });
@@ -633,7 +691,11 @@ it.each(["streaming", "buffered"])(
   },
 );
 
-it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", async (outcome) => {
+async function halfOpenStreamFixture(): Promise<{
+  readonly gateway: Gateway;
+  readonly fake: StreamingFake;
+  readonly log: ReturnType<typeof recorder>;
+}> {
   let now = 0;
   const fake = streamingFake([new TimeoutError("provider outage")]);
   const log = recorder();
@@ -651,28 +713,49 @@ it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", asyn
   );
   await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
   now = 1000;
-  const stream = gateway.chatStream({
-    ...REQUEST,
-    logContext: { correlationId: "cancelled-probe-0001" },
-    ...(outcome === "cancelled" ? { cancellationSignal: AbortSignal.abort() } : {}),
-  });
-  if (outcome === "cancelled") {
-    await expect(stream.next()).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
-    expect(fake.bounds).toHaveLength(1);
-  } else {
-    expect((await stream.next()).value).toEqual({ type: "delta", token: "answer" });
-    await stream.return(undefined);
-  }
-  expect(log.events).toContainEqual(
-    expect.objectContaining({
-      op: outcome === "cancelled" ? "gateway.stream.failed" : "gateway.stream.abandoned",
-      correlationId: "cancelled-probe-0001",
-    }),
-  );
-  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+  return { gateway, fake, log };
+}
+
+it("never claims a half-open probe for an already-cancelled stream", async () => {
+  const { gateway, fake } = await halfOpenStreamFixture();
+  const stream = gateway.chatStream({ ...REQUEST, cancellationSignal: AbortSignal.abort() });
+  await expect(stream.next()).rejects.toBeInstanceOf(CancelledError);
+  expect(fake.bounds).toHaveLength(1);
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("open");
   await expect(consumeStream(gateway)).resolves.toBeUndefined();
   expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
 });
+
+it.each(["cancelled", "abandoned"])(
+  "releases a %s half-open stream probe after admission",
+  async (outcome) => {
+    const { gateway, fake, log } = await halfOpenStreamFixture();
+    const controller = new AbortController();
+    const stream = gateway.chatStream({
+      ...REQUEST,
+      logContext: { correlationId: "cancelled-probe-0001" },
+      cancellationSignal: controller.signal,
+    });
+    expect((await stream.next()).value).toEqual({ type: "delta", token: "answer" });
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+    if (outcome === "cancelled") {
+      controller.abort();
+      await expect(stream.next()).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
+    } else {
+      await stream.return(undefined);
+    }
+    expect(fake.bounds).toHaveLength(2);
+    expect(log.events).toContainEqual(
+      expect.objectContaining({
+        op: outcome === "cancelled" ? "gateway.stream.failed" : "gateway.stream.abandoned",
+        correlationId: "cancelled-probe-0001",
+      }),
+    );
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+    await expect(consumeStream(gateway)).resolves.toBeUndefined();
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+  },
+);
 
 it.each(["abandoned", "succeeded", "failed"])(
   "does not let an older %s stream settle a later half-open probe",

@@ -65,6 +65,7 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "chat.context.management",
+  diagnosticWhen: [{ field: "outcome", values: ["failed", "prompt-failed"] }],
   owner: "keiko-server",
   category: "gateway",
   emitter: "chat-context-log.logChatContextManagement",
@@ -85,6 +86,11 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     },
     inputTokens: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
+    contextWindowTokens: { type: "integer", dataClass: "count", required: false },
+    inputLimitTokens: { type: "integer", dataClass: "count", required: false },
+    inputCapacityUnavailableTokens: { type: "integer", dataClass: "count", required: false },
+    reservedOutputTokens: { type: "integer", dataClass: "count", required: false },
+    safetyMarginTokens: { type: "integer", dataClass: "count", required: false },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
     // An inspection that projected automatic compaction: the stored history before the projection
     // and the projected history after it, so an oversized history that the meter reports as fitting
@@ -98,6 +104,8 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     // from the log alone (PR #3678 review): the trigger (a grounded chat's lane-based one differs
     // from the whole-window one), the last knowledge request and the known shares.
     autoCompactionAtTokens: { type: "integer", dataClass: "count", required: false },
+    conversationInputBudgetTokens: { type: "integer", dataClass: "count", required: false },
+    sourceCapacityTokens: { type: "integer", dataClass: "count", required: false },
     lastRequestTokens: { type: "integer", dataClass: "count", required: false },
     lastRequestMeasured: { type: "boolean", dataClass: "closed-enum", required: false },
     lastRequestEstimatedTokens: { type: "integer", dataClass: "count", required: false },
@@ -159,9 +167,12 @@ type ContextManagementStatus = Pick<
       | "knowledgeSources"
       | "contextWindowAssumed"
       | "autoCompactionAtTokens"
+      | "conversationInputBudgetTokens"
       | "lastRequest"
       | "segments"
       | "contextWindowProbePending"
+      | "contextWindowTokens"
+      | "inputLimitTokens"
     >
   >;
 
@@ -177,10 +188,14 @@ function contextStatusEvidence(status: ContextManagementStatus): Evidence {
           projectedHistoryTokens: pending.tokensAfter,
           projectedMessagesCompacted: pending.messagesCompacted,
         }),
+    ...declaredWindowEvidence(status),
     ...knowledgeEvidence(status),
     ...segmentEvidence(status.segments),
     ...(status.contextWindowAssumed === true ? { contextWindowAssumed: true } : {}),
     ...(status.contextWindowProbePending === true ? { contextWindowProbePending: true } : {}),
+    ...(status.conversationInputBudgetTokens === undefined
+      ? {}
+      : { conversationInputBudgetTokens: status.conversationInputBudgetTokens }),
     ...(status.autoCompactionAtTokens === undefined
       ? {}
       : { autoCompactionAtTokens: status.autoCompactionAtTokens }),
@@ -214,6 +229,10 @@ const SEGMENT_EVIDENCE_FIELDS = new Map([
   ["system", "systemTokens"],
   ["summary", "summaryTokens"],
   ["messages", "messageTokens"],
+  ["source-capacity", "sourceCapacityTokens"],
+  ["input-capacity-unavailable", "inputCapacityUnavailableTokens"],
+  ["output-reserve", "reservedOutputTokens"],
+  ["safety-margin", "safetyMarginTokens"],
 ]);
 
 function segmentEvidence(segments: ContextManagementStatus["segments"]): Evidence {
@@ -223,4 +242,13 @@ function segmentEvidence(segments: ContextManagementStatus["segments"]): Evidenc
     if (field !== undefined) evidence[field] = segment.tokens;
   }
   return evidence;
+}
+
+function declaredWindowEvidence(status: ContextManagementStatus): Evidence {
+  return {
+    ...(status.contextWindowTokens === undefined
+      ? {}
+      : { contextWindowTokens: status.contextWindowTokens }),
+    ...(status.inputLimitTokens === undefined ? {} : { inputLimitTokens: status.inputLimitTokens }),
+  };
 }

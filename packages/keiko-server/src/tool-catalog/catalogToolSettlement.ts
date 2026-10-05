@@ -77,6 +77,9 @@ export class CatalogInvocation {
   public get admittedAt(): number {
     return this.startedAt;
   }
+  public get deadlineAtMs(): number {
+    return this.deadlineAt;
+  }
   public get settled(): boolean {
     return this.finishing || this.outcome !== undefined;
   }

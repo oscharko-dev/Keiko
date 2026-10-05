@@ -5,6 +5,8 @@ import {
   DIAGNOSTIC_SUFFICIENCY_REASONS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
+import { findSupportRegistry } from "./support-registry.js";
+import { SUPPORT_RELEASE_REGISTRY_SNAPSHOTS } from "./support-registry-history.generated.js";
 import { installLayoutOverrideActivityLogEvent } from "../../../keiko-cli/src/install-layout.js";
 import {
   processExitingActivityLogEvent,
@@ -18,6 +20,7 @@ import {
 import {
   activityLogFailureClassesOf,
   projectActivityLogSufficiency,
+  reportsProcessEvidenceLoss,
   restrictActivityLogSufficiency,
   type ActivityLogClassSufficiency,
   type ActivityLogSufficiencyIntegrity,
@@ -158,6 +161,113 @@ describe("projectActivityLogSufficiency", () => {
       "complete",
       "complete",
     ]);
+  });
+
+  it.each(["none", "event-dropped"])(
+    "keeps current and historical pin quota %s evidence local to pin protection",
+    (loss) => {
+      const protection = line("activity-log.pin.quota-exhausted", "pin-protection-failure", {
+        loss,
+        completeness: "partial",
+        unprotectedSegmentCount: 1,
+      });
+      const lines = [
+        line("gateway.chat.started", "corr-chat-0006"),
+        line("gateway.chat.completed", "corr-chat-0006"),
+        line("activity-log.pin.created", "pin-protection-failure"),
+        protection,
+      ];
+      expect(reportsProcessEvidenceLoss(protection)).toBe(false);
+      const gateway = classEntry(lines, "gateway-chat-call");
+      if (gateway === undefined) throw new Error("Expected the gateway failure class");
+      expect(gateway.status).toBe("complete");
+      expect(classEntry(lines, "activity-log-pin")).toMatchObject({
+        status: "degraded",
+        reasons: ["evidence-partial"],
+      });
+    },
+  );
+
+  it("preserves class-local pin uncertainty under a trusted historical loss registry", () => {
+    const registry = SUPPORT_RELEASE_REGISTRY_SNAPSHOTS.map((snapshot) =>
+      findSupportRegistry(snapshot),
+    ).find(
+      (candidate) =>
+        candidate?.operations.get("activity-log.pin.quota-exhausted")?.lifecycle === "loss",
+    );
+    if (registry === undefined) throw new TypeError("Expected a supported historical pin registry");
+    const protection = line("activity-log.pin.quota-exhausted", "pin-protection-failure", {
+      loss: "event-dropped",
+      completeness: "partial",
+    });
+    expect(reportsProcessEvidenceLoss(protection, registry)).toBe(false);
+    const projected = projectActivityLogSufficiency(
+      [
+        line("gateway.chat.started", "corr-chat-0006"),
+        line("gateway.chat.completed", "corr-chat-0006"),
+        protection,
+      ],
+      CLEAN,
+      registry,
+    );
+    expect(
+      projected.classes.find((entry) => entry.failureClass === "gateway-chat-call")?.status,
+    ).toBe("complete");
+    expect(
+      projected.classes.find((entry) => entry.failureClass === "activity-log-pin"),
+    ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
+  });
+
+  it.each(["unrelated-maintenance", ACTIVITY_LOG_UNKNOWN_CORRELATION_ID])(
+    "does not invent a missing pin start for quota observation on %s",
+    (correlationId) => {
+      const protection = line("activity-log.pin.quota-exhausted", correlationId, {
+        loss: "none",
+        completeness: "partial",
+      });
+      expect(reportsProcessEvidenceLoss(protection)).toBe(false);
+      expect(
+        classEntry(
+          [line("activity-log.pin.created", "original-pin-owner"), protection],
+          "activity-log-pin",
+        ),
+      ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
+    },
+  );
+
+  it("keeps removed shared-store pin evidence distinct from the maintenance writer's own records", () => {
+    const retention = line("activity-log.retention.pruned", "maintenance-0001", {
+      retentionStatus: "pruned",
+      prunedUnprotectedPinnedSegmentCount: 1,
+      prunedUnprotectedPinnedBytes: 4096,
+      completeness: "partial",
+      loss: "event-dropped",
+    });
+    expect(reportsProcessEvidenceLoss(retention)).toBe(false);
+    const records = [
+      line("gateway.chat.started", "retained-request"),
+      line("gateway.chat.completed", "retained-request"),
+      retention,
+    ];
+    expect(classEntry(records, "gateway-chat-call")).toMatchObject({
+      status: "complete",
+      reasons: [],
+    });
+    expect(classEntry(records, "activity-log-retention")).toMatchObject({
+      status: "degraded",
+      reasons: ["evidence-partial"],
+    });
+  });
+
+  it("keeps an actual pin expiry without its causal start insufficient", () => {
+    const expiry = line("activity-log.pin.expired", "pin-protection-failure", {
+      loss: "none",
+    });
+    expect(reportsProcessEvidenceLoss(expiry)).toBe(false);
+    expect(classEntry([expiry], "activity-log-pin")).toMatchObject({
+      status: "insufficient",
+      reasons: ["lifecycle-start-missing"],
+    });
   });
 
   it("degrades every class of the process that reported Activity Log evidence loss", () => {

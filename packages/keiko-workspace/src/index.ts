@@ -110,7 +110,12 @@ export type {
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
-export { candidateBucketForPath, SYMBOL_RELATION_TERMS } from "./repoSearchPolicy.js";
+export {
+  candidateBucketForPath,
+  hasSymbolRelationshipQuery,
+  SYMBOL_RELATION_TERMS,
+} from "./repoSearchPolicy.js";
+export { requestedSourceInspectionExtensions } from "./repoSearchSourceInspection.js";
 export type {
   SemanticFusionSignals,
   SemanticSearchDocument,
@@ -180,7 +185,7 @@ export type {
   EcosystemStructureProfile,
   EcosystemVersionDeclaration,
 } from "./ecosystems.js";
-export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
+export { decodeTextFileBytes, looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
 export {
   evidenceAtomStableId,

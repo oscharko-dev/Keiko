@@ -47,11 +47,6 @@
       "count": 2
     }
   },
-  "src/app/components/desktop/ConnectorScopePill.tsx": {
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/EditorMenu.tsx": {
     "max-lines-per-function": {
       "count": 1
@@ -74,9 +69,6 @@
     }
   },
   "src/app/components/desktop/GroundedAnswer.tsx": {
-    "complexity": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 3
     }
@@ -91,7 +83,7 @@
       "count": 3
     },
     "complexity": {
-      "count": 2
+      "count": 1
     },
     "max-lines-per-function": {
       "count": 4
@@ -273,7 +265,7 @@
   },
   "src/app/components/desktop/hooks/useChatSession.ts": {
     "complexity": {
-      "count": 10
+      "count": 9
     },
     "max-lines-per-function": {
       "count": 11

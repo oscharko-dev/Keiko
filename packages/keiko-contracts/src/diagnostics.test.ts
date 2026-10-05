@@ -1,3 +1,5 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
+import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -340,6 +342,14 @@ describe("isClientDiagnosticIngestRequest", () => {
   // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits, and
   // this closed pair is the only evidence of which surface actually closed — never a label or an
   // option's text.
+  it("accepts an Escape dismissal from menu chrome without an invented option target", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        selectDismissal: { reason: "escape", focus: "menu" },
+      }),
+    ).toBe(true);
+  });
   it("accepts only a closed select dismissal: a known reason paired with a known focus location", () => {
     for (const reason of CLIENT_SELECT_DISMISSAL_REASONS) {
       for (const focus of CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS) {
@@ -353,7 +363,7 @@ describe("isClientDiagnosticIngestRequest", () => {
     }
     for (const invalid of [
       { reason: "outside-click", focus: "trigger" },
-      { reason: "escape", focus: "menu" },
+      { reason: "escape", focus: "unknown" },
       { reason: "escape" },
       { focus: "trigger" },
       { reason: "escape", focus: "trigger", label: "Model only" },
@@ -562,6 +572,75 @@ describe("client diagnostic loss counts", () => {
 // #3532: the readiness `/api/health` reports and `keiko status` prints.
 describe("isActivityLogReadinessSnapshot", () => {
   const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
+  it("preserves truthful retained stock above a newly governing admission capacity", () => {
+    expect(
+      isActivityLogReadinessSnapshot({
+        ...ready,
+        retainedDiagnosticCount: 16,
+        diagnosticCapacity: 15,
+      }),
+    ).toBe(true);
+  });
+  it("accepts coherent retained diagnostic capacity and rejects incomplete or invalid counts", () => {
+    expect(
+      isActivityLogReadinessSnapshot({
+        ...ready,
+        retainedDiagnosticCount: 32,
+        diagnosticCapacity: 32,
+      }),
+    ).toBe(true);
+    for (const fields of [
+      { retainedDiagnosticCount: 32 },
+      { diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: -1, diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: 1.5, diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: 0, diagnosticCapacity: 0 },
+    ])
+      expect(isActivityLogReadinessSnapshot({ ...ready, ...fields })).toBe(false);
+  });
+
+  it.each([2048, 64527, Number.MAX_SAFE_INTEGER])(
+    "accepts safe byte-derived diagnostic capacity %s without a fixed count ceiling",
+    (diagnosticCapacity) => {
+      for (const retainedDiagnosticCount of [0, 20, diagnosticCapacity]) {
+        expect(
+          isActivityLogReadinessSnapshot({
+            ...ready,
+            diagnosticCapacity,
+            retainedDiagnosticCount,
+          }),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    "2048",
+    null,
+  ])("rejects unsafe or malformed diagnostic capacity %s", (diagnosticCapacity) => {
+    expect(
+      isActivityLogReadinessSnapshot({ ...ready, diagnosticCapacity, retainedDiagnosticCount: 0 }),
+    ).toBe(false);
+  });
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY, "20", null])(
+    "rejects unsafe or malformed retained diagnostic count %s",
+    (retainedDiagnosticCount) => {
+      expect(
+        isActivityLogReadinessSnapshot({
+          ...ready,
+          diagnosticCapacity: Number.MAX_SAFE_INTEGER,
+          retainedDiagnosticCount,
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("accepts every closed state, reason and writer in a coherent combination", () => {
     for (const writer of ACTIVITY_LOG_WRITER_KINDS) {
@@ -1171,6 +1250,12 @@ describe("capture diagnostic vocabulary", () => {
 
 describe("client module and markdown identity boundaries", () => {
   const base = { message: "diagnostic", clientTs: "2026-09-19T00:00:00.000Z" };
+  it.each(["git-sync", "git-history", "git-read", "widget-locale"])(
+    "accepts the closed module %s",
+    (moduleLoadFailure) => {
+      expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure })).toBe(true);
+    },
+  );
   it("accepts the known module and a short provider message identity", () => {
     expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "git-sync" })).toBe(true);
     expect(
@@ -1381,6 +1466,8 @@ describe("closed diagnostic navigation and render context", () => {
       };
       expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files source preview" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files source reveal" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory navigation" })).toBe(
         true,
       );
@@ -1426,3 +1513,506 @@ describe("closed diagnostic navigation and render context", () => {
     ).toBe(false);
   });
 });
+
+// Initiating a browser download is routine evidence and never proof of an OS save.
+describe("support report download evidence", () => {
+  it("accepts only automatic or manual initiation without report content", () => {
+    for (const supportReportDelivery of ["automatic", "manual"])
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportDelivery })).toBe(
+        true,
+      );
+    for (const supportReportDelivery of ["saved", "uploaded", { text: "private report" }, 1])
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportDelivery })).toBe(
+        false,
+      );
+  });
+});
+
+describe("bounded source-preview stage evidence", () => {
+  const stage = {
+    kind: "stage",
+    stage: "files source preview",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 1,
+    navigationOutcome: "applied",
+  };
+  it.each(["too-large", "unsupported"] as const)(
+    "accepts closed binary reason %s",
+    (binaryReason) => {
+      expect(
+        isClientStageIngestRequest({
+          ...stage,
+          preview: { previewKind: "binary", sourceTextBytesRead: 0, canEdit: false, binaryReason },
+        }),
+      ).toBe(true);
+    },
+  );
+  it("retains legacy binary metadata without inventing a reason", () => {
+    expect(
+      isClientStageIngestRequest({
+        ...stage,
+        preview: { previewKind: "binary", sourceTextBytesRead: 0, canEdit: false },
+      }),
+    ).toBe(true);
+  });
+  it.each(["text", "image", "binary"])(
+    "refuses private or mismatched binary reasons for %s",
+    (previewKind) => {
+      expect(
+        isClientStageIngestRequest({
+          ...stage,
+          preview: {
+            previewKind,
+            sourceTextBytesRead: 0,
+            canEdit: false,
+            binaryReason: "/private/customer",
+          },
+        }),
+      ).toBe(false);
+      if (previewKind !== "binary")
+        expect(
+          isClientStageIngestRequest({
+            ...stage,
+            preview: {
+              previewKind,
+              sourceTextBytesRead: 0,
+              canEdit: false,
+              binaryReason: "too-large",
+            },
+          }),
+        ).toBe(false);
+    },
+  );
+  it("accepts the bounded text-only byte count and independent editing capability", () => {
+    expect(
+      isClientStageIngestRequest({
+        ...stage,
+        preview: { previewKind: "text", sourceTextBytesRead: 2_097_152, canEdit: false },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { previewKind: "text", sourceTextBytesRead: -1, canEdit: false },
+    { previewKind: "text", sourceTextBytesRead: 2_097_153, canEdit: false },
+    { previewKind: "binary", sourceTextBytesRead: 1, canEdit: false },
+    { previewKind: "image", sourceTextBytesRead: 0, canEdit: true },
+    { previewKind: "customer.html", sourceTextBytesRead: 0, canEdit: false },
+    { previewKind: "text", sourceTextBytesRead: 1, canEdit: false, content: "private" },
+  ])("rejects unsafe preview metadata %j", (preview) => {
+    expect(isClientStageIngestRequest({ ...stage, preview })).toBe(false);
+  });
+  it("refuses preview metadata on another stage or before a response", () => {
+    const preview = { previewKind: "text", sourceTextBytesRead: 10, canEdit: false };
+    expect(isClientStageIngestRequest({ ...stage, stage: "chat bind", preview })).toBe(false);
+    expect(isClientStageIngestRequest({ ...stage, phase: "started", preview })).toBe(false);
+  });
+});
+
+describe("browser support report preparation evidence", () => {
+  it("accepts bounded local cause evidence separately from the triggering transport kind", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: "internal",
+          originalErrorKind: "unavailable",
+          durationMs: 12,
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: ["RangeError"] },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts a failed attempt without manufactured artifact metadata", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: "unavailable",
+          durationMs: 12,
+        },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { outcome: "failed", errorKind: "internal", durationMs: 12, originalErrorKind: "private" },
+    {
+      outcome: "failed",
+      errorKind: "internal",
+      durationMs: 12,
+      errorEvidence: { errorClass: "PrivateClass", frames: [], causeChain: [] },
+    },
+    {
+      outcome: "failed",
+      errorKind: "internal",
+      durationMs: 12,
+      errorEvidence: {
+        errorClass: "Error",
+        frames: ["/Users/customer/private.ts:1:2"],
+        causeChain: [],
+      },
+    },
+    {
+      outcome: "failed",
+      errorKind: "internal",
+      durationMs: 12,
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: ["secret"] },
+    },
+    { outcome: "failed", errorKind: "invented", durationMs: 12 },
+    { outcome: "failed", errorKind: "unavailable", durationMs: -1 },
+    { outcome: "failed", errorKind: "unavailable", durationMs: 12, reportBytes: 1024 },
+    { outcome: "failed", errorKind: "unavailable", durationMs: 12, message: "private detail" },
+  ])("refuses incoherent failed preparation %j", (supportReportPreparation) => {
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation })).toBe(
+      false,
+    );
+  });
+
+  const prepared = {
+    reportBytes: 1024,
+    evidenceScope: "client-only",
+    completeness: "complete",
+    loss: "none",
+    availabilityReason: "service-unavailable",
+  };
+  it.each(["client-only-selected", "correlation-unavailable"])(
+    "accepts the limited artifact reason without an outage claim: %s",
+    (availabilityReason) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, availabilityReason },
+        }),
+      ).toBe(true);
+    },
+  );
+  it("rejects contradictory client-only integrity and server-unavailability claims", () => {
+    for (const patch of [
+      { completeness: "partial" },
+      { loss: "event-dropped" },
+      { availabilityReason: undefined },
+      { evidenceScope: "server" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, ...patch },
+        }),
+      ).toBe(false);
+    const { availabilityReason: _reason, ...server } = { ...prepared, evidenceScope: "server" };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation: server }),
+    ).toBe(true);
+  });
+  it("accepts only the closed body-free canonical disposition", () => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation: prepared }),
+    ).toBe(true);
+    for (const failure of [
+      { kind: "boundary" },
+      { errorKind: "internal" },
+      { supportReportDelivery: "manual" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          ...failure,
+          supportReportPreparation: prepared,
+        }),
+      ).toBe(false);
+    for (const reportBytes of [0, -1, MAX_SUPPORT_REPORT_BYTES + 1, 1.5, "123"])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, reportBytes },
+        }),
+      ).toBe(false);
+    for (const patch of [
+      { evidenceScope: "private" },
+      { completeness: "saved" },
+      { loss: "all" },
+      { availabilityReason: "network detail" },
+      { reportJson: "private report" },
+      { fileName: "/private/report" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, ...patch },
+        }),
+      ).toBe(false);
+  });
+});
+
+describe("Files scope ownership decision evidence", () => {
+  it.each(["timeout-blocked", "timeout-rejected", "conflict-retried"])(
+    "does not accept a recovery summary count on %s",
+    (decision) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "queue-blocking-attempt",
+          filesScopeDecision: { decision, rejectionCount: 1 },
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([0, 1, 25, Number.MAX_SAFE_INTEGER])(
+    "accepts exact recovery rejection count %s",
+    (rejectionCount) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "queue-blocking-attempt",
+          filesScopeDecision: {
+            decision: "timeout-recovered",
+            mutationSurface: "files",
+            rejectionCount,
+          },
+        }),
+      ).toBe(true);
+    },
+  );
+  it.each([-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, "2"])(
+    "rejects malformed recovery rejection count %s",
+    (rejectionCount) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "queue-blocking-attempt",
+          filesScopeDecision: { decision: "timeout-recovered", rejectionCount },
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    "timeout-blocked",
+    "timeout-recovered",
+    "timeout-rejected",
+    "request-superseded",
+    "acknowledged",
+    "ack-invalidated",
+  ])("accepts the closed queue lifecycle decision %s", (decision) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "scope-decision-123",
+        filesScopeDecision: { decision },
+      }),
+    ).toBe(true);
+  });
+  it.each(["files", "local-knowledge", "git-change"])(
+    "accepts the shared grounding queue surface %s without private references",
+    (mutationSurface) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          filesScopeDecision: { decision: "timeout-rejected", mutationSurface },
+        }),
+      ).toBe(true);
+    },
+  );
+  const decision = {
+    decision: "blocked-ambiguous",
+    sourceCount: 3,
+    candidateCount: 2,
+    bindingFingerprint: "a".repeat(64),
+  };
+  it("rejects forged or failure-shaped decisions before they can consume routine capacity", () => {
+    for (const patch of [
+      { decision: "private root" },
+      { sourceCount: -1 },
+      { candidateCount: 1.5 },
+      { bindingFingerprint: "/private/customer/root" },
+      { root: "/private/customer/root" },
+      { mutationSurface: "/private/customer/root" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          filesScopeDecision: { ...decision, ...patch },
+        }),
+      ).toBe(false);
+    for (const patch of [
+      { correlationId: undefined },
+      { kind: "boundary" },
+      { errorKind: "internal" },
+      { moduleLoadFailure: "git-sync" },
+      { errorEvidence: { errorClass: "Error", frames: [], causeChain: [] } },
+      { supportReportDelivery: "manual" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          ...patch,
+          filesScopeDecision: decision,
+        }),
+      ).toBe(false);
+  });
+});
+
+describe("citation activation diagnostic contract", () => {
+  const activation = { reason: "matched", outcome: "opened", rootCount: 2, matchCount: 1 };
+  it("accepts only declared decisions, outcomes and safe coherent counts", () => {
+    for (const reason of ["matched", "unmatched", "absent", "malformed", "ambiguous"]) {
+      const matchCount = reason === "ambiguous" ? 2 : reason === "matched" ? 1 : 0;
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "citation-action-123",
+          citationActivation: { ...activation, reason, matchCount },
+        }),
+      ).toBe(true);
+    }
+    for (const outcome of [
+      "opened",
+      "open-refused",
+      "picker-opened",
+      "picker-dismissed",
+      "refused",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "citation-action-123",
+          citationActivation: { ...activation, reason: "absent", matchCount: 0, outcome },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "citation-action-123",
+        citationActivation: { ...activation, rootCount: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toBe(false);
+  });
+  it.each([
+    { rootCount: CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX, accepted: true },
+    { rootCount: CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX + 1, accepted: false },
+  ])("enforces the declared diagnostic bound $rootCount", ({ rootCount, accepted }) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "citation-action-123",
+        citationActivation: { ...activation, rootCount },
+      }),
+    ).toBe(accepted);
+  });
+  it.each([undefined, "", "/customer/private?secret=token"])(
+    "requires an original action correlation: %s",
+    (correlationId) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId,
+          citationActivation: activation,
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    { reason: "absent", outcome: "opened", rootCount: 0, matchCount: 0 },
+    { reason: "malformed", outcome: "picker-opened", rootCount: 0, matchCount: 0 },
+    { reason: "absent", outcome: "picker-dismissed", rootCount: 0, matchCount: 0 },
+    { reason: "unmatched", outcome: "open-refused", rootCount: 0, matchCount: 0 },
+  ])("rejects impossible navigation states %j", (citationActivation) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "citation-action-123",
+        citationActivation,
+      }),
+    ).toBe(false);
+  });
+  it.each(["unmatched", "malformed"])(
+    "retains opened after explicit source selection for %s identity",
+    (reason) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "citation-action-123",
+          citationActivation: { reason, outcome: "opened", rootCount: 1, matchCount: 0 },
+        }),
+      ).toBe(true);
+    },
+  );
+  it.each([
+    { reason: "private/path" },
+    { outcome: "unknown" },
+    { rootCount: -1 },
+    { rootCount: 1.5 },
+    { rootCount: Number.MAX_SAFE_INTEGER + 1 },
+    { matchCount: 3 },
+    { matchCount: -1 },
+    { matchCount: 0 },
+    { path: "secret.txt" },
+    { fingerprint: "a1".repeat(32) },
+  ])("rejects hostile or incoherent activation metadata %j", (overrides) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "citation-action-123",
+        citationActivation: { ...activation, ...overrides },
+      }),
+    ).toBe(false);
+  });
+  it.each(["kind", "errorKind", "filesScopeDecision", "answerCopy", "selectDismissal"])(
+    "does not mix citation activation with a different diagnostic family: %s",
+    (key) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "citation-action-123",
+          citationActivation: activation,
+          [key]: key === "kind" ? "other" : {},
+        }),
+      ).toBe(false);
+    },
+  );
+});
+
+it("keeps source reveal outcome separate from source byte-read counts", () => {
+  const base = {
+    kind: "stage",
+    phase: "settled",
+    stage: "files source reveal",
+    ordinal: 1,
+    durationMs: 2,
+    navigationOutcome: "applied",
+  };
+  expect(isClientStageIngestRequest(base)).toBe(true);
+  expect(
+    isClientStageIngestRequest({
+      ...base,
+      preview: {
+        previewKind: "text",
+        sourceTextBytesRead: 32,
+        canEdit: false,
+      },
+    }),
+  ).toBe(false);
+  expect(isClientStageIngestRequest({ ...base, phase: "started" })).toBe(false);
+});
+
+it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
+  "validates preview counts against the shared source ceiling (%s)",
+  (sourceTextBytesRead) => {
+    expect(
+      isClientStageIngestRequest({
+        kind: "stage",
+        stage: "files source preview",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        preview: { previewKind: "text", sourceTextBytesRead, canEdit: false },
+      }),
+    ).toBe(sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES);
+  },
+);

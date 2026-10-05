@@ -2,9 +2,18 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   SUPPORT_REPORT_FAILURES,
+  SUPPORT_INCIDENT_TRIGGERS,
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
+  looksLikeSecret,
+  looksLikePersonalIdentifier,
+  isActivityLogCorrelationId,
+  type ActivityLogCompletenessState,
+  type ActivityLogLossState,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
+  type DiagnosticSufficiencyStatus,
+  type DiagnosticSufficiencyReason,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -23,6 +32,28 @@ const COMPLETE = {
   completeness: { type: "string", dataClass: "completeness-state", required: true },
   loss: { type: "string", dataClass: "loss-state", required: true },
 } as const;
+const SELECTED_CORRELATION = {
+  selectedCorrelationId: {
+    type: "string",
+    dataClass: "opaque-id",
+    required: false,
+    maxLength: 128,
+  },
+} as const;
+const DELIVERY_FIELDS = {
+  evidenceScope: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["server", "client-only"],
+  },
+  deliveryAuthority: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["session-bound", "client-only"],
+  },
+} as const;
 const STARTED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.started",
@@ -36,6 +67,7 @@ const STARTED = defineActivityLogOperation({
       required: true,
       values: ["correlation", "recent"],
     },
+    ...SELECTED_CORRELATION,
     ...COMPLETE,
   },
   proofIds: ["support.report.ui.started.lifecycle"],
@@ -47,10 +79,36 @@ const COMPLETED = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   fields: {
+    ...SELECTED_CORRELATION,
+    ...DELIVERY_FIELDS,
+    pinDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pinned", "quota-exceeded", "rejected"],
+    },
+    retentionDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["stored", "transient"],
+    },
+    availabilityReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: SUPPORT_REPORT_AVAILABILITY_REASONS,
+    },
     reportBytes: { type: "integer", dataClass: "count", required: true },
     recordCount: { type: "integer", dataClass: "count", required: false },
     reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     incidentId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 32 },
+    incidentTrigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: SUPPORT_INCIDENT_TRIGGERS,
+    },
     manifestUnreadableCount: { type: "integer", dataClass: "count", required: false },
     manifestReusedCount: { type: "integer", dataClass: "count", required: false },
     sufficiency: {
@@ -70,6 +128,62 @@ const COMPLETED = defineActivityLogOperation({
   },
   proofIds: ["support.report.ui.completed.lifecycle"],
 });
+const DELIVERED = defineActivityLogOperation({
+  ...BASE,
+  op: "support.report.ui.delivered",
+  emitter: "support-report-evidence.emitSupportReportDelivered",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  fields: {
+    reportBytes: { type: "integer", dataClass: "count", required: true },
+    transportBytes: { type: "integer", dataClass: "count", required: false },
+    reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    ...DELIVERY_FIELDS,
+    ...COMPLETE,
+  },
+  proofIds: ["support.report.ui.delivered.line"],
+});
+
+const DELIVERY_RELEASED = defineActivityLogOperation({
+  ...BASE,
+  op: "support.report.ui.delivery-released",
+  emitter: "support-report-evidence.emitSupportReportDeliveryReleased",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["expired", "byte-pressure", "entry-pressure"],
+    },
+    reportBytes: { type: "integer", dataClass: "count", required: true },
+    retainedBytes: { type: "integer", dataClass: "count", required: true },
+    ...DELIVERY_FIELDS,
+    ...COMPLETE,
+  },
+  proofIds: ["support.report.ui.delivery-released.line"],
+});
+
+const DOWNLOAD_REFUSED = defineActivityLogOperation({
+  ...BASE,
+  op: "support.report.ui.download-refused",
+  emitter: "support-report-evidence.emitSupportReportDownloadRefused",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-session", "other-session", "expired-or-unknown"],
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: true },
+    ...COMPLETE,
+  },
+  proofIds: ["support.report.ui.download-refused.line"],
+});
+
 const FAILED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.failed",
@@ -91,6 +205,7 @@ const FAILED = defineActivityLogOperation({
         "store-unavailable",
         "record-too-large",
         "evaluation-rate-limited",
+        "delivery-capacity",
       ],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
@@ -113,9 +228,81 @@ const FAILED = defineActivityLogOperation({
   proofIds: ["support.report.ui.failed.lifecycle"],
 });
 
+interface DeliveredReportEvidence {
+  readonly correlationId: string | undefined;
+  readonly reportBytes: number;
+  readonly deliveryAuthority: "session-bound" | "client-only";
+  readonly parentCorrelationId?: string | undefined;
+  readonly reportDigest?: string | undefined;
+  readonly evidenceScope?: "server" | "client-only" | undefined;
+  readonly transportBytes: number;
+}
+
+export function emitSupportReportDelivered(options: DeliveredReportEvidence): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DELIVERED,
+      reportCorrelation(options.correlationId, options.parentCorrelationId),
+      {
+        reportBytes: options.reportBytes,
+        transportBytes: options.transportBytes,
+        ...(options.reportDigest === undefined ? {} : { reportDigest: options.reportDigest }),
+        deliveryAuthority: options.deliveryAuthority,
+        evidenceScope:
+          options.evidenceScope ??
+          (options.deliveryAuthority === "client-only" ? "client-only" : "server"),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+export function emitSupportReportDeliveryReleased(
+  correlationId: string | undefined,
+  reason: "expired" | "byte-pressure" | "entry-pressure",
+  reportBytes: number,
+  retainedBytes: number,
+  deliveryAuthority: "session-bound" | "client-only",
+  evidenceScope: "server" | "client-only",
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DELIVERY_RELEASED,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        reason,
+        reportBytes,
+        retainedBytes,
+        deliveryAuthority,
+        evidenceScope,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+export function emitSupportReportDownloadRefused(
+  correlationId: string | undefined,
+  reason: "no-session" | "other-session" | "expired-or-unknown",
+  httpStatus: 403 | 404,
+  parentCorrelationId?: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(DOWNLOAD_REFUSED, reportCorrelation(correlationId, parentCorrelationId), {
+      reason,
+      httpStatus,
+      completeness: "complete",
+      loss: "none",
+    }),
+  );
+}
+
 export function emitSupportReportStarted(
   correlationId: string | undefined,
   selected: boolean,
+  selectedCorrelationId?: string,
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -123,15 +310,63 @@ export function emitSupportReportStarted(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         selector: selected ? "correlation" : "recent",
+        ...selectedCorrelationFields(selectedCorrelationId),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
 }
+type CompletionSummary = Partial<{
+  [
+    Key in
+      | "recordCount"
+      | "reportDigest"
+      | "incidentId"
+      | "incidentTrigger"
+      | "manifestUnreadableCount"
+      | "manifestReusedCount"
+      | "pinDisposition"
+      | "retentionDisposition"
+      | "availabilityReason"
+  ]: Exclude<NonNullable<DesktopSupportReportResponse["summary"]>[Key], undefined>;
+}>;
+function completionSummary(summary: DesktopSupportReportResponse["summary"]): CompletionSummary {
+  if (summary === undefined) return {};
+  return {
+    recordCount: summary.recordCount,
+    reportDigest: summary.reportDigest,
+    incidentId: summary.incidentId,
+    ...(summary.incidentTrigger === undefined ? {} : { incidentTrigger: summary.incidentTrigger }),
+    manifestUnreadableCount: summary.manifestUnreadableCount,
+    manifestReusedCount: summary.manifestReusedCount,
+    ...(summary.pinDisposition === undefined ? {} : { pinDisposition: summary.pinDisposition }),
+    ...(summary.retentionDisposition === undefined
+      ? {}
+      : { retentionDisposition: summary.retentionDisposition }),
+    ...(summary.availabilityReason === undefined
+      ? {}
+      : { availabilityReason: summary.availabilityReason }),
+  };
+}
+function completionState(report: DesktopSupportReportResponse): {
+  sufficiency: DiagnosticSufficiencyStatus;
+  reasons: readonly DiagnosticSufficiencyReason[];
+  completeness: ActivityLogCompletenessState;
+  loss: ActivityLogLossState;
+} {
+  const status = report.summary?.status ?? "degraded";
+  return {
+    sufficiency: status,
+    reasons: report.summary?.reasons ?? ["evidence-partial"],
+    completeness: report.summary?.completeness ?? "unknown",
+    loss: report.summary?.loss ?? "event-location-unknown",
+  };
+}
 export function emitSupportReportCompleted(
   correlationId: string | undefined,
   report: DesktopSupportReportResponse,
+  selectedCorrelationId?: string,
 ): void {
   const summary = report.summary;
   const status = summary?.status ?? "degraded";
@@ -141,19 +376,11 @@ export function emitSupportReportCompleted(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         reportBytes: Buffer.byteLength(report.reportJson),
-        ...(summary === undefined
-          ? {}
-          : {
-              recordCount: summary.recordCount,
-              reportDigest: summary.reportDigest,
-              incidentId: summary.incidentId,
-              manifestUnreadableCount: summary.manifestUnreadableCount,
-              manifestReusedCount: summary.manifestReusedCount,
-            }),
-        sufficiency: status,
-        reasons: summary?.reasons ?? ["evidence-partial"],
-        completeness: status === "complete" ? "complete" : "partial",
-        loss: status === "complete" ? "none" : "event-location-unknown",
+        ...selectedCorrelationFields(selectedCorrelationId),
+        evidenceScope: report.evidenceScope ?? "server",
+        deliveryAuthority: report.evidenceScope === "client-only" ? "client-only" : "session-bound",
+        ...completionSummary(summary),
+        ...completionState(report),
       },
     ),
   );
@@ -161,15 +388,18 @@ export function emitSupportReportCompleted(
 export function emitSupportReportFailed(
   correlationId: string | undefined,
   error: SupportReportJobError,
+  parentCorrelationId?: string,
+  reasonOverride?: "delivery-capacity",
 ): void {
+  const reason = reasonOverride ?? error.reason;
   const event = activityLogEvent(
     FAILED,
     {
-      correlationId: correlationIdOrUnknown(correlationId),
+      ...reportCorrelation(correlationId, parentCorrelationId),
       errorKind: supportReportJobErrorKind(error),
     },
     {
-      reason: error.reason,
+      reason,
       failureKind: error.failureKind,
       ...(error.frames.length === 0 ? {} : { frames: error.frames }),
       ...(error.causeChain.length === 0 ? {} : { causeChain: error.causeChain }),
@@ -177,7 +407,7 @@ export function emitSupportReportFailed(
       loss: "none",
     },
   );
-  if (EXPECTED_REFUSALS.has(error.reason)) getServerLogger().warn(event);
+  if (EXPECTED_REFUSALS.has(reason)) getServerLogger().warn(event);
   else getServerLogger().error(event);
 }
 
@@ -188,6 +418,7 @@ const EXPECTED_REFUSALS = new Set([
   "quota-exhausted",
   "evaluation-rate-limited",
   "record-too-large",
+  "delivery-capacity",
 ]);
 
 function supportReportJobErrorKind(error: SupportReportJobError): ActivityLogErrorKind {
@@ -202,4 +433,26 @@ function supportReportJobErrorKind(error: SupportReportJobError): ActivityLogErr
   if (error.reason === "record-too-large") return "validation-failed";
   if (error.reason === "store-unavailable" || error.reason === "unavailable") return "unavailable";
   return error.reason === "timeout" ? "timeout" : "internal";
+}
+
+function safeReportCorrelation(value: string | undefined): string | undefined {
+  return isActivityLogCorrelationId(value) &&
+    !looksLikeSecret(value) &&
+    !looksLikePersonalIdentifier(value)
+    ? value
+    : undefined;
+}
+function selectedCorrelationFields(value: string | undefined): { selectedCorrelationId?: string } {
+  const selectedCorrelationId = safeReportCorrelation(value);
+  return selectedCorrelationId === undefined ? {} : { selectedCorrelationId };
+}
+function reportCorrelation(
+  correlationId: string | undefined,
+  parent: string | undefined,
+): { correlationId: string; parentCorrelationId?: string } {
+  const parentCorrelationId = safeReportCorrelation(parent);
+  return {
+    correlationId: correlationIdOrUnknown(correlationId),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+  };
 }

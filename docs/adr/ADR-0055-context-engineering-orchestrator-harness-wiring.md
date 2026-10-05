@@ -96,10 +96,19 @@ The observer runs in `assembleGroundedPack` (`grounded-orchestrator.ts:L2055`), 
 conditional-spread to the EXISTING `pack.diagnostics?.contextBudget?` attach point defined in
 `ContextPackDiagnostics` (`connected-context.ts:L304–308`, `contextBudget?: ContextBudget | undefined`).
 
-The observer maps the three present lanes in the grounded path (`system-contract`,
-`user-task`, `repo-evidence`) onto the eight-lane taxonomy. It calls `estimateTokens` on the
-pack's constituent text segments to populate per-lane `ContextLaneDiagnostics`, then produces a
-`ContextAssemblyDiagnostics` attached to `pack.diagnostics.contextBudget`.
+The grounded observer maps the already selected repository excerpts onto `repo-evidence`; it does
+not assemble the conversation, instruction, memory, or other lanes. It attaches the canonical
+`ContextBudget` to `pack.diagnostics.contextBudget`. The shared diagnostics producer uses the
+allocator's calibrated token accounting with a non-evicting observation of that lane, counting every
+selected excerpt even when the lane or model budget is exceeded. It reports overflow rather than
+pretending a second allocation removed excerpts from the prompt. `orderedForRecency` is false: the
+observer does not rearrange the prompt. Source exclusion is never conversation compaction.
+
+The repository-excerpt estimate describes the selected pack. Gateway fitting may subsequently send
+fewer references; `promptContext` separately reports the actual sent reference count and estimated
+source share, alongside provider-measured whole-prompt usage when available. The existing
+`search.connected-context.completed` operation records selected excerpt counts, token estimate,
+pressure, and whether recency layout was applied, without paths or content.
 
 **Crucial constraint:** the observer DOES NOT change which evidence is selected, does NOT mutate
 any text, does NOT alter the budget struct (`pack.budget`), and does NOT affect `pack.stableId`

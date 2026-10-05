@@ -1,5 +1,17 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
+
+import {
+  adoptableGitChat,
+  committedGitChat,
+  replaceGroundingScopeList,
+} from "@/lib/chat-grounding-mutation";
+
 // Issue #3400 (epic #3384) — git-change scope pills for the chat header.
 //
 // A chat connects at most one Git-change comparison in V1 practice (gitChangeScopes); this
@@ -22,16 +34,17 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { ClientDiagnosticGitChangeDescription } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  fetchChats,
   applyGitChangeChatDescription,
   approveGitChangeChatDescription,
   refreshGitChangeScope,
   reviewGitChangeChatDescription,
   updateChatGitChangeScopes,
 } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useScopePillError, ScopePillError, emptyScopePill } from "./hooks/useScopePillError";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
 import type { WorkspaceLinkedGitChangeComparison } from "./hooks/useWorkspace.types";
@@ -79,6 +92,7 @@ export interface GitChangeScopePillProps {
   /** Injectable wire seams for tests. Default to the real BFF helpers. */
   readonly updateScopes?: typeof updateChatGitChangeScopes;
   readonly refreshScope?: typeof refreshGitChangeScope;
+  readonly listChats?: typeof fetchChats;
   readonly approveDescription?: ApproveGitChangeDescriptionFn;
   readonly applyDescription?: ApplyGitChangeDescriptionFn;
   readonly reviewDescription?: ReviewGitChangeDescriptionFn;
@@ -640,10 +654,12 @@ interface GitChangePillItemProps {
   readonly onRefreshed: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatGitChangeScopes;
   readonly refreshScope: typeof refreshGitChangeScope;
+  readonly listChats: typeof fetchChats | undefined;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly reviewDescription: ReviewGitChangeDescriptionFn;
   readonly t: I18nTranslate;
+  readonly setDisconnectError: (message: string | null) => void;
 }
 
 // Owner audit b1-6 — mirrors `value` on every render (not only at effect time), so an async
@@ -683,17 +699,28 @@ async function runGuardedPillAction(
   }
 }
 
-// Owner audit b1-6 — merges onto the freshest chat, not the one captured when the refresh button
-// was clicked: every field the refresh itself did not change survives whatever landed (a title
-// rename, a connector disconnect, a model switch) while the round trip was in flight.
-function mergeRefreshedChat(
-  latestChat: Chat,
-  allScopes: readonly ChatGitChangeScope[],
-  relationshipId: string,
-  resultScope: ChatGitChangeScope,
-): Chat {
-  const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, relationshipId);
-  return { ...latestChat, gitChangeScopes: [...remaining, resultScope] };
+async function refreshCommittedGitPill(
+  props: GitChangePillItemProps,
+  latest: RefObject<Chat>,
+  setError: (message: string | null) => void,
+): Promise<void> {
+  const { chat, scope, t } = props;
+  const correlationId = newClientCorrelationId();
+  const result = await props.refreshScope(chat.id, scope.relationshipId, undefined, correlationId);
+  if (result.status === "blocked") {
+    setError(gitChangeBlockedReasonMessage(result.reason, t));
+    return;
+  }
+  const committed = await committedGitChat(chat, result, correlationId, props.listChats);
+  const adopted = adoptableGitChat(
+    chat,
+    latest.current,
+    committed,
+    result.scope,
+    scope.relationshipId,
+  );
+  if (adopted !== undefined) props.onRefreshed?.(adopted);
+  if (!committed.confirmed) props.setDisconnectError(t("gitChangeScope.savedRefreshUnavailable"));
 }
 
 interface GitChangePillActions {
@@ -707,36 +734,38 @@ interface GitChangePillActions {
 // Extracted from GitChangePillItem so the component body stays under the max-lines-per-function
 // bar; both handlers share the same busy/error state and scope-list derivation.
 function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillActions {
-  const { chat, scope, allScopes, onDisconnect, onRefreshed, updateScopes, refreshScope, t } =
-    props;
+  const { chat, scope, allScopes, onDisconnect, updateScopes, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
   const latestChatRef = useLatestRef(chat);
 
   async function runDisconnect(): Promise<void> {
-    await runGuardedPillAction(setBusy, setError, formatDisconnectErrorMessage, t, async () => {
-      // Capture the stable header ancestor before this pill unmounts (mirrors ConnectedScopePill).
-      const header = disconnectRef.current?.closest(".chat-scope-header");
-      const remaining = otherScopes(allScopes, scope.relationshipId);
-      const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
-      onDisconnect?.(response.chat);
-      restoreScopeHeaderFocus(header);
-    });
+    const button = disconnectRef.current;
+    const header = button?.closest(".chat-scope-header");
+    await runGuardedPillAction(
+      setBusy,
+      props.setDisconnectError,
+      formatDisconnectErrorMessage,
+      t,
+      async () => {
+        const remaining = otherScopes(allScopes, scope.relationshipId);
+        const response = await replaceGroundingScopeList(
+          chat,
+          remaining.length > 0 ? remaining : null,
+          updateScopes,
+          onDisconnect,
+        );
+        onDisconnect?.(response.chat);
+      },
+    );
+    restoreScopeHeaderFocus(header, button);
   }
 
-  async function runRefresh(): Promise<void> {
-    await runGuardedPillAction(setBusy, setError, formatRefreshErrorMessage, t, async () => {
-      const result = await refreshScope(chat.id, scope.relationshipId);
-      if (result.status === "blocked") {
-        setError(gitChangeBlockedReasonMessage(result.reason, t));
-        return;
-      }
-      onRefreshed?.(
-        mergeRefreshedChat(latestChatRef.current, allScopes, scope.relationshipId, result.scope),
-      );
-    });
-  }
+  const runRefresh = (): Promise<void> =>
+    runGuardedPillAction(setBusy, setError, formatRefreshErrorMessage, t, () =>
+      refreshCommittedGitPill(props, latestChatRef, setError),
+    );
 
   return {
     busy,
@@ -985,14 +1014,19 @@ interface GitChangeScopePillContentProps {
   readonly onRefreshed: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatGitChangeScopes;
   readonly refreshScope: typeof refreshGitChangeScope;
+  readonly listChats: typeof fetchChats | undefined;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly reviewDescription: ReviewGitChangeDescriptionFn;
   readonly t: I18nTranslate;
+  readonly error: string | null;
+  readonly setDisconnectError: (message: string | null) => void;
 }
 
 function GitChangeScopePillContent({
   announcer,
+  error,
+  setDisconnectError,
   chat,
   pending,
   scopes,
@@ -1000,6 +1034,7 @@ function GitChangeScopePillContent({
   onRefreshed,
   updateScopes,
   refreshScope,
+  listChats,
   approveDescription,
   applyDescription,
   reviewDescription,
@@ -1008,6 +1043,7 @@ function GitChangeScopePillContent({
   return (
     <span className="scope-pill-group">
       {announcer}
+      <ScopePillError error={error} />
       {pending.map((comparison) => (
         <PendingGitChangePillItem
           key={`pending:${comparison.connectionId}`}
@@ -1022,9 +1058,11 @@ function GitChangeScopePillContent({
           scope={scope}
           allScopes={scopes}
           onDisconnect={onDisconnect}
+          setDisconnectError={setDisconnectError}
           onRefreshed={onRefreshed}
           updateScopes={updateScopes}
           refreshScope={refreshScope}
+          listChats={listChats}
           approveDescription={approveDescription}
           applyDescription={applyDescription}
           reviewDescription={reviewDescription}
@@ -1035,10 +1073,6 @@ function GitChangeScopePillContent({
   );
 }
 
-function emptyGitChangeScopePill(announcement: string, announcer: ReactNode): ReactNode {
-  return announcement === "" ? null : announcer;
-}
-
 export function GitChangeScopePill({
   chat,
   pendingComparisons = [],
@@ -1046,11 +1080,13 @@ export function GitChangeScopePill({
   onRefreshed,
   updateScopes = updateChatGitChangeScopes,
   refreshScope = refreshGitChangeScope,
+  listChats,
   approveDescription = defaultApproveDescription,
   applyDescription = defaultApplyDescription,
   reviewDescription = defaultReviewDescription,
 }: GitChangeScopePillProps): ReactNode {
   const t = useTranslate();
+  const { error, setError } = useScopePillError(chat);
   const scopes = chat.gitChangeScopes ?? [];
   const pending = pendingComparisonsWithoutConfirmed(pendingComparisons, scopes);
   const signature = `${scopesSignature(scopes)}|${pendingComparisonsSignature(pending)}`;
@@ -1062,11 +1098,13 @@ export function GitChangeScopePill({
   const announcer = <GitChangeScopeAnnouncer text={announcement} />;
 
   if (isEmpty) {
-    return emptyGitChangeScopePill(announcement, announcer);
+    return emptyScopePill(announcement, announcer, error);
   }
   return (
     <GitChangeScopePillContent
       announcer={announcer}
+      error={error}
+      setDisconnectError={setError}
       chat={chat}
       pending={pending}
       scopes={scopes}
@@ -1074,6 +1112,7 @@ export function GitChangeScopePill({
       onRefreshed={onRefreshed}
       updateScopes={updateScopes}
       refreshScope={refreshScope}
+      listChats={listChats}
       approveDescription={approveDescription}
       applyDescription={applyDescription}
       reviewDescription={reviewDescription}

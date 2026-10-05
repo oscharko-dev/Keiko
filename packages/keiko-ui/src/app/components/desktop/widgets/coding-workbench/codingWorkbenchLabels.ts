@@ -12,6 +12,7 @@ import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import type {
   CodingWorkbenchResourceStatus,
+  CodingWorkbenchClientError,
   CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
 
@@ -381,22 +382,37 @@ export function changesetDeliveryAlert(
     : actionFailureAlert("codingWorkbench.changesetReview.deliveryFailedCode", failure, t);
 }
 
+const REFRESH_FAILURE_ALERTS = [
+  ["profile", "codingWorkbench.alert.authenticationRefreshFailed"],
+  ["codexSetup", "codingWorkbench.alert.authenticationSetupRefreshFailed"],
+  ["source", "codingWorkbench.alert.modelSourceRefreshFailed"],
+  ["runtime", "codingWorkbench.alert.runtimeRefreshFailed"],
+  ["workspace", "codingWorkbench.alert.workspaceRefreshFailed"],
+  ["run", "codingWorkbench.alert.runRefreshFailed"],
+  ["stream", "codingWorkbench.alert.eventStreamRefreshFailed"],
+] as const;
+
+function refreshFailureResource(
+  state: CodingWorkbenchRuntimeState,
+): (typeof REFRESH_FAILURE_ALERTS)[number] | undefined {
+  return REFRESH_FAILURE_ALERTS.find(([resource]) => state[resource].status === "error");
+}
+
 function refreshFailureAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
 ): string | null {
-  for (const [resource, value] of [
-    ["authentication", state.profile],
-    ["authenticationSetup", state.codexSetup],
-    ["modelSource", state.source],
-    ["runtime", state.runtime],
-    ["workspace", state.workspace],
-    ["run", state.run],
-    ["eventStream", state.stream],
-  ] as const) {
-    if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
-  }
-  return null;
+  const failure = refreshFailureResource(state);
+  return failure === undefined ? null : t(failure[1]);
+}
+
+/** The error selected by visibleAlert; never report another resource's concurrent failure. */
+export function visibleAlertFailure(
+  state: CodingWorkbenchRuntimeState,
+): CodingWorkbenchClientError | null {
+  if (state.mutation.error !== null) return state.mutation.error;
+  const failure = refreshFailureResource(state);
+  return failure === undefined ? null : state[failure[0]].error;
 }
 
 type StartReadinessResource = "modelSource" | "workspace" | "runtime" | "run";

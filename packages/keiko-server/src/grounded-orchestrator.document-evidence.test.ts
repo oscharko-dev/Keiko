@@ -157,6 +157,51 @@ afterEach(() => {
 });
 
 describe("grounded exploration with connected documents", () => {
+  it("charges each exclusively extracted document once and retains its owning diagnostic", async () => {
+    const { pack } = await runGroundedExploration(input(), {
+      correlationId: undefined,
+      answerer: recordingAnswerer,
+      nowMs: () => 1_000,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(pack.files.map((file) => file.scopePath).sort()).toEqual([
+      "docs/budget.xlsx",
+      "docs/manual.pdf",
+      "docs/report.docx",
+      "src/foo.ts",
+    ]);
+    expect(pack.usage.filesRead).toBe(4);
+    expect(pack.omitted).toEqual([
+      { scopePath: "docs/legacy.doc", reason: "unsupported-format", omittedAtMs: 1_000 },
+    ]);
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("keeps ordinary text with a document suffix when extraction does not own the scope", async () => {
+    const requested = input();
+    const { pack } = await runGroundedExploration(
+      {
+        ...requested,
+        scope: { ...requested.scope, kind: "directory", relativePaths: ["docs"] },
+        query: { ...requested.query, text: "What legacy text is present?" },
+      },
+      {
+        correlationId: undefined,
+        answerer: recordingAnswerer,
+        nowMs: () => 1_000,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    const text = pack.files.find((file) => file.scopePath === "docs/legacy.doc");
+    expect(text?.excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(
+      "legacy binary word doc",
+    );
+    expect(
+      text?.excerpts.every((excerpt) => excerpt.atom.provenance.kind !== "document-extract"),
+    ).toBe(true);
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
   it("includes bounded DOCX evidence and discloses an unsupported legacy .doc", async () => {
     const output = await runGroundedExploration(input(), {
       correlationId: undefined,

@@ -13,7 +13,7 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   readBoundedRequestBody,
-  readJsonRequestBody,
+  readJsonRequestBodyOutcome,
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
@@ -467,6 +467,23 @@ describe("bounded request body activity log", () => {
 // is now the one owner of that wrapper layer; each caller keeps its own max-bytes constant and
 // becomes a one-line delegate to this function.
 describe("readJsonRequestBody", () => {
+  it("keeps request-supplied refusal-shaped fields inside the parsed branch", async () => {
+    const input = { status: 413, body: { error: { code: "PAYLOAD_TOO_LARGE" } } };
+    const req = asRequest(Readable.from([Buffer.from(JSON.stringify(input))]));
+    expect(await readJsonRequestBodyOutcome(req, 128_000)).toEqual({
+      kind: "parsed",
+      value: input,
+    });
+  });
+
+  it("tags a genuine byte-limit refusal independently of parsed body fields", async () => {
+    const req = asRequest(Readable.from([Buffer.from("oversized")]));
+    expect(await readJsonRequestBodyOutcome(req, 1)).toMatchObject({
+      kind: "rejected",
+      response: { status: 413, body: { error: { code: "PAYLOAD_TOO_LARGE" } } },
+    });
+  });
+
   it.each([
     {
       name: "413 PAYLOAD_TOO_LARGE for an oversized body",
@@ -498,25 +515,25 @@ describe("readJsonRequestBody", () => {
   ])("returns $name", async ({ body, maxBytes, expected }) => {
     const req = asRequest(Readable.from([Buffer.from(body)]));
 
-    const result = await readJsonRequestBody(req, maxBytes);
+    const result = await readJsonRequestBodyOutcome(req, maxBytes);
 
-    expect(result).toEqual(expected);
+    expect(result).toEqual({ kind: "rejected", response: expected });
   });
 
   it("returns the parsed record for a valid JSON object body", async () => {
     const req = asRequest(Readable.from([Buffer.from('{"projectId":"p-1","cwd":"/tmp"}')]));
 
-    const result = await readJsonRequestBody(req, 128_000);
+    const result = await readJsonRequestBodyOutcome(req, 128_000);
 
-    expect(result).toEqual({ projectId: "p-1", cwd: "/tmp" });
+    expect(result).toEqual({ kind: "parsed", value: { projectId: "p-1", cwd: "/tmp" } });
   });
 
   it("treats an empty body as an empty object", async () => {
     const req = asRequest(Readable.from([]));
 
-    const result = await readJsonRequestBody(req, 128_000);
+    const result = await readJsonRequestBodyOutcome(req, 128_000);
 
-    expect(result).toEqual({});
+    expect(result).toEqual({ kind: "parsed", value: {} });
   });
 
   // `JSON.parse` never triggers a prototype-setter for an own `"__proto__"` key — it defines it
@@ -526,24 +543,28 @@ describe("readJsonRequestBody", () => {
   it("returns a hostile '__proto__' key as an ordinary own property, not a polluted prototype", async () => {
     const req = asRequest(Readable.from([Buffer.from('{"__proto__":{"polluted":true}}')]));
 
-    const result = await readJsonRequestBody(req, 128_000);
+    const result = await readJsonRequestBodyOutcome(req, 128_000);
 
     // Object.prototype itself must stay clean: an unrelated, freshly-created object never picks
     // up "polluted" through its prototype chain.
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
-    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
-    expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(true);
-    expect((result as { __proto__: unknown }).__proto__).toEqual({ polluted: true });
+    if (result.kind !== "parsed") throw new Error("Expected parsed JSON data");
+    expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(result.value, "__proto__")).toBe(true);
+    expect((result.value as { __proto__: unknown }).__proto__).toEqual({ polluted: true });
   });
 
   it("returns 400 BAD_REQUEST for valid JSON that is not an object (null)", async () => {
     const req = asRequest(Readable.from([Buffer.from("null")]));
 
-    const result = await readJsonRequestBody(req, 128_000);
+    const result = await readJsonRequestBodyOutcome(req, 128_000);
 
     expect(result).toEqual({
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+      kind: "rejected",
+      response: {
+        status: 400,
+        body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+      },
     });
   });
 
@@ -554,11 +575,14 @@ describe("readJsonRequestBody", () => {
   ])("returns 400 BAD_REQUEST for valid JSON that is not an object (%s)", async (_label, raw) => {
     const req = asRequest(Readable.from([Buffer.from(raw)]));
 
-    const result = await readJsonRequestBody(req, 128_000);
+    const result = await readJsonRequestBodyOutcome(req, 128_000);
 
     expect(result).toEqual({
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+      kind: "rejected",
+      response: {
+        status: 400,
+        body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+      },
     });
   });
 });

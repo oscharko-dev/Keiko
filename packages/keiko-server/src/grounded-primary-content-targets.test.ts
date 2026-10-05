@@ -1,0 +1,277 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
+import type { ConnectedFileEntry } from "@oscharko-dev/keiko-contracts/connected-context";
+import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
+import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+
+const NOW = 1_784_653_600_000;
+let root = "";
+beforeEach((): void => {
+  root = mkdtempSync(join(tmpdir(), "keiko-primary-content-"));
+  mkdirSync(join(root, "facts"));
+});
+afterEach((): void => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+async function retrieve(
+  content: string,
+  provider?: SemanticSearchProvider,
+): Promise<Awaited<ReturnType<typeof retrieveConnectedContextPack>>> {
+  return retrieveConnectedContextPack(
+    {
+      workspaceRoot: root,
+      scope: {
+        schemaVersion: "1",
+        scopeId: "primary-content",
+        workspaceRoot: root,
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+        conversationId: "chat",
+        connectedAtMs: NOW,
+      },
+      query: buildQuery(content, () => NOW),
+    },
+    {
+      correlationId: undefined,
+      nowMs: () => NOW,
+      ...(provider === undefined ? {} : { repoSemanticSearchProvider: provider }),
+      answerer: {
+        answer: (): Promise<string> => Promise.reject(new Error("Unexpected model call")),
+      },
+    },
+  );
+}
+
+function facts(target: string, extension: string, count = 16): void {
+  for (let index = 1; index <= count; index += 1) {
+    const body = `${target} ${String(71000 + index)}`;
+    writeFileSync(
+      join(root, "facts", `record-${String(index)}.${extension}`),
+      extension === "html" ? `<p>${body}</p>\n` : `${body}\n`,
+    );
+  }
+  writeFileSync(join(root, "facts", `unrelated-16.${extension}`), "unrelated values 16\n");
+}
+
+function expectSupplementalFileListing(file: ConnectedFileEntry | undefined): void {
+  if (file === undefined) throw new TypeError("Expected supplemental file context");
+  expect(file.excerpts).toHaveLength(1);
+  expect(file.excerpts.every((excerpt) => excerpt.atom.provenance.kind === "file-listing")).toBe(
+    true,
+  );
+  expect(file.excerpts.some((excerpt) => excerpt.atom.provenance.kind === "lexical-search")).toBe(
+    false,
+  );
+}
+
+const variants = [
+  ["InventoryMarker", "txt", "InventoryMarker"],
+  ["WindowReadingSignal", "html", "Welche Werte stehen zu WindowReadingSignal?"],
+  ["VerifiedRecordProbe", "txt", "Zeige VerifiedRecordProbe für alle 16 Einträge."],
+  ["ThermalAuditReading", "ts", "List every value for ThermalAuditReading across 16 files."],
+  [
+    "DruckMesswert",
+    "html",
+    "Für alle 16 Einträge: DruckMesswert, gelesener Wert und belegte Zeile.",
+  ],
+  [
+    "IndependentFactProbe",
+    "txt",
+    "Show IndependentFactProbe. Use only read values, no guesses. Include all 999 entries when evidenced.",
+  ],
+] as const;
+
+describe("primary content evidence is independent of presentation wording", () => {
+  it.each(variants)(
+    "retains actual %s content for the paraphrased request",
+    async (target, extension, content): Promise<void> => {
+      facts(target, extension);
+      const { pack } = await retrieve(content);
+      expect(pack.files).toHaveLength(16);
+      expect(pack.files.some((file) => file.scopePath.includes("unrelated"))).toBe(false);
+      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, (value) => value));
+      for (let index = 1; index <= 16; index += 1)
+        expect(prompt.includes(`${target} ${String(71000 + index)}`)).toBe(true);
+      expect(pack.omitted).toEqual([]);
+    },
+  );
+
+  it("preserves multiple independent targets without protecting unrelated prose", async (): Promise<void> => {
+    facts("FirstTargetProbe", "txt", 8);
+    facts("SecondTargetSignal", "html", 8);
+    const { pack } = await retrieve(
+      "Zeige FirstTargetProbe und SecondTargetSignal für alle 16 Einträge.",
+    );
+    expect(pack.files).toHaveLength(16);
+    expect(pack.files.some((file) => file.scopePath.includes("unrelated"))).toBe(false);
+  });
+
+  it("preserves semantic augmentation when primary named content is actually present", async (): Promise<void> => {
+    facts("PrimaryReadingProbe", "txt", 8);
+    writeFileSync(join(root, "facts", "related.txt"), "Additional related documentation\n");
+    const { pack } = await retrieve("Welche Werte stehen zu PrimaryReadingProbe?", {
+      name: "related fixture",
+      search: (): Promise<readonly { scopePath: string; line: number; score: number }[]> =>
+        Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]),
+    });
+    expect(pack.files.some((file) => file.scopePath === "facts/related.txt")).toBe(true);
+    const prompt = JSON.stringify(
+      buildGroundedGatewayMessages("PrimaryReadingProbe", pack, (value) => value),
+    );
+    for (let index = 1; index <= 8; index += 1)
+      expect(prompt.includes(`PrimaryReadingProbe ${String(71000 + index)}`)).toBe(true);
+  });
+
+  it.each([
+    "CompactAbsentProbe: Welche Information ist dazu in diesem Ordner belegt?",
+    "What is the value of CompactAbsentProbe?",
+  ])(
+    "does not substitute another identifier's semantic evidence for named fact absence: %s",
+    async (content): Promise<void> => {
+      writeFileSync(join(root, "facts", "related.txt"), "OtherReadingProbe 81234\n");
+      const { pack } = await retrieve(content, {
+        name: "related fixture",
+        search: (): Promise<readonly { scopePath: string; line: number; score: number }[]> =>
+          Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]),
+      });
+      expect(pack.files).toEqual([]);
+      expect(pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+    },
+  );
+
+  it.each([
+    "What is the latest value of CompactAbsentProbe?",
+    "What is the fastest value of CompactAbsentProbe?",
+  ])(
+    "keeps unparsed value questions contextual without asserting literal presence: %s",
+    async (content): Promise<void> => {
+      writeFileSync(join(root, "facts", "related.txt"), "OtherReadingProbe 81234\n");
+      const queries: string[] = [];
+      const { pack } = await retrieve(content, {
+        name: "related fixture",
+        search: ({ query }) => {
+          queries.push(query.text);
+          return Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]);
+        },
+      });
+      expect(queries).toEqual([content]);
+      expect(pack.diagnostics?.coverage?.matchesReturned).toBe(1);
+      expect(pack.files.map((file) => file.scopePath)).toEqual(["facts/related.txt"]);
+      expect(
+        pack.files[0]?.excerpts.every((excerpt) =>
+          excerpt.atom.provenance.tool.startsWith("repo.semanticSearch:"),
+        ),
+      ).toBe(true);
+      expect(
+        pack.files[0]?.excerpts.every((excerpt) => !excerpt.content.includes("CompactAbsentProbe")),
+      ).toBe(true);
+      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, (value) => value));
+      expect(prompt).toContain("Related semantic context (not verified as an exact literal match)");
+      expect(prompt).toContain("OtherReadingProbe 81234");
+    },
+  );
+
+  it.each(["ns::missing", "absentFn()", "@MissingDecorator"])(
+    "preserves missing punctuation-bearing code target %s in both quote forms",
+    async (target): Promise<void> => {
+      writeFileSync(join(root, "facts", "related.txt"), "Unrelated value 81234\n");
+      const provider: SemanticSearchProvider = {
+        name: "unrelated approximate evidence",
+        search: () => Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]),
+      };
+      for (const quote of ["`", '"']) {
+        const { pack } = await retrieve(`Find ${quote}${target}${quote} exactly.`, provider);
+        expect(pack.files).toEqual([]);
+        expect(pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+      }
+    },
+  );
+
+  it.each(["ns::sym", "fn()", "@Decorator", "dir/file.ts"])(
+    "retains actual punctuation-bearing code target %s with literal provenance",
+    async (target): Promise<void> => {
+      writeFileSync(join(root, "facts", "target.txt"), `${target} observed value 81234\n`);
+      writeFileSync(join(root, "facts", "related.txt"), "Unrelated value 81235\n");
+      let semanticCalls = 0;
+      const provider: SemanticSearchProvider = {
+        name: "unrelated approximate evidence",
+        search: () => {
+          semanticCalls += 1;
+          return Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]);
+        },
+      };
+      for (const quote of ["`", '"']) {
+        const { pack } = await retrieve(`Find ${quote}${target}${quote} exactly.`, provider);
+        expect(pack.files.map((file) => file.scopePath)).toEqual(["facts/target.txt"]);
+        expect(
+          pack.files[0]?.excerpts.some(
+            (excerpt) =>
+              excerpt.atom.provenance.kind === "lexical-search" && excerpt.content.includes(target),
+          ),
+        ).toBe(true);
+      }
+      expect(semanticCalls).toBe(0);
+    },
+  );
+
+  it("keeps denied files unread when the code target resembles a sensitive path", async (): Promise<void> => {
+    writeFileSync(join(root, ".env"), "SensitivePathOnlyProbe=81234\n");
+    for (const quote of ["`", '"']) {
+      const { pack } = await retrieve(`Find ${quote}SensitivePathOnlyProbe${quote} exactly.`);
+      expect(pack.files).toEqual([]);
+      expect(pack.diagnostics?.coverage?.deniedByDiscovery).toBeGreaterThan(0);
+    }
+  });
+
+  it("does not turn exact identifier absence into a fuzzy related-word hit", async (): Promise<void> => {
+    writeFileSync(join(root, "facts", "related.txt"), "Absent target probe values\n");
+    const { pack } = await retrieve(
+      "Welche Werte stehen zu AbsentTargetProbe? Nenne alle 16 Einträge.",
+    );
+    expect(pack.files).toEqual([]);
+    expect(pack.diagnostics?.coverage?.filesScanned).toBe(1);
+  });
+
+  it("keeps a parsed numeric literal search separate from supplemental folder context", async (): Promise<void> => {
+    writeFileSync(join(root, "facts", "target.txt"), "256 präziser Druck 81234\n");
+    writeFileSync(join(root, "facts", "unrelated.txt"), "ordinary unrelated prose\n");
+    const { pack } = await retrieve("Suche nach 256");
+    const target = pack.files.find((file) => file.scopePath === "facts/target.txt");
+    const supplemental = pack.files.find((file) => file.scopePath === "facts/unrelated.txt");
+    expect(
+      target?.excerpts.some((excerpt) => excerpt.content.includes("256 präziser Druck 81234")),
+    ).toBe(true);
+    expect(pack.diagnostics?.coverage).toMatchObject({
+      matchesReturned: 1,
+      filesScanned: 2,
+      incomplete: false,
+      reasons: [],
+    });
+    expect(supplemental).toBeUndefined();
+  });
+
+  it.each(['Suche nach "256"', 'Find the literal "präziser Druck"'])(
+    "preserves the actual literal target in %s",
+    async (content): Promise<void> => {
+      writeFileSync(join(root, "facts", "target.txt"), "256 präziser Druck 81234\n");
+      writeFileSync(join(root, "facts", "unrelated.txt"), "ordinary unrelated prose\n");
+      const { pack } = await retrieve(content);
+      expect(pack.files.map((file) => file.scopePath)).toEqual(["facts/target.txt"]);
+    },
+  );
+
+  it("retains verified supplemental folder context for unparsed numeric prose", async () => {
+    writeFileSync(join(root, "facts", "target.txt"), "256 precise pressure 81234\n");
+    writeFileSync(join(root, "facts", "unrelated.txt"), "ordinary unrelated prose\n");
+    const { pack } = await retrieve("Explain these 256 records.");
+    expectSupplementalFileListing(
+      pack.files.find((file) => file.scopePath === "facts/unrelated.txt"),
+    );
+    expect(pack.diagnostics?.coverage).toMatchObject({ filesScanned: 2, incomplete: false });
+  });
+});

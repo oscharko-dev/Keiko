@@ -173,6 +173,7 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
     // status). They decide the short re-probe cooldown, so the decision is reconstructable.
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
+  diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -235,6 +236,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
     probeCount: { type: "integer", dataClass: "count", required: true },
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
+  diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -1491,17 +1493,34 @@ export function longContextTokens(
   options: GatewayReadinessOptions | undefined,
   capability: ModelCapability | undefined,
 ): number {
+  return Math.min(
+    longContextWindowTokens(options, capability),
+    declaredContextWindow(capability),
+    capability?.maxInputTokens ?? Number.POSITIVE_INFINITY,
+  );
+}
+
+function declaredContextWindow(capability: ModelCapability | undefined): number {
+  const window = capability?.contextWindow ?? 0;
+  return window > 0 && capability?.contextWindowAssumed !== true
+    ? window
+    : Number.POSITIVE_INFINITY;
+}
+
+function longContextWindowTokens(
+  options: GatewayReadinessOptions | undefined,
+  capability: ModelCapability | undefined,
+): number {
   const contextWindow = capability?.contextWindow ?? 0;
   if (options?.maxContextTokens !== undefined) {
-    const deploymentCeiling = contextWindow > 0 ? contextWindow : MAX_CONTEXT_TOKENS;
+    const deploymentCeiling = declaredContextWindow(capability);
     return Math.min(options.maxContextTokens, deploymentCeiling, MAX_CONTEXT_TOKENS);
   }
   if (contextWindow >= EXTENDED_LONG_CONTEXT_TOKENS) return EXTENDED_LONG_CONTEXT_TOKENS;
   // KEIKO-0358: an unknown/not-yet-probed contextWindow (0) is not evidence the model is
   // short-context; capping such probes at 32k lets a genuinely long-context model look
   // healthy from the readiness lane and then run out of room in production. Assume the
-  // extended budget for the 0 case; genuinely small windows (1..EXTENDED-1) still cap at
-  // DEFAULT_LONG_CONTEXT_TOKENS to avoid probing past the model's real ceiling.
+  // extended budget for the 0 case; the caller intersects known total and input ceilings.
   if (contextWindow === 0) return EXTENDED_LONG_CONTEXT_TOKENS;
   return DEFAULT_LONG_CONTEXT_TOKENS;
 }
@@ -2007,8 +2026,13 @@ export function codingWorkbenchProbesSettledForTests(): Promise<void> {
 function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
   const eligibility = codingWorkbenchModelEligibility(capability);
   if (eligibility === "ineligible") return [];
-  const shortWindow =
-    capability.contextWindow < CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
+  const minimum = CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
+  const canProveMinimum =
+    Math.min(
+      declaredContextWindow(capability),
+      capability.maxInputTokens ?? Number.POSITIVE_INFINITY,
+    ) >= minimum;
+  const shortWindow = canProveMinimum && capability.contextWindow < minimum;
   return [
     ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
     ...(shortWindow ? (["long_context"] as const) : []),
@@ -2074,6 +2098,7 @@ async function runWorkbenchProbe(
   key: string,
   correlationId: string,
 ): Promise<WorkbenchProbeOutcome> {
+  const generation = deps.gatewayConfig?.generation();
   try {
     const report = await runGatewayReadiness(
       {
@@ -2091,7 +2116,8 @@ async function runWorkbenchProbe(
     // Proven, yet not stored: the configuration changed under the run and the conclusion was
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
-    if (outcome === "proven" && stillNeeded) workbenchProbes.delete(key);
+    if (outcome === "proven" && stillNeeded && deps.gatewayConfig?.generation() !== generation)
+      workbenchProbes.delete(key);
     return outcome;
   } catch (error) {
     emitServerDiagnostic(

@@ -69,6 +69,82 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it.each(["git-read", "widget-locale"])(
+    "persists module prerequisite failure %s on its initiating correlation",
+    async (moduleLoadFailure) => {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private module URL must not be logged",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_module-attempt-123",
+            kind: "other",
+            errorKind: "unavailable",
+            moduleLoadFailure,
+            errorEvidence: { errorClass: "ChunkLoadError", frames: [], causeChain: [] },
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+      const [persisted] = lines("client.diagnostic");
+      expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+        correlationId: "ui_module-attempt-123",
+        moduleLoadFailure,
+        errorKind: "unavailable",
+        errorClass: "ChunkLoadError",
+      });
+      expect(readPersistedActivityLog(stateDir)).not.toContain("private module URL");
+    },
+  );
+
+  it.each(["private-response-value", null, false])(
+    "refuses unknown health validation facts %j before writing a diagnostic",
+    async (healthDiagnosticsInvalidReason) => {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "[keiko] health diagnostics failed validation",
+            clientTs: CLIENT_TS,
+            correlationId: "server-health-response",
+            errorKind: "validation-failed",
+            healthDiagnosticsInvalidReason,
+          }),
+        ),
+      );
+      expect(result.status).toBe(400);
+      expect(lines("client.diagnostic")).toEqual([]);
+      expect(readPersistedActivityLog(stateDir)).not.toContain("private-response-value");
+    },
+  );
+
+  it.each(["null-shape", "readiness-value", "snapshot-shape"])(
+    "persists the closed health validation reason %s without invented error frames",
+    async (healthDiagnosticsInvalidReason) => {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "[keiko] health diagnostics failed validation",
+            clientTs: CLIENT_TS,
+            correlationId: "server-health-response",
+            errorKind: "validation-failed",
+            healthDiagnosticsInvalidReason,
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+      const [persisted] = lines("client.diagnostic");
+      expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+        correlationId: "server-health-response",
+        errorKind: "validation-failed",
+        healthDiagnosticsInvalidReason,
+      });
+      const record: unknown = JSON.parse(persisted ?? "{}");
+      expect(record).not.toHaveProperty("errorClass");
+      expect(record).not.toHaveProperty("frames");
+      expect(record).not.toHaveProperty("causeChain");
+    },
+  );
+
   it("persists issue-provenance refusal linked to the successful preview request", async () => {
     const result = await handleClientDiagnosticIngest(
       context(
@@ -339,6 +415,87 @@ describe("client diagnostics loss evidence", () => {
       expectActivityLogProof("client.stage.settled.line", lines("client.stage.settled")[0] ?? ""),
     ).toMatchObject(expected);
     expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  it.each(["started", "settled"] as const)(
+    "preserves the user action parent through a %s stage ingest and stored line",
+    async (phase) => {
+      const body = {
+        kind: "stage",
+        stage: "files source preview",
+        phase,
+        ordinal: 1,
+        correlationId: "ui_preview-child-0001",
+        parentCorrelationId: "ui_navigation-parent-0001",
+        ...(phase === "settled" ? { durationMs: 9 } : {}),
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+      const op = `client.stage.${phase}` as const;
+      const line = lines(op)[0] ?? "";
+      const record =
+        phase === "started"
+          ? expectActivityLogProof("client.stage.started.line", line)
+          : expectActivityLogProof("client.stage.settled.line", line);
+      expect(record).toMatchObject({
+        correlationId: body.correlationId,
+        parentCorrelationId: body.parentCorrelationId,
+        stage: "files-source-preview",
+      });
+      expect(lines("client.diagnostic")).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["server", "server"],
+    ["server", "client-only"],
+    ["browser", "client-only"],
+  ] as const)(
+    "persists the %s/%s report identity on the download click",
+    async (source, evidenceScope) => {
+      const reportDigest = "ab".repeat(32);
+      const body = {
+        message: "download",
+        clientTs: CLIENT_TS,
+        correlationId: "ui_download-child-0001",
+        parentCorrelationId: "ui_prepare-parent-0001",
+        supportReportDelivery: { mode: "manual", source, evidenceScope, reportDigest },
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+      const op = "client.support-report.download-started";
+      expect(
+        expectActivityLogProof("client.support-report.download-started.line", lines(op)[0] ?? ""),
+      ).toMatchObject({
+        correlationId: body.correlationId,
+        parentCorrelationId: body.parentCorrelationId,
+        deliveryMode: "manual",
+        source,
+        evidenceScope,
+        reportDigest,
+      });
+      expect(lines("client.diagnostic")).toEqual([]);
+    },
+  );
+
+  it("refuses browser provenance that claims server evidence before writing a download line", async () => {
+    const body = {
+      message: "private refused provenance",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_download-invalid-0001",
+      supportReportDelivery: {
+        mode: "manual",
+        source: "browser",
+        evidenceScope: "server",
+        reportDigest: "ab".repeat(32),
+      },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(400);
+    expect(lines("client.support-report.download-started")).toEqual([]);
+    const rejected = expectActivityLogProof(
+      "client.diagnostic.rejected.line",
+      lines("client.diagnostic.rejected")[0] ?? "",
+    );
+    expect(rejected).toMatchObject({ rejection: "invalid-shape", errorKind: "invalid-request" });
+    expect(JSON.stringify(rejected)).not.toMatch(/private refused|reportDigest|evidenceScope/);
   });
 
   it("persists a started stage report as client.stage.started", async () => {

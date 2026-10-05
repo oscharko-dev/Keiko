@@ -13,6 +13,7 @@ import {
   ATLASSIAN_SYNC_JOB_STATUSES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 import { ATLASSIAN_CONNECTOR_VERIFY_STATUSES } from "@/lib/atlassian-connectors-api";
 import {
   actionTypeLabelKey,
@@ -30,10 +31,10 @@ import {
 } from "./connector-labels";
 
 function catalogHas(key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(EN_MESSAGES, key);
+  return Object.hasOwn(EN_MESSAGES, key) || Object.hasOwn(OPTIONAL_WIDGET_EN_MESSAGES, key);
 }
 
-describe("connector-labels — every mapped key exists in the central catalog", () => {
+describe("connector-labels — every mapped key exists in the widget or shared core catalog", () => {
   it("maps all providers, actions, risks, dispositions, review reasons", () => {
     for (const provider of ATLASSIAN_CONNECTOR_PROVIDERS) {
       expect(catalogHas(providerLabelKey(provider))).toBe(true);

@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { performance } from "node:perf_hooks";
+import * as timers from "node:timers/promises";
+import { describe, expect, it, vi } from "vitest";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 import {
   CUSTOMER_SHAPE_API_KEY,
+  failTransportResponse,
+  transportWait,
   startCustomerShapeLiteLlmTwin,
 } from "../lib/customer-shape-litellm-twin.mjs";
 import {
@@ -11,6 +16,8 @@ import {
   customerShapeRequestEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
+
+const { URL, fetch, TextDecoder, setTimeout } = globalThis;
 
 describe("customer-shape LiteLLM twin", () => {
   it("requires the configured custom authentication header for chat", async () => {
@@ -405,5 +412,299 @@ describe("customer-shape LiteLLM twin", () => {
         "current-run",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("closed gateway twin transports", () => {
+  it.each([Number.NaN, Number.NEGATIVE_INFINITY, 0])(
+    "does not retain a timer or listener for a non-positive or NaN duration %s",
+    async (milliseconds) => {
+      const response = Object.assign(new EventEmitter(), { destroyed: false });
+      await expect(transportWait(response, milliseconds)).resolves.toBe(true);
+      expect(response.listenerCount("close")).toBe(0);
+    },
+  );
+
+  it("keeps an early timer pending until the monotonic deadline", async () => {
+    const response = Object.assign(new EventEmitter(), { destroyed: false });
+    const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+    let settled = false;
+    const result = transportWait(response, 10).then((completed) => {
+      settled = true;
+      return completed;
+    });
+    try {
+      await timers.setTimeout(15);
+      expect(settled).toBe(false);
+      expect(response.listenerCount("close")).toBe(1);
+      clock.mockReturnValue(110);
+      await expect(result).resolves.toBe(true);
+      expect(response.listenerCount("close")).toBe(0);
+    } finally {
+      clock.mockRestore();
+      response.emit("close");
+      await result;
+    }
+  });
+
+  it("does not install a delay or close listener after a transport was already destroyed", async () => {
+    const response = Object.assign(new EventEmitter(), { destroyed: true });
+    const result = transportWait(response, 35_000);
+    try {
+      expect(response.listenerCount("close")).toBe(0);
+      await expect(result).resolves.toBe(false);
+    } finally {
+      response.emit("close");
+      await result;
+    }
+  });
+
+  it.each([false, true])(
+    "does not write or destroy an already closed failure (%s)",
+    (headersSent) => {
+      const response = {
+        destroyed: true,
+        headersSent,
+        destroy: vi.fn(),
+        writeHead: vi.fn(),
+        end: vi.fn(),
+      };
+      failTransportResponse(response);
+      expect(response.destroy).not.toHaveBeenCalled();
+      expect(response.writeHead).not.toHaveBeenCalled();
+      expect(response.end).not.toHaveBeenCalled();
+    },
+  );
+
+  it("destroys an open response when failure occurs after headers were sent", () => {
+    const response = {
+      destroyed: false,
+      headersSent: true,
+      destroy: vi.fn(),
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    };
+    failTransportResponse(response);
+    expect(response.destroy).toHaveBeenCalledExactlyOnceWith();
+    expect(response.writeHead).not.toHaveBeenCalled();
+    expect(response.end).not.toHaveBeenCalled();
+  });
+
+  it("sends one closed error payload when failure precedes headers", () => {
+    const response = {
+      destroyed: false,
+      headersSent: false,
+      destroy: vi.fn(),
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    };
+    failTransportResponse(response);
+    expect(response.writeHead).toHaveBeenCalledExactlyOnceWith(400, {
+      "content-type": "application/json",
+    });
+    expect(response.end).toHaveBeenCalledExactlyOnceWith(
+      '{"error":{"type":"invalid_request_error"}}',
+    );
+    expect(response.destroy).not.toHaveBeenCalled();
+  });
+});
+
+describe("synthetic gateway transport profile", () => {
+  function fixtureRequest(stream) {
+    return {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+      },
+      body: JSON.stringify({
+        stream,
+        messages: [{ role: "user", content: "private fixture prompt" }],
+      }),
+    };
+  }
+
+  it("rejects unauthenticated transport chat and malformed authenticated requests", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });
+    try {
+      const url = `${twin.baseUrl}/chat/completions`;
+      const denied = await fetch(url, { ...fixtureRequest(false), headers: {} });
+      expect(denied.status).toBe(401);
+      expect(await denied.json()).toEqual({ error: { type: "authentication_error" } });
+      const invalid = await fetch(url, { ...fixtureRequest(false), body: "{" });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({ error: { type: "invalid_request_error" } });
+      expect(twin.requests).toEqual([]);
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("offers a usable default URL for the transport profile", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });
+    try {
+      const response = await fetch(`${twin.baseUrl}/chat/completions`, fixtureRequest(false));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("transport test completed");
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("closes active delayed connections without waiting for the configured pause", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 60_000 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    const controller = new globalThis.AbortController();
+    let closing;
+    try {
+      const response = await fetch(url, { ...fixtureRequest(true), signal: controller.signal });
+      const reader = response.body.getReader();
+      await reader.read();
+      let closed = false;
+      closing = twin.close().then(() => {
+        closed = true;
+      });
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 500 });
+      await expect(reader.read()).rejects.toThrow();
+      reader.releaseLock();
+    } finally {
+      controller.abort();
+      await (closing ?? twin.close());
+    }
+  });
+
+  it("keeps basic readiness valid before exercising a truncated interactive stream", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });
+    const url = `${new URL(twin.baseUrl).origin}/partial/v1/chat/completions`;
+    try {
+      const buffered = await fetch(url, fixtureRequest(false));
+      expect(buffered.headers.get("content-type")).toBe("application/json");
+      const payload = await buffered.json();
+      expect(payload.choices[0].message.content).toContain("transport test completed");
+      const streaming = await fetch(url, fixtureRequest(true));
+      const partial = await streaming.text();
+      expect(partial).toContain("Synthetic partial reply.");
+      expect(partial).not.toContain("[DONE]");
+      expect(twin.requests).toHaveLength(2);
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("delays headers and reports transport metadata without recording prompt content", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 25 });
+    const origin = new URL(twin.baseUrl).origin;
+    try {
+      const started = Date.now();
+      const response = await fetch(`${origin}/delay35/v1/chat/completions`, fixtureRequest(false));
+      expect(Date.now() - started).toBeGreaterThanOrEqual(25);
+      expect(await response.text()).toContain("Synthetic gateway transport test completed.");
+      const metrics = await (await fetch(`${origin}/metrics`)).json();
+      expect(metrics).toMatchObject({
+        requestCount: 1,
+        requests: [{ scenario: "delay35", status: 200 }],
+      });
+      expect(JSON.stringify(metrics)).not.toContain("private fixture prompt");
+      const models = await (await fetch(`${origin}/delay35/v1/models`)).json();
+      expect(models.data[0].model_info.max_input_tokens).toBe(128_000);
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it.each([429, 503])(
+    "keeps HTTP%d unavailable until the advertised queue cooldown ends",
+    async (status) => {
+      const twin = await startCustomerShapeLiteLlmTwin({
+        transportOnly: true,
+        retryAfterSeconds: 1,
+      });
+      const url = `${new URL(twin.baseUrl).origin}/retry${status}/v1/chat/completions`;
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await fetch(url, fixtureRequest(false));
+          expect(response.status).toBe(status);
+          expect(response.headers.get("retry-after")).toBe("1");
+          await response.text();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1050));
+        const recovered = await fetch(url, fixtureRequest(true));
+        expect(recovered.status).toBe(200);
+        expect(await recovered.text()).toContain("data: [DONE]");
+        expect(twin.requests).toHaveLength(3);
+      } finally {
+        await twin.close();
+      }
+    },
+  );
+
+  it("distinguishes an aborted pause from a completed stream", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 10_000 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    const controller = new globalThis.AbortController();
+    try {
+      const response = await fetch(url, { ...fixtureRequest(true), signal: controller.signal });
+      const reader = response.body.getReader();
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(first).toContain("Synthetic gateway stream started.");
+      controller.abort();
+      await expect(reader.read()).rejects.toMatchObject({ name: "AbortError" });
+      reader.releaseLock();
+      await vi.waitFor(() => expect(twin.requests[0].closed).toBe(true));
+      expect(twin.requests[0]).toMatchObject({ status: 200, completed: false });
+    } finally {
+      controller.abort();
+      await twin.close();
+    }
+  });
+
+  it("pauses a live stream after the first delta and never echoes the prompt", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 30 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    try {
+      const response = await fetch(url, fixtureRequest(true));
+      const reader = response.body.getReader();
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(first).toContain("Synthetic gateway stream started.");
+      expect(first).not.toContain("[DONE]");
+      let rest = "";
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        rest += new TextDecoder().decode(chunk.value);
+      }
+      expect(twin.requests[0].elapsedMs).toBeGreaterThanOrEqual(30);
+      expect(twin.requests[0]).toMatchObject({ status: 200, completed: true });
+      expect(rest).toContain("Synthetic gateway transport test completed.");
+      expect(rest).toContain("[DONE]");
+      expect(first + rest).not.toContain("private fixture prompt");
+      reader.releaseLock();
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("measures transport duration independently of wall-clock corrections", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 30 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    const clock = vi.spyOn(Date, "now");
+    try {
+      const response = await fetch(url, fixtureRequest(true));
+      const reader = response.body.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+        "Synthetic gateway stream started.",
+      );
+      clock.mockReturnValue(twin.requests[0].startedAtMs - 5_000);
+      while (!(await reader.read()).done) {
+        // Drain the real stream through its transport-close measurement.
+      }
+      reader.releaseLock();
+      await vi.waitFor(() => expect(twin.requests[0].closed).toBe(true));
+      expect(twin.requests[0].elapsedMs).toBeGreaterThanOrEqual(30);
+      expect(twin.requests[0].completed).toBe(true);
+    } finally {
+      clock.mockRestore();
+      await twin.close();
+    }
   });
 });

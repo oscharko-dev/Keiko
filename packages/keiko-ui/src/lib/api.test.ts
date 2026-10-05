@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  updateChatConnectedScopes,
+  updateChatLocalKnowledgeScopes,
+  updateChatGitChangeScopes,
   streamAssistantSpeech,
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
@@ -135,6 +138,73 @@ const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), "managed-lsp-response-validators.ts"),
   "utf8",
 );
+
+describe("connected source update preconditions", () => {
+  it.each([
+    ["connectedScopes", updateChatConnectedScopes],
+    ["localKnowledgeScopes", updateChatLocalKnowledgeScopes],
+    ["gitChangeScopes", updateChatGitChangeScopes],
+  ] as const)("joins the %s PATCH to the caller's mutation attempt", async (field, update) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ chat: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    const identity = "gsi-v1:" + "b".repeat(64);
+    await update("chat-source", null, identity, "scope-mutation-attempt");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      [field]: null,
+      expectedGroundingScopeIdentity: identity,
+    });
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe("scope-mutation-attempt");
+  });
+
+  it.each([
+    ["localKnowledgeScopes", updateChatLocalKnowledgeScopes],
+    ["gitChangeScopes", updateChatGitChangeScopes],
+  ] as const)("guards %s against stale source replacement", async (field, update) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ chat: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    const identity = "gsi-v1:" + "b".repeat(64);
+    await update("chat-source", null, identity);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      [field]: null,
+      expectedGroundingScopeIdentity: identity,
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([undefined, "gsi-v1:" + "a".repeat(64)])(
+    "forwards the optional canonical baseline %s",
+    async (identity) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ chat: {} }));
+      vi.stubGlobal("fetch", fetchMock);
+      await updateChatConnectedScopes("chat-source", null, identity);
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({
+        connectedScopes: null,
+        ...(identity === undefined ? {} : { expectedGroundingScopeIdentity: identity }),
+      });
+    },
+  );
+
+  it("preserves the closed scope-conflict status for intent rebasing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: "GROUNDING_SCOPE_CHANGED", message: "Connected sources changed." },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    await expect(
+      updateChatConnectedScopes("chat-source", null, "gsi-v1:" + "a".repeat(64)),
+    ).rejects.toMatchObject({ code: "GROUNDING_SCOPE_CHANGED", status: 409 });
+  });
+});
 
 describe("managed language settings API", () => {
   afterEach(() => {
@@ -1334,7 +1404,12 @@ describe("files API helpers", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       "X-Keiko-Correlation-Id": "ui-directory-0001",
     });
-    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001");
+    const previewAbort = new AbortController();
+    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001", previewAbort.signal);
+    const previewSignal = fetchMock.mock.calls[1]?.[1]?.signal;
+    expect(previewSignal?.aborted).toBe(false);
+    previewAbort.abort();
+    expect(previewSignal?.aborted).toBe(true);
     await fetchFilesContent("/repo space", "src/app.ts", "ui-content-0001");
     await saveFilesContent({
       root: "/repo space",
@@ -3126,6 +3201,122 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     expect(headers.get("X-Keiko-CSRF")).toBe("1");
   });
 
+  it.each([
+    [409, "GROUNDING_SCOPE_CHANGED"],
+    [409, "CHAT_TURN_IN_PROGRESS"],
+    [409, "CHAT_TURN_IDEMPOTENCY_CONFLICT"],
+    [409, "CHAT_CLOSED"],
+    [422, "BAD_REQUEST"],
+    [429, "TOO_MANY_STREAMS"],
+    [503, "GATEWAY_UNAVAILABLE"],
+  ] as const)("does not replay pre-stream %s %s as a capability fallback", async (status, code) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code, message: "Request refused." } }), {
+        status,
+        headers: {
+          "Content-Type": "application/json",
+          [CORRELATION_HEADER]: "stream-refusal-correlation",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const outcome = sendDesktopChatStream(
+      { chatId: "c6", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      makeStreamHandlers(),
+    );
+    await expect(outcome).rejects.toMatchObject({
+      name: "ApiError",
+      code,
+      status,
+      correlationId: "stream-refusal-correlation",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([200, 404, 405, 501, 502])(
+    "does not replay an ambiguous non-envelope HTTP %s stream response",
+    async (status) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response("<html>Gateway response</html>", {
+          status,
+          headers: {
+            "Content-Type": "text/html",
+            [CORRELATION_HEADER]: "ambiguous-stream-request",
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        sendDesktopChatStream(
+          { chatId: "c6", projectPath: "/repo", content: "hello" },
+          new AbortController().signal,
+          makeStreamHandlers(),
+        ),
+      ).rejects.toMatchObject({
+        name: "ApiError",
+        code: "INTERNAL",
+        status,
+        correlationId: "ambiguous-stream-request",
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["request-stream-owner", "response-stream-owner"])(
+    "reports established SSE ownership with %s without changing the supplied request identity",
+    async (responseId) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response("", {
+          headers: { "Content-Type": "text/event-stream", [CORRELATION_HEADER]: responseId },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const onStarted = vi.fn();
+      await sendDesktopChatStream(
+        { chatId: "c6", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        makeStreamHandlers({ onStarted }),
+        "request-stream-owner",
+      );
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        "/api/desktop/chat/stream",
+        expect.objectContaining({
+          headers: expect.objectContaining({ [CORRELATION_HEADER]: "request-stream-owner" }),
+        }),
+      );
+      expect(onStarted).toHaveBeenCalledExactlyOnceWith(responseId);
+    },
+  );
+
+  it("does not treat a missing SSE body as proof streaming is unsupported", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          [CORRELATION_HEADER]: "missing-stream-body",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onStarted = vi.fn();
+    await expect(
+      sendDesktopChatStream(
+        { chatId: "c6", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        makeStreamHandlers({ onStarted }),
+      ),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "INTERNAL",
+      status: 200,
+      correlationId: "missing-stream-body",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onStarted).not.toHaveBeenCalled();
+  });
+
   it("attaches the server-echoed correlation id to a pre-stream StreamingUnavailableError", async () => {
     const response = new Response(
       JSON.stringify({ error: { code: "STREAMING_UNSUPPORTED", message: "no stream" } }),
@@ -3154,7 +3345,7 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     }
   });
 
-  it("falls back to the client-generated correlation id when the pre-stream response carries none", async () => {
+  it("keeps the exact request correlation id on a non-envelope pre-stream ApiError", async () => {
     // #3241 review — a well-formed-ID match also passes if the thrown error carries a SECOND,
     // unrelated generated id instead of the id the request actually sent. Read the id off the
     // mocked fetch call and assert the thrown error's id is exactly that one.
@@ -3172,8 +3363,8 @@ describe("sendDesktopChatStream — correlation id threading", () => {
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
       const sentCorrelationId = new Headers(init.headers).get(CORRELATION_HEADER);
       expect(sentCorrelationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
-      expect(error).toBeInstanceOf(StreamingUnavailableError);
-      expect((error as StreamingUnavailableError).correlationId).toBe(sentCorrelationId);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).correlationId).toBe(sentCorrelationId);
     }
   });
 });
@@ -4069,6 +4260,72 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     };
   }
 
+  function committedGitChatFixture(): Record<string, unknown> {
+    return {
+      id: "chat-1",
+      projectPath: "/repo",
+      title: "Committed chat",
+      selectedModel: "model",
+      createdAt: 1,
+      updatedAt: 2,
+      status: "open",
+      gitChangeScopes: [gitChangeScopeFixture()],
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    };
+  }
+
+  it.each([
+    { id: "foreign-chat" },
+    { groundingScopeIdentity: "made-up" },
+    { gitChangeScopes: [] },
+    { gitChangeScopes: [{ ...gitChangeScopeFixture(), snapshotDigest: "b".repeat(64) }] },
+    { updatedAt: "not-a-timestamp" },
+  ])("refuses an incoherent committed Git chat %j", async (patch) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          status: "connected",
+          scope: gitChangeScopeFixture(),
+          chat: { ...committedGitChatFixture(), ...patch },
+        }),
+      ),
+    );
+    await expect(
+      connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  it("shares the supplied attempt correlation across Git connect and refresh without putting it in the body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonOk({
+          status: "connected",
+          scope: gitChangeScopeFixture(),
+          chat: committedGitChatFixture(),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonOk({
+          status: "current",
+          scope: gitChangeScopeFixture(),
+          chat: committedGitChatFixture(),
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await connectGitChangeToChat(
+      { chatId: "chat-1", mode: "pull-request", headRef: "feature/x" },
+      undefined,
+      "git-attempt-123",
+    );
+    await refreshGitChangeScope("chat-1", "rel-1", undefined, "git-attempt-123");
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe("git-attempt-123");
+      expect(init.body).not.toContain("git-attempt-123");
+    }
+  });
+
   it("posts the exact comparison request and returns the validated connected scope", async () => {
     const fetchMock = vi
       .fn()
@@ -4923,7 +5180,7 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/approve-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
-    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe(
       "ui-git-change-approve-correlation",
     );
   });
@@ -4946,7 +5203,7 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/review-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
-    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe(
       "ui-git-change-review-correlation",
     );
   });
@@ -4967,7 +5224,7 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/apply-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
-    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe(
       "ui-git-change-apply-correlation",
     );
   });

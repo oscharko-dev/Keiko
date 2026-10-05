@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { isGroundingScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { errorBody } from "../route-error.js";
+import type { RouteResult } from "../routes.js";
 import type {
   Chat,
   ChatConnectedScope,
@@ -105,4 +108,35 @@ function canonicalGroundingScope(chat: Chat): string {
 
 export function deriveChatGroundingScopeIdentity(chat: Chat): string {
   return `gsi-v1:${createHash("sha256").update(canonicalGroundingScope(chat)).digest("hex")}`;
+}
+
+/** Shared HTTP-boundary parser; no route dispatcher or chat runtime dependency. */
+export function parseExpectedGroundingScopeIdentity(
+  value: unknown,
+): string | RouteResult | undefined {
+  if (value === undefined) return undefined;
+  return isGroundingScopeIdentity(value)
+    ? value
+    : {
+        status: 400,
+        body: errorBody(
+          "BAD_REQUEST",
+          "expectedGroundingScopeIdentity must be a valid server-issued identity.",
+        ),
+      };
+}
+
+export function chatGroundingSourceCounts(chat: Chat): {
+  readonly connectedSourceCount: number;
+  readonly localKnowledgeSourceCount: number;
+  readonly gitChangeSourceCount: number;
+} {
+  return {
+    connectedSourceCount: canonicalConnectedScopes(chat).length,
+    localKnowledgeSourceCount: deduplicateAndSort(
+      localKnowledgeScopes(chat).map(canonicalLocalKnowledgeScope),
+    ).length,
+    gitChangeSourceCount: deduplicateAndSort(gitChangeScopes(chat).map(canonicalGitChangeScope))
+      .length,
+  };
 }

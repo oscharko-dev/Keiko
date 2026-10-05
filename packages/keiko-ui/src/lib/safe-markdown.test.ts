@@ -12,6 +12,14 @@ describe("parseSafeMarkdown — paragraph", () => {
   });
 });
 
+describe("parseSafeMarkdown — raw reference identity", () => {
+  it("preserves soft newlines instead of inventing a different citation path", () => {
+    const source = "Evidence [src/\nprivate/status.ts:1-2].";
+    const nodes = parseSafeMarkdown(source);
+    expect(nodes[0]?.children?.[0]?.text).toBe(source);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 2. Headings H1–H6
 // ---------------------------------------------------------------------------

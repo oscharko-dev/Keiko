@@ -1,8 +1,14 @@
 "use client";
 
 import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
+import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -11,6 +17,14 @@ import {
 } from "react";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { FileIcon } from "./widgets/shared/projectTree";
+import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import type { ClientDiagnosticCitationActivation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
+
+import type { ChatConnectedScope } from "@/lib/types";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 
 export interface RepositoryReference {
   readonly label: string;
@@ -22,6 +36,7 @@ export interface RepositoryReference {
 export interface RepositoryReferenceRoot {
   readonly root: string;
   readonly label: string;
+  readonly scopeFingerprints?: readonly string[] | undefined;
 }
 
 export type OpenRepositoryReference = (request: OpenEditorFileRequest) => OpenEditorFileResult;
@@ -50,24 +65,37 @@ export interface RepositoryReferenceTextPart {
 //     bound is raised generously — to 1000 — so that no realistic repository path can ever reach
 //     the ceiling, while staying finite so the retry cost above stays a bounded constant and static
 //     analysis still recognizes the quantifier as bounded.
-const REPOSITORY_REFERENCE_SEGMENT = "[A-Za-z0-9_.-]{1,255}";
+const REPOSITORY_REFERENCE_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
 const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGMENT}\/){0,1000}${REPOSITORY_REFERENCE_SEGMENT}\.[A-Za-z0-9][A-Za-z0-9]{0,15}`;
+const REFERENCE_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
+function referenceLineRange(
+  capture: boolean,
+  afterColon = String.raw`[\u00a0\u202f]{0,64}`,
+): string {
+  const digits = capture ? String.raw`(\d{1,7})` : String.raw`\d{1,7}`;
+  // Nonbreaking typographic spacing belongs to a citation; ordinary ': 5 files' is prose.
+  return String.raw`${REFERENCE_HORIZONTAL_SPACE}:${afterColon}${digits}(?:${REFERENCE_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${REFERENCE_HORIZONTAL_SPACE}${digits})?`;
+}
+const REFERENCE_LINE_RANGE = referenceLineRange(true);
+const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:-(\d{1,7}))?)?`,
+  String.raw`\[[^\[\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
   "gu",
 );
-const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?::\d{1,7}(?:-\d{1,7})?)?`;
+// Exact/bracketed references have a known boundary, so their filenames may contain spaces or
+// other Unicode characters. The shared portable-path contract still owns path validity.
+const EXACT_REPOSITORY_REFERENCE_PATTERN = new RegExp(
+  String.raw`^@?([^:[\]\r\n]{1,4096}?)(?:${referenceLineRange(true, REFERENCE_HORIZONTAL_SPACE)})?$`,
+  "u",
+);
+const REPOSITORY_REFERENCE_SOURCE = `@?${REPOSITORY_REFERENCE_PATH_CORE}(?:${referenceLineRange(false)})?`;
 const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
   "giu",
 );
-// `[^\]]+` already allows whitespace, so a preceding `\s*` is redundant and only creates an
-// ambiguous split point between two quantified atoms that can consume the same characters
-// (S8786): with no closing bracket, the engine explores every way to divide a run of whitespace
-// between `\s*` and `[^\]]+`, which is quadratic. Dropping the redundant `\s*` matches the exact
-// same set of strings (proof: `\s* [^\]]+` requires >=1 total char, all drawn from `[^\]]`, which
-// is exactly what `[^\]]+` alone requires) while removing the ambiguity entirely.
-const SOURCE_LABEL_FRAGMENT = String.raw`\[source:[^\]]+\]`;
+// An unterminated label must stop at the next opening bracket. Otherwise every repeated
+// `[source:` prefix scans the entire remaining answer again, making streamed rendering quadratic.
+const SOURCE_LABEL_FRAGMENT = String.raw`\[source:[^\[\]]+\]`;
 const BRACKETED_REFERENCE_DUPLICATE_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]\s*(?:${SOURCE_LABEL_FRAGMENT}\s*)?(${REPOSITORY_REFERENCE_SOURCE})`,
   "giu",
@@ -135,14 +163,14 @@ const KNOWN_REPOSITORY_EXTENSIONS = new Set([
 
 function boundaryBefore(value: string, index: number): boolean {
   if (index <= 0) return true;
-  const previous = value[index - 1] ?? "";
-  return !/[A-Za-z0-9_./:@-]/u.test(previous);
+  const previous = value.slice(Math.max(0, index - 2), index);
+  return !/[\p{L}\p{N}\p{M}\p{Sc}_./:@+^~\x60-]$/u.test(previous);
 }
 
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
-  const next = value[index] ?? "";
-  return !/[A-Za-z0-9_/:+-]/u.test(next);
+  const next = value.slice(index, index + 2);
+  return !/^[\p{L}\p{N}\p{M}\p{Sc}_/:+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -179,13 +207,28 @@ function collapseDuplicateReferences(first: string, second: string, fallback: st
   return firstIdentity !== null && firstIdentity === secondIdentity ? first : fallback;
 }
 
-function tidyEvidenceText(source: string): string {
+function tidyEvidenceProse(source: string): string {
   // The first pass already collapses every run of 2+ space/tab characters down to a single " ",
   // so by the time the second pass runs, no two space/tab characters can ever be adjacent. The
   // trailing `+` in the second pass therefore only ever matches 0 or 1 characters in practice;
   // dropping it removes the unbounded-quantifier-next-to-a-group shape S8786 flags, with no
   // behavior change given that invariant.
   return source.replace(/[ \t]{2,}/gu, " ").replace(/[ \t]([,.;:!?])/gu, "$1");
+}
+
+function tidyEvidenceText(source: string): string {
+  // Keep bracket contents byte-for-byte: whitespace can be part of a real filename, and
+  // converting controls to spaces could invent a different valid citation path.
+  return source
+    .split(/(\[[^[\]]{1,4096}\])/gu)
+    .map((part) => (part.startsWith("[") && part.endsWith("]") ? part : tidyEvidenceProse(part)))
+    .join("");
+}
+
+function stripEvidenceSourceLabel(raw: string): string {
+  const contents = raw.slice(1, -1);
+  const value = contents.slice(contents.indexOf(":") + 1).trim();
+  return parseExactRepositoryReference(value, true) === null ? "" : raw;
 }
 
 // Grounded model answers sometimes echo evidence as:
@@ -198,28 +241,40 @@ export function sanitizeRepositoryEvidenceText(source: string): string {
       .replace(
         BRACKETED_REFERENCE_DUPLICATE_PATTERN,
         (raw: string, first: string, second: string) =>
-          collapseDuplicateReferences(first, second, raw.replace(SOURCE_LABEL_PATTERN, "")),
+          collapseDuplicateReferences(
+            first,
+            second,
+            raw.replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
+          ),
       )
       .replace(ADJACENT_REFERENCE_DUPLICATE_PATTERN, (raw: string, first: string, second: string) =>
-        collapseDuplicateReferences(first, second, raw.replace(SOURCE_LABEL_PATTERN, "")),
+        collapseDuplicateReferences(
+          first,
+          second,
+          raw.replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
+        ),
       )
       .replace(REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN, (raw: string, reference: string) =>
         parseExactRepositoryReference(reference) === null ? raw : reference,
       )
-      .replace(SOURCE_LABEL_PATTERN, ""),
+      .replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
+  );
+}
+
+function isSafeRawReferencePath(path: string): boolean {
+  return (
+    isPortableWorkspaceRelativePath(path) &&
+    stripUnsafeFormatChars(path) === path &&
+    !/\p{Cc}/u.test(path)
   );
 }
 
 function validRepositoryPath(path: string): boolean {
-  const normalized = normalizeReferencePath(path);
-  if (normalized.length === 0 || normalized !== path) return false;
-  if (normalized.startsWith(".") || normalized.includes("..")) return false;
-  if (!normalized.includes(".")) return false;
-  const segments = normalized.split("/");
-  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
-    return false;
-  }
-  const filename = segments.at(-1) ?? "";
+  if (!isSafeRawReferencePath(path)) return false;
+  if (/[*?{}<>|"]/u.test(path) || path.startsWith("$")) return false;
+  if (path.startsWith(".") || path.includes("..")) return false;
+  if (!path.includes(".")) return false;
+  const filename = path.split("/").at(-1) ?? "";
   const extension = filename.split(".").pop()?.toLowerCase() ?? "";
   return KNOWN_REPOSITORY_EXTENSIONS.has(extension);
 }
@@ -230,18 +285,51 @@ function parseLine(value: string | undefined): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function validMatchedLineRange(
+  match: RegExpExecArray,
+  start: number | undefined,
+  end: number | undefined,
+): boolean {
+  if (match[2] === undefined) return match[3] === undefined;
+  return start !== undefined && (match[3] === undefined || (end !== undefined && end >= start));
+}
+
+function hasExplanatoryReferenceSuffix(source: string, offset: number): boolean {
+  return /^[:\u2010-\u2014\u2212-][ \t\u00a0\u202f]{1,64}[^\d\s]/u.test(
+    source.slice(offset, offset + 131),
+  );
+}
+
+function incompleteReferenceLineSuffix(source: string, offset: number): boolean {
+  if (hasExplanatoryReferenceSuffix(source, offset)) return false;
+  const tail = source.slice(offset, offset + 131);
+  return (
+    /^[:\u2010-\u2014\u2212-]/u.test(tail) ||
+    /^[ \t\u00a0\u202f]{1,64}[:\u2010-\u2014\u2212-][ \t\u00a0\u202f]{0,64}\d/u.test(tail)
+  );
+}
+
+function validReferenceMatchBoundary(match: RegExpExecArray, source: string): boolean {
+  const end = match.index + match[0].length;
+  return (
+    boundaryBefore(source, match.index) &&
+    (boundaryAfter(source, end) ||
+      (match[2] !== undefined && hasExplanatoryReferenceSuffix(source, end))) &&
+    (match[2] === undefined || !incompleteReferenceLineSuffix(source, end))
+  );
+}
+
 function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryReference | null {
   const raw = match[0] ?? "";
-  const matchIndex = match.index;
-  if (!boundaryBefore(source, matchIndex) || !boundaryAfter(source, matchIndex + raw.length)) {
+  if (!validReferenceMatchBoundary(match, source)) {
     return null;
   }
-  const path = normalizeReferencePath(match[1] ?? "");
+  const path = match[1] ?? "";
   if (!validRepositoryPath(path)) return null;
   const lineStart = parseLine(match[2]);
   const rawLineEnd = parseLine(match[3]);
-  const lineEnd =
-    lineStart === undefined ? undefined : Math.max(lineStart, rawLineEnd ?? lineStart);
+  if (!validMatchedLineRange(match, lineStart, rawLineEnd)) return null;
+  const lineEnd = rawLineEnd ?? lineStart;
   return {
     label: raw,
     path,
@@ -250,21 +338,68 @@ function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryR
   };
 }
 
+function containsUnsafeBracketPath(contents: string): boolean {
+  return (
+    stripUnsafeFormatChars(contents) !== contents ||
+    /(?:^|[\s,])(?:\/|[A-Za-z]:\/|\.\.?\/)/u.test(contents) ||
+    /\/\.\.?\//u.test(contents)
+  );
+}
+
+function bracketReferenceParts(contents: string): readonly RepositoryReferenceTextPart[] {
+  if (containsUnsafeBracketPath(contents)) return [];
+  const members = contents.split(",");
+  const references = members.map((member) => parseExactRepositoryReference(member.trim(), true));
+  if (members.length > 1 && references.every((reference) => reference !== null)) {
+    return referenceParts(references);
+  }
+  // Only separators may contain line breaks; never invent a path by normalizing its controls.
+  if (/\p{Cc}/u.test(contents)) return [];
+  const reference = parseExactRepositoryReference(contents.trim(), true);
+  // An explicit, valid whole path owns its spaces. Prose-shaped filenames are still filenames;
+  // selecting a guessed suffix would silently change the navigation target.
+  if (reference !== null) return referenceParts([reference]);
+  const inline = repositoryReferenceTextParts(contents);
+  const inlineCount = inline.filter((part) => part.kind === "reference").length;
+  if (inlineCount === 0) return [];
+  // Preserve prose around individually validated paths instead of treating it as a filename.
+  return [{ kind: "text", text: "[" }, ...inline, { kind: "text", text: "]" }];
+}
+
+function referencePartsFromTextMatch(
+  match: RegExpExecArray,
+  source: string,
+): readonly RepositoryReferenceTextPart[] {
+  const token = match[0] ?? "";
+  if (token.startsWith("[")) return bracketReferenceParts(token.slice(1, -1));
+  const reference = referenceFromMatch(match, source);
+  return reference === null ? [] : referenceParts([reference]);
+}
+
+function referenceParts(references: readonly RepositoryReference[]): RepositoryReferenceTextPart[] {
+  const parts: RepositoryReferenceTextPart[] = [];
+  for (const reference of references) {
+    if (parts.length > 0) parts.push({ kind: "text", text: ", " });
+    parts.push({ kind: "reference", reference });
+  }
+  return parts;
+}
+
 export function repositoryReferenceTextParts(
   source: string,
 ): readonly RepositoryReferenceTextPart[] {
   const parts: RepositoryReferenceTextPart[] = [];
   let lastIndex = 0;
-  REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
+  const pattern = new RegExp(REPOSITORY_REFERENCE_PATTERN);
   for (;;) {
-    const match = REPOSITORY_REFERENCE_PATTERN.exec(source);
+    const match = pattern.exec(source);
     if (match === null) break;
-    const reference = referenceFromMatch(match, source);
-    if (reference === null) continue;
+    const references = referencePartsFromTextMatch(match, source);
+    if (references.length === 0) continue;
     if (match.index > lastIndex) {
       parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
     }
-    parts.push({ kind: "reference", reference });
+    parts.push(...references);
     lastIndex = match.index + (match[0]?.length ?? 0);
   }
   if (lastIndex === 0) return [{ kind: "text", text: source }];
@@ -272,13 +407,34 @@ export function repositoryReferenceTextParts(
   return parts;
 }
 
-export function parseExactRepositoryReference(source: string): RepositoryReference | null {
-  REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
-  const match = REPOSITORY_REFERENCE_PATTERN.exec(source);
+export function parseExactRepositoryReference(
+  source: string,
+  allowSpaces = false,
+): RepositoryReference | null {
+  const match = EXACT_REPOSITORY_REFERENCE_PATTERN.exec(source);
   if (match?.index !== 0 || (match[0]?.length ?? 0) !== source.length) {
     return null;
   }
+  if (!allowSpaces && /\s/u.test(match[1] ?? "")) return null;
   return referenceFromMatch(match, source);
+}
+
+/** A line suffix must be immediately adjacent to the code-wrapped path in the same text node. */
+export function consumeRepositoryReferenceLineSuffix(
+  path: string,
+  followingText: string,
+): { readonly reference: RepositoryReference; readonly length: number } | undefined {
+  const match = FOLLOWING_REFERENCE_LINE_RANGE.exec(followingText);
+  if (match === null) return undefined;
+  if (
+    !boundaryAfter(followingText, match[0].length) &&
+    !hasExplanatoryReferenceSuffix(followingText, match[0].length)
+  )
+    return undefined;
+  if (incompleteReferenceLineSuffix(followingText, match[0].length)) return undefined;
+  const reference = parseExactRepositoryReference(`${path}${match[0]}`, true);
+  if (reference?.lineStart === undefined) return undefined;
+  return { reference, length: match[0].length };
 }
 
 export function repositoryRootLabel(root: string): string {
@@ -301,16 +457,130 @@ export function repositoryReferenceRoots(
   return out;
 }
 
-function referenceRangeLabel(reference: RepositoryReference): string {
-  if (reference.lineStart === undefined) return "";
-  if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
-    return ` at line ${String(reference.lineStart)}`;
+export function repositoryReferenceRootsForScopes(
+  scopes: readonly ChatConnectedScope[],
+  fallbackRoot: string,
+): readonly RepositoryReferenceRoot[] {
+  const roots = new Map<string, { root: string; label: string; scopeFingerprints: string[] }>();
+  for (const scope of scopes) {
+    const root = scope.root ?? fallbackRoot;
+    if (root.length === 0) continue;
+    const option = roots.get(root) ?? {
+      root,
+      label: repositoryRootLabel(root),
+      scopeFingerprints: [],
+    };
+    const fingerprint = connectedScopeFingerprint({ ...scope, root });
+    if (!option.scopeFingerprints.includes(fingerprint)) {
+      option.scopeFingerprints.push(fingerprint);
+    }
+    roots.set(root, option);
   }
-  return ` at lines ${String(reference.lineStart)}-${String(reference.lineEnd)}`;
+  return [...roots.values()];
 }
 
-function referenceVisibleLabel(reference: RepositoryReference): string {
-  const fileName = reference.path.split("/").filter(Boolean).pop() ?? reference.path;
+function referenceRangeLabel(reference: RepositoryReference, t: I18nTranslate): string {
+  if (reference.lineStart === undefined) return "";
+  if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
+    return t("chat.repository.line", { start: reference.lineStart });
+  }
+  return t("chat.repository.lines", { start: reference.lineStart, end: reference.lineEnd });
+}
+
+interface ReferenceSuffixNode {
+  count: number;
+  readonly children: Map<string, ReferenceSuffixNode>;
+}
+
+function insertReferenceSuffix(root: ReferenceSuffixNode, parts: readonly string[]): void {
+  let node = root;
+  const reversedParts = [...parts];
+  reversedParts.reverse();
+  for (const part of reversedParts) {
+    const child = node.children.get(part) ?? {
+      count: 0,
+      children: new Map<string, ReferenceSuffixNode>(),
+    };
+    child.count += 1;
+    node.children.set(part, child);
+    node = child;
+  }
+}
+
+function shortestReferenceSuffix(root: ReferenceSuffixNode, parts: readonly string[]): string {
+  let node: ReferenceSuffixNode | undefined = root;
+  const suffix: string[] = [];
+  for (const part of [...parts].reverse()) {
+    suffix.push(part);
+    node = node?.children.get(part);
+    if (node === undefined || node.count === 1) break;
+  }
+  suffix.reverse();
+  return suffix.join("/");
+}
+
+// A reversed segment trie finds the shortest distinct suffix in linear work over source paths.
+// Repeated line references to the same path do not make that file ambiguous.
+export function repositoryReferencePathLabels(
+  paths: readonly string[],
+): ReadonlyMap<string, string> {
+  const visibleByPath = new Map(
+    [...new Set(paths)].map((path) => [path, referenceLabelPath(path, false)]),
+  );
+  const visibleCounts = new Map<string, number>();
+  for (const visible of visibleByPath.values()) {
+    visibleCounts.set(visible, (visibleCounts.get(visible) ?? 0) + 1);
+  }
+  const partsByPath = new Map(
+    [...visibleByPath].map(([path, visible]) => [path, visible.split("/")]),
+  );
+  const root: ReferenceSuffixNode = { count: 0, children: new Map() };
+  for (const parts of partsByPath.values()) insertReferenceSuffix(root, parts);
+  return new Map(
+    [...partsByPath].map(([path, parts]) => [
+      path,
+      (visibleCounts.get(visibleByPath.get(path) ?? "") ?? 0) > 1
+        ? escapedUnsafeReferencePath(path)
+        : shortestReferenceSuffix(root, parts),
+    ]),
+  );
+}
+
+function escapedUnsafeReferencePath(path: string): string {
+  return referenceLabelPath(path, true);
+}
+
+function referenceLabelCharacter(character: string, includeUnsafe: boolean): string {
+  const reserved = character === "⟦" || character === "⟧";
+  const unsafe =
+    includeUnsafe && (stripUnsafeFormatChars(character) !== character || /\p{Cc}/u.test(character));
+  if (!reserved && !unsafe) return character;
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) throw new TypeError("Missing reference label code point");
+  return `⟦U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}⟧`;
+}
+
+function referenceLabelPath(path: string, includeUnsafe: boolean): string {
+  return repositoryReferenceDisplayPath(
+    Array.from(path, (character): string => referenceLabelCharacter(character, includeUnsafe)).join(
+      "",
+    ),
+  );
+}
+
+export function repositoryReferenceDisplayPath(path: string): string {
+  return stripUnsafeFormatChars(path)
+    .replaceAll("\t", "␉")
+    .replaceAll("\r", "␍")
+    .replaceAll("\n", "␊");
+}
+
+function referenceVisibleLabel(reference: RepositoryReference, displayPath?: string): string {
+  const parts = reference.path.split("/");
+  parts.reverse();
+  const fileName = repositoryReferenceDisplayPath(
+    displayPath ?? parts.find(Boolean) ?? reference.path,
+  );
   if (reference.lineStart === undefined) return fileName;
   if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
     return `${fileName}:${String(reference.lineStart)}`;
@@ -373,6 +643,37 @@ interface RepositoryReferenceInlineProps {
   readonly roots: readonly RepositoryReferenceRoot[];
   readonly openReference: OpenRepositoryReference | undefined;
   readonly className?: string | undefined;
+  readonly displayPath?: string | undefined;
+  readonly sourceLabel?: string | undefined;
+  readonly requireRootChoice?: boolean | undefined;
+  readonly rootRelative?: boolean | undefined;
+  readonly citationActivation?: Omit<ClientDiagnosticCitationActivation, "outcome"> | undefined;
+}
+
+function sourceChoicePath(
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): string | undefined {
+  const sameLabel = roots.filter((candidate) => candidate.label === root.label).length > 1;
+  if (sameLabel) return repositoryReferenceDisplayPath(root.root);
+  const suffix = repositoryRootSuffix(root.root);
+  return suffix === root.label ? undefined : suffix;
+}
+
+function sourceChoiceLabel(
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): string {
+  const detail = sourceChoicePath(root, roots);
+  return detail === undefined ? root.label : `${root.label} · ${detail}`;
+}
+
+function sourceChoiceDetail(
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): ReactNode {
+  const detail = sourceChoicePath(root, roots);
+  return detail === undefined ? null : <span className="repo-ref-root-path">{detail}</span>;
 }
 
 const OPENED_CONFIRMATION_MS = 1800;
@@ -382,7 +683,12 @@ const OPENED_CONFIRMATION_MS = 1800;
 // timer was a latent race: a test file finishing inside the delay let it fire after jsdom was torn
 // down, React threw "window is not defined", and the required keiko-ui coverage job went red on a
 // pull request that had not touched this file (#3573).
-function useClearedTimeout(callback: () => void): (delayMs: number) => void {
+interface ClearedTimeout {
+  readonly schedule: (delayMs: number) => void;
+  readonly clear: () => void;
+}
+
+function useClearedTimeout(callback: () => void): ClearedTimeout {
   const timerRef = useRef<number | undefined>(undefined);
   const clear = useCallback((): void => {
     if (timerRef.current === undefined) return;
@@ -390,7 +696,7 @@ function useClearedTimeout(callback: () => void): (delayMs: number) => void {
     timerRef.current = undefined;
   }, []);
   useEffect(() => clear, [clear]);
-  return useCallback(
+  const schedule = useCallback(
     (delayMs: number): void => {
       clear();
       timerRef.current = window.setTimeout(() => {
@@ -400,6 +706,23 @@ function useClearedTimeout(callback: () => void): (delayMs: number) => void {
     },
     [callback, clear],
   );
+  return { schedule, clear };
+}
+
+function referenceAccessiblePath(
+  path: string,
+  sourceLabel: string | undefined,
+  visibleLabel: string | undefined,
+): string {
+  let displayPath = repositoryReferenceDisplayPath(path);
+  if (stripUnsafeFormatChars(path) !== path && visibleLabel !== undefined) {
+    const safeLabel = repositoryReferenceDisplayPath(visibleLabel);
+    if (safeLabel !== displayPath && !displayPath.endsWith(`/${safeLabel}`))
+      displayPath += ` · ${safeLabel}`;
+  }
+  return sourceLabel === undefined
+    ? displayPath
+    : `${repositoryReferenceDisplayPath(sourceLabel)} · ${displayPath}`;
 }
 
 export function RepositoryReferenceInline({
@@ -407,7 +730,28 @@ export function RepositoryReferenceInline({
   roots,
   openReference,
   className = "repo-ref-link",
+  displayPath,
+  sourceLabel,
+  requireRootChoice = false,
+  rootRelative,
+  citationActivation,
 }: RepositoryReferenceInlineProps): ReactNode {
+  const t = useTranslate();
+  const pickerId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const pickerRef = useRef<HTMLSpanElement>(null);
+  const activationCorrelation = useRef<string | undefined>(undefined);
+  const recordActivation = useCallback(
+    (outcome: ClientDiagnosticCitationActivation["outcome"]): void => {
+      if (citationActivation === undefined) return;
+      activationCorrelation.current ??= newClientCorrelationId();
+      reportClientDiagnostic("[keiko] citation activation settled", {
+        correlationId: activationCorrelation.current,
+        citationActivation: { ...citationActivation, outcome },
+      });
+    },
+    [citationActivation],
+  );
   const [status, setStatus] = useState<"idle" | "choosing" | "opening" | "opened" | "failed">(
     "idle",
   );
@@ -416,7 +760,7 @@ export function RepositoryReferenceInline({
     setStatus("idle");
     setMessage("");
   }, []);
-  const scheduleIdleReset = useClearedTimeout(resetToIdle);
+  const { schedule: scheduleIdleReset, clear: clearIdleReset } = useClearedTimeout(resetToIdle);
   const rootOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: RepositoryReferenceRoot[] = [];
@@ -433,8 +777,11 @@ export function RepositoryReferenceInline({
     return out;
   }, [roots]);
   const rankedRootOptions = useMemo(
-    () => rankedRootsForReference(reference, rootOptions),
-    [reference, rootOptions],
+    () =>
+      requireRootChoice || rootRelative
+        ? rootOptions.map((root) => ({ ...root, openPath: normalizeReferencePath(reference.path) }))
+        : rankedRootsForReference(reference, rootOptions),
+    [reference, requireRootChoice, rootOptions, rootRelative],
   );
   const bestRootOptions = useMemo(() => {
     const best = rankedRootOptions[0];
@@ -445,9 +792,11 @@ export function RepositoryReferenceInline({
   const openForRoot = useCallback(
     (root: RankedRepositoryRoot): void => {
       if (openReference === undefined) return;
+      clearIdleReset();
+      if (pickerRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
       const path = root.openPath;
       setStatus("opening");
-      setMessage(`Opening ${path}…`);
+      setMessage(t("chat.repository.opening", { path: repositoryReferenceDisplayPath(path) }));
       const result = openReference({
         root: root.root,
         path,
@@ -455,87 +804,129 @@ export function RepositoryReferenceInline({
         ...(reference.lineEnd === undefined ? {} : { lineEnd: reference.lineEnd }),
       });
       if (result.ok) {
+        recordActivation("opened");
         setStatus("opened");
-        setMessage(`Opened ${path} in editor.`);
+        setMessage(t("chat.repository.opened", { path: repositoryReferenceDisplayPath(path) }));
         scheduleIdleReset(OPENED_CONFIRMATION_MS);
         return;
       }
+      recordActivation("open-refused");
       setStatus("failed");
       setMessage(result.message);
     },
-    [openReference, reference, scheduleIdleReset],
+    [clearIdleReset, openReference, recordActivation, reference, scheduleIdleReset, t],
   );
 
   const activate = useCallback((): void => {
+    clearIdleReset();
+    if (status !== "choosing") activationCorrelation.current = undefined;
     if (openReference === undefined || rootOptions.length === 0) {
       setStatus("failed");
-      setMessage("Connect a Files window to open repository references.");
+      setMessage(t("chat.repository.connectFirst"));
+      recordActivation("refused");
       return;
     }
     if (rankedRootOptions.length === 0) {
       setStatus("failed");
-      setMessage("This repository reference does not match any connected source.");
+      setMessage(t("chat.repository.sourceMismatch"));
+      recordActivation("refused");
       return;
     }
-    if (bestRootOptions.length === 1) {
+    if (bestRootOptions.length === 1 && !requireRootChoice) {
       const root = bestRootOptions[0];
       if (root !== undefined) openForRoot(root);
       return;
     }
+    recordActivation(status === "choosing" ? "picker-dismissed" : "picker-opened");
     setStatus((current) => (current === "choosing" ? "idle" : "choosing"));
-    setMessage("Select a repository source.");
-  }, [bestRootOptions, openForRoot, openReference, rankedRootOptions.length, rootOptions.length]);
+    setMessage(t("chat.repository.chooseSource"));
+  }, [
+    bestRootOptions,
+    clearIdleReset,
+    openForRoot,
+    openReference,
+    rankedRootOptions.length,
+    recordActivation,
+    status,
+    requireRootChoice,
+    rootOptions.length,
+    t,
+  ]);
+
+  const dismissOnEscape = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>): void => {
+      if (event.key !== "Escape" || status === "idle") return;
+      if (status === "choosing") {
+        event.preventDefault();
+        event.stopPropagation();
+        recordActivation("picker-dismissed");
+      }
+      clearIdleReset();
+      resetToIdle();
+      triggerRef.current?.focus();
+    },
+    [clearIdleReset, recordActivation, resetToIdle, status],
+  );
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
-      if (event.key === "Escape") {
-        setStatus("idle");
-        setMessage("");
-        return;
-      }
+      if (event.key === "Escape") return dismissOnEscape(event);
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         activate();
       }
     },
-    [activate],
+    [activate, dismissOnEscape],
   );
 
   if (openReference === undefined) {
-    return <span title={reference.label}>{referenceVisibleLabel(reference)}</span>;
+    return (
+      <span title={repositoryReferenceDisplayPath(reference.label)}>
+        {referenceVisibleLabel(reference, displayPath)}
+      </span>
+    );
   }
 
   const alert = status === "failed";
   return (
     <span className="repo-ref">
       <button
+        ref={triggerRef}
         type="button"
         className={className}
-        aria-label={`Open ${reference.path}${referenceRangeLabel(reference)} in editor`}
-        aria-expanded={bestRootOptions.length > 1 ? status === "choosing" : undefined}
+        aria-label={t("chat.repository.openInEditor", {
+          path: referenceAccessiblePath(reference.path, sourceLabel, displayPath),
+          range: referenceRangeLabel(reference, t),
+        })}
+        aria-expanded={
+          bestRootOptions.length > 1 || requireRootChoice ? status === "choosing" : undefined
+        }
+        aria-controls={status === "choosing" ? pickerId : undefined}
         data-state={status}
-        title={reference.label}
+        title={repositoryReferenceDisplayPath(reference.label)}
         onClick={activate}
         onKeyDown={onKeyDown}
       >
         <span className="repo-ref-file-icon" aria-hidden="true">
           <FileIcon name={reference.path} />
         </span>
-        <span>{referenceVisibleLabel(reference)}</span>
+        <span>{referenceVisibleLabel(reference, displayPath)}</span>
       </button>
       {status === "choosing" ? (
-        <span className="repo-ref-picker" role="dialog" aria-label="Select repository source">
+        <span ref={pickerRef} id={pickerId} className="repo-ref-picker">
           {bestRootOptions.map((root) => (
             <button
               key={root.root}
               type="button"
               className="repo-ref-root"
+              aria-label={t("chat.repository.selectSource", {
+                label: sourceChoiceLabel(root, bestRootOptions),
+              })}
               onClick={() => openForRoot(root)}
+              onKeyDown={dismissOnEscape}
             >
               <span>{root.label}</span>
-              {repositoryRootSuffix(root.root) === root.label ? null : (
-                <span className="repo-ref-root-path">{repositoryRootSuffix(root.root)}</span>
-              )}
+              {sourceChoiceDetail(root, bestRootOptions)}
             </button>
           ))}
         </span>

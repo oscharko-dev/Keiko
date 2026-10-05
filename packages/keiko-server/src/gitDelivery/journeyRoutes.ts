@@ -239,6 +239,7 @@ const JOURNEY_READINESS_REFRESHED_OPERATION = defineActivityLogOperation({
     ...JOURNEY_ERROR_FIELDS,
   },
   lifecycle: "state",
+  diagnosticWhen: [{ field: "store", values: ["unavailable"] }],
   failureClasses: ["git-journey-readiness"],
   proofIds: ["git.journey-readiness.refreshed.emitted-line"],
 });

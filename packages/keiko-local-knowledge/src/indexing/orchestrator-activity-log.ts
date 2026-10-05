@@ -314,6 +314,12 @@ const SOURCE_COMPLETED_OPERATION = defineActivityLogOperation({
       required: true,
     },
   },
+  diagnosticWhen: [
+    { field: "failedCount", positive: true },
+    { field: "walkCompleted", values: [false] },
+    { field: "cancelled", values: [true] },
+    { field: "sawScopeError", values: [true] },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

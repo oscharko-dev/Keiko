@@ -235,7 +235,8 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: true,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="queued"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Submitting your message…");
   });
 
@@ -248,7 +249,8 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: false,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="cancelled"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Response cancelled.");
   });
 
@@ -261,10 +263,11 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: true,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="contacting"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toBeInTheDocument();
-    expect(status).toHaveTextContent("Contacting model…");
-    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status).toHaveTextContent("Preparing response…");
+    expect(status).toHaveAttribute("aria-live", "polite");
   });
 
   it("renders the streaming label for non-streaming-style waits → AC#4 stable wait still maps to a polite announcement", () => {
@@ -276,7 +279,8 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: true,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="streaming"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Receiving response…");
   });
 
@@ -455,7 +459,7 @@ describe("sendStatusLabel (Issue #152 — no fake progress percentages)", () => 
 
   it("returns a stable, human label for every in-flight lifecycle state", () => {
     expect(sendStatusLabel("queued")).toBe("Submitting your message…");
-    expect(sendStatusLabel("contacting")).toBe("Contacting model…");
+    expect(sendStatusLabel("contacting")).toBe("Preparing response…");
     expect(sendStatusLabel("streaming")).toBe("Receiving response…");
     expect(sendStatusLabel("cancelled")).toBe("Response cancelled.");
   });
@@ -1432,28 +1436,32 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
       reports.push(meta);
     });
     try {
-      vi.spyOn(api, "sendDesktopChatStream").mockImplementation((): Promise<void> => {
-        const stalled = new api.ApiError(
-          "DESKTOP_CHAT_STREAM_STALLED",
-          "The connection to Keiko stopped delivering the answer. Retry the request.",
-          504,
-        );
-        stalled.correlationId = "ui_stream-stall-0001";
-        return Promise.reject(stalled);
-      });
+      vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+        (_input, _signal, handlers): Promise<void> => {
+          handlers.onStarted?.("ui_stream-stall-0001");
+          const stalled = new api.ApiError(
+            "DESKTOP_CHAT_STREAM_STALLED",
+            "The connection to Keiko stopped delivering the answer. Retry the request.",
+            504,
+          );
+          stalled.correlationId = "ui_stream-stall-0001";
+          return Promise.reject(stalled);
+        },
+      );
       const view = await bootStreamingHook();
       act(() => view.result.current.setDraft("hello"));
       await act(async () => {
         await view.result.current.sendMessage();
       });
       expect(view.result.current.sendStatus).toBe("failed");
-      expect(reports).toContainEqual(
-        expect.objectContaining({
+      expect(reports).toEqual([
+        {
           kind: "sse-error",
           errorKind: "timeout",
           correlationId: "ui_stream-stall-0001",
-        }),
-      );
+          errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+        },
+      ]);
     } finally {
       resetClientDiagnosticWriter();
     }

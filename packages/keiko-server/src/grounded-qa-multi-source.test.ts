@@ -4,10 +4,12 @@
 // scope must produce the same answer shape as the legacy single-source runner — is asserted by
 // routing one scope through both seams and comparing the wire object minus volatile ids.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -20,6 +22,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCounts,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
@@ -32,15 +35,20 @@ import type {
 
 import {
   buildAnswerCitations,
+  buildSelectedScopeFrom,
   handleGroundedAsk,
+  modelWindowAwareBudget,
+  withPromptExcerptByteLimit,
   promptByteLength,
   type GroundedRunner,
   type MultiSourceSeam,
 } from "./grounded-qa.js";
+import { GROUNDED_PACK_VALIDATION_MESSAGE } from "./grounded-pack-validation.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   buildLabeledAnswerCitations,
+  groundedSourceScopeFingerprint,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
   fittedMultiSourcePrompt,
@@ -50,6 +58,7 @@ import {
   sourceLabels,
   splitExplorationBudget,
   splitExplorationBudgets,
+  type LabeledPack,
   type GroundedRetriever,
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
@@ -59,13 +68,19 @@ import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.j
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { adoptReportedContextWindow } from "./gateway-context-window.js";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  closeFileServerLogSinks,
+  createServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
@@ -256,26 +271,12 @@ function coverageDiagnostics(
 function budgetSum(
   budgets: readonly ConnectedContextPack["budget"][],
 ): ConnectedContextPack["budget"] {
-  return budgets.reduce(
-    (acc, budget) => ({
-      searchCallsMax: acc.searchCallsMax + budget.searchCallsMax,
-      filesReadMax: acc.filesReadMax + budget.filesReadMax,
-      excerptBytesMax: acc.excerptBytesMax + budget.excerptBytesMax,
-      modelInputTokensMax: acc.modelInputTokensMax + budget.modelInputTokensMax,
-      modelOutputTokensMax: acc.modelOutputTokensMax + budget.modelOutputTokensMax,
-      elapsedMsMax: acc.elapsedMsMax + budget.elapsedMsMax,
-      rerankCallsMax: acc.rerankCallsMax + budget.rerankCallsMax,
+  return mergeContextPackSummaries(
+    budgets.map((budget, index) => {
+      const pack = { ...scopePack("src/fixture.ts", 1, String(index)), budget };
+      return buildGroundedAnswerContextPackSummary(pack, 1, 0);
     }),
-    {
-      searchCallsMax: 0,
-      filesReadMax: 0,
-      excerptBytesMax: 0,
-      modelInputTokensMax: 0,
-      modelOutputTokensMax: 0,
-      elapsedMsMax: 0,
-      rerankCallsMax: 0,
-    },
-  );
+  ).budget;
 }
 
 // Retriever that returns a distinct pack per source, keyed by the source's first relativePath, so
@@ -286,6 +287,24 @@ function packPerScope(byPath: ReadonlyMap<string, ConnectedContextPack>): Ground
     const pack = byPath.get(key);
     if (pack === undefined) throw new Error(`no fixture pack for ${key}`);
     return Promise.resolve({ pack, elapsedMs: 11, plan: { state: "ready" } as never });
+  };
+}
+
+function concurrentTimedRetriever(clock: { now: number }): GroundedRetriever {
+  const ready = deferred<boolean>();
+  let started = 0;
+  return async (input) => {
+    started += 1;
+    if (started === 2) {
+      clock.now += 1_000;
+      ready.resolve(true);
+    }
+    await ready.promise;
+    return {
+      pack: scopePack(input.scope.relativePaths[0] ?? "src/fallback.ts", 0.8, "evidence"),
+      elapsedMs: 1_000,
+      plan: { state: "ready" } as never,
+    };
   };
 }
 
@@ -311,6 +330,44 @@ function tempRoot(name: string): string {
   const root = join(tmp, name);
   mkdirSync(root, { recursive: true });
   return root;
+}
+
+function aliasRelativePaths(kind: ChatConnectedScope["kind"], index: number): readonly string[] {
+  if (kind === "workspace-root") return [];
+  return kind === "files" ? [index === 0 ? "src/a.ts" : "src/b.ts"] : ["src"];
+}
+
+function modelBudgetDeps(configured: boolean): UiHandlerDeps {
+  if (!configured) return recordingDeps([]);
+  return recordingDeps([], {
+    configPresent: true,
+    config: parseGatewayConfig({
+      providers: [
+        {
+          modelId: CHAT_MODEL,
+          baseUrl: "https://provider.example.invalid/v1",
+          apiKey: "fixture-only-key",
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+      capabilities: [
+        { ...assumedChatCapability(CHAT_MODEL), contextWindow: 128_000, maxOutputTokens: 8_000 },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+    }),
+  });
+}
+
+function budgetReflectingRetriever(observed: ConnectedContextPack["budget"][]): GroundedRetriever {
+  return (input) => {
+    if (input.budget === undefined) throw new Error("Expected an allocated source budget");
+    observed.push(input.budget);
+    const path = input.scope.relativePaths[0] ?? "src/fallback.ts";
+    const pack = { ...scopePack(path, 0.8, path), budget: input.budget };
+    return Promise.resolve({ pack, elapsedMs: 1, plan: { state: "ready" } as never });
+  };
 }
 
 beforeEach(() => {
@@ -370,8 +427,9 @@ describe("splitExplorationBudget", () => {
 
     expect(budgets).toHaveLength(3);
     expect(budgetSum(budgets)).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
-    expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
-    expect(budgets[1]?.filesReadMax).toBeGreaterThanOrEqual(budgets[2]?.filesReadMax ?? 0);
+    expect(budgets.every((budget) => budget.filesReadMax === null)).toBe(true);
+    expect(budgets[0]?.excerptBytesMax).toBeGreaterThan(budgets[1]?.excerptBytesMax ?? 0);
+    expect(budgets[1]?.excerptBytesMax).toBeGreaterThanOrEqual(budgets[2]?.excerptBytesMax ?? 0);
     expect(budgets.filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(1);
   });
 
@@ -379,13 +437,18 @@ describe("splitExplorationBudget", () => {
     const base = { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 };
     const budgets = splitExplorationBudgets(base, scopes, query);
     expect(budgetSum(budgets).filesReadMax).toBe(1);
-    expect(budgets.filter((budget) => budget.filesReadMax > 0)).toHaveLength(1);
+    expect(
+      budgets.filter((budget) => budget.filesReadMax !== null && budget.filesReadMax > 0),
+    ).toHaveLength(1);
   });
 
   it("keeps the legacy equal split helper deterministic", () => {
     const split = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, 3);
     expect(split.searchCallsMax).toBe(6);
-    expect(split.filesReadMax).toBe(11);
+    expect(split.filesReadMax).toBeNull();
+    expect(
+      splitExplorationBudget({ ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 }, 3).filesReadMax,
+    ).toBe(11);
   });
 });
 
@@ -410,7 +473,8 @@ describe("splitExplorationBudgets", () => {
 
     expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
     expect(budgets[0]?.searchCallsMax).toBeGreaterThan(budgets[2]?.searchCallsMax ?? 0);
-    expect(budgets.reduce((sum, budget) => sum + budget.filesReadMax, 0)).toBe(30);
+    expect(budgets.every((budget) => budget.filesReadMax !== null)).toBe(true);
+    expect(budgets.reduce((sum, budget) => sum + (budget.filesReadMax ?? 0), 0)).toBe(30);
   });
 });
 
@@ -467,12 +531,90 @@ describe("buildConnectedScopes", () => {
 });
 
 describe("buildMultiSourceGatewayMessages", () => {
+  it("attributes unavailable counts and original line offsets to the correct source", () => {
+    const base = scopePack("handbook/service.html", 1, "first");
+    const first: ConnectedContextPack = {
+      ...base,
+      files: base.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          atom: { ...excerpt.atom, lineRange: { startLine: 182, endLine: 182 } },
+          content: "Maintenance: 731 hours.",
+        })),
+      })),
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "tool-unavailable": 3 },
+    };
+    const messages = buildMultiSourceGatewayMessages(
+      "Document the intervals",
+      [
+        { label: "manuals", pack: first },
+        { label: "app", pack: scopePack("src/app.ts", 1, "second") },
+      ],
+      buildRedactor({}),
+    );
+    const [manuals, app] = (messages[1]?.content ?? "").split("### Source 2");
+    expect(manuals).toContain("182 | Maintenance: 731 hours.");
+    expect(manuals).toContain("- tool-unavailable: 3");
+    expect(manuals).toContain("Candidate file evidence unavailable for reading/retrieval: 3.");
+    expect(app).not.toContain("tool-unavailable: 3");
+    expect(app).not.toContain("Candidate file evidence unavailable");
+  });
+  it("keeps exact aggregate omission counts attributed to their own source", () => {
+    const first: ConnectedContextPack = {
+      ...scopePack("src/a.ts", 1, "first"),
+      omitted: [{ scopePath: "manuals/above.txt", reason: "size-exceeded", omittedAtMs: NOW }],
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "size-exceeded": 5000 },
+    };
+    const messages = buildMultiSourceGatewayMessages(
+      "Explain size exclusions",
+      [
+        { label: "handbook", pack: first },
+        { label: "app", pack: scopePack("src/b.ts", 1, "second") },
+      ],
+      buildRedactor({}),
+    );
+    const prompt = messages[1]?.content ?? "";
+    const [handbook, app] = prompt.split("### Source 2");
+    expect(handbook).toContain("omitted files: 5000");
+    expect(handbook).toContain("Files excluded by file-size policy: 5000");
+    expect(handbook).toContain("Additional excluded paths not listed: 4999");
+    expect(app).not.toContain("5000");
+    const summary = mergeContextPackSummaries([
+      buildGroundedAnswerContextPackSummary(first, 1, 0),
+      buildGroundedAnswerContextPackSummary(scopePack("src/b.ts", 1, "second"), 1, 0),
+    ]);
+    expect(summary.omittedCount).toBe(5001);
+    expect(summary.omittedCounts["size-exceeded"]).toBe(5000);
+  });
+
+  it("keeps size-exclusion metadata inside its source and redacts sensitive path text", () => {
+    const secret = "tenantcredentialvalue987";
+    const first: ConnectedContextPack = {
+      ...scopePack("src/a.ts", 1, "first"),
+      omitted: [{ scopePath: `manuals/${secret}.html`, reason: "size-exceeded", omittedAtMs: NOW }],
+    };
+    const messages = buildMultiSourceGatewayMessages(
+      "Which files exceeded the text size limit?",
+      [
+        { label: "handbook", pack: first },
+        { label: "app", pack: scopePack("src/b.ts", 1, "second") },
+      ],
+      buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+    );
+    const prompt = messages[1]?.content ?? "";
+    expect(prompt).toContain("reason=size-exceeded");
+    expect(prompt).toContain("not file-content evidence");
+    expect(prompt).not.toContain(secret);
+    expect(prompt.indexOf("reason=size-exceeded")).toBeLessThan(prompt.indexOf("### Source 2"));
+  });
+
   it("prunes prompt-only excerpt content to fit the summed model input budget", () => {
     const packA = scopePack("src/a.ts", 0.3, "low");
     const packB = scopePack("src/b.ts", 0.9, "high");
     const [budgetedA, budgetedB] = [packA, packB].map((pack) => ({
       ...pack,
-      budget: { ...pack.budget, modelInputTokensMax: 512 },
+      budget: { ...pack.budget, modelInputTokensMax: 1024 },
       files: pack.files.map((file) => ({
         ...file,
         excerpts: file.excerpts.map((excerpt) => ({
@@ -490,7 +632,7 @@ describe("buildMultiSourceGatewayMessages", () => {
       ],
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(512 + 512));
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(1024 + 1024));
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
     expect(messages[1]?.content).toContain("[source:1|src/file.ts:10-20]");
@@ -590,6 +732,105 @@ describe("buildMultiSourceGatewayMessages", () => {
   });
 });
 
+function omissionHeavySources(): readonly LabeledPack[] {
+  return ["alpha", "beta"].map((label) => ({
+    label,
+    pack: {
+      ...scopePack(`src/${label}.ts`, 0.7, label),
+      omitted: Array.from({ length: 300 }, (_, index) => ({
+        scopePath: `manuals/${label}/${"section-".repeat(20)}${String(index)}.html`,
+        reason: "size-exceeded" as const,
+        omittedAtMs: NOW,
+      })),
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "size-exceeded": 300 },
+    },
+  }));
+}
+
+describe("multi-source minimal prompt admission", () => {
+  afterEach(resetServerLogger);
+
+  it.each([0, 16])("refuses zero-excerpt overhead above a %i token window", (budget) => {
+    const packs = omissionHeavySources().map((entry) => ({
+      ...entry,
+      pack: { ...entry.pack, files: [] },
+    }));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(() =>
+      fittedMultiSourcePrompt(
+        "Explain",
+        packs,
+        buildRedactor({}),
+        { modelInputTokensMax: budget },
+        "empty-overflow",
+      ),
+    ).toThrow(ContextOverflowError);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "empty-overflow",
+      extra: { state: "refused", referenceCount: 0, sentReferenceCount: 0, inputBudget: budget },
+    });
+  });
+
+  it("measures refused overhead with omitted paths removed and exact counts retained", () => {
+    const packs = omissionHeavySources();
+    const minimal = packs.map((entry) => ({
+      ...entry,
+      pack: { ...withPromptExcerptByteLimit(entry.pack, 0), omitted: [] },
+    }));
+    const expected = fittedMultiSourcePrompt("Explain", minimal, buildRedactor({}));
+    const expectedTokens = countGatewayPromptTokens({ messages: expected.messages });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(() =>
+      fittedMultiSourcePrompt(
+        "Explain",
+        packs,
+        buildRedactor({}),
+        { modelInputTokensMax: 16 },
+        "minimal-refusal",
+      ),
+    ).toThrow(ContextOverflowError);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "minimal-refusal",
+      extra: { state: "refused", promptTokens: expectedTokens, inputBudget: 16 },
+    });
+  });
+
+  it("distinguishes metadata-only reduction while preserving both evidence sources", () => {
+    const packs = omissionHeavySources();
+    const withoutPaths = packs.map((entry) => ({ ...entry, pack: { ...entry.pack, omitted: [] } }));
+    const baseline = fittedMultiSourcePrompt("Explain", withoutPaths, buildRedactor({}));
+    const inputBudget = countGatewayPromptTokens({ messages: baseline.messages }) + 100;
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fitted = fittedMultiSourcePrompt(
+      "Explain",
+      packs,
+      buildRedactor({}),
+      { modelInputTokensMax: inputBudget },
+      "metadata-fit",
+    );
+    expect(fitted.sentReferenceCount).toBe(2);
+    expect(countGatewayPromptTokens({ messages: fitted.messages })).toBeLessThanOrEqual(
+      inputBudget,
+    );
+    const prompt = fitted.messages[1]?.content ?? "";
+    expect(prompt).toContain("body of src/alpha.ts");
+    expect(prompt).toContain("body of src/beta.ts");
+    expect(prompt.match(/Files excluded by file-size policy: 300\./gu)).toHaveLength(2);
+    expect((prompt.match(/omitted path:/gu) ?? []).length).toBeLessThan(600);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "metadata-fit",
+      extra: { state: "metadata-trimmed", referenceCount: 2, sentReferenceCount: 2, inputBudget },
+    });
+    expectActivityLogProof(
+      "search.prompt.window-fitted.line",
+      formatActivityLogProofLine(sink.events.at(-1) ?? {}),
+    );
+  });
+});
+
 describe("mergeContextPackSummaries", () => {
   function laneCounts(
     overrides: Partial<Record<ContextLaneId, number>> = {},
@@ -624,7 +865,7 @@ describe("mergeContextPackSummaries", () => {
     const b = buildGroundedAnswerContextPackSummary(rootPack, 1, 13);
     const merged = mergeContextPackSummaries([a, b]);
     expect(merged.usage.searchCalls).toBe(a.usage.searchCalls + b.usage.searchCalls);
-    expect(merged.budget.filesReadMax).toBe(a.budget.filesReadMax + b.budget.filesReadMax);
+    expect(merged.budget.filesReadMax).toBeNull();
     expect(merged.citationCount).toBe(2);
     expect(merged.omittedCount).toBe(a.omittedCount + b.omittedCount);
     expect(merged.fileCount).toBe(-1);
@@ -731,6 +972,90 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it.each(["workspace-root", "directory", "files"] as const)(
+    "attributes %s citations to selected aliases while reads use the canonical root",
+    async (kind): Promise<void> => {
+      const canonicalRoot = tempRoot("canonical-source");
+      const scopes = ["FirstAlias", "second-alias"].map((name, index): ChatConnectedScope => {
+        const root = join(tmp, name);
+        symlinkSync(canonicalRoot, root, "dir");
+        return {
+          root,
+          kind,
+          relativePaths: aliasRelativePaths(kind, index),
+          connectedAtMs: NOW,
+        };
+      });
+      const chatId = makeChat(scopes);
+      const chat = store.findChatById(chatId);
+      if (chat === undefined) throw new TypeError("Missing alias fixture chat");
+      const observed: string[] = [];
+      const retriever: GroundedRetriever = (input) => {
+        observed.push(input.scope.workspaceRoot);
+        const path = observed.length === 1 ? "src/a.ts" : "src/b.ts";
+        return Promise.resolve({
+          pack: scopePack(path, 1, path),
+          elapsedMs: 1,
+          plan: { state: "ready" } as never,
+        });
+      };
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain both definitions" })),
+        recordingDeps([]),
+        undefined,
+        seam(
+          retriever,
+          constAnswerer("First [src/a.ts:1-5]. Second [src/b.ts:1-5].", { count: 0 }),
+        ),
+      );
+      expect(result.status).toBe(200);
+      expect(observed).toEqual([realpathSync(canonicalRoot), realpathSync(canonicalRoot)]);
+      expect(store.findChatById(chatId)?.connectedScopes).toEqual(scopes);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.citations.map((citation) => citation.sourceScopeFingerprint)).toEqual(
+        scopes.map((scope, index) =>
+          groundedSourceScopeFingerprint(
+            buildSelectedScopeFrom(chat, scope, `selected-${String(index)}`),
+          ),
+        ),
+      );
+      expect(
+        new Set(answer.citations.map((citation) => citation.sourceScopeFingerprint)).size,
+      ).toBe(2);
+    },
+  );
+
+  it.each([false, true])(
+    "projects the active model budget through two source allocations (configured=%s)",
+    async (configured): Promise<void> => {
+      const scopes: ChatConnectedScope[] = [
+        { kind: "directory", relativePaths: ["src/a.ts"], connectedAtMs: NOW, root: tempRoot("a") },
+        { kind: "directory", relativePaths: ["src/b.ts"], connectedAtMs: NOW, root: tempRoot("b") },
+      ];
+      const chat = store.findChatById(makeChat(scopes));
+      if (chat === undefined) throw new Error("Expected a fixture chat");
+      const deps = modelBudgetDeps(configured);
+      const expected = modelWindowAwareBudget(deps, CHAT_MODEL);
+      const observed: ConnectedContextPack["budget"][] = [];
+      const result = await runMultiSourceAsk({
+        chat,
+        scopes,
+        content: "Explain both files",
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps,
+        retriever: budgetReflectingRetriever(observed),
+        answerer: constAnswerer("The first file [src/a.ts:1-5].", { count: 0 }),
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe(200);
+      expect(observed).toHaveLength(2);
+      expect.soft(budgetSum(observed)).toEqual(expected);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.contextPack.budget).toEqual(expected);
+    },
+  );
+
   // PR #3678 review: a local window refusal reached the error mapping without the request's
   // correlation, so its structured diagnostic fell back to the unknown correlation.
   it("joins an answer overflow's diagnostic to the ask's correlation", async () => {
@@ -813,6 +1138,47 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(retrievalQueries.join("\n")).not.toContain("Prefer concise answers");
     expect(answerQuestion).toContain("Prefer concise answers");
   });
+
+  it.each([
+    ["Find CompletelyMissingSymbol", "No matching evidence was found for this search."],
+    ["Ist CompletelyMissingSymbol vorhanden?", "Keine passenden Belege für diese Suche gefunden."],
+  ])(
+    "localizes an empty multi-source search without calling the model: %s",
+    async (content, expected) => {
+      const scopes: ChatConnectedScope[] = ["src/a.ts", "src/b.ts"].map((path, index) => ({
+        kind: "directory",
+        relativePaths: [path],
+        connectedAtMs: NOW,
+        root: tempRoot(`empty-search-${String(index)}`),
+      }));
+      const chat = store.findChatById(makeChat(scopes));
+      if (chat === undefined) throw new TypeError("chat fixture missing");
+      const packs = new Map(
+        scopes.map((scope) => {
+          const path = scope.relativePaths[0] ?? "";
+          return [path, { ...scopePack(path, 0.5, path), files: [], omitted: [] }] as const;
+        }),
+      );
+      const result = await runMultiSourceAsk({
+        chat,
+        scopes,
+        content,
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps: recordingDeps([]),
+        retriever: packPerScope(packs),
+        answerer: () => {
+          throw new TypeError("empty search must not invoke the model");
+        },
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe(200);
+      const body = result.body as GroundedAnswer;
+      expect(body.content).toBe(expected);
+      expect(body.citations).toHaveLength(0);
+      expect(body.evidenceRunId).toBeUndefined();
+    },
+  );
 
   it("keeps a memory-only answer ungrounded when every source has no evidence", async () => {
     const scopes: ChatConnectedScope[] = [
@@ -1009,6 +1375,14 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(labels).toContain("api");
     expect(labels).toContain("web");
     expect(labels).not.toContain("gone");
+    const identities = answer.citations.map((citation) => citation.sourceScopeFingerprint);
+    expect(identities).toHaveLength(2);
+    expect(
+      identities.every(
+        (identity) => typeof identity === "string" && /^[0-9a-f]{64}$/u.test(identity),
+      ),
+    ).toBe(true);
+    expect(new Set(identities).size).toBe(2);
     const skippedClaims = answer.uncertainty
       .filter((u) => u.kind === "source-skipped")
       .map((u) => u.claim)
@@ -1062,42 +1436,80 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(serialized).not.toContain("customer-root");
   });
 
-  it("skips a root that disappears after admission while a healthy source answers", async () => {
-    const healthy: ChatConnectedScope = {
+  it("joins a skipped multi-source root to its request with the actual filesystem cause", async () => {
+    const scopes: ChatConnectedScope[] = ["healthy", "gone"].map((name) => ({
       kind: "directory",
-      relativePaths: ["src/a.ts"],
+      relativePaths: [`src/${name}.ts`],
       connectedAtMs: NOW,
-      root: tempRoot("healthy-after-admission"),
-    };
-    const disappeared: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["src/gone.ts"],
-      connectedAtMs: NOW,
-      root: tempRoot("gone-after-admission"),
-    };
-    const chatId = makeChat([healthy, disappeared]);
-    const sensitivePath = join(tmp, ".aws", "gone-after-admission");
-    const healthyPack = scopePack("src/a.ts", 0.8, "a");
+      root: tempRoot(name),
+    }));
+    const chatId = makeChat(scopes);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "multi-source-root-failure";
+    const failure = new WorkspaceNotFoundError("root disappeared", "/private/customer/root");
+    failure.cause = Object.assign(new Error("filesystem-private-canary"), { code: "EACCES" });
     const retriever: GroundedRetriever = (input) =>
       input.scope.relativePaths[0] === "src/gone.ts"
-        ? Promise.reject(
-            new WorkspaceNotFoundError("root disappeared", sensitivePath, [sensitivePath]),
-          )
-        : Promise.resolve({ pack: healthyPack, elapsedMs: 11, plan: { state: "ready" } as never });
+        ? Promise.reject(failure)
+        : Promise.resolve({
+            pack: scopePack("src/healthy.ts", 0.8, "healthy"),
+            elapsedMs: 11,
+            plan: { state: "ready" } as never,
+          });
+    try {
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: "explain all" })), correlationId },
+        recordingDeps([]),
+        undefined,
+        seam(retriever, constAnswerer("healthy answer [src/healthy.ts]", { count: 0 })),
+      );
+      expect(result.status).toBe(200);
+      expect(JSON.stringify(result.body)).toContain("Connected scope root is not accessible.");
+      const failures = sink.events.filter((event) => event.op === "workspace.root.denied");
+      expect(failures).toHaveLength(1);
+      const line = formatActivityLogProofLine(failures[0] ?? {});
+      expect(expectActivityLogProof("workspace.root.denied.line", line)).toMatchObject({
+        correlationId,
+        failureKind: "EACCES",
+        errorKind: "permission-denied",
+        causeChain: ["Error"],
+      });
+      expect(JSON.stringify([result.body, line])).not.toContain("filesystem-private-canary");
+      expect(JSON.stringify([result.body, line])).not.toContain("/private/customer/root");
+    } finally {
+      resetServerLogger();
+    }
+  });
 
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain all" })),
-      recordingDeps([]),
-      undefined,
-      seam(retriever, constAnswerer("healthy answer [src/a.ts]", { count: 0 })),
-    );
-
-    expect(result.status).toBe(200);
-    const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    const serialized = JSON.stringify(answer);
-    expect(serialized).toContain("Connected scope root is not accessible.");
-    expect(serialized).not.toContain(sensitivePath);
-    expect(serialized).not.toContain(".aws");
+  it("measures total answer wall time across concurrent retrieval and delayed model response", async () => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(name),
+    }));
+    const clock = { now: NOW };
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+    try {
+      const answerer: MultiSourceAnswerer = () => {
+        clock.now += 35_000;
+        return Promise.resolve("evidence [src/a.ts:1-5] [src/b.ts:1-5]");
+      };
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId: makeChat(scopes), content: "explain both" })),
+        recordingDeps([]),
+        undefined,
+        seam(concurrentTimedRetriever(clock), answerer),
+      );
+      expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.elapsedMs).toBe(36_000);
+      expect(answer.contextPack.elapsedMs).toBe(36_000);
+      expect(answer.contextPack.usage.elapsedMs).toBe(14);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("merges two sources: citations carry BOTH labels, omitted/usage/budget are summed", async () => {
@@ -1142,43 +1554,48 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       11,
     );
     expect(answer.contextPack.usage.searchCalls).toBe(baseSummary.usage.searchCalls * 2);
-    expect(answer.contextPack.budget.filesReadMax).toBe(baseSummary.budget.filesReadMax * 2);
+    expect(answer.contextPack.budget.filesReadMax).toBeNull();
     expect(answer.uncertainty).toHaveLength(2);
   });
 
-  it("fails closed when an unqualified path exists in more than one source", async () => {
-    const scopeA: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["source-a"],
-      connectedAtMs: NOW,
-      root: tempRoot("api"),
-    };
-    const scopeB: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["source-b"],
-      connectedAtMs: NOW,
-      root: tempRoot("web"),
-    };
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: makeChat([scopeA, scopeB]), content: "explain shared" })),
-      recordingDeps([]),
-      undefined,
-      seam(
-        packPerScope(
-          new Map([
-            ["source-a", scopePack("src/shared.ts", 0.8, "shared-a")],
-            ["source-b", scopePack("src/shared.ts", 0.7, "shared-b")],
-          ]),
+  it.each(["[src/shared.ts:1-5]", "`src/shared.ts:1-5`", "src/shared.ts:1-5"])(
+    "fails closed for a multi-source ambiguous location: %s",
+    async (ambiguous) => {
+      const scopeA: ChatConnectedScope = {
+        kind: "directory",
+        relativePaths: ["source-a"],
+        connectedAtMs: NOW,
+        root: tempRoot("api"),
+      };
+      const scopeB: ChatConnectedScope = {
+        kind: "directory",
+        relativePaths: ["source-b"],
+        connectedAtMs: NOW,
+        root: tempRoot("web"),
+      };
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId: makeChat([scopeA, scopeB]), content: "explain shared" })),
+        recordingDeps([]),
+        undefined,
+        seam(
+          packPerScope(
+            new Map([
+              ["source-a", scopePack("src/shared.ts", 0.8, "shared-a")],
+              ["source-b", scopePack("src/shared.ts", 0.7, "shared-b")],
+            ]),
+          ),
+          constAnswerer(`Ambiguous claim ${ambiguous}.`, { count: 0 }),
         ),
-        constAnswerer("Ambiguous claim [src/shared.ts:1-5].", { count: 0 }),
-      ),
-    );
+      );
 
-    expect(result.status).toBe(200);
-    const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.citations).toEqual([]);
-    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(true);
-  });
+      expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.citations).toEqual([]);
+      expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+        true,
+      );
+    },
+  );
 
   it("attributes an identical path only to its explicitly cited source ordinal", async () => {
     const scopeA: ChatConnectedScope = {
@@ -1323,11 +1740,11 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
 
     expect(result.status).toBe(200);
     expect(budgetSum([...seenBudgets.values()])).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
-    expect(seenBudgets.get("services/payments-api")?.filesReadMax).toBeGreaterThan(
-      seenBudgets.get("apps/web")?.filesReadMax ?? 0,
+    expect(seenBudgets.get("services/payments-api")?.excerptBytesMax).toBeGreaterThan(
+      seenBudgets.get("apps/web")?.excerptBytesMax ?? 0,
     );
-    expect(seenBudgets.get("apps/web")?.filesReadMax).toBeGreaterThanOrEqual(
-      seenBudgets.get("docs")?.filesReadMax ?? 0,
+    expect(seenBudgets.get("apps/web")?.excerptBytesMax).toBeGreaterThanOrEqual(
+      seenBudgets.get("docs")?.excerptBytesMax ?? 0,
     );
     expect([...seenBudgets.values()].filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(1);
   });
@@ -1528,6 +1945,133 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(puts).toHaveLength(16);
   });
 
+  it("aborts active source siblings and stops queued scopes after a fatal failure", async () => {
+    const scopes: ChatConnectedScope[] = Array.from({ length: 8 }, (_, index) => ({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: NOW,
+      root: tempRoot(`fatal-source-${String(index)}`),
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new Error("Missing fanout chat");
+    const parent = new AbortController();
+    const release = deferred<undefined>();
+    const failure = new TypeError("fatal source fixture");
+    const signals: (AbortSignal | undefined)[] = [];
+    const run = runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Trace the handler",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: parent.signal,
+      retriever: async (_input, signal) => {
+        signals.push(signal);
+        if (signals.length === 1) throw failure;
+        await release.promise;
+        signal?.throwIfAborted();
+        throw new Error("sibling should have been cancelled");
+      },
+      answerer: () => {
+        throw new Error("failed retrieval must not answer");
+      },
+    });
+    try {
+      await expect(run).rejects.toBe(failure);
+      expect(signals).toHaveLength(4);
+      expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+      expect(signals.every((signal) => signal?.reason === failure)).toBe(true);
+      expect(parent.signal.aborted).toBe(false);
+    } finally {
+      release.resolve(undefined);
+      await setImmediate();
+    }
+    expect(signals).toHaveLength(4);
+  });
+
+  it("persists the original mapped fanout failure once under the actual request", async () => {
+    const scopes: ChatConnectedScope[] = ["one", "two"].map((name) => ({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: NOW,
+      root: tempRoot(name),
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("Missing fanout diagnostic chat");
+    const stateDir = join(tmp, "fanout-diagnostic");
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failure = new ContextOverflowError("private-fanout-error-canary");
+    failure.cause = new TypeError("private-fanout-cause-canary");
+    try {
+      const result = await runMultiSourceAsk({
+        chat,
+        scopes,
+        content: "Trace",
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps: recordingDeps([], { diagnostics: defaultServerDiagnosticSink }),
+        signal: new AbortController().signal,
+        correlationId: "fanout-original-request",
+        retriever: () => Promise.reject(failure),
+        answerer: vi.fn<MultiSourceAnswerer>(),
+      });
+      expect(result.status).toBe(502);
+      closeFileServerLogSinks();
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "server.diagnostic.failure",
+      );
+      expect(lines).toHaveLength(1);
+      expect(
+        expectActivityLogProof("server.diagnostic.failure.activity-log-line", lines[0] ?? ""),
+      ).toMatchObject({
+        correlationId: "fanout-original-request",
+        diagnosticErrorClass: "ContextOverflowError",
+        code: "GATEWAY_CONTEXT_OVERFLOW",
+        causeChain: ["TypeError"],
+      });
+      expect(lines.join("\n")).not.toContain("private-fanout-");
+    } finally {
+      stderr.mockRestore();
+      closeFileServerLogSinks();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("maps a pre-cancelled fanout to 499 without starting a source", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: NOW,
+        root: tempRoot("cancelled-fanout"),
+      },
+    ];
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new Error("Missing cancellation chat");
+    const parent = new AbortController();
+    parent.abort();
+    const retriever = vi.fn<GroundedRetriever>();
+    const answerer = vi.fn<MultiSourceAnswerer>();
+    await expect(
+      runMultiSourceAsk({
+        chat,
+        scopes,
+        content: "Trace",
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps: recordingDeps([]),
+        signal: parent.signal,
+        retriever,
+        answerer,
+      }),
+    ).resolves.toMatchObject({ status: 499 });
+    expect(retriever).not.toHaveBeenCalled();
+    expect(answerer).not.toHaveBeenCalled();
+  });
+
   it("retrieves connected sources with bounded concurrency", async () => {
     const scopes: ChatConnectedScope[] = Array.from({ length: 4 }, (_unused, i) => ({
       kind: "directory" as const,
@@ -1602,6 +2146,46 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.citations.every((c) => c.source === undefined)).toBe(true);
   });
 
+  it("skips a closed assembler omission failure while preserving a healthy source", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        root: tempRoot("healthy"),
+        connectedAtMs: NOW,
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        root: tempRoot("broken"),
+        connectedAtMs: NOW,
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const healthy = packPerScope(new Map([["src/a.ts", scopePack("src/a.ts", 0.7, "healthy")]]));
+    const retrieve: GroundedRetriever = (input) =>
+      input.scope.relativePaths.includes("src/b.ts")
+        ? failInvalidOmissionAssembly(input.scope)
+        : healthy(input);
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain both sources" })),
+      recordingDeps([]),
+      undefined,
+      seam(retrieve, constAnswerer("observed [src/a.ts:1]", { count: 0 })),
+    );
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.citations.some((citation) => citation.source === "healthy")).toBe(true);
+    expect(
+      answer.uncertainty.some(
+        (marker) => marker.kind === "source-skipped" && marker.claim.includes("broken"),
+      ),
+    ).toBe(true);
+    expect(answer.uncertainty.find((marker) => marker.kind === "source-skipped")?.claim).toContain(
+      GROUNDED_PACK_VALIDATION_MESSAGE,
+    );
+  });
+
   // ─── Fail-soft: pack validation failure skips, not aborts ────────────────
 
   it("fail-soft: 1 bad source + 2 healthy → 200 with answer from healthy sources and skip in uncertainty", async () => {
@@ -1636,14 +2220,29 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ["src/c.ts", goodPackC],
     ]);
     const answered = { count: 0 };
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "multi-pack-validation-review";
     const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain all" })),
-      recordingDeps([]),
+      { ...ctx(JSON.stringify({ chatId, content: "explain all" })), correlationId },
+      recordingDeps([], { diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       seam(packPerScope(byPath), constAnswerer("partial answer [src/a.ts] [src/c.ts]", answered)),
     );
     // Must succeed (200), not fail (500)
     expect(result.status).toBe(200);
+    const validationRecords = records.filter(
+      (record) => record.diagnosticStage === "grounded-pack-validation",
+    );
+    expect(validationRecords).toHaveLength(1);
+    expect(validationRecords[0]).toMatchObject({
+      correlationId,
+      sourceIndex: 1,
+      diagnosticOutcome: "source-skipped",
+      validationReasons: ["stable-id"],
+      violationCount: 1,
+      validatorThrew: false,
+    });
+    expect(validationRecords[0]).not.toHaveProperty("httpStatus");
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("partial answer [src/a.ts] [src/c.ts]");
     // Answerer receives only the 2 healthy packs
@@ -1658,6 +2257,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       (u) => u.kind === "source-skipped" && u.claim.includes("broken"),
     );
     expect(skippedEntries.length).toBeGreaterThan(0);
+    expect(skippedEntries[0]?.claim).toContain(GROUNDED_PACK_VALIDATION_MESSAGE);
   });
 
   it("fail-soft: all sources bad → coded error returned (500 internal error)", async () => {
@@ -1686,16 +2286,26 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ["src/b.ts", badPack("src/b.ts", "bad-b")],
     ]);
     let answererCalled = false;
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "multi-pack-validation-review";
     const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain both" })),
-      recordingDeps([]),
+      { ...ctx(JSON.stringify({ chatId, content: "explain both" })), correlationId },
+      recordingDeps([], { diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       seam(packPerScope(byPath), () => {
         answererCalled = true;
         return Promise.resolve("nope");
       }),
     );
-    expect(result.status).toBe(500);
+    expect(result).toMatchObject({ status: 500, body: { error: { correlationId } } });
+    expect(records.filter((record) => record.diagnosticOutcome === "source-skipped")).toHaveLength(
+      2,
+    );
+    expect(records.at(-1)).toMatchObject({
+      correlationId,
+      diagnosticOutcome: "request-failed",
+      httpStatus: 500,
+    });
     expect(answererCalled).toBe(false);
   });
 });
@@ -1892,7 +2502,10 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     // implementation always resolves the object branch — `normalizeGroundedAnswerPayload` is the
     // SAME narrowing every production caller already applies to this result
     // (grounded-qa-multi-source.ts, grounded-orchestrator.ts), not a test-only cast.
-    const result = normalizeGroundedAnswerPayload(await answerer("What is alpha?", []));
+    const empty = { ...scopePack("src/alpha.ts", 0.7, "alpha"), files: [] };
+    const result = normalizeGroundedAnswerPayload(
+      await answerer("What is alpha?", [{ label: "alpha", pack: empty }]),
+    );
 
     expect(result.content).toBe("multi-source answer");
     expect(seenRequests).toHaveLength(1);

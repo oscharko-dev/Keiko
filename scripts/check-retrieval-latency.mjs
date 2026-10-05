@@ -117,6 +117,13 @@ function encodedContent(contentByAbs, encoder, abs) {
   return encoder.encode(content);
 }
 
+async function* iterateFixtureDirectory(children) {
+  if (children === undefined) return;
+  for (const [name, isDirectory] of children) {
+    yield dirEntry(name, isDirectory);
+  }
+}
+
 function buildFixtureFs(files) {
   const { contentByAbs, childrenByDir } = buildFixtureIndex(files);
   const encoder = new TextEncoder();
@@ -147,6 +154,7 @@ function buildFixtureFs(files) {
       }
       return [...children.entries()].map(([name, isDirectory]) => dirEntry(name, isDirectory));
     },
+    iterateDirectory: (abs) => iterateFixtureDirectory(childrenByDir.get(abs)),
     realPath: (abs) => abs,
     exists: (abs) => contentByAbs.has(abs) || childrenByDir.has(abs),
     readFileBytes: (abs, maxBytes) => {

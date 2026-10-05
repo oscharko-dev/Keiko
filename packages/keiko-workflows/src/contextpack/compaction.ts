@@ -104,7 +104,7 @@ export function nextAtomFitsBudget(
     return { fits: false, violatedDim: "excerptBytes" };
   }
   const projectedFiles = cp.currentUsage.filesRead + 1;
-  if (projectedFiles > cp.budget.filesReadMax) {
+  if (cp.budget.filesReadMax !== null && projectedFiles > cp.budget.filesReadMax) {
     return { fits: false, violatedDim: "filesRead" };
   }
   return { fits: true };

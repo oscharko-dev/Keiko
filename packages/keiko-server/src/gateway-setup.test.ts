@@ -16,11 +16,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentContextProfileForModel } from "./deps.js";
+import { readChatContextStatus } from "./chat-context-status.js";
+import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
@@ -77,7 +79,17 @@ const handlerDeps: UiHandlerDeps[] = [];
 function buildUiHandlerDeps(
   options: Parameters<typeof createUiHandlerDeps>[0],
 ): ReturnType<typeof createUiHandlerDeps> {
-  const deps = createUiHandlerDeps(options);
+  // Smoke-only unit fixtures do not leave optional metadata enrichment doing real network I/O.
+  // Tests of the actual discovery transport use the real tester or inject discovery explicitly.
+  const isolatedOptions =
+    options.gatewaySetupTester !== undefined && options.gatewayModelDiscovery === undefined
+      ? {
+          ...options,
+          gatewayModelDiscovery: (): Promise<readonly string[]> =>
+            Promise.reject(new Error("Fixture has no discovery endpoint")),
+        }
+      : options;
+  const deps = createUiHandlerDeps(isolatedOptions);
   handlerDeps.push(deps);
   return deps;
 }
@@ -124,9 +136,11 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 function ctx(body: unknown, correlationId?: string): RouteContext {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
+  req.complete = true;
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
+    req,
+    res: new ServerResponse(req),
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
     correlationId,
@@ -169,6 +183,16 @@ function fakeEmbeddingProbeResponse(
       headers: { "content-type": "application/json" },
     }),
   );
+}
+
+function fakeAzureNonChatResponse(
+  url: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): Promise<Response> | undefined {
+  if (init?.method === "GET") {
+    return Promise.resolve(new Response("{}", { status: 404 }));
+  }
+  return fakeEmbeddingProbeResponse(url);
 }
 
 // Reads the first provider's resolved apiKey from the in-memory runtime config (Issue #1320 keeps the
@@ -822,6 +846,7 @@ describe("handleGatewaySetup", () => {
       env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.reject(new Error("Fixture has no discovery endpoint")),
     });
     try {
       const result = await handleGatewaySetup(
@@ -1070,6 +1095,7 @@ describe("handleGatewaySetup", () => {
       env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.reject(new Error("Fixture has no discovery endpoint")),
     });
     try {
       const result = await handleGatewaySetup(
@@ -8265,7 +8291,7 @@ describe("handleGatewaySetup", () => {
     const fakeFetch: typeof fetch = (url, init) => {
       // Setup probes the declared embedding models with a real request (LiteLLM field incident).
       // A gateway that rejects chat for an embedding model still answers /embeddings.
-      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      const embeddingProbeResponse = fakeAzureNonChatResponse(url, init);
       if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       const href = fetchInputUrl(url);
       expect(href).not.toContain("api/projects/proj-oscharko-dev");
@@ -8733,146 +8759,150 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
-    const uiDir = await tempDir("keiko-gw-ui-litellm-");
-    const evidenceDir = await tempDir("keiko-gw-ev-litellm-");
-    const originalFetch = globalThis.fetch;
-    const seenUrls: string[] = [];
-    const seenModels: string[] = [];
-    const seenAuthHeaders: { auth: string | null; custom: string | null }[] = [];
-    const fakeFetch: typeof fetch = (url, init) => {
-      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
-      // A gateway that rejects chat for an embedding model still answers /embeddings.
-      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
-      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
-      const href = fetchInputUrl(url);
-      seenUrls.push(href);
-      const headers = new Headers(init?.headers);
-      seenAuthHeaders.push({
-        auth: headers.get("authorization"),
-        custom: headers.get("x-litellm-key"),
-      });
-      if (href.endsWith("/model/info")) {
+  it.each([false, true])(
+    "uses LiteLLM model info while preserving explicit deployments=%s",
+    async (explicit) => {
+      const uiDir = await tempDir("keiko-gw-ui-litellm-");
+      const evidenceDir = await tempDir("keiko-gw-ev-litellm-");
+      const originalFetch = globalThis.fetch;
+      const seenUrls: string[] = [];
+      const seenModels: string[] = [];
+      const seenAuthHeaders: { auth: string | null; custom: string | null }[] = [];
+      const fakeFetch: typeof fetch = (url, init) => {
+        // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+        // A gateway that rejects chat for an embedding model still answers /embeddings.
+        const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+        if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
+        const href = fetchInputUrl(url);
+        seenUrls.push(href);
+        const headers = new Headers(init?.headers);
+        seenAuthHeaders.push({
+          auth: headers.get("authorization"),
+          custom: headers.get("x-litellm-key"),
+        });
+        if (href.endsWith("/model/info")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    model_name: "litellm-chat-large",
+                    model_info: {
+                      mode: "chat",
+                      max_input_tokens: 1_050_000,
+                      max_output_tokens: 128_000,
+                      supports_function_calling: false,
+                    },
+                  },
+                  {
+                    model_name: "litellm-vision-chat",
+                    model_info: { mode: "chat", supports_vision: true },
+                  },
+                  { model_name: "litellm-embedding", model_info: { mode: "embedding" } },
+                  { model_name: "litellm-image", model_info: { mode: "image_generation" } },
+                  { model_name: "litellm-unknown-mode" },
+                ],
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        expect(href).toContain("/chat/completions");
+        if (init?.body !== undefined && typeof init.body !== "string") {
+          throw new Error("expected JSON string request body");
+        }
+        const body = JSON.parse(init?.body ?? "{}") as { model?: string };
+        if (body.model !== undefined) {
+          seenModels.push(body.model);
+        }
         return Promise.resolve(
           new Response(
             JSON.stringify({
-              data: [
-                {
-                  model_name: "litellm-chat-large",
-                  model_info: {
-                    mode: "chat",
-                    max_input_tokens: 1_050_000,
-                    max_output_tokens: 128_000,
-                    supports_function_calling: false,
-                  },
-                },
-                {
-                  model_name: "litellm-vision-chat",
-                  model_info: { mode: "chat", supports_vision: true },
-                },
-                { model_name: "litellm-embedding", model_info: { mode: "embedding" } },
-                { model_name: "litellm-image", model_info: { mode: "image_generation" } },
-                { model_name: "litellm-unknown-mode" },
-              ],
+              choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 3, completion_tokens: 1 },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
           ),
         );
-      }
-      expect(href).toContain("/chat/completions");
-      if (init?.body !== undefined && typeof init.body !== "string") {
-        throw new Error("expected JSON string request body");
-      }
-      const body = JSON.parse(init?.body ?? "{}") as { model?: string };
-      if (body.model !== undefined) {
-        seenModels.push(body.model);
-      }
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 3, completion_tokens: 1 },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      );
-    };
-    globalThis.fetch = fakeFetch;
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir,
-      env: { ...MOCK_FETCH_EGRESS_ENV },
-      uiDbPath: join(uiDir, "keiko-ui.db"),
-    });
-    try {
-      const apiKey = ["example-secret-token"].join("");
-      const result = await handleGatewaySetup(
-        ctx({
-          baseUrl: "https://llm-gateway.example.com/v1",
-          apiKey,
-          apiKeyHeaderName: "X-Litellm-Key",
-        }),
-        deps,
-      );
-      expect(result.status).toBe(200);
-      expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
-      expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
-      expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
-      expect(seenModels).toEqual([
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-      ]);
-      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-      ]);
-      expect(
-        seenAuthHeaders.every(
-          (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
-        ),
-      ).toBe(true);
-      expect(
-        currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
-      ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key", "x-litellm-key"]);
-      const config = currentGatewayConfig(deps);
-      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-        "litellm-embedding",
-      ]);
-      expect(
-        config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
-          ?.supportsImageInput,
-      ).toBe(true);
-      expect(
-        config?.capabilities?.find((capability) => capability.id === "litellm-chat-large"),
-      ).toMatchObject({
-        contextWindow: 1_050_000,
-        maxOutputTokens: 128_000,
-        toolCalling: false,
+      };
+      globalThis.fetch = fakeFetch;
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...MOCK_FETCH_EGRESS_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
       });
-      expectLiteLlmCounter(config);
-      expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
-      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-      expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
-      expect(saved).toContain("litellm-embedding");
-      expect(saved).toContain('"kind": "embedding"');
-      expect(saved).not.toContain("litellm-image");
-      expect(saved).toContain('"tokenCounter": "litellm"');
-    } finally {
-      globalThis.fetch = originalFetch;
-      deps.store.close();
-    }
-  });
+      try {
+        const apiKey = ["example-secret-token"].join("");
+        const result = await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey,
+            apiKeyHeaderName: "X-Litellm-Key",
+            ...explicitLiteLlmDeploymentFields(explicit),
+          }),
+          deps,
+        );
+        expect(result.status).toBe(200);
+        expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
+        expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
+        expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
+        expect(seenModels).toEqual([
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+        ]);
+        expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+        ]);
+        expect(
+          seenAuthHeaders.every(
+            (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
+          ),
+        ).toBe(true);
+        expect(
+          currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
+        ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key", "x-litellm-key"]);
+        const config = currentGatewayConfig(deps);
+        expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-embedding",
+        ]);
+        expect(
+          config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
+            ?.supportsImageInput,
+        ).toBe(true);
+        expect(
+          config?.capabilities?.find((capability) => capability.id === "litellm-chat-large"),
+        ).toMatchObject({
+          contextWindow: 1_050_000,
+          maxOutputTokens: 128_000,
+          toolCalling: false,
+        });
+        expectLiteLlmCounter(config);
+        expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
+        const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+        expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
+        expect(saved).toContain("litellm-embedding");
+        expect(saved).toContain('"kind": "embedding"');
+        expect(saved).not.toContain("litellm-image");
+        expect(saved).toContain('"tokenCounter": "litellm"');
+      } finally {
+        globalThis.fetch = originalFetch;
+        deps.store.close();
+      }
+    },
+  );
 
   it("falls back to OpenAI-compatible model discovery when LiteLLM model info is unavailable", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-fallback-");
@@ -10295,6 +10325,18 @@ describe("handleGatewaySetup", () => {
 // customer gateway models without requiring code changes for each model name")
 // by exercising the wrapper with every documented payload shape.
 describe("normalizeDiscoveryPayload", () => {
+  it("honors an explicit smaller total context ceiling beside an input declaration", () => {
+    const normalized = normalizeDiscoveryPayloadForSetup({
+      data: [
+        {
+          model_name: "context-ceiling-alias",
+          model_info: { mode: "chat", max_input_tokens: 32_768, context_window: 8_192 },
+        },
+      ],
+    });
+    expect(normalized.modelMetadata?.["context-ceiling-alias"]?.contextWindow).toBe(8_192);
+  });
+
   it("does not reinterpret an output max_tokens field as an input context window", () => {
     const normalized = normalizeDiscoveryPayloadForSetup({
       data: [{ id: "test-chat-1", model_info: { max_tokens: 4_096 } }],
@@ -11439,6 +11481,20 @@ function expectLiteLlmCounter(config: GatewayConfig | undefined): void {
   );
 }
 
+function explicitLiteLlmDeploymentFields(explicit: boolean): Record<string, unknown> {
+  return explicit
+    ? {
+        deploymentNames: [
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-embedding",
+        ],
+        imageInputModelIds: ["litellm-vision-chat"],
+      }
+    : {};
+}
+
 it("bounds discovery evidence by selected aliases instead of raw replica count", () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -11458,5 +11514,1190 @@ it("bounds discovery evidence by selected aliases instead of raw replica count",
     });
   } finally {
     resetServerLogger();
+  }
+});
+
+const MODEL_GEOMETRY_MATRIX = [
+  [4_096, 256],
+  [8_192, 512],
+  [16_384, 1_024],
+  [24_576, 2_048],
+  [32_768, 4_096],
+  [48_000, 6_000],
+  [64_000, 8_000],
+  [96_000, 12_000],
+  [128_000, 16_000],
+  [160_000, 20_000],
+  [200_000, 24_000],
+  [256_000, 32_000],
+  [500_000, 48_000],
+  [1_000_000, 64_000],
+  [2_000_000, 128_000],
+] as const;
+
+function matrixDiscovery(): ReturnType<typeof parseModelDiscovery> {
+  return parseModelDiscovery({
+    data: [
+      ...MODEL_GEOMETRY_MATRIX.map(([window, output], index) => ({
+        model_name: `matrix-alias-${String(index)}`,
+        model_info: {
+          mode: "chat",
+          context_window: window,
+          max_input_tokens: Math.floor(window / 2),
+          max_output_tokens: output,
+        },
+      })),
+      { model_name: "matrix-unknown", model_info: { mode: "chat" } },
+    ],
+  });
+}
+
+function assertSelectedModelGeometry(deps: UiHandlerDeps, chatId: string, index: number): void {
+  const row = MODEL_GEOMETRY_MATRIX[index];
+  if (row === undefined) throw new Error("Missing matrix model geometry");
+  const modelId = `matrix-alias-${String(index)}`;
+  const capability = requiredCapability(requiredGatewayConfig(deps), modelId);
+  const expected = deriveContextProfileFromCapability(capability);
+  expect(capability.contextWindow).toBe(row[0]);
+  expect(capability.maxOutputTokens).toBe(row[1]);
+  expect(capability.maxInputTokens).toBe(Math.floor(row[0] / 2));
+  expect(currentContextProfileForModel(deps, modelId)).toEqual(expected);
+  expect(modelWindowAwareBudget(deps, modelId)).toMatchObject({
+    modelInputTokensMax: expected.effectiveInputBudget,
+    modelOutputTokensMax: expected.reservedOutputTokens,
+  });
+  const status = readChatContextStatus(deps, chatId, modelId);
+  expect(status).toMatchObject({
+    modelId,
+    inputLimitTokens: Math.floor(row[0] / 2),
+    contextWindowTokens: row[0],
+    inputBudgetTokens: expected.effectiveInputBudget,
+    reservedOutputTokens: expected.reservedOutputTokens,
+    safetyMarginTokens: expected.safetyMarginTokens,
+  });
+  expect(status.segments?.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(row[0]);
+  expect(status.contextWindowAssumed).toBeUndefined();
+}
+
+describe("model-specific LiteLLM conversation geometry", () => {
+  it.each([false, true])(
+    "intersects independent input and total limits for alias replicas, reversed=%s",
+    (reversed) => {
+      const replicas = [
+        {
+          model_name: "replicated-alias",
+          model_info: {
+            mode: "chat",
+            context_window: 128_000,
+            max_input_tokens: 96_000,
+            max_output_tokens: 16_000,
+          },
+        },
+        {
+          model_name: "replicated-alias",
+          model_info: {
+            mode: "chat",
+            context_window: 64_000,
+            max_input_tokens: 16_000,
+            max_output_tokens: 8_000,
+          },
+        },
+      ];
+      const discovered = parseModelDiscovery({
+        data: reversed ? [...replicas].reverse() : replicas,
+      });
+      expect(discovered.modelMetadata?.["replicated-alias"]).toMatchObject({
+        contextWindow: 64_000,
+        maxInputTokens: 16_000,
+        maxOutputTokens: 8_000,
+      });
+    },
+  );
+
+  it("carries fifteen distinct aliases through discovery, persisted setup, budgets and context status", async () => {
+    const directory = await tempDir("keiko-model-matrix-");
+    const discovered = matrixDiscovery();
+    const deps = buildUiHandlerDeps({
+      configPath: join(directory, "keiko.config.json"),
+      evidenceDir: await tempDir("keiko-model-matrix-evidence-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(directory, "ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovered),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://matrix.example.invalid/v1", apiKey: "synthetic-matrix-key" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    deps.store.createProject(directory, "Model matrix");
+    const chatId = deps.store.createChat(directory, "Model matrix", "matrix-alias-0").id;
+    for (let index = 0; index < MODEL_GEOMETRY_MATRIX.length; index += 1)
+      assertSelectedModelGeometry(deps, chatId, index);
+    const unknown = readChatContextStatus(deps, chatId, "matrix-unknown");
+    expect(unknown.contextWindowAssumed).toBe(true);
+    expect(unknown.contextWindowTokens).toBe(
+      deriveContextProfileFromCapability(
+        requiredCapability(requiredGatewayConfig(deps), "matrix-unknown"),
+      ).maxInputTokens,
+    );
+    deps.store.close();
+  });
+});
+
+function selectedDeploymentMetadata(): ReturnType<typeof parseModelDiscovery> {
+  return parseModelDiscovery({
+    data: [
+      {
+        model_name: "selected-small",
+        model_info: {
+          mode: "chat",
+          context_window: 4_096,
+          max_input_tokens: 3_000,
+          max_output_tokens: 512,
+        },
+      },
+      {
+        model_name: "selected-large",
+        model_info: { mode: "chat", context_window: 128_000, max_output_tokens: 8_000 },
+      },
+      { model_name: "not-selected", model_info: { mode: "chat", context_window: 1_000_000 } },
+    ],
+  });
+}
+
+function seedSelectedDeployments(deps: UiHandlerDeps, removedVision: boolean): void {
+  const store = deps.gatewayConfig;
+  if (store === undefined) throw new TypeError("Missing fixture gateway store");
+  const ids = ["selected-small", "selected-large", ...(removedVision ? ["old-vision"] : [])];
+  const raw = {
+    providers: ids.map((modelId) => ({
+      modelId,
+      baseUrl: "https://previous.example.invalid/v1",
+      apiKey: "synthetic-previous-key",
+      capability: {
+        ...createDefaultChatCapability(modelId),
+        supportsImageInput: modelId === "old-vision",
+        contextWindowAssumed: true,
+      },
+    })),
+  };
+  store.set(parseGatewayConfig(raw), true);
+  writeFileSync(store.storagePath, JSON.stringify(raw), "utf8");
+}
+
+function expectSelectedDeploymentMetadata(deps: UiHandlerDeps): void {
+  const config = requiredGatewayConfig(deps);
+  expect(config.providers.map((provider) => provider.modelId)).toEqual([
+    "selected-small",
+    "selected-large",
+  ]);
+  const small = requiredCapability(config, "selected-small");
+  expect(small).toMatchObject({
+    contextWindow: 4_096,
+    maxInputTokens: 3_000,
+    maxOutputTokens: 512,
+  });
+  expect(small.contextWindowAssumed).toBeUndefined();
+  expect(requiredCapability(config, "selected-large").contextWindow).toBe(128_000);
+  const profile = deriveContextProfileFromCapability(small);
+  expect(modelWindowAwareBudget(deps, "selected-small")).toMatchObject({
+    modelInputTokensMax: profile.effectiveInputBudget,
+    modelOutputTokensMax: profile.reservedOutputTokens,
+  });
+  expect(config.capabilities?.every((capability) => !capability.supportsImageInput)).toBe(true);
+  const persisted = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+    readonly providers?: readonly {
+      readonly modelId: string;
+      readonly capability?: ModelCapability;
+    }[];
+  };
+  expect(
+    persisted.providers?.find((provider) => provider.modelId === "selected-small")?.capability,
+  ).toMatchObject({ contextWindow: 4_096, maxInputTokens: 3_000, maxOutputTokens: 512 });
+}
+
+describe("selected deployment discovery metadata", () => {
+  it.each(["missing", "different-role"] as const)(
+    "records a body-free explicit selection when metadata is %s",
+    async (state) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      Object.assign(deps, {
+        gatewayModelDiscovery: () =>
+          Promise.resolve(
+            parseModelDiscovery({
+              data: [
+                {
+                  model_name: state === "missing" ? "not-selected" : "selected-small",
+                  model_info: { mode: "embedding", context_window: 32_768 },
+                },
+              ],
+            }),
+          ),
+      });
+      try {
+        expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(200);
+        const events = sink.events.filter(
+          (event) => event.op === "gateway.setup.metadata.resolved",
+        );
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({
+          selectedModelCount: 1,
+          metadataEnrichedModelCount: 0,
+          roleMismatchModelCount: state === "different-role" ? 1 : 0,
+          notDiscoveredModelCount: state === "missing" ? 1 : 0,
+        });
+        expect(JSON.stringify(events)).not.toContain("selected-small");
+        expect(JSON.stringify(events)).not.toContain("selected.example.invalid");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("reports discovery truncation before projecting explicitly selected deployment metadata", async () => {
+    const deps = await metadataResponsivenessDeps();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    Object.assign(deps, {
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              ...Array.from({ length: MAX_DISCOVERED_MODELS }, (_unused, index) => ({
+                model_name: `other-chat-${String(index)}`,
+                model_info: { mode: "chat", context_window: 16_000 },
+              })),
+              { model_name: "selected-small", model_info: { mode: "chat", context_window: 4_096 } },
+            ],
+          }),
+        ),
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => {
+          diagnostics.push(record);
+        },
+      },
+    });
+    const result = await handleGatewaySetup(selectedMetadataContext(), deps);
+    expect(result.status).toBe(200);
+    expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+    ]);
+    expect(diagnostics.filter((record) => record.code === "GATEWAY_DISCOVERY_TRUNCATED")).toEqual([
+      expect.objectContaining({ retainedModelCount: MAX_DISCOVERED_MODELS }),
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("other-chat-");
+    expect(JSON.stringify(diagnostics)).not.toContain("selected.example.invalid");
+  });
+
+  it("enriches explicitly selected embedding geometry without adding discovered deployments", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, {
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              { model_name: "selected-small", model_info: { mode: "chat", context_window: 4_096 } },
+              {
+                model_name: "selected-vectorizer",
+                model_info: { mode: "embedding", context_window: 32_768 },
+              },
+              {
+                model_name: "not-selected",
+                model_info: { mode: "embedding", context_window: 128_000 },
+              },
+            ],
+          }),
+        ),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames: ["selected-small", "selected-vectorizer"],
+        embeddingModelIds: ["selected-vectorizer"],
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(config.providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+      "selected-vectorizer",
+    ]);
+    expect(requiredCapability(config, "selected-vectorizer")).toMatchObject({
+      kind: "embedding",
+      contextWindow: 32_768,
+    });
+    expect(requiredCapability(config, "selected-vectorizer").contextWindowAssumed).not.toBe(true);
+  });
+
+  it.each(["reported", "unavailable", "model-list", "no-limits"] as const)(
+    "refreshes an omitted input ceiling only when selected metadata is %s",
+    async (state) => {
+      const directory = await tempDir("keiko-refresh-input-ceiling-");
+      let first = true;
+      const deps = buildUiHandlerDeps({
+        configPath: join(directory, "keiko.config.json"),
+        evidenceDir: await tempDir("keiko-refresh-input-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(directory, "ui.db"),
+        gatewayModelDiscovery: () => {
+          if (!first && state === "unavailable") return Promise.reject(new Error("No discovery"));
+          if (!first && state === "model-list") {
+            return Promise.resolve(parseModelDiscovery({ data: [{ id: "selected-small" }] }));
+          }
+          if (!first && state === "no-limits") {
+            return Promise.resolve(
+              parseModelDiscovery({
+                data: [
+                  {
+                    model_name: "selected-small",
+                    model_info: { mode: "chat" },
+                  },
+                ],
+              }),
+            );
+          }
+          return Promise.resolve(
+            parseModelDiscovery({
+              data: [
+                {
+                  model_name: "selected-small",
+                  model_info: {
+                    mode: "chat",
+                    context_window: 128_000,
+                    max_output_tokens: 8_000,
+                    ...(first ? { max_input_tokens: 16_000 } : {}),
+                  },
+                },
+              ],
+            }),
+          );
+        },
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      });
+      const body = {
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames: ["selected-small"],
+      };
+      expect((await handleGatewaySetup(ctx(body), deps)).status).toBe(200);
+      expect(requiredCapability(requiredGatewayConfig(deps), "selected-small").maxInputTokens).toBe(
+        16_000,
+      );
+      first = false;
+      expect((await handleGatewaySetup(ctx(body), deps)).status).toBe(200);
+      const capability = requiredCapability(requiredGatewayConfig(deps), "selected-small");
+      expect(capability.maxInputTokens).toBe(state === "reported" ? undefined : 16_000);
+      expect(capability.contextWindow).toBe(128_000);
+    },
+  );
+
+  it.each(["explicit", "preserved", "replacement"] as const)(
+    "persists discovered model geometry without widening %s deployment selection",
+    async (selection) => {
+      const directory = await tempDir("keiko-selected-metadata-");
+      const discovery = vi.fn(() => Promise.resolve(selectedDeploymentMetadata()));
+      const deps = buildUiHandlerDeps({
+        configPath: join(directory, "keiko.config.json"),
+        evidenceDir: await tempDir("keiko-selected-metadata-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(directory, "ui.db"),
+        gatewayModelDiscovery: discovery,
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      });
+      if (selection !== "explicit") seedSelectedDeployments(deps, selection === "replacement");
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://selected.example.invalid/v1",
+          apiKey: "synthetic-selected-key",
+          preserveExisting: selection !== "explicit",
+          deploymentNames: selection === "preserved" ? [] : ["selected-small", "selected-large"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expectSelectedDeploymentMetadata(deps);
+      expect(discovery).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["unavailable", "legacy", "different-role"] as const)(
+    "keeps explicit deployment ownership when discovery is %s",
+    async (discoveryState) => {
+      const directory = await tempDir("keiko-selected-metadata-control-");
+      const deps = buildUiHandlerDeps({
+        configPath: join(directory, "keiko.config.json"),
+        evidenceDir: await tempDir("keiko-selected-metadata-control-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(directory, "ui.db"),
+        gatewayModelDiscovery: () => {
+          if (discoveryState === "unavailable") return Promise.reject(new Error("No discovery"));
+          if (discoveryState === "legacy") return Promise.resolve(["not-selected"]);
+          return Promise.resolve(
+            parseModelDiscovery({
+              data: [{ model_name: "selected-small", model_info: { mode: "embedding" } }],
+            }),
+          );
+        },
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      });
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://selected.example.invalid/v1",
+          apiKey: "synthetic-selected-key",
+          deploymentNames: ["selected-small"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const config = requiredGatewayConfig(deps);
+      expect(config.providers.map((provider) => provider.modelId)).toEqual(["selected-small"]);
+      expect(requiredCapability(config, "selected-small")).toMatchObject({
+        kind: "chat",
+        contextWindowAssumed: true,
+        maxOutputTokens: 0,
+      });
+    },
+  );
+
+  it("still rejects an explicitly asserted image model omitted from replacement deployments", async () => {
+    const directory = await tempDir("keiko-selected-metadata-image-guard-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(directory, "keiko.config.json"),
+      evidenceDir: await tempDir("keiko-selected-metadata-image-evidence-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(directory, "ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(selectedDeploymentMetadata()),
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+    });
+    seedSelectedDeployments(deps, true);
+    const before = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        preserveExisting: true,
+        deploymentNames: ["selected-small", "selected-large"],
+        imageInputModelIds: ["old-vision"],
+      }),
+      deps,
+    );
+    expect(result.status).toBe(502);
+    expect(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")).toBe(before);
+    expect(requiredCapability(requiredGatewayConfig(deps), "old-vision").supportsImageInput).toBe(
+      true,
+    );
+  });
+});
+
+async function metadataResponsivenessDeps(): Promise<UiHandlerDeps> {
+  const directory = await tempDir("keiko-metadata-responsiveness-");
+  return buildUiHandlerDeps({
+    configPath: join(directory, "keiko.config.json"),
+    evidenceDir: await tempDir("keiko-metadata-responsiveness-evidence-"),
+    env: { ...MOCK_FETCH_EGRESS_ENV },
+    uiDbPath: join(directory, "ui.db"),
+    gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+  });
+}
+
+function selectedMetadataContext(): RouteContext {
+  return ctx({
+    baseUrl: "https://selected.example.invalid/v1",
+    apiKey: "synthetic-selected-key",
+    deploymentNames: ["selected-small"],
+  });
+}
+
+function expectFailureMetadataCounts(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  selectedModelCount: number | undefined,
+): void {
+  const events = sink.events.filter((event) => event.op === "gateway.setup.metadata.resolved");
+  expect(events).toHaveLength(1);
+  const event = events[0];
+  if (event === undefined) throw new Error("Expected a metadata outcome.");
+  if (selectedModelCount === undefined)
+    expect(event.extra).not.toHaveProperty("selectedModelCount");
+  else expect(event.extra).toMatchObject({ selectedModelCount });
+  expect(event.extra).not.toHaveProperty("metadataEnrichedModelCount");
+  expect(event.extra).not.toHaveProperty("roleMismatchModelCount");
+  expect(event.extra).not.toHaveProperty("notDiscoveredModelCount");
+  expectActivityLogProof("gateway.setup.metadata.resolved.line", formatActivityLogProofLine(event));
+}
+
+function metadataContextForSelection(explicitSelection: boolean): RouteContext {
+  return explicitSelection
+    ? selectedMetadataContext()
+    : ctx({ baseUrl: "https://selected.example.invalid/v1", apiKey: "synthetic-selected-key" });
+}
+
+function metadataAbortTimers(): void {
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => {
+      controller.abort(new DOMException("Timed out", "TimeoutError"));
+    }, milliseconds);
+    return controller.signal;
+  });
+}
+
+function selectedMetadataResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      data: [
+        {
+          model_name: "selected-small",
+          model_info: {
+            mode: "chat",
+            max_input_tokens: 32_768,
+            max_output_tokens: 4_096,
+          },
+        },
+      ],
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+function slowMetadataResponse(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      clearTimeout(timer);
+      const cause: unknown = signal?.reason;
+      reject(cause instanceof Error ? cause : new Error("Metadata request aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve(selectedMetadataResponse());
+    }, 14_000);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+describe("selected metadata responsiveness", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resetServerLogger();
+  });
+  it("retains declared geometry from a management route responding after fourteen seconds", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, { gatewayModelDiscovery: undefined });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const fetcher = vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) =>
+      fetchInputUrl(url).endsWith("/model/info")
+        ? slowMetadataResponse(init?.signal)
+        : Promise.resolve(new Response(null, { status: 404 })),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const setup = handleGatewaySetup(selectedMetadataContext(), deps);
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect((await setup).status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "selected-small")).toMatchObject({
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+    expect(event?.extra).toMatchObject({
+      outcome: "available",
+      discoverySource: "model-info",
+      modelInfoOutcome: "available",
+      modelGroupInfoOutcome: "not-attempted",
+      modelListOutcome: "not-attempted",
+    });
+    expectActivityLogProof(
+      "gateway.setup.metadata.resolved.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  });
+
+  it.each(["http-error", "transport-error", "unusable", "invalid-json"] as const)(
+    "retains the %s management outcome when a fallback supplies metadata",
+    async (outcome) => {
+      const deps = await metadataResponsivenessDeps();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: Parameters<typeof fetch>[0]) => {
+          if (!fetchInputUrl(url).endsWith("/model/info"))
+            return Promise.resolve(selectedMetadataResponse());
+          if (outcome === "transport-error")
+            return Promise.reject(new TypeError("Private transport cause"));
+          return Promise.resolve(
+            outcome === "http-error"
+              ? new Response(null, { status: 503 })
+              : new Response(
+                  outcome === "invalid-json" ? "not-json" : JSON.stringify({ data: [] }),
+                  {
+                    headers: { "content-type": "application/json" },
+                  },
+                ),
+          );
+        }),
+      );
+      const context = { ...selectedMetadataContext(), correlationId: "metadata-fallback" };
+      expect((await handleGatewaySetup(context, deps)).status).toBe(200);
+      const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+      expect(event).toMatchObject({
+        correlationId: "metadata-fallback",
+        extra: {
+          outcome: "available",
+          discoverySource: "model-group-info",
+          modelInfoOutcome: outcome === "invalid-json" ? "unusable" : outcome,
+          modelGroupInfoOutcome: "available",
+          modelListOutcome: "not-attempted",
+        },
+      });
+      expectActivityLogProof(
+        "gateway.setup.metadata.resolved.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(JSON.stringify(event)).not.toContain("Private transport cause");
+    },
+  );
+
+  it.each(["empty", "unsupported"] as const)(
+    "classifies an answered but %s discovery as validation failure",
+    async (failure) => {
+      const deps = await metadataResponsivenessDeps();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const data =
+        failure === "empty"
+          ? []
+          : [{ model_name: "private-image-model", model_info: { mode: "image_generation" } }];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(JSON.stringify({ data }), {
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        ),
+      );
+      const context = selectedMetadataContext();
+      expect(
+        (await handleGatewaySetup({ ...context, correlationId: "metadata-unusable" }, deps)).status,
+      ).toBe(200);
+      const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+      expect(event).toMatchObject({
+        correlationId: "metadata-unusable",
+        errorKind: "validation-failed",
+        extra: { outcome: "unavailable", selectedModelCount: 1 },
+      });
+      expectFailureMetadataCounts(sink, 1);
+      expect(event?.status).toBeUndefined();
+      expect(event?.extra).not.toHaveProperty("httpStatus");
+      expect(JSON.stringify(event)).not.toMatch(
+        /private-image-model|synthetic-selected-key|selected\.example\.invalid/,
+      );
+    },
+  );
+
+  it.each(["timeout", "transport"] as const)(
+    "records closed metadata failure context for %s",
+    async (failure) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const cause =
+        failure === "timeout"
+          ? new DOMException("private-cause", "TimeoutError")
+          : new Error("private-cause");
+      Object.assign(deps, { gatewayModelDiscovery: () => Promise.reject(cause) });
+      try {
+        expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(200);
+        const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+        expect(event).toMatchObject({
+          errorKind: failure === "timeout" ? "timeout" : "unavailable",
+          extra: { outcome: "unavailable", selectedModelCount: 1 },
+        });
+        expectFailureMetadataCounts(sink, 1);
+        expect(event?.status).toBeUndefined();
+        expectActivityLogProof(
+          "gateway.setup.metadata.resolved.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(JSON.stringify(event)).not.toContain("private-cause");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it.each([
+    [401, "permission-denied"],
+    [404, "unavailable"],
+    [429, "rate-limited"],
+  ] as const)(
+    "records closed metadata failure context for HTTP %s without raw response text",
+    async (httpStatus, errorKind) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      Object.assign(deps, {
+        gatewayModelDiscovery: () =>
+          Promise.reject(Object.assign(new Error("synthetic-private-response"), { httpStatus })),
+      });
+      try {
+        expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(200);
+        const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+        expect(event).toMatchObject({
+          errorKind,
+          extra: { outcome: "unavailable", selectedModelCount: 1, httpStatus },
+        });
+        expect(event?.status).toBeUndefined();
+        expectFailureMetadataCounts(sink, 1);
+        expectActivityLogProof(
+          "gateway.setup.metadata.resolved.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(JSON.stringify(event)).not.toContain("synthetic-private-response");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("falls back to the healthy model list within the shared budget after management routes hang", async () => {
+    const deps = await metadataResponsivenessDeps();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    Object.assign(deps, { gatewayModelDiscovery: undefined });
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const endpoint = fetchInputUrl(url);
+        requests.push(endpoint);
+        if (endpoint.endsWith("/models")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ data: [{ id: "selected-small" }] }), {
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Timed out", "TimeoutError"));
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+    const setup = handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+      }),
+      deps,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await setup).status).toBe(200);
+    expect(requests.some((endpoint) => endpoint.endsWith("/models"))).toBe(true);
+    const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+    expect(event?.extra).toMatchObject({
+      outcome: "available",
+      discoverySource: "model-list",
+      modelInfoOutcome: "timeout",
+      modelGroupInfoOutcome: "timeout",
+      modelListOutcome: "available",
+    });
+    expectActivityLogProof(
+      "gateway.setup.metadata.resolved.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+    ]);
+  });
+
+  it("spends the existing discovery timeout once before probing explicit deployments", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, { gatewayModelDiscovery: undefined });
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        requests.push(fetchInputUrl(url));
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Timed out", "TimeoutError"));
+            },
+            {
+              once: true,
+            },
+          );
+        });
+      }),
+    );
+    const setup = handleGatewaySetup(selectedMetadataContext(), deps);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+    ]);
+    expect(requests.map((endpoint) => new URL(endpoint).pathname)).toEqual([
+      "/v1/model/info",
+      "/v1/model_group/info",
+      "/v1/models",
+    ]);
+    expect((await setup).status).toBe(200);
+  });
+
+  it.each([true, false])(
+    "does not swallow a programming failure or fabricate discovery counts (explicit=%s)",
+    async (explicitSelection) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      Object.assign(deps, {
+        gatewayModelDiscovery: () =>
+          Promise.reject(
+            new TypeError("Synthetic defect", {
+              cause: new RangeError("Private nested cause"),
+            }),
+          ),
+      });
+      const context = metadataContextForSelection(explicitSelection);
+      expect((await handleGatewaySetup(context, deps)).status).toBe(502);
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      expectFailureMetadataCounts(sink, explicitSelection ? 1 : undefined);
+      expect(
+        sink.events.find((event) => event.op === "gateway.setup.metadata.resolved"),
+      ).toMatchObject({
+        errorKind: "internal",
+        extra: {
+          outcome: "failed",
+          causeChain: ["RangeError"],
+        },
+      });
+      const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+      expect(event?.extra?.frames).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^packages\/keiko-server\/src\/gateway-setup\.test\.ts:\d+:\d+$/),
+        ]),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("Private nested cause");
+      expect(JSON.stringify(sink.events)).not.toContain("Synthetic defect");
+      expect(JSON.stringify(sink.events)).not.toContain("synthetic-selected-key");
+      expect(JSON.stringify(sink.events)).not.toContain("selected.example.invalid");
+    },
+  );
+
+  it.each([true, false])(
+    "does not start probes, persist or fabricate counts after client disconnect (explicit=%s)",
+    async (explicitSelection) => {
+      const deps = await metadataResponsivenessDeps();
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let started: (() => void) | undefined;
+      const discoveryStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const probe = vi.fn((_config: GatewayConfig, ids: readonly string[]) => Promise.resolve(ids));
+      Object.assign(deps, {
+        gatewaySetupTester: probe,
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            diagnostics.push(record);
+          },
+        },
+        gatewayModelDiscovery: () => {
+          started?.();
+          return new Promise<readonly string[]>(() => undefined);
+        },
+      });
+      const context = metadataContextForSelection(explicitSelection);
+      const setup = handleGatewaySetup(context, deps);
+      await discoveryStarted;
+      context.res.emit("close");
+      expect((await setup).status).toBe(502);
+      expect(probe).not.toHaveBeenCalled();
+      expect(
+        diagnostics.filter((record) => record.source === "gateway.setup.provider-verify"),
+      ).toHaveLength(0);
+      expect(
+        sink.events.find((event) => event.op === "gateway.setup.metadata.resolved")?.extra?.outcome,
+      ).toBe("cancelled");
+      expectFailureMetadataCounts(sink, explicitSelection ? 1 : undefined);
+      expect(
+        sink.events.find((event) => event.op === "gateway.setup.metadata.resolved"),
+      ).toMatchObject({ errorKind: "cancelled" });
+      expect(JSON.stringify(sink.events)).not.toContain("synthetic-selected-key");
+      expect(JSON.stringify(sink.events)).not.toContain("selected.example.invalid");
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      expect(context.res.listenerCount("close")).toBe(0);
+    },
+  );
+});
+
+it.each(["available", "unavailable", "failed"] as const)(
+  "records a body-free selected metadata %s outcome",
+  async (outcome) => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, {
+      gatewayModelDiscovery: () => {
+        if (outcome === "unavailable")
+          return Promise.reject(new Error("Synthetic availability failure"));
+        if (outcome === "failed")
+          return Promise.reject(new TypeError("Synthetic programming failure"));
+        return Promise.resolve(selectedDeploymentMetadata());
+      },
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      await handleGatewaySetup(selectedMetadataContext(), deps);
+      const events = sink.events.filter((event) => event.op === "gateway.setup.metadata.resolved");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toMatchObject({
+        outcome,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(typeof events[0]?.extra?.elapsedMs).toBe("number");
+      expect(JSON.stringify(events)).not.toContain("synthetic-selected-key");
+      expect(JSON.stringify(events)).not.toContain("selected.example.invalid");
+      expect(JSON.stringify(events)).not.toContain("Synthetic programming failure");
+      const event = events[0];
+      if (event === undefined) throw new Error("Expected the metadata outcome event.");
+      expectActivityLogProof(
+        "gateway.setup.metadata.resolved.line",
+        formatActivityLogProofLine(event),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  },
+);
+
+type SetupProbePhase = "smoke" | "format" | "tool" | "embedding";
+
+function probePhaseOf(url: Parameters<typeof fetch>[0], init?: RequestInit): SetupProbePhase {
+  if (fetchInputUrl(url).includes("/embeddings")) return "embedding";
+  const body = typeof init?.body === "string" ? init.body : "";
+  if (body.includes('"tools"')) return "tool";
+  return body.includes("Reply with exactly: OK") ? "smoke" : "format";
+}
+
+function setupProbeReply(): Response {
+  return new Response(
+    JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+      data: [{ embedding: [0.1, 0.2] }],
+      usage: { prompt_tokens: 3, completion_tokens: 1 },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+function pendingSetupProbe(phase: SetupProbePhase): {
+  readonly fetch: typeof fetch;
+  readonly ready: Promise<void>;
+  readonly signals: AbortSignal[];
+  readonly release: () => void;
+} {
+  const signals: AbortSignal[] = [];
+  const releases: (() => void)[] = [];
+  let released = false;
+  let ready: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  return {
+    signals,
+    ready: started,
+    release: (): void => {
+      released = true;
+      for (const release of releases) release();
+    },
+    fetch: (url, init): Promise<Response> => {
+      if (released || probePhaseOf(url, init) !== phase) return Promise.resolve(setupProbeReply());
+      return new Promise<Response>((resolve, reject) => {
+        if (init?.signal === undefined || init.signal === null)
+          throw new Error("Expected native fetch signal.");
+        signals.push(init.signal);
+        releases.push(() => {
+          resolve(setupProbeReply());
+        });
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("Probe cancelled", "AbortError"));
+          },
+          { once: true },
+        );
+        if (signals.length >= (phase === "smoke" ? 4 : 1)) ready?.();
+      });
+    },
+  };
+}
+
+describe("setup native probe cancellation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("bounds a format probe by its existing candidate deadline and preserves prior verified support", async () => {
+    const deps = await metadataResponsivenessDeps();
+    const stored = deps.gatewayConfig;
+    if (stored === undefined) throw new TypeError("Expected gateway configuration store");
+    const raw = {
+      providers: [
+        {
+          modelId: "selected-small",
+          baseUrl: "https://selected.example.invalid/v1",
+          apiKey: "synthetic-selected-key",
+          capability: {
+            ...createDefaultChatCapability("selected-small"),
+            contextWindow: 128_000,
+            maxOutputTokens: 8_000,
+            structuredOutput: true,
+            supportsResponseFormat: true,
+          },
+        },
+      ],
+    };
+    stored.set(parseGatewayConfig(raw), true);
+    writeFileSync(stored.storagePath, JSON.stringify(raw), "utf8");
+    Object.assign(deps, { gatewaySetupTester: undefined });
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const pending = pendingSetupProbe("format");
+    vi.stubGlobal("fetch", pending.fetch);
+    const setup = handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames: ["selected-small"],
+        preserveExisting: true,
+      }),
+      deps,
+    );
+    try {
+      await pending.ready;
+      await vi.advanceTimersByTimeAsync(
+        candidateSmokeDeadlineMs(requiredGatewayConfig(deps), "selected-small"),
+      );
+      expect(pending.signals).toHaveLength(1);
+      expect(pending.signals[0]?.aborted).toBe(true);
+      expect((await setup).status).toBe(200);
+      expect(
+        requiredCapability(requiredGatewayConfig(deps), "selected-small").supportsResponseFormat,
+      ).toBe(true);
+    } finally {
+      pending.release();
+      await setup;
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each(["smoke", "format", "tool", "embedding"] as const)(
+    "aborts in-flight %s probes without probing further or reporting a provider failure",
+    async (phase) => {
+      const deps = await metadataResponsivenessDeps();
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      Object.assign(deps, {
+        gatewaySetupTester: undefined,
+        gatewayEmbeddingProbe: undefined,
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            diagnostics.push(record);
+          },
+        },
+      });
+      const deploymentNames =
+        phase === "smoke"
+          ? Array.from({ length: 8 }, (_, index) => `cancel-chat-${String(index)}`)
+          : ["cancel-chat"];
+      if (phase === "embedding") deploymentNames.push("text-embedding-cancel");
+      const context = ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames,
+      });
+      const pending = pendingSetupProbe(phase);
+      vi.stubGlobal("fetch", pending.fetch);
+      const setup = handleGatewaySetup(context, deps);
+      try {
+        await pending.ready;
+        context.res.emit("close");
+        expect(pending.signals.every((signal) => signal.aborted)).toBe(true);
+        expect((await setup).status).toBe(502);
+        expect(pending.signals).toHaveLength(phase === "smoke" ? 4 : 1);
+        expect(
+          diagnostics.filter((record) => record.source.startsWith("gateway.setup.")),
+        ).toHaveLength(0);
+        expect(currentGatewayConfig(deps)).toBeUndefined();
+      } finally {
+        pending.release();
+        await setup;
+      }
+    },
+  );
+});
+
+it("cancels the embedding retry wait before starting another attempt", async () => {
+  const deps = await metadataResponsivenessDeps();
+  Object.assign(deps, { gatewaySetupTester: undefined, gatewayEmbeddingProbe: undefined });
+  vi.useFakeTimers();
+  let embeddingRequests = 0;
+  let settled = false;
+  vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+    if (fetchInputUrl(url).includes("/embeddings")) {
+      embeddingRequests += 1;
+      return Promise.resolve(new Response("{}", { status: 429 }));
+    }
+    return Promise.resolve(setupProbeReply());
+  });
+  const context = ctx({
+    baseUrl: "https://selected.example.invalid/v1",
+    apiKey: "synthetic-selected-key",
+    deploymentNames: ["cancel-chat", "text-embedding-cancel"],
+  });
+  const setup = handleGatewaySetup(context, deps).then((result) => {
+    settled = true;
+    return result;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(embeddingRequests).toBe(1);
+    expect(settled).toBe(false);
+    context.res.emit("close");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    expect(embeddingRequests).toBe(1);
+    expect((await setup).status).toBe(502);
+  } finally {
+    await vi.advanceTimersByTimeAsync(500);
+    await setup;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   }
 });

@@ -681,9 +681,11 @@ export async function handleStartQiRun(
 
   let modelRouting: QualityIntelligenceModelRouting;
   try {
-    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request, runId);
+    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request, runId, controller.signal);
   } catch (error) {
-    qiRunRegistry.complete(runId, "failed");
+    qiRunRegistry.complete(runId, controller.signal.aborted ? "cancelled" : "failed");
+    if (controller.signal.aborted)
+      return errorResult(499, "CANCELLED", "Quality Intelligence preflight was cancelled.");
     if (error instanceof QiModelPolicyError) {
       return errorResult(400, error.code, error.message);
     }

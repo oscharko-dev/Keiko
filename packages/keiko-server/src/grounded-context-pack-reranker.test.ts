@@ -6,10 +6,11 @@ import {
   type EvidenceAtom,
   type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type {
-  GatewayConfig,
-  LiteLLMRerankRequest,
-  RerankOutcome,
+import {
+  requestLiteLLMRerank,
+  type GatewayConfig,
+  type LiteLLMRerankRequest,
+  type RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -189,4 +190,108 @@ describe("configuredContextPackRerankerFor", () => {
     expect(out).toHaveLength(2);
     deps.store.close();
   });
+
+  it("bounds the aggregate request bytes and preserves every unsubmitted candidate", async () => {
+    let captured: LiteLLMRerankRequest | undefined;
+    let bodyBytes = 0;
+    const deps = depsWith(config(true), (request) => {
+      captured = request;
+      return requestLiteLLMRerank({
+        ...request,
+        fetchImpl: (_url, init) => {
+          bodyBytes = httpBodyBytes(init);
+          return Promise.resolve(completeRerankResponse(request));
+        },
+      });
+    });
+    const candidates = Array.from({ length: 8_000 }, (_, index) =>
+      candidate(`handbook/測定-${String(index)}.html`, 0.5),
+    );
+    const byteBudget = 4_096;
+    const seam = configuredContextPackRerankerFor(deps, QUERY, undefined, byteBudget);
+    const out = await seam?.rerank(candidates, new Map(), candidates.length);
+    const request = requiredRequest(captured);
+    expect(bodyBytes).toBeGreaterThan(0);
+    expect(bodyBytes).toBeLessThanOrEqual(byteBudget);
+    expect(request.documents.length).toBeGreaterThan(0);
+    expect(request.documents.length).toBeLessThan(candidates.length);
+    expect(request.topN).toBe(request.documents.length);
+    expect(out?.at(-1)).toBe(candidates.at(-1));
+    expect(out).toHaveLength(candidates.length);
+    expect(out?.[0]?.scopePath).toBe(candidates[request.documents.length - 1]?.scopePath);
+    expect(out?.[0]?.signals[0]).toEqual({ name: "model-rerank", value: 0.99 });
+    deps.store.close();
+  });
+
+  it("retains the original pool when the request envelope cannot fit", async () => {
+    let calls = 0;
+    const deps = depsWith(config(true), () => {
+      calls += 1;
+      return Promise.resolve({ ok: true, value: { modelId: "unused", results: [] } });
+    });
+    const candidates = [candidate("src/測定.ts", 0.5)];
+    const seam = configuredContextPackRerankerFor(deps, QUERY, undefined, 1);
+    const out = await seam?.rerank(candidates, new Map(), candidates.length);
+    expect(out).toBe(candidates);
+    expect(calls).toBe(0);
+    deps.store.close();
+  });
+
+  it("preserves original identity on a failed bounded request", async () => {
+    let captured: LiteLLMRerankRequest | undefined;
+    let bodyBytes = 0;
+    const deps = depsWith(config(true), (request) => {
+      captured = request;
+      return requestLiteLLMRerank({
+        ...request,
+        fetchImpl: (_url, init) => {
+          bodyBytes = httpBodyBytes(init);
+          return Promise.reject(new Error("Unavailable"));
+        },
+      });
+    });
+    const candidates = Array.from({ length: 100 }, (_, index) =>
+      candidate(`notes/${String(index)}.txt`, 0.5),
+    );
+    const seam = configuredContextPackRerankerFor(deps, QUERY, undefined, 1_024);
+    const out = await seam?.rerank(candidates, new Map(), candidates.length);
+    expect(bodyBytes).toBeGreaterThan(0);
+    expect(bodyBytes).toBeLessThanOrEqual(1_024);
+    expect(captured?.documents.length).toBeLessThan(candidates.length);
+    expect(out).toBe(candidates);
+    deps.store.close();
+  });
+
+  it("preserves the full pool when topK is smaller than the submitted batch", async () => {
+    const deps = depsWith(config(true), (request) =>
+      Promise.resolve({
+        ok: true,
+        value: { modelId: request.modelId, results: [{ index: 1, relevanceScore: 0.99 }] },
+      }),
+    );
+    const candidates = [candidate("src/a.ts", 0.4), candidate("src/b.ts", 0.6)];
+    const seam = configuredContextPackRerankerFor(deps, QUERY, undefined, 4_096);
+    const out = await seam?.rerank(candidates, new Map(), 1);
+    expect(out).toBe(candidates);
+    deps.store.close();
+  });
 });
+
+function httpBodyBytes(init: RequestInit | undefined): number {
+  if (typeof init?.body !== "string") throw new TypeError("Expected serialized HTTP body");
+  return Buffer.byteLength(init.body, "utf8");
+}
+
+function requiredRequest(request: LiteLLMRerankRequest | undefined): LiteLLMRerankRequest {
+  if (request === undefined) throw new TypeError("Expected rerank transport request");
+  return request;
+}
+
+function completeRerankResponse(request: LiteLLMRerankRequest): Response {
+  const results = request.documents
+    .map((_document, index) => ({ index, relevance_score: 0.99 }))
+    .reverse();
+  return new Response(JSON.stringify({ results }), {
+    headers: { "content-type": "application/json" },
+  });
+}

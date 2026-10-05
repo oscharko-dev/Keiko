@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import {
   admitStageSelection,
   reviewStageSelection,
@@ -278,6 +279,19 @@ afterEach(() => {
   rmSync(signingRoot, { recursive: true, force: true });
 });
 
+function expectVerificationFailureRetention(retained: boolean): void {
+  const activity = events.filter((event) => event.op === "git.verified-commit");
+  expectActivityLogProof(
+    "git.verified-commit.emitted-line",
+    formatActivityLogProofLine(activity.at(-1) ?? {}),
+  );
+  expect(
+    observedFailureQuery(activity).events.some(
+      (event) => event.parsed.view.op === "git.verified-commit",
+    ),
+  ).toBe(retained);
+}
+
 function ticketOf(outcome: VerificationTicketOutcome): object | undefined {
   return outcome.kind === "ticket" ? outcome.ticket : undefined;
 }
@@ -391,7 +405,36 @@ describe("verified Code-task commit service", () => {
       currentGeneration: starts[1]?.extra?.verificationGeneration,
     });
     expect(evidence.size).toBe(1);
+    expectVerificationFailureRetention(false);
   });
+
+  it.each([
+    ["passed", false],
+    ["failed", true],
+    ["denied", false],
+    ["skipped", false],
+    ["cancelled", false],
+    ["timed-out", true],
+    ["resource-exceeded", true],
+  ] as const)(
+    "retains only actual %s verification failures as incident evidence",
+    async (status, retained) => {
+      const base = report();
+      const observed: VerificationReport = {
+        ...base,
+        overallStatus: status,
+        counts: { ...base.counts, passed: 0, [status]: 1 },
+        results: base.results.map((result) => ({ ...result, status })),
+      };
+      const ticket = ticketOf(await service.beginVerification());
+      if (ticket === undefined) throw new Error("verification unavailable");
+      await service.completeVerification(ticket, observed);
+      expectVerificationFailureRetention(retained);
+      events.length = 0;
+      service.observeVerification(observed);
+      expectVerificationFailureRetention(retained);
+    },
+  );
 
   it("invalidates a prior approved proposal when fresh verification starts and fails", async () => {
     const id = await verifiedProposal();

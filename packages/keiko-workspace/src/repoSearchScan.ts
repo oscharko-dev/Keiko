@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Candidate gathering and the per-file scan loop for the repo-search facade (Issue #179).
 // Kept separate from the public API surface so repoSearch.ts stays inside the 400-LOC cap.
 // Every file system touch goes through the injected WorkspaceFs port; nothing here calls
@@ -13,10 +14,13 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
+import { Buffer } from "node:buffer";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   discoverCandidateInventory,
   readWorkspaceFileBytesPrefixForInternalUse,
+  readWorkspaceFileBytesForTextInspection,
+  type InternalWorkspaceTextByteRead,
   readWorkspaceFileTextForInternalUse,
   type WorkspaceContentLane,
 } from "./discovery.js";
@@ -36,10 +40,11 @@ import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
   containedRealPathInfo,
+  isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
   realRootIsDeniedViaSymlink,
 } from "./realpath.js";
-import { DEFAULT_BINARY_PROBE, decodeTextBytes, looksBinary } from "./binaryDetect.js";
+import { DEFAULT_BINARY_PROBE, decodeTextFileBytes, looksBinary } from "./binaryDetect.js";
 import { collectFromEntries, validateSearchScopeRelativePaths } from "./repoSearchEntries.js";
 import {
   bestCachedLexicalLines,
@@ -64,7 +69,7 @@ import {
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
   policyOmissionReason,
-  resolveSearchPolicy,
+  resolveWorkspaceSearchPolicy,
   routeQueryTermsForSearch,
   scoreContentForSearch,
   shouldScoreContent,
@@ -96,6 +101,7 @@ const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".jpeg",
   ".jpg",
   ".png",
+  ".svg",
   ".tif",
   ".tiff",
   ".webp",
@@ -115,10 +121,10 @@ export interface ScopeShape {
 }
 
 export interface LimitsShape {
-  readonly maxFilesScanned: number;
+  readonly maxFilesScanned: number | null;
   readonly maxMatchesReturned: number;
   readonly maxBytesPerFileScanned: number;
-  readonly elapsedMsMax: number;
+  readonly elapsedMsMax: number | null;
 }
 
 export interface AtomShape {
@@ -183,6 +189,7 @@ function collectFromDirectory(
   readonly truncated: boolean;
   readonly ignored: number;
   readonly denied: number;
+  readonly unrepresentablePaths?: number | undefined;
   readonly depthPruned: number;
   readonly maxFilesPruned: number;
 } {
@@ -212,13 +219,17 @@ function collectFromDirectory(
     truncated: result.stats.maxFilesPruned > 0,
     ignored: result.stats.ignored,
     denied: result.stats.denied,
+    unrepresentablePaths: result.stats.unrepresentablePaths,
     depthPruned: result.stats.depthPruned,
     maxFilesPruned: result.stats.maxFilesPruned,
   };
 }
 
 export function candidateDiscoveryFileLimit(limits: LimitsShape): number {
-  return Math.max(limits.maxFilesScanned * 25, limits.maxFilesScanned + 1);
+  return Math.min(
+    50_000,
+    Math.max((limits.maxFilesScanned ?? 2048) * 25, (limits.maxFilesScanned ?? 2048) + 1),
+  );
 }
 
 export function candidateInventoryFileLimit(
@@ -230,7 +241,7 @@ export function candidateInventoryFileLimit(
     query.kind === "natural-language" ||
     query.kind === "exact-symbol"
     ? candidateDiscoveryFileLimit(limits)
-    : limits.maxFilesScanned;
+    : (limits.maxFilesScanned ?? 2048);
 }
 
 export interface CandidateSet {
@@ -252,7 +263,7 @@ export function limitCandidateSetForStructuralBuild(
   limits: LimitsShape,
   isEligible: (file: DiscoveredFile) => boolean,
 ): CandidateSet {
-  const fileLimit = Math.max(0, limits.maxFilesScanned);
+  const fileLimit = Math.max(0, limits.maxFilesScanned ?? 2048);
   const eligibleFiles = candidateSet.files.filter(isEligible);
   if (eligibleFiles.length <= fileLimit) {
     return { ...candidateSet, files: eligibleFiles };
@@ -316,6 +327,7 @@ export function deriveCandidateSetFromInventory(
       skippedSymbolicLinks: inventory.skippedSymbolicLinks,
       filesDiscovered: inventory.diagnostics.filesDiscovered,
       truncated: inventory.truncated,
+      unrepresentablePaths: inventory.diagnostics.unrepresentablePathsByDiscovery,
       depthPruned: inventory.diagnostics.depthPrunedByDiscovery,
       maxFilesPruned: inventory.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -377,7 +389,7 @@ function contentPrescoreLimit(
   const defaultLimit = Math.min(
     fileCount,
     CONTENT_PRESCORE_MAX_FILES,
-    Math.max(limits.maxFilesScanned * 25, 0),
+    Math.max((limits.maxFilesScanned ?? 2048) * 25, 0),
   );
   return policy.intent === "project-metadata"
     ? Math.min(defaultLimit, PROJECT_METADATA_CONTENT_PRESCORE_MAX_FILES)
@@ -492,7 +504,7 @@ function resolveGatherInputs(
       query: queryOrLimits,
       limits: limitsOrFs as LimitsShape,
       fs: fsOrPolicy as WorkspaceFs,
-      policy: policy ?? resolveSearchPolicy(scope.relativePaths.length > 0, undefined),
+      policy: policy ?? resolveWorkspaceSearchPolicy(scope, fsOrPolicy as WorkspaceFs, undefined),
       prescoreContent: true,
       ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
       ...(executionControl === undefined ? {} : { executionControl }),
@@ -508,6 +520,7 @@ function resolveGatherInputs(
 }
 
 interface CollectedCandidates {
+  readonly unrepresentablePaths?: number | undefined;
   readonly files: readonly DiscoveredFile[];
   readonly directories: readonly string[];
   readonly directorySnapshots?: readonly WorkspaceDirectorySnapshot[] | undefined;
@@ -651,6 +664,7 @@ function orderCollectedCandidates(
     policy: inputs.policy,
     ignoredByDiscovery,
     deniedByDiscovery,
+    unrepresentablePathsByDiscovery: result.unrepresentablePaths,
     depthPrunedByDiscovery: result.depthPruned,
     maxFilesPrunedByDiscovery: result.maxFilesPruned,
     contentScores,
@@ -692,6 +706,16 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
 }
 
 export interface SearchTextRunner {
+  readonly eligibleTextObserver?:
+    | {
+        active: boolean;
+        readonly observe: (file: {
+          readonly scopePath: string;
+          readonly contentBytes: number;
+          readonly lineCount: number;
+        }) => unknown;
+      }
+    | undefined;
   readonly scope: ScopeShape;
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
@@ -700,9 +724,11 @@ export interface SearchTextRunner {
   readonly deadlineAtMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly matcher: LineMatcher;
+  readonly literalTerms?: readonly string[] | undefined;
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
   readonly query: RetrievalQuery;
+  readonly sourceInspection?: boolean | undefined;
   // Which bytes the per-file matcher sees. REQUIRED, never defaulted here: every runner has to state
   // its lane so a new call site cannot inherit the wrong one silently.
   //   "evidence" — text is redacted at the IO boundary (context packs, grounded answers, evidence
@@ -751,7 +777,7 @@ export function isRunnerTimedOut(runner: SearchTextRunner): boolean {
   const currentMs = runner.nowMs();
   return (
     (runner.deadlineAtMs !== undefined && currentMs >= runner.deadlineAtMs) ||
-    currentMs - runner.startMs > runner.limits.elapsedMsMax
+    currentMs - runner.startMs > (runner.limits.elapsedMsMax ?? Infinity)
   );
 }
 
@@ -765,7 +791,7 @@ export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
     markTruncated(state, "aborted");
     return true;
   }
-  if (state.filesScanned >= runner.limits.maxFilesScanned) {
+  if (state.filesScanned >= (runner.limits.maxFilesScanned ?? Infinity)) {
     markTruncated(state, "file-cap");
     return true;
   }
@@ -785,7 +811,7 @@ export function hitScanLimit(runner: SearchTextRunner, state: RunState): boolean
     markTruncated(state, "aborted");
     return true;
   }
-  if (state.filesScanned >= runner.limits.maxFilesScanned) {
+  if (state.filesScanned >= (runner.limits.maxFilesScanned ?? Infinity)) {
     markTruncated(state, "file-cap");
     return true;
   }
@@ -955,8 +981,10 @@ function recordCandidateOmission(
   candidates: CandidateFile[],
   relativePath: string,
   omitted: CandidateOmissionReason,
+  state?: RunState,
 ): void {
   candidates.push(buildCandidate(relativePath, omitted));
+  if (omitted === "tool-unavailable" && state !== undefined) markTruncated(state, "io-error");
 }
 
 function persistWorkspaceIndexRecord(
@@ -998,7 +1026,9 @@ function recordSizeExceeded(relativePath: string, candidates: CandidateFile[]): 
 // boundary, so no secret-shaped byte can reach an evidence atom, the persisted index, or a grounded
 // answer. The editor lane keeps the raw bytes: see `SearchTextRunner.contentLane`.
 function laneText(runner: SearchTextRunner, text: string): string {
-  return runner.contentLane === "editor" ? text : redact(text);
+  return runner.contentLane === "editor"
+    ? text
+    : redact(text, [], { preserveSourceLineBreaks: true });
 }
 
 async function readRawTextForScan(
@@ -1011,11 +1041,41 @@ async function readRawTextForScan(
     return await readBoundedRawText(runner, relativePath, state, candidates);
   } catch (err) {
     if (isIoError(err)) {
-      recordCandidateOmission(candidates, relativePath, "tool-unavailable");
+      recordCandidateOmission(candidates, relativePath, "tool-unavailable", state);
       return undefined;
     }
     throw err;
   }
+}
+
+function markSizeExclusion(runner: SearchTextRunner, state: RunState, sizeBytes: number): void {
+  if (
+    runner.limits.maxBytesPerFileScanned < MAX_RECURSIVE_TEXT_FILE_BYTES ||
+    sizeBytes <= MAX_RECURSIVE_TEXT_FILE_BYTES
+  )
+    markTruncated(state, "file-cap");
+}
+
+async function readScanBytes(
+  runner: SearchTextRunner,
+  relativePath: string,
+): Promise<InternalWorkspaceTextByteRead> {
+  if (runner.limits.maxFilesScanned === null) {
+    return readWorkspaceFileBytesForTextInspection(
+      runner.scope.workspace,
+      relativePath,
+      runner.limits.maxBytesPerFileScanned,
+      runner.fs,
+    );
+  }
+  // Finite scans already ran binaryOmission before admitting this file.
+  const read = await readWorkspaceFileBytesPrefixForInternalUse(
+    runner.scope.workspace,
+    relativePath,
+    runner.limits.maxBytesPerFileScanned,
+    runner.fs,
+  );
+  return { ...read, binary: false };
 }
 
 async function readBoundedRawText(
@@ -1024,27 +1084,25 @@ async function readBoundedRawText(
   state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
-  const read = await readWorkspaceFileBytesPrefixForInternalUse(
-    runner.scope.workspace,
-    relativePath,
-    runner.limits.maxBytesPerFileScanned,
-    runner.fs,
-  );
-  const decoded = decodeTextBytes(
-    read.bytes,
-    undefined,
-    read.complete ? undefined : { allowIncompleteTail: true },
-  );
+  const read = await readScanBytes(runner, relativePath);
+  if (read.binary) {
+    recordCandidateOmission(candidates, relativePath, "binary");
+    return undefined;
+  }
+  if (!read.complete) {
+    markSizeExclusion(runner, state, read.stat.size);
+    recordSizeExceeded(relativePath, candidates);
+    return undefined;
+  }
+  const decoded = decodeTextFileBytes(read.bytes, {
+    scopePath: relativePath,
+    requireSupportedEncoding: true,
+  });
   if (decoded === undefined) {
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;
   }
   const text = laneText(runner, decoded.text);
-  if (!read.complete) {
-    markTruncated(state, "file-cap");
-    state.oversizedFilesScanned = (state.oversizedFilesScanned ?? 0) + 1;
-    return text;
-  }
   persistWorkspaceIndexRecord(runner, {
     kind: "text",
     scopePath: relativePath,
@@ -1066,7 +1124,7 @@ function readLaneText(
     relativePath,
     opts,
     runner.fs,
-    runner.contentLane,
+    "editor",
   );
 }
 
@@ -1078,21 +1136,25 @@ function readUtf8TextForScan(
 ): string | undefined {
   try {
     const read = readLaneText(runner, relativePath);
+    if (read.content.includes("\0")) {
+      recordCandidateOmission(candidates, relativePath, "binary");
+      return undefined;
+    }
     persistWorkspaceIndexRecord(runner, {
       kind: "text",
       scopePath: relativePath,
       metadata: workspaceIndexFileMetadata(relativePath, read.stat),
-      content: read.content,
+      content: laneText(runner, read.content),
     });
-    return read.content;
+    return laneText(runner, read.content);
   } catch (err) {
     if (err instanceof FileTooLargeError) {
-      return readOversizedUtf8Text(relativePath, state, candidates);
+      return readOversizedUtf8Text(runner, relativePath, state, candidates, err.sizeBytes);
     }
     // TOCTOU: permissions or availability may change between discovery and read.
     // A single unreadable file must degrade to a skip, not crash the whole scan.
     if (isIoError(err)) {
-      recordCandidateOmission(candidates, relativePath, "tool-unavailable");
+      recordCandidateOmission(candidates, relativePath, "tool-unavailable", state);
       return undefined;
     }
     throw err;
@@ -1100,11 +1162,13 @@ function readUtf8TextForScan(
 }
 
 function readOversizedUtf8Text(
+  runner: SearchTextRunner,
   relativePath: string,
   state: RunState,
   candidates: CandidateFile[],
+  sizeBytes: number,
 ): string | undefined {
-  markTruncated(state, "file-cap");
+  markSizeExclusion(runner, state, sizeBytes);
   recordSizeExceeded(relativePath, candidates);
   return undefined;
 }
@@ -1154,6 +1218,7 @@ export interface FileMatches {
   readonly best: readonly ScoredLine[];
   readonly maxScore: number;
   readonly definitionMatch?: boolean | undefined;
+  readonly contentScore?: number | undefined;
 }
 
 function maxLineScore(best: readonly ScoredLine[]): number {
@@ -1185,6 +1250,7 @@ function filePathPolicyOmission(
   runner: SearchTextRunner,
   file: DiscoveredFile,
 ): CandidateOmissionReason | undefined {
+  if (file.sizeBytes > runner.limits.maxBytesPerFileScanned) return "size-exceeded";
   if (isImageScopePath(file.relativePath)) {
     return "binary";
   }
@@ -1204,9 +1270,8 @@ function filePolicyOmission(
   }
   const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
   const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
-  if (!isCanonicalAllowedContainedPath(contained, runner.scope.workspace.root, file.relativePath)) {
-    return { omitted: "ignored" };
-  }
+  const containmentOmission = fileContainmentOmission(runner, file.relativePath, contained);
+  if (containmentOmission !== undefined) return { omitted: containmentOmission };
   try {
     const stat = runner.fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
@@ -1219,6 +1284,21 @@ function filePolicyOmission(
     throw err;
   }
   return { omitted: policyOmissionReason(file.relativePath, runner.policy), path: contained.path };
+}
+
+function fileContainmentOmission(
+  runner: SearchTextRunner,
+  relativePath: string,
+  contained: ReturnType<typeof containedRealPathInfo>,
+): CandidateOmissionReason | undefined {
+  const root = runner.scope.workspace.root;
+  if (isCanonicalAllowedContainedPath(contained, root, relativePath)) return undefined;
+  if (
+    isAllowedContainedPathParent(contained, root, relativePath) &&
+    !runner.fs.exists(contained.path)
+  )
+    return "tool-unavailable";
+  return "ignored";
 }
 
 async function binaryOmission(
@@ -1281,6 +1361,16 @@ function cachedPreviewFileMatches(
   return textFileMatches(runner, file, state, order, content) ?? "handled";
 }
 
+function canUseCachedLexicalMatches(runner: SearchTextRunner): boolean {
+  // Hashed natural-language records cannot prove atomic phrase/alternative matching.
+  return (
+    runner.literalTerms === undefined &&
+    runner.eligibleTextObserver?.active !== true &&
+    runner.semantic === undefined &&
+    runner.sourceInspection !== true
+  );
+}
+
 function cachedFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -1296,7 +1386,7 @@ function cachedFileMatches(
     recordCandidateOmission(candidates, file.relativePath, cached.kind);
     return "handled";
   }
-  if (runner.semantic !== undefined) {
+  if (!canUseCachedLexicalMatches(runner)) {
     return undefined;
   }
   if (abortScanFile(runner, state)) {
@@ -1330,6 +1420,22 @@ function cachedFileMatches(
   };
 }
 
+export async function fileListingTextIsReadable(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  candidates: CandidateFile[],
+): Promise<boolean> {
+  const policy = filePolicyOmission(runner, file);
+  if (policy.omitted !== undefined) {
+    recordCandidateOmission(candidates, file.relativePath, policy.omitted, state);
+    if (policy.omitted === "size-exceeded") markSizeExclusion(runner, state, file.sizeBytes);
+    return false;
+  }
+  state.filesScanned += 1;
+  return (await readForScan(runner, file.relativePath, state, candidates)) !== undefined;
+}
+
 export async function scanFile(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -1355,6 +1461,7 @@ export async function collectFileMatches(
   }
   const pathOmission = filePathPolicyOmission(runner, file);
   if (pathOmission !== undefined) {
+    if (pathOmission === "size-exceeded") markSizeExclusion(runner, state, file.sizeBytes);
     recordCandidateOmission(candidates, file.relativePath, pathOmission);
     return undefined;
   }
@@ -1375,7 +1482,7 @@ async function collectLiveFileMatches(
   candidates: CandidateFile[],
   order: number,
 ): Promise<FileMatches | undefined> {
-  const policyPath = await readablePolicyPath(runner, file, candidates);
+  const policyPath = await readablePolicyPath(runner, file, state, candidates);
   if (policyPath === undefined || abortScanFile(runner, state)) {
     return undefined;
   }
@@ -1389,20 +1496,53 @@ async function collectLiveFileMatches(
 async function readablePolicyPath(
   runner: SearchTextRunner,
   file: DiscoveredFile,
+  state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
-    recordCandidateOmission(candidates, file.relativePath, policy.omitted);
+    recordCandidateOmission(candidates, file.relativePath, policy.omitted, state);
     return undefined;
   }
+  if (runner.limits.maxFilesScanned === null && runner.fs.readFileBytes !== undefined)
+    return policy.path;
   const binary =
     policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
   if (binary !== undefined) {
-    recordCandidateOmission(candidates, file.relativePath, binary);
+    recordCandidateOmission(candidates, file.relativePath, binary, state);
     return undefined;
   }
   return policy.path;
+}
+
+function collectRankedSemanticDocument(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  text: string,
+): void {
+  if (runner.semantic === undefined) return;
+  const document = { scopePath: file.relativePath, text };
+  if (runner.semantic.maxDocumentBytes === undefined) {
+    collectSemanticSearchDocument(runner.semantic, document);
+    return;
+  }
+  const contentScore = scoreContentForSearch(runner.query, text, runner.policy, file.relativePath);
+  const ranked = orderCandidatesForSearch({
+    files: [file],
+    query: runner.query,
+    policy: runner.policy,
+    contentScores: new Map([[file.relativePath, contentScore]]),
+    ignoredByDiscovery: 0,
+    deniedByDiscovery: 0,
+  }).diagnostics.rankedCandidates[0];
+  collectSemanticSearchDocument(runner.semantic, document, ranked?.score ?? 0);
+}
+
+function fileCanContainMatches(runner: SearchTextRunner, text: string): boolean {
+  if (runner.sourceInspection === true) return true;
+  // Reuse the prepared literal matcher: alternatives and case folding must match line selection.
+  if (runner.literalTerms !== undefined) return runner.matcher.match(text) > 0;
+  return shouldScoreContent(runner.query, text, runner.policy);
 }
 
 function textFileMatches(
@@ -1412,11 +1552,11 @@ function textFileMatches(
   order: number,
   text: string,
 ): FileMatches | undefined {
-  collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
-  if (!shouldScoreContent(runner.query, text, runner.policy)) {
-    return undefined;
-  }
-  const best = scanLines(runner, text, state, file.relativePath);
+  observeEligibleTextFile(runner, file, text);
+  collectRankedSemanticDocument(runner, file, text);
+  if (!fileCanContainMatches(runner, text)) return undefined;
+  const matched = scanLines(runner, text, state, file.relativePath);
+  const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {
     return undefined;
   }
@@ -1425,6 +1565,10 @@ function textFileMatches(
     order,
     best,
     maxScore: maxLineScore(best),
+    contentScore:
+      runner.policy.intent === "project-metadata"
+        ? 0
+        : scoreContentForSearch(runner.query, text, runner.policy, file.relativePath),
     definitionMatch:
       runner.query.kind === "exact-symbol" &&
       repositorySourceLines(text, file.relativePath).some((line) =>
@@ -1435,6 +1579,52 @@ function textFileMatches(
         ),
       ),
   };
+}
+
+function observeEligibleTextFile(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  text: string,
+): void {
+  const observer = runner.eligibleTextObserver;
+  if (observer?.active !== true || !/\S/u.test(text)) return;
+  let lineCount = 1;
+  let offset = text.indexOf("\n");
+  while (offset >= 0) {
+    lineCount += 1;
+    offset = text.indexOf("\n", offset + 1);
+  }
+  observer.active =
+    observer.observe({
+      scopePath: file.relativePath,
+      contentBytes: Math.max(file.sizeBytes, Buffer.byteLength(text, "utf8")),
+      lineCount: Math.max(1, lineCount - Number(text.endsWith("\n"))),
+    }) !== false;
+}
+
+// Filename inspection still yields actual admitted text, never an inferred symbol or file body.
+// The ordinary excerpt reader applies the same evidence budgets to this bounded source window.
+function sourceInspectionOrMatchedLines(
+  runner: SearchTextRunner,
+  text: string,
+  state: RunState,
+  matched: readonly ScoredLine[],
+): readonly ScoredLine[] {
+  if (runner.sourceInspection !== true || matched.length > 0) return matched;
+  if (abortScanFile(runner, state)) return [];
+  const lines = text.split(/\r?\n/u);
+  if (text.endsWith("\n")) lines.pop();
+  const first = lines.findIndex((line) => line.trim().length > 0);
+  return first < 0
+    ? []
+    : [
+        {
+          line: first + 1,
+          startLine: first + 1,
+          endLine: Math.min(lines.length, first + 200),
+          score: 1,
+        },
+      ];
 }
 
 export function emitFileMatches(

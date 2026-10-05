@@ -39,6 +39,7 @@ const CONVERSATION_COVERAGE_FIELDS: ReadonlySet<string> = new Set([
   "throughMessageId",
   "historyRevision",
   "contextWindowTokens",
+  "effectiveInputBudget",
 ]);
 
 // ─── Shared primitives (local; contracts is a leaf, no shared-util import) ──────
@@ -645,6 +646,13 @@ function collectConversationCoverage(coverage: unknown, reasons: string[], prefi
     !nonNegativeInteger(coverage.historyRevision),
     `${prefix}.conversationCoverage.historyRevision invalid`,
   );
+  if (coverage.effectiveInputBudget !== undefined) {
+    pushIf(
+      reasons,
+      !nonNegativeInteger(coverage.effectiveInputBudget),
+      `${prefix}.conversationCoverage.effectiveInputBudget invalid`,
+    );
+  }
   if (coverage.contextWindowTokens !== undefined) {
     pushIf(
       reasons,

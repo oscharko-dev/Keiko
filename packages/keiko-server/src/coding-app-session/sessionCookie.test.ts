@@ -6,6 +6,7 @@ import {
   APP_SESSION_FILES_COOKIE_PATH,
   APP_SESSION_GIT_COOKIE_PATH,
   APP_SESSION_COOKIE_NAME,
+  APP_SESSION_COOKIE_PATH,
   APP_SESSION_RUNTIME_COOKIE_PATH,
   APP_SESSION_RUNS_COOKIE_PATH,
   APP_SESSION_WORKSPACES_COOKIE_PATH,
@@ -13,6 +14,7 @@ import {
   APP_SESSION_TASK_WORKSPACES_COOKIE_PATH,
   APP_SESSION_SUPPORT_REPORT_COOKIE_PATH,
   APP_SESSION_CLONE_COOKIE_PATH,
+  APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
   clearSessionCookie,
   clearSessionCookies,
   readSessionCookie,
@@ -20,6 +22,26 @@ import {
   serializeSessionCookie,
   serializeSessionCookies,
 } from "./sessionCookie.js";
+
+const activeCookiePaths = [
+  APP_SESSION_COOKIE_PATH,
+  APP_SESSION_GIT_COOKIE_PATH,
+  APP_SESSION_FILES_COOKIE_PATH,
+  APP_SESSION_EDITOR_COOKIE_PATH,
+  APP_SESSION_RUNTIME_COOKIE_PATH,
+  APP_SESSION_RUNS_COOKIE_PATH,
+  APP_SESSION_WORKSPACES_COOKIE_PATH,
+  APP_SESSION_DESKTOP_COOKIE_PATH,
+  APP_SESSION_TASK_WORKSPACES_COOKIE_PATH,
+  APP_SESSION_SUPPORT_REPORT_COOKIE_PATH,
+  APP_SESSION_CLONE_COOKIE_PATH,
+  APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
+];
+const retiredCookiePaths = ["/api/editor/local-history", "/api"];
+
+function cookiePaths(cookies: readonly string[]): readonly string[] {
+  return cookies.map((cookie) => /(?:^|; )Path=([^;]+)/u.exec(cookie)?.[1] ?? "");
+}
 
 function requestWith(headers: Record<string, string>, encrypted = false): IncomingMessage {
   return {
@@ -48,36 +70,17 @@ describe("serializeSessionCookie", () => {
 
   it("issues the bearer only on protected coding-session route families", () => {
     const cookies = serializeSessionCookies("t", { secure: false, maxAgeSeconds: 10 });
-
-    expect(cookies).toHaveLength(13);
-    expect(cookies[0]).toContain("Path=/api/coding-workbench;");
-    expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
-    expect(cookies[2]).toContain(`Path=${APP_SESSION_FILES_COOKIE_PATH};`);
-    expect(cookies[3]).toContain(`Path=${APP_SESSION_EDITOR_COOKIE_PATH};`);
-    expect(cookies[4]).toContain(`Path=${APP_SESSION_RUNTIME_COOKIE_PATH};`);
-    expect(cookies[5]).toContain(`Path=${APP_SESSION_RUNS_COOKIE_PATH};`);
-    expect(cookies[6]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
-    expect(cookies[7]).toContain(`Path=${APP_SESSION_DESKTOP_COOKIE_PATH};`);
-    expect(cookies[8]).toContain(`Path=${APP_SESSION_TASK_WORKSPACES_COOKIE_PATH};`);
-    expect(cookies[9]).toContain(`Path=${APP_SESSION_SUPPORT_REPORT_COOKIE_PATH};`);
-    expect(cookies[10]).toContain(`Path=${APP_SESSION_CLONE_COOKIE_PATH};`);
-    expect(cookies.some((cookie) => cookie.includes("Path=/api/repositories;"))).toBe(false);
-    expect(cookies.some((cookie) => cookie.includes("Path=/api/diagnostics;"))).toBe(false);
-    // The predecessor broad-path bearer is expired on issuance: a browser that paired before the
-    // narrowing holds the SAME cookie name at Path=/api and would keep sending it to unrelated
-    // /api routes until it lapsed on its own.
-    expect(cookies[11]).toContain("Path=/api/editor/local-history;");
-    expect(cookies[11]).toContain("Max-Age=0");
-    expect(cookies[12]).toContain("Path=/api;");
-    expect(cookies[12]).toContain("Max-Age=0");
-    // Only the final expiring projection may carry the broad path; no live bearer does.
-    expect(cookies.slice(0, -1).every((cookie) => !cookie.includes("Path=/api;"))).toBe(true);
+    const active = cookies.filter((cookie) => !cookie.includes("Max-Age=0"));
+    const expired = cookies.filter((cookie) => cookie.includes("Max-Age=0"));
+    expect(new Set(cookiePaths(active))).toEqual(new Set(activeCookiePaths));
+    expect(new Set(cookiePaths(expired))).toEqual(new Set(retiredCookiePaths));
+    expect(new Set(cookiePaths(cookies)).size).toBe(cookies.length);
+    for (const cookie of active) expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=t;`);
+    for (const cookie of expired) expect(cookie).toContain(`${APP_SESSION_COOKIE_NAME}=;`);
   });
 
-  // Structural pin (#2627 W2-15): the by-index assertions above catch the current narrow
-  // projections, but a future edit that reorders indices — or adds another projection at
-  // `Path=/api` with a live Max-Age — could re-widen the bearer scope while every index assertion
-  // still passed. The Wave-2 pre-merge audit flagged a prior iteration of this very pin that had
+  // Structural pin (#2627 W2-15): independent effective-attribute assertions preserve the
+  // security invariant even if a future projection adds conflicting expiry attributes. The Wave-2 pre-merge audit flagged a prior iteration of this very pin that had
   // been rewritten to accept a `Path=/api` widening under a false ADR-0147 D7 attribution; the
   // reversion landed in commit fa178cd1 before the epic merged to dev, but the class of edit
   // remains the highest-consequence artifact this file can produce. Assert the invariant
@@ -125,24 +128,11 @@ describe("clearSessionCookie", () => {
 
   it("expires every route-family projection", () => {
     const cookies = clearSessionCookies(false);
-
-    expect(cookies).toHaveLength(13);
+    const expected = [...activeCookiePaths, ...retiredCookiePaths];
+    expect(new Set(cookiePaths(cookies))).toEqual(new Set(expected));
+    expect(new Set(cookiePaths(cookies)).size).toBe(cookies.length);
     expect(cookies.every((cookie) => cookie.includes("Max-Age=0"))).toBe(true);
-    expect(cookies[1]).toContain(`Path=${APP_SESSION_GIT_COOKIE_PATH};`);
-    expect(cookies[2]).toContain(`Path=${APP_SESSION_FILES_COOKIE_PATH};`);
-    expect(cookies[3]).toContain(`Path=${APP_SESSION_EDITOR_COOKIE_PATH};`);
-    expect(cookies[4]).toContain(`Path=${APP_SESSION_RUNTIME_COOKIE_PATH};`);
-    expect(cookies[5]).toContain(`Path=${APP_SESSION_RUNS_COOKIE_PATH};`);
-    expect(cookies[6]).toContain(`Path=${APP_SESSION_WORKSPACES_COOKIE_PATH};`);
-    expect(cookies[7]).toContain(`Path=${APP_SESSION_DESKTOP_COOKIE_PATH};`);
-    expect(cookies[8]).toContain(`Path=${APP_SESSION_TASK_WORKSPACES_COOKIE_PATH};`);
-    expect(cookies[9]).toContain(`Path=${APP_SESSION_SUPPORT_REPORT_COOKIE_PATH};`);
-    expect(cookies[10]).toContain(`Path=${APP_SESSION_CLONE_COOKIE_PATH};`);
-    expect(cookies.some((cookie) => cookie.includes("Path=/api/repositories;"))).toBe(false);
-    expect(cookies.some((cookie) => cookie.includes("Path=/api/diagnostics;"))).toBe(false);
-    expect(cookies[11]).toContain("Path=/api/editor/local-history;");
-    // Sign-out must also remove the predecessor broad-path bearer, not just the narrow ones.
-    expect(cookies[12]).toContain("Path=/api;");
+    expect(cookies.every((cookie) => cookie.startsWith(`${APP_SESSION_COOKIE_NAME}=;`))).toBe(true);
   });
 });
 

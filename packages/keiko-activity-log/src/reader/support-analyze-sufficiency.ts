@@ -28,7 +28,8 @@
 // browser-side drops (`client*` counters) that the client-diagnostic loss lines evidence on their
 // own, so only its Activity Log counters propagate. A product loss fully evidenced by its own
 // registered loss line (a rate-limited client report, a bounded discovery) keeps the report
-// complete.
+// complete. Pin quota exhaustion is a protection failure, even in historical loss-marked records;
+// it declares partial evidence only for its own pin class, never a process-wide event deletion.
 
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
@@ -94,6 +95,7 @@ interface OperationFacts {
 
 const ACTIVITY_LOG_EVIDENCE_CLASS_PREFIX = "activity-log-";
 const ACTIVITY_LOG_LOSS_SUMMARY_OP = "activity-log.loss";
+const PIN_PROTECTION_FAILURE_OP = "activity-log.pin.quota-exhausted";
 const CLIENT_LOSS_COUNTER_PREFIX = "client";
 const DROPPED_OPERATION_FIELDS = ["failedOp", "droppedOp"] as const;
 const DROPPED_OPERATION_DIGEST_FIELD = "droppedOpDigest";
@@ -126,6 +128,9 @@ function isEvidenceLossLine(
   line: ActivityLogSufficiencyLine,
   registry: SupportReaderRegistry,
 ): boolean {
+  // Historical quota markers declared event-dropped before any retention deletion occurred.
+  // Preserve their supported records, but their subject is protection rather than process evidence.
+  if (line.op === PIN_PROTECTION_FAILURE_OP) return false;
   const facts = registry.operations.get(line.op);
   if (facts?.lifecycle !== "loss") return false;
   if (!facts.failureClasses.some((name) => name.startsWith(ACTIVITY_LOG_EVIDENCE_CLASS_PREFIX))) {
@@ -245,7 +250,9 @@ function lineReasons(
   if (facts === undefined) return [];
   const completeness = line.fields?.completeness;
   const partial =
-    facts.lifecycle !== "loss" && completeness !== undefined && completeness !== "complete";
+    (facts.lifecycle !== "loss" || line.op === PIN_PROTECTION_FAILURE_OP) &&
+    completeness !== undefined &&
+    completeness !== "complete";
   return partial ? [...causalReasons(line, facts), "evidence-partial"] : causalReasons(line, facts);
 }
 

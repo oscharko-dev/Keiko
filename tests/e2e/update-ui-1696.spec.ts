@@ -191,6 +191,9 @@ async function createOutageHarness(): Promise<OutageHarness> {
     mode: 0o600,
   });
   const port = await freeLoopbackPort();
+  const env = { ...process.env };
+  // The fixture models a global install launched by Node, not its parent's npm exec command.
+  delete env.npm_command;
   return {
     port,
     origin: `http://127.0.0.1:${String(port)}`,
@@ -198,7 +201,7 @@ async function createOutageHarness(): Promise<OutageHarness> {
     stateDir,
     launcherCwd,
     env: {
-      ...process.env,
+      ...env,
       KEIKO_CLI_BIN_PATH: OUTAGE_WRAPPER,
       KEIKO_UI_STATIC_ROOT: PACKAGED_STATIC_ROOT,
       KEIKO_CONFIG_FILE: configPath,
@@ -940,6 +943,9 @@ async function assertManualCheckActionIsUnobscuredAt320CssPixels(
     ),
   ).toBeVisible();
 
+  // Window activation follows user modality; a programmatic focus after a pointer click must
+  // not steal the foreground. Exercise the keyboard path before focusing the background window.
+  await page.keyboard.press("Tab");
   await settings.focus();
   await expect(updateWindow).toHaveAttribute("data-top", "false");
   await expect(notice).toBeVisible();

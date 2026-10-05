@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { classifyRetrievalIntent } from "./intent.js";
 
 describe("classifyRetrievalIntent", () => {
+  it("prioritizes inspection of existing C# sources over proposed TypeScript and Vitest code", () => {
+    expect(
+      classifyRetrievalIntent(
+        "Untersuche dazu jetzt die C#-Quelldateien im verbundenen Ordner. Welche Rechenfunktion ist implementiert, was liefert sie für 8 und 13, und welchen passenden kopierbaren Vitest-Test mit einer äquivalenten TypeScript-Funktion würdest du vorschlagen? Unterscheide ausdrücklich Bestand und vorgeschlagenen Code; führe nichts aus.",
+      ).intent,
+    ).toBe("targeted-code-search");
+  });
+
+  it("preserves diagnostic intent for source inspection of a failure", () => {
+    expect(
+      classifyRetrievalIntent("Inspect C# source files to explain this exception.").intent,
+    ).toBe("diagnostic-search");
+  });
+
   it.each([
     "Welche Type-Script Version wird in der App verwendet?",
     "Welche Node-Version erwartet das Projekt?",
@@ -18,6 +32,13 @@ describe("classifyRetrievalIntent", () => {
   ])("classifies repository overview query: %s", (text) => {
     expect(classifyRetrievalIntent(text).intent).toBe("repository-overview");
   });
+
+  it.each(["Was siehst du?", "Was kannst du sehen?", "What can you see?", "Tell me everything"])(
+    "recognizes connected-scope orientation without repository vocabulary: %s",
+    (text) => {
+      expect(classifyRetrievalIntent(text).intent).toBe("repository-overview");
+    },
+  );
 
   it("classifies stacktrace and HTTP failures as diagnostic search", () => {
     expect(classifyRetrievalIntent("Warum bekomme ich HTTP 503 im Chat?").intent).toBe(

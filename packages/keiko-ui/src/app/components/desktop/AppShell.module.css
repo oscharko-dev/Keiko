@@ -20,3 +20,31 @@
     max-height: calc(100dvh - 28px);
   }
 }
+
+.cmpSourceAlertStack {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: max-content;
+  max-width: min(520px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  pointer-events: none;
+  padding: 6px;
+  box-sizing: border-box;
+}
+
+.cmpSourceAlertStack > * {
+  pointer-events: auto;
+  position: static;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  transform: none;
+  width: 100%;
+  max-width: 100%;
+}

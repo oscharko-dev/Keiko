@@ -25,9 +25,11 @@ import {
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
+import { filesChatBindScope } from "../hooks/workspaceActions";
 import { parsePersistedWindows, sanitizePersistedWindows } from "../hooks/workspace-persistence";
 import type { AppWindow } from "../windows/types";
 import { chatReferenceFingerprint } from "./chatReferenceFingerprint";
+import { createInitialLayout } from "./cards/editorPaneGeometry";
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
@@ -184,12 +186,13 @@ vi.mock("../workspace-trust/useWorkspaceTrust", () => ({
 
 // The real Explorer only needs to expose the root-bar affordance for this test; its own navigation
 // behaviour is covered by FilesWidget's suite.
+const filesRootSelectionTarget = vi.hoisted(() => ({ current: "/work" }));
 vi.mock("./cards/FilesWidget", () => ({
   FilesWidget: ({ onRootChange }: { readonly onRootChange?: (next: string) => void }): ReactNode =>
     onRootChange === undefined ? (
       <div data-testid="files-without-root-bar" />
     ) : (
-      <button type="button" onClick={() => onRootChange("/work")}>
+      <button type="button" onClick={() => onRootChange(filesRootSelectionTarget.current)}>
         go up
       </button>
     ),
@@ -324,6 +327,7 @@ function cfgPatches(ctx: WindowRenderContext): readonly Record<string, unknown>[
 }
 
 afterEach(() => {
+  filesRootSelectionTarget.current = "/work";
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   window.localStorage.clear();
@@ -816,23 +820,66 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     expect(patch["revealRequestId"]).toBeUndefined();
   });
 
-  it("keeps an in-flight reveal across a layout commit that does not change the root", async () => {
+  it("clears a retained reveal when another file is selected within the same root", async () => {
     const ctx = context();
     manifestRef.current = singleRootManifest("/repo-a");
     render(
       editorHost(
-        { root: "/repo-a", revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" },
+        {
+          root: "/repo-a",
+          file: "src/first.ts",
+          revealLineStart: 7,
+          revealLineEnd: 10,
+          revealRequestId: "old-reveal",
+        },
         ctx,
       ),
     );
     await screen.findByTestId("editor-/repo-a");
-
-    editorHandlers.at(-1)?.({ root: "/repo-a", layoutJson: '{"version":2}' });
-
+    editorHandlers.at(-1)?.({ root: "/repo-a", file: "src/other.ts" });
     const patch = lastCfgPatch(ctx);
-    // The addressee did not change, so the request is still this editor's to act on.
-    expect(Object.keys(patch)).not.toContain("revealRequestId");
+    expect(patch).toHaveProperty("revealRequestId", undefined);
+    expect(patch).toHaveProperty("revealLineStart", undefined);
+    expect(patch).toHaveProperty("revealLineEnd", undefined);
   });
+
+  it.each([undefined, "src/a.ts", "./src/a.ts"])(
+    "keeps an in-flight reveal through the production same-file layout patch (%s)",
+    async (file) => {
+      const { buildEditorWorkspacePatch } =
+        await vi.importActual<typeof import("./cards/EditorWidget")>("./cards/EditorWidget");
+      const actualPatch = buildEditorWorkspacePatch(
+        "/repo-a",
+        createInitialLayout({
+          root: "/repo-a",
+          file: "src/a.ts",
+          openFiles: ["src/a.ts"],
+          layoutJson: undefined,
+        }),
+      );
+      expect(actualPatch).toHaveProperty("file", "src/a.ts");
+      expect(actualPatch.openFiles).toEqual(["src/a.ts"]);
+      const ctx = context();
+      manifestRef.current = singleRootManifest("/repo-a");
+      render(
+        editorHost(
+          {
+            root: "/repo-a",
+            file,
+            revealLineStart: 7,
+            revealLineEnd: 10,
+            revealRequestId: "reveal-1",
+          },
+          ctx,
+        ),
+      );
+      await screen.findByTestId("editor-/repo-a");
+      editorHandlers.at(-1)?.(actualPatch);
+      expect(lastCfgPatch(ctx)).not.toHaveProperty("revealRequestId");
+      expect(lastCfgPatch(ctx)).not.toHaveProperty("revealLineStart");
+      expect(lastCfgPatch(ctx)).not.toHaveProperty("revealLineEnd");
+    },
+  );
 
   it("withholds a reveal whose target root is not a member of the workspace", async () => {
     // `selectedRoot()` falls back to the focused root when cfg names an unknown root. The fallback
@@ -3063,6 +3110,42 @@ describe("ChatWindowSessionHost target missing", () => {
 });
 
 describe("FilesWindowSessionHost", () => {
+  it("replaces the configured source root for ordinary explicit folder navigation", async () => {
+    manifestRef.current = null;
+    filesRootSelectionTarget.current = "/manuals/Distinct";
+    const cfg = {
+      root: "/manuals/Scale",
+      resolvedRoot: "/manuals/Scale",
+      rootBinding: "coding-repository",
+    };
+    const ctx = context();
+    render(
+      <I18nProvider>
+        <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={cfg.root} />
+      </I18nProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "go up" }));
+    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0];
+    if (patch === undefined) throw new Error("The Files root selection did not update its cfg");
+    const files: AppWindow = {
+      id: "files-root",
+      type: "files",
+      cfg: patch,
+      x: 0,
+      y: 0,
+      w: 640,
+      h: 480,
+      z: 1,
+      max: false,
+      zoom: 1,
+    };
+    const chat: AppWindow = { ...files, id: "chat-source", type: "chat", cfg: {} };
+    expect(patch["root"]).toBe("/manuals/Distinct");
+    expect(patch["rootBinding"]).toBe("coding-repository");
+    expect(patch["resolvedRoot"]).toBeUndefined();
+    expect(filesChatBindScope(files, chat, 0)?.root).toBe("/manuals/Distinct");
+  });
+
   it("does not expose a second root authority when the global workspace root is bound", async () => {
     manifestRef.current = singleRootManifest("/work/keiko");
     const ctx = context();

@@ -1,8 +1,12 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+} from "../../../tests/support/activity-log-test-support.js";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listSupportIncidents,
   recordRegisteredFailureIncident,
@@ -32,6 +36,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   closeFileServerLogSinks();
+  vi.unstubAllEnvs();
   rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -106,6 +111,29 @@ describe("real canonical support report worker", () => {
     expect(existsSync(join(stateDir, "activity-log-manifests"))).toBe(false);
   });
 
+  it("downloads the selected failure through the real worker when all candidate slots are occupied", async () => {
+    failure();
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const response = await runSupportReportJob(stateDir, "desktop-worker-failure");
+    const report = parseSupportReport(response.reportJson);
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(analyzed.selection.status).toBe("complete");
+    expect(report.incident.pin.status).toBe("rejected");
+    expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+      retainedIds,
+    );
+    expect(listSupportIncidents(stateDir)).toHaveLength(0);
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+    const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(evidence).toContain('"op":"client.diagnostic"');
+    expect(evidence).toContain('"errorKind":"timeout"');
+    expect(evidence).not.toContain("desktop-worker-failure");
+    expect(existsSync(join(stateDir, "activity-log-manifests"))).toBe(false);
+  });
+
   it("rejects an unknown correlation before creating any incident", async () => {
     failure();
     await expect(runSupportReportJob(stateDir, "unknown-worker-failure")).rejects.toMatchObject({
@@ -115,9 +143,18 @@ describe("real canonical support report worker", () => {
   });
 
   it("creates a manual report with honest absent-evidence status through the real worker", async () => {
-    const response = await runSupportReportJob(stateDir);
+    const requestId = "manual-worker-export-request";
+    const response = await runSupportReportJob(stateDir, undefined, undefined, requestId);
     expect(analyzeSupportReport(response.reportJson).selection.status).not.toBe("complete");
-    expect(listSupportIncidents(stateDir)).toHaveLength(1);
+    const retained = listSupportIncidents(stateDir);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.correlation.rootCorrelationId).not.toBe(requestId);
+    expect(retained[0]?.correlation.rootCorrelationId).toMatch(/^[a-f0-9-]{36}$/u);
+    const report = parseSupportReport(response.reportJson);
+    expect(report.incident.incidentId).toBe(retained[0]?.incidentId);
+    expect(report.incident.trigger).toBe("user-report");
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
+    expect(response.reportJson).not.toContain(requestId);
   });
 
   it("keeps manual export focused on a retained failure under unrelated request traffic", async () => {

@@ -17,6 +17,7 @@ import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
+  ConnectionOutcome,
   ChatBindingTarget,
   ChatUnbindTarget,
   UseWorkspaceResult,
@@ -40,9 +41,8 @@ import {
   boundGitChangeRelationshipIdOf,
   boundConnectorScopeOf,
   connectorChatBind,
-  boundScopeOf,
+  connectionTeardownScope,
   chatUnbindTarget,
-  filesChatBindScope,
   isWorkspaceWindowSelectable,
   makeConnectActions,
   makeLayoutActions,
@@ -57,6 +57,10 @@ import {
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
+import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 
 export type { AppWindow, View };
@@ -1042,8 +1046,18 @@ function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   );
 }
 
-export function reportConnectionUnbindFailure(): void {
-  reportClientDiagnostic("[keiko] workspace connection unbind callback failed");
+export function reportConnectionUnbindFailure(error?: unknown): void {
+  reportClientDiagnostic(
+    "[keiko] workspace connection unbind callback failed",
+    error === undefined
+      ? undefined
+      : {
+          kind: "other",
+          correlationId: correlationIdOf(error),
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        },
+  );
 }
 
 // Server sync failures were swallowed by bare `catch { return null; }` — network
@@ -1858,6 +1872,7 @@ export interface UseWorkspaceOptions {
         chatWindowId: string,
         scope: ChatConnectedScope,
         target?: ChatUnbindTarget,
+        connectionId?: string,
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorBind?:
@@ -1912,15 +1927,15 @@ function connectionChatWindowId(conn: Connection, win: AppWindow, other: AppWind
   return null;
 }
 
-function connectionUnbindScope(
-  conn: Connection,
-  win: AppWindow,
-  other: AppWindow,
-): ChatConnectedScope | null {
-  const bound = boundScopeOf(conn);
-  if (bound !== null) return bound;
-  if (conn.boundScopeElided === true) return null;
-  return filesChatBindScope(win, other, Date.now());
+function acknowledgedConnection(conn: Connection, scope: ChatConnectedScope): Connection {
+  const next = { ...conn, boundScopeKind: scope.kind };
+  delete next.boundScopeElided;
+  delete next.boundRelativePath;
+  next.boundScopeFingerprint = connectedScopeFingerprint(scope);
+  if (scope.root !== undefined) next.boundRoot = scope.root;
+  else delete next.boundRoot;
+  if (scope.relativePaths[0] !== undefined) next.boundRelativePath = scope.relativePaths[0];
+  return next;
 }
 
 function connectionOtherWindow(
@@ -2001,11 +2016,7 @@ async function unbindClosedWindowConnection(
   closedWin: AppWindow,
   conn: Connection,
   winsById: ReadonlyMap<string, AppWindow>,
-  unbindScope: (
-    chatWindowId: string,
-    scope: ChatConnectedScope,
-    target?: ChatUnbindTarget,
-  ) => boolean | Promise<boolean>,
+  unbindScope: NonNullable<UseWorkspaceOptions["onScopeUnbind"]>,
   unbindConnectorScope: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
@@ -2022,13 +2033,14 @@ async function unbindClosedWindowConnection(
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
   const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
   const target = chatUnbindTarget(chatWindow);
-  const scope = connectionUnbindScope(conn, closedWin, other);
+  const scope = connectionTeardownScope(conn, closedWin, other);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
   const gitChangeRelationshipId = boundGitChangeRelationshipIdOf(conn);
   if (chatWindowId === null) return true;
   try {
     const results: Promise<boolean>[] = [];
-    if (scope !== null) results.push(Promise.resolve(unbindScope(chatWindowId, scope, target)));
+    if (scope !== null)
+      results.push(Promise.resolve(unbindScope(chatWindowId, scope, target, conn.id)));
     if (connectorScope !== null) {
       results.push(Promise.resolve(unbindConnectorScope(chatWindowId, connectorScope, target)));
     }
@@ -2040,8 +2052,8 @@ async function unbindClosedWindowConnection(
       unbindGitChangeScope,
     );
     return (await Promise.all(results)).every(Boolean);
-  } catch {
-    reportConnectionUnbindFailure();
+  } catch (error) {
+    reportConnectionUnbindFailure(error);
     return false;
   }
 }
@@ -2087,6 +2099,7 @@ export function useWorkspace(
   const [palOpen, setPalOpen] = useState(false);
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
+  const [connectionOutcome, setConnectionOutcome] = useState<ConnectionOutcome>();
   const [view, setView] = useState<View>(readView);
   // Issue #1580 — destructure the optional scope-bind callbacks so the memoized
   // action factories below depend on their (stable) identities rather than on the
@@ -2135,8 +2148,9 @@ export function useWorkspace(
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatUnbindTarget,
+      connectionId?: string,
     ): boolean | Promise<boolean> =>
-      onScopeUnbindRef.current?.(chatWindowId, scope, target) ?? true,
+      onScopeUnbindRef.current?.(chatWindowId, scope, target, connectionId) ?? true,
     [],
   );
   const stableConnectorBind = useCallback(
@@ -2456,6 +2470,7 @@ export function useWorkspace(
         focus: focusWindow,
         setConns,
         setConnecting,
+        onConnectionOutcome: setConnectionOutcome,
         onScopeBind: stableScopeBind,
         onScopeUnbind: stableScopeUnbind,
         onConnectorBind: stableConnectorBind,
@@ -2565,18 +2580,7 @@ export function useWorkspace(
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
     (connId, scope) => {
       setConns((cs) =>
-        cs.map((conn) =>
-          conn.id === connId
-            ? {
-                ...conn,
-                boundScopeKind: scope.kind,
-                ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
-                ...(scope.relativePaths[0] !== undefined
-                  ? { boundRelativePath: scope.relativePaths[0] }
-                  : {}),
-              }
-            : conn,
-        ),
+        cs.map((conn) => (conn.id === connId ? acknowledgedConnection(conn, scope) : conn)),
       );
     },
     [setConns],
@@ -2898,6 +2902,7 @@ export function useWorkspace(
 
   return {
     layoutLocked,
+    connectionOutcome,
     wins,
     winsById,
     snapPrev,

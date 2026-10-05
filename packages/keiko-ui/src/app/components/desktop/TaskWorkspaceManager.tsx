@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Discoverable, server-truth management surface for the repository-scoped Task Workspace
 // inventory (Issue #2946). It deliberately owns no persisted lifecycle state: the shared
 // ActiveWorkspaceContext reloads the authoritative BFF view after every mutation.
@@ -24,7 +29,7 @@ import {
   isAutomaticWorkspaceRepairStrategy,
   nextLegalTaskWorkspaceStates,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { useOptionalAnnouncer } from "./context/AnnouncerContext";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";

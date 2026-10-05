@@ -160,6 +160,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       maxLength: 128,
     },
     checkCount: { type: "integer", dataClass: "count", required: false },
+    failedCheckCount: { type: "integer", dataClass: "count", required: false },
     omittedCount: { type: "integer", dataClass: "count", required: false },
     proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     stagedTreeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
@@ -203,6 +204,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     causeChain: VERIFIED_COMMIT_CAUSE_CHAIN_FIELD,
   },
   causal: "correlation",
+  diagnosticWhen: [{ field: "failedCheckCount", positive: true }],
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-verified-commit"],
@@ -233,6 +235,7 @@ interface VerifiedCommitActivityFields {
   readonly passed?: boolean;
   readonly verificationEvidenceId?: string;
   readonly checkCount?: number;
+  readonly failedCheckCount?: number;
   readonly omittedCount?: number;
   readonly proposalId?: string;
   readonly stagedTreeDigest?: string;
@@ -264,6 +267,12 @@ function verifiedCommitErrorFields(
     ...(detail.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
   };
+}
+
+function failedVerificationCheckCount(report: VerificationReport): number {
+  return report.results.filter(
+    ({ status }) => status === "failed" || status === "timed-out" || status === "resource-exceeded",
+  ).length;
 }
 
 const TTL_MS = 5 * 60 * 1000;
@@ -523,6 +532,7 @@ class VerifiedCommitController implements VerifiedCommitService {
       passed,
       verificationEvidenceId: evidenceId,
       checkCount: history.records.length,
+      failedCheckCount: failedVerificationCheckCount(report),
     });
     return passed;
   }
@@ -544,6 +554,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     // leaves a line just as the proof path's does (review on PR #3452).
     this.log(context, "verification-observed", {
       checkCount: history.records.length,
+      failedCheckCount: failedVerificationCheckCount(report),
       omittedCount: history.omitted,
     });
   }

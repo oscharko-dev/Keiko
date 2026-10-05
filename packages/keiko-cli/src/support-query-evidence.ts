@@ -93,6 +93,7 @@ export const SUPPORT_QUERY_COMPLETED_OPERATION = defineActivityLogOperation({
     closureCorrelationCount: COUNT,
     selectedBytes: COUNT,
     requiredBytes: COUNT,
+    requiredRecordCount: { ...COUNT, required: false },
     truncation: {
       type: "string",
       dataClass: "closed-enum",
@@ -218,6 +219,7 @@ export function emitSupportQueryEvidence(
         closureCorrelationCount: result.closure?.correlationCount ?? 0,
         selectedBytes: metrics.selectedBytes,
         requiredBytes: result.truncation.requiredBytes,
+        requiredRecordCount: result.truncation.requiredRecordCount,
         truncation: result.truncation.state,
         evidenceClassification: integrity.classification,
         sufficiency: diagnosticSufficiency.status,

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e0f4dba60f0c2eb9f9a2adbaf76b381cbf1bcfebc52f84488d29c71c6ff53377"
+    "catalogDigest": "bad5acf672e5dccbc88a6549663bb93c4041dd3492dcbb527de30f0f2f012d1d"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,12 +55,12 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 502,
-    "proofCount": 509,
-    "resolvedProofCount": 509,
-    "failureClassCount": 334,
-    "scenarioCount": 29,
-    "resolvedScenarioCount": 29
+    "operationCount": 520,
+    "proofCount": 527,
+    "resolvedProofCount": 527,
+    "failureClassCount": 336,
+    "scenarioCount": 30,
+    "resolvedScenarioCount": 30
   },
   "surfaces": [
     {
@@ -95,6 +95,7 @@
         "chat.creation.rejected",
         "chat.regeneration.rejected",
         "chat.response.message",
+        "chat.scope.update",
         "chat.send.rejected",
         "chat.turn.started",
         "git-change.chat.apply",
@@ -115,6 +116,9 @@
         "store.journey-outcomes.migration",
         "store.opened",
         "support.report.ui.completed",
+        "support.report.ui.delivered",
+        "support.report.ui.delivery-released",
+        "support.report.ui.download-refused",
         "support.report.ui.failed",
         "support.report.ui.started"
       ],
@@ -132,10 +136,12 @@
         "client.binding.choice-withdrawn",
         "client.binding.resolved",
         "client.binding.target-missing",
+        "client.citation.activated",
         "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.files-scope.decision",
         "client.git-operation.attempted",
         "client.git-operation.settled",
         "client.knowledge-catalog.unavailable",
@@ -146,9 +152,16 @@
         "client.session-repair.recovered",
         "client.stage.settled",
         "client.stage.started",
+        "client.support-report.download-started",
+        "client.support-report.preparation-failed",
+        "client.support-report.prepared",
         "voice.dialogue.stage"
       ],
-      "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
+      "scenarios": [
+        "client-diagnostics.dependency-failure",
+        "client-diagnostics.loss",
+        "client-diagnostics.rejection"
+      ]
     },
     {
       "surface": "model-gateway",
@@ -183,6 +196,7 @@
         "gateway.circuit.half-open",
         "gateway.circuit.opened",
         "gateway.circuit.rejected",
+        "gateway.circuit.wait",
         "gateway.config.resolved",
         "gateway.context-window.adoption",
         "gateway.context-window.probe",
@@ -210,6 +224,7 @@
         "gateway.retry.exhausted",
         "gateway.retry.scheduled",
         "gateway.route.rejected",
+        "gateway.setup.metadata.resolved",
         "gateway.spend.ceiling",
         "gateway.spend.rejected",
         "gateway.spend.reserved",
@@ -260,6 +275,7 @@
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
         "coding-app-session.local-session.confirmed",
+        "coding-app-session.operation.state",
         "coding-app-session.paired",
         "coding-app-session.rotated",
         "coding-app-session.signed-out",
@@ -444,15 +460,19 @@
         "search.answer.assessed",
         "search.citations.reconciled",
         "search.citations.support-settled",
+        "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.failed",
+        "search.connected-context.metadata-unavailable",
+        "search.connected-context.source-details",
         "search.connected-context.started",
         "search.entailment.judged",
         "search.index-invalidated-for-capsule",
         "search.native-runtime-resolved",
         "search.prompt.window-fitted",
         "search.rerank.completed",
+        "search.symbol-line.unavailable",
         "store.encryption-checkpoint-degraded",
         "store.encryption-migrated"
       ],
@@ -597,6 +617,8 @@
         "support.incident.dismissed",
         "support.incident.expired",
         "support.incident.rejected",
+        "support.incident.retirement-failed",
+        "support.incident.retirement-started",
         "task-workspace.manifest.reconnected"
       ],
       "scenarios": [
@@ -674,6 +696,7 @@
   "failureClassScenarios": {
     "chat-context-management": ["bff.dependency-failure"],
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
+    "gateway-setup-metadata": ["model-gateway.dependency-failure"],
     "gateway-context-admission": ["model-gateway.dependency-failure"],
     "coding-history-persistence": ["tools-workflows.dependency-failure"],
     "activity-log-contract": ["lifecycle-crash.loss"],
@@ -702,6 +725,7 @@
     "client-answer-copy": ["client-diagnostics.dependency-failure"],
     "client-answer-speech": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
+    "client-citation-activation": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -1005,7 +1029,11 @@
     "workspace-script-trust": ["tools-workflows.rejection"],
     "workspace-script-trust-admission": ["tools-workflows.rejection"],
     "support-query": ["runtime-packages.dependency-failure"],
-    "support-report": ["bff.dependency-failure", "runtime-packages.dependency-failure"]
+    "support-report": [
+      "bff.rejection",
+      "client-diagnostics.rejection",
+      "runtime-packages.rejection"
+    ]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -1018,7 +1046,8 @@
       "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
     ],
     "activity-log.pin.expired.emitted-line": [
-      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
+      "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts",
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts"
     ],
     "activity-log.pin.quota-exhausted.emitted-line": [
       "packages/keiko-activity-log/src/server-log.activity-log-proof.test.ts"
@@ -1059,7 +1088,10 @@
       "packages/keiko-server/src/chat-activity.test.ts",
       "packages/keiko-server/src/chat-stream-handlers.test.ts"
     ],
-    "chat.continuity.capture.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
+    "chat.continuity.capture.line": [
+      "packages/keiko-server/src/chat-context-status.test.ts",
+      "packages/keiko-server/src/chat-history-snapshot.test.ts"
+    ],
     "chat.continuity.degraded.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.continuity.rehydration.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
@@ -1075,6 +1107,7 @@
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
+    "chat.scope.update.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
     "chat.send.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
@@ -1124,6 +1157,9 @@
     "client.binding.target-missing.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.citation.activated.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.composer.activity.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
@@ -1136,6 +1172,9 @@
     ],
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.files-scope.decision.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.git-operation.attempted.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
@@ -1157,8 +1196,21 @@
     "client.session-repair.recovered.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
-    "client.stage.settled.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.stage.settled.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts",
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.stage.started.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.support-report.download-started.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts",
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.support-report.preparation-failed.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.support-report.prepared.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],
@@ -1167,6 +1219,9 @@
     ],
     "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
+    "coding-app-session.operation.state.line": [
+      "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts"
     ],
     "coding-app-session.paired.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
@@ -1580,6 +1635,10 @@
     "gateway.circuit.rejected.emitted-line": [
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
+    "gateway.circuit.wait.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
+      "packages/keiko-model-gateway/src/resilience.admission.test.ts"
+    ],
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
@@ -1647,11 +1706,13 @@
     ],
     "gateway.retry.exhausted.emitted-line": ["packages/keiko-model-gateway/src/resilience.test.ts"],
     "gateway.retry.scheduled.emitted-line": [
+      "packages/keiko-model-gateway/src/openai-adapter.test.ts",
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
     "gateway.route.rejected.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
+    "gateway.setup.metadata.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "gateway.spend.ceiling.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
     "gateway.spend.rejected.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
     "gateway.spend.reserved.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
@@ -1666,10 +1727,12 @@
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.stream.failed.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
       "packages/keiko-model-gateway/src/gateway.logging.test.ts",
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
     ],
     "gateway.stream.started.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.tool-calling.verification.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
@@ -1810,7 +1873,8 @@
       "packages/keiko-server/src/gitDelivery/journeyRoutes.test.ts"
     ],
     "git.pr-description.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/prDescriptionProjection.test.ts"
+      "packages/keiko-server/src/gitDelivery/prDescriptionProjection.test.ts",
+      "packages/keiko-server/src/gitDelivery/prDescriptionService.test.ts"
     ],
     "git.pr-description.receipt.emitted-line": [
       "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.test.ts"
@@ -2087,21 +2151,55 @@
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],
     "search.answer.assessed.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
-    "search.citations.reconciled.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
+    "search.citations.reconciled.line": [
+      "packages/keiko-server/src/grounded-citation-log.test.ts",
+      "packages/keiko-server/src/grounded-qa-hybrid.test.ts"
+    ],
     "search.citations.support-settled.line": [
       "packages/keiko-server/src/grounded-citation-log.test.ts"
     ],
+    "search.connected-context.clarification-needed.line": [
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.denied-root-log.test.ts",
+      "packages/keiko-server/src/grounded-planner-outcomes.activity-log.test.ts"
+    ],
     "search.connected-context.completed.line": [
-      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
+      "packages/keiko-server/src/grounded-case-sensitive.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-portable-coverage.test.ts",
+      "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-search-release-blockers.test.ts",
+      "packages/keiko-server/src/grounded-source-inspection.test.ts"
     ],
     "search.connected-context.completion-details.line": [
-      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
     ],
     "search.connected-context.failed.line": [
-      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-parallel-cleanup.test.ts",
+      "packages/keiko-server/src/grounded-terminal-cleanup.test.ts"
+    ],
+    "search.connected-context.metadata-unavailable.line": [
+      "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
+    ],
+    "search.connected-context.source-details.line": [
+      "packages/keiko-server/src/grounded-binary-probe.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-definition-provenance.test.ts",
+      "packages/keiko-server/src/grounded-omission-totals.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-planner-outcomes.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-portable-coverage.test.ts",
+      "packages/keiko-server/src/grounded-repo-semantic-search.test.ts",
+      "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-source-decisions.activity-log.test.ts"
     ],
     "search.connected-context.started.line": [
-      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
+      "packages/keiko-server/src/grounded-case-sensitive.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
     ],
     "search.entailment.judged.line": [
       "packages/keiko-server/src/grounded-entailment-stage.test.ts"
@@ -2113,10 +2211,14 @@
       "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-resolved-logging.test.ts"
     ],
     "search.prompt.window-fitted.line": [
+      "packages/keiko-server/src/grounded-qa-hybrid.test.ts",
       "packages/keiko-server/src/grounded-qa-multi-source.test.ts",
       "packages/keiko-server/src/knowledge-prompt-window.test.ts"
     ],
     "search.rerank.completed.line": ["packages/keiko-server/src/grounded-rerank-facade.test.ts"],
+    "search.symbol-line.unavailable.line": [
+      "packages/keiko-server/src/grounded-symbol-read-failure.test.ts"
+    ],
     "security.fs.atomic-rename-failed.attempts": [
       "packages/keiko-security/src/fs-atomic-rename.test.ts"
     ],
@@ -2196,7 +2298,8 @@
     "server.diagnostic.failure.activity-log-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
-      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts"
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "speech.stt.language.normalized.emitted-line": [
@@ -2236,19 +2339,32 @@
     ],
     "store.opened.identity": ["packages/keiko-server/src/store/db.test.ts"],
     "support.incident.created.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts",
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.deduplicated.emitted-line": [
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.dismissed.emitted-line": [
+      "packages/keiko-activity-log/src/reader/support-desktop-report.test.ts",
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts",
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.expired.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-recovery.test.ts",
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts",
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.rejected.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-recovery.test.ts",
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts",
       "packages/keiko-activity-log/src/support-incident.test.ts"
+    ],
+    "support.incident.retirement-failed.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts"
+    ],
+    "support.incident.retirement-started.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-retention.test.ts"
     ],
     "support.manifest.rebuilt.manifest-evidence": [
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
@@ -2262,22 +2378,38 @@
     ],
     "support.report.completed.report-lifecycle": [
       "packages/keiko-cli/src/support-query-cli.test.ts",
-      "packages/keiko-cli/src/support-report-cli.test.ts"
+      "packages/keiko-cli/src/support-report-cli.test.ts",
+      "packages/keiko-cli/src/support-report-input.test.ts"
     ],
     "support.report.degraded.lifecycle-validator": [
       "packages/keiko-cli/src/support-report-cli.test.ts"
     ],
-    "support.report.failed.report-lifecycle": ["packages/keiko-cli/src/support-report-cli.test.ts"],
+    "support.report.failed.report-lifecycle": [
+      "packages/keiko-cli/src/support-report-cli.test.ts",
+      "packages/keiko-cli/src/support-report-input.test.ts"
+    ],
     "support.report.started.report-lifecycle": [
       "packages/keiko-cli/src/support-report-cli.test.ts"
     ],
     "support.report.ui.completed.lifecycle": [
+      "packages/keiko-server/src/support-report-evidence.test.ts",
       "packages/keiko-server/src/support-report-routes.test.ts"
     ],
+    "support.report.ui.delivered.line": [
+      "packages/keiko-server/src/support-report-download.test.ts"
+    ],
+    "support.report.ui.delivery-released.line": [
+      "packages/keiko-server/src/support-report-download.test.ts"
+    ],
+    "support.report.ui.download-refused.line": [
+      "packages/keiko-server/src/support-report-download.test.ts"
+    ],
     "support.report.ui.failed.lifecycle": [
+      "packages/keiko-server/src/support-report-download.test.ts",
       "packages/keiko-server/src/support-report-routes.test.ts"
     ],
     "support.report.ui.started.lifecycle": [
+      "packages/keiko-server/src/support-report-evidence.test.ts",
       "packages/keiko-server/src/support-report-routes.test.ts"
     ],
     "task-workspace.identity.creation-time-probe.line": [
@@ -2368,16 +2500,24 @@
     "workspace-script-trust.run-manifest-revoked.line": [
       "packages/keiko-server/src/workspace-script-trust.test.ts"
     ],
-    "workspace.root.denied.line": ["packages/keiko-server/src/workspace-root-denial-log.test.ts"]
+    "workspace.root.denied.line": [
+      "packages/keiko-server/src/grounded-qa-hybrid.test.ts",
+      "packages/keiko-server/src/grounded-qa-multi-source.test.ts",
+      "packages/keiko-server/src/workspace-root-denial-log.test.ts"
+    ]
   },
   "scenarios": {
     "bff.crash": ["tests/activity-log-scenarios/bff.test.ts"],
-    "bff.dependency-failure": ["tests/activity-log-scenarios/bff.test.ts"],
+    "bff.dependency-failure": [
+      "tests/activity-log-scenarios/bff.test.ts",
+      "tests/activity-log-scenarios/support-report.test.ts"
+    ],
     "bff.rejection": ["tests/activity-log-scenarios/bff.test.ts"],
     "client-diagnostics.dependency-failure": [
       "tests/activity-log-scenarios/client-diagnostics-ui.test.ts"
     ],
     "client-diagnostics.loss": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
+    "client-diagnostics.rejection": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "editor-delivery.crash": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
     "editor-delivery.dependency-failure": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
     "editor-delivery.loss": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
@@ -2398,11 +2538,13 @@
     "model-gateway.loss": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.rejection": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "runtime-packages.dependency-failure": [
-      "packages/keiko-cli/src/support-report-cli.test.ts",
       "tests/activity-log-scenarios/lifecycle-runtime.test.ts"
     ],
     "runtime-packages.loss": ["tests/activity-log-scenarios/lifecycle-runtime.test.ts"],
-    "runtime-packages.rejection": ["tests/activity-log-scenarios/lifecycle-runtime.test.ts"],
+    "runtime-packages.rejection": [
+      "packages/keiko-cli/src/support-report-cli.test.ts",
+      "tests/activity-log-scenarios/lifecycle-runtime.test.ts"
+    ],
     "tools-workflows.crash": ["tests/activity-log-scenarios/tools-workflows.test.ts"],
     "tools-workflows.dependency-failure": ["tests/activity-log-scenarios/tools-workflows.test.ts"],
     "tools-workflows.loss": ["tests/activity-log-scenarios/tools-workflows.test.ts"],

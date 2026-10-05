@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #3400 (epic #3384) — "Connect to Chat" affordance for the Git window.
 //
 // Frozen Decision 5: the Git window only CONNECTS a comparison to a Chat; every refinement of the
@@ -17,8 +22,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, SubmitEventHandler, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { connectGitChangeToChat, fetchChats } from "@/lib/api";
+import { adoptableGitChat, committedGitChat } from "@/lib/chat-grounding-mutation";
 import type { ConnectGitChangeInput, GitChangeConnectResponse } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat } from "@/lib/types";
 import { gitChangeBlockedReasonMessage } from "../../../GitChangeScopePill";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
@@ -379,25 +387,23 @@ interface SubmitInput {
   readonly currentBranch: string | undefined;
   readonly baseRef: string;
   readonly connect: typeof connectGitChangeToChat;
-  readonly onConnected: (chatId: string, result: GitChangeConnectResponse) => void;
+  readonly onConnected: (
+    chatId: string,
+    result: GitChangeConnectResponse,
+    correlationId: string,
+  ) => Promise<boolean>;
   readonly onClose: () => void;
   readonly t: I18nTranslate;
 }
 
-function useSubmit({
-  chatId,
-  mode,
-  currentBranch,
-  baseRef,
-  connect,
-  onConnected,
-  onClose,
-  t,
-}: SubmitInput): SubmitState {
+function useSubmit(input: SubmitInput): SubmitState {
+  const { chatId, mode, currentBranch, baseRef, connect, onConnected, onClose, t } = input;
   const [busy, setBusy] = useState(false);
+  const [committed, setCommitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canSubmit =
     !busy &&
+    !committed &&
     chatId !== "" &&
     currentBranch !== undefined &&
     (mode === "pull-request" || (baseRef !== "" && baseRef !== currentBranch));
@@ -407,13 +413,20 @@ function useSubmit({
     setBusy(true);
     setError(null);
     try {
-      const result = await connect(buildConnectInput(chatId, mode, currentBranch, baseRef));
+      const correlationId = newClientCorrelationId();
+      const result = await connect(
+        buildConnectInput(chatId, mode, currentBranch, baseRef),
+        undefined,
+        correlationId,
+      );
       if (result.status === "blocked") {
         setError(gitChangeBlockedReasonMessage(result.reason, t));
         return;
       }
-      onConnected(chatId, result);
-      onClose();
+      setCommitted(true);
+      const confirmed = await onConnected(chatId, result, correlationId);
+      if (confirmed) onClose();
+      else setError(t("gitChangeScope.savedRefreshUnavailable"));
     } catch (error_) {
       setError(blockedOrNetworkError(error_, t));
     } finally {
@@ -490,7 +503,11 @@ function useConnectDialogState(
   baseBranchName: string | undefined,
   baseBranchChoices: readonly string[],
   connect: typeof connectGitChangeToChat,
-  onConnected: (chatId: string, result: GitChangeConnectResponse) => void,
+  onConnected: (
+    chatId: string,
+    result: GitChangeConnectResponse,
+    correlationId: string,
+  ) => Promise<boolean>,
   onClose: () => void,
   t: I18nTranslate,
 ): ConnectDialogState {
@@ -518,21 +535,6 @@ function useConnectDialogState(
     t,
   });
   return { chatId, setChatId, mode, setMode, baseRef, setBaseRef, busy, error, canSubmit, submit };
-}
-
-function projectConnectedChat(
-  chats: readonly Chat[],
-  chatId: string,
-  result: GitChangeConnectResponse,
-): Chat | undefined {
-  if (result.status !== "connected") return undefined;
-  const chat = chats.find((candidate) => candidate.id === chatId);
-  if (chat === undefined) return undefined;
-  return {
-    ...chat,
-    gitChangeScopes: [...(chat.gitChangeScopes ?? []), result.scope],
-    updatedAt: Date.now(),
-  };
 }
 
 // The server accepts a safe, resolvable ref even when it is not among the local
@@ -598,6 +600,37 @@ function ConnectDialogForm({
   );
 }
 
+function useRecordConnection(
+  projectId: string,
+  catalog: ChatCatalog,
+  listChats: typeof fetchChats,
+  onConnected: (chat: Chat) => void,
+): SubmitInput["onConnected"] {
+  const currentCatalogRef = useRef({ projectId, chats: catalog.chats });
+  currentCatalogRef.current = { projectId, chats: catalog.chats };
+  return async (
+    chatId: string,
+    result: GitChangeConnectResponse,
+    correlationId: string,
+  ): Promise<boolean> => {
+    const selected = catalog.chats.find((candidate) => candidate.id === chatId);
+    if (selected === undefined || result.status === "blocked") {
+      reportClientDiagnostic("Committed Git chat selection unavailable.", {
+        kind: "other",
+        correlationId,
+        errorKind: "unavailable",
+      });
+      return false;
+    }
+    const committed = await committedGitChat(selected, result, correlationId, listChats);
+    const latest = currentCatalogRef.current.chats.find((candidate) => candidate.id === chatId);
+    if (currentCatalogRef.current.projectId !== projectId || latest === undefined) return false;
+    const adopted = adoptableGitChat(selected, latest, committed, result.scope);
+    if (adopted !== undefined) onConnected(adopted);
+    return committed.confirmed;
+  };
+}
+
 export function ConnectToChatDialog({
   projectId,
   currentBranch,
@@ -614,10 +647,7 @@ export function ConnectToChatDialog({
     () => usableBaseBranchChoices(currentBranch, baseBranchChoices),
     [baseBranchChoices, currentBranch],
   );
-  const recordConnection = (chatId: string, result: GitChangeConnectResponse): void => {
-    const connected = projectConnectedChat(catalog.chats, chatId, result);
-    if (connected !== undefined) onConnected(connected);
-  };
+  const recordConnection = useRecordConnection(projectId, catalog, listChats, onConnected);
   const state = useConnectDialogState(
     currentBranch,
     baseBranchName,

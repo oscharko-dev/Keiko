@@ -13,6 +13,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  fstatSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -32,6 +33,7 @@ import {
   MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
   MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
   SafeArtifactFileError,
+  assertSafeArtifactAncestors,
   acknowledgeSafeArtifactFileSet,
   archiveSafeArtifactFile,
   chmodIfPresent,
@@ -66,6 +68,24 @@ afterEach(() => {
   for (const path of cleanups.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
+});
+
+describe("absent artifact ancestor preflight", () => {
+  it("allows a regular missing bootstrap and refuses missing descendants behind an alias", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-artifact-bootstrap-"));
+    cleanups.push(root);
+    const existing = join(root, "existing");
+    mkdirSync(join(existing, "nested"), { recursive: true, mode: 0o700 });
+    expect(() => {
+      assertSafeArtifactAncestors(join(existing, "missing", "policy.json"), "activity-log");
+    }).not.toThrow();
+    const alias = join(root, "alias");
+    symlinkSync(existing, alias);
+    expect(() => {
+      assertSafeArtifactAncestors(join(alias, "nested", "missing", "policy.json"), "activity-log");
+    }).toThrow(SafeArtifactFileError);
+    expect(existsSync(join(existing, "missing"))).toBe(false);
+  });
 });
 
 interface DirectoryMutationInvocation {
@@ -2690,6 +2710,65 @@ describe("bounded Activity Log mutations", () => {
       trustedRoot: base,
     });
     expect(existsSync(target)).toBe(false);
+  });
+
+  it("preserves an artifact and closes the held descriptor when the ownership predicate refuses", () => {
+    const base = freshDir();
+    const target = join(base, "claim.json");
+    writeFileSync(target, "peer-owner", { mode: FILE_MODE });
+    let held = -1;
+    removeSafeArtifactFile(
+      target,
+      { artifactClass: "manifest", trustedRoot: base },
+      (descriptor) => {
+        held = descriptor;
+        expect(fstatSync(descriptor).isFile()).toBe(true);
+        return false;
+      },
+    );
+    expect(readFileSync(target, "utf8")).toBe("peer-owner");
+    expect(() => fstatSync(held)).toThrow();
+  });
+
+  it("closes the held descriptor and preserves the artifact when ownership validation throws", () => {
+    const base = freshDir();
+    const target = join(base, "claim.json");
+    writeFileSync(target, "peer-owner", { mode: FILE_MODE });
+    let held = -1;
+    expect(() => {
+      removeSafeArtifactFile(
+        target,
+        { artifactClass: "manifest", trustedRoot: base },
+        (descriptor) => {
+          held = descriptor;
+          throw new TypeError("Ownership unavailable");
+        },
+      );
+    }).toThrow(TypeError);
+    expect(readFileSync(target, "utf8")).toBe("peer-owner");
+    expect(() => fstatSync(held)).toThrow();
+  });
+
+  it("preserves a replacement created after same-descriptor ownership validation", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const target = join(base, "claim.json");
+    writeFileSync(target, "original-owner", { mode: FILE_MODE });
+    let held = -1;
+    expect(() => {
+      removeSafeArtifactFile(
+        target,
+        { artifactClass: "manifest", trustedRoot: base },
+        (descriptor) => {
+          held = descriptor;
+          unlinkSync(target);
+          writeFileSync(target, "peer-owner", { mode: FILE_MODE });
+          return true;
+        },
+      );
+    }).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(readFileSync(target, "utf8")).toBe("peer-owner");
+    expect(() => fstatSync(held)).toThrow();
   });
 
   it("rejects a group-readable trusted artifact directory before archive or removal", (ctx) => {

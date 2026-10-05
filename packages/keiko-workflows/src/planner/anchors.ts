@@ -1,9 +1,12 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+
 // Deterministic search-anchor extraction for the exploration planner (Epic #177, Issue #181).
 // Pure JS — no IO, no clock, no randomness. Given free-form prompt text, this module produces
 // a small, stable, weight-ordered set of search anchors. The stop-word list is intentionally
 // fixed and bilingual (English/German) so supported prompts remain deterministic.
 
-const MAX_INPUT_LENGTH = 4096;
+// The matcher limits literal target metadata, not surrounding question/specification text.
+const MAX_ANCHOR_CHARACTERS = 4096;
 
 const STOP_WORDS: ReadonlySet<string> = new Set([
   "the",
@@ -155,10 +158,12 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "zur",
 ]);
 
-// Module-scope regex pool. Each pattern uses character classes only (no nested quantifiers),
-// so scanning is linear in input length — ReDoS-safe.
+// Identifier and path patterns bound backtracking at each start position, so the full admitted
+// question can be inspected without discarding targets after a fixed prefix.
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
-const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
+// Apostrophes stay inside alphabetic words; only unspaced CJK scripts may border a quote.
+const QUOTED_SINGLE_RE =
+  /(?<!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])'([^'\n]+)'(?!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])/gu;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
@@ -168,8 +173,7 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // `[\w.-]+` trade the same run of characters back and forth across an unbounded number of split
 // points, which is quadratic on adversarial input (measured empirically before this change).
 // Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
-// exercise the pattern directly, past extractAnchors's MAX_INPUT_LENGTH guard, for the S8786
-// regression test.
+// exercise the pattern directly for the S8786 regression test.
 export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
@@ -183,7 +187,11 @@ const DEFINITION_TARGET_AFTER_NOUN_RE =
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
 // with a non-symbol — see planner/plan.ts decideClarification and grounded symbolFileAnchorTerms.
-const CAMEL_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*[a-z0-9][A-Z][A-Za-z0-9_$]*)\b/g;
+const CAMEL_IDENTIFIER_RE =
+  /\b([A-Za-z_$][A-Za-z0-9_$]{0,127}[a-z0-9][A-Z][A-Za-z0-9_$]{0,127})\b/g;
+const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]{0,127}_[A-Za-z0-9_$]{1,127})\b/g;
+const FILENAME_RE =
+  /(?<![\p{L}\p{M}\p{N}_$.-])([\p{L}\p{N}_$-][\p{L}\p{M}\p{N}_$-]{0,254}(?:\.[A-Za-z0-9]{1,16}){1,4})(?![\p{L}\p{M}\p{N}_$-]|\.[\p{L}\p{M}\p{N}_$-])/gu;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
@@ -218,6 +226,8 @@ export interface SearchAnchor {
 export interface AnchorExtractionInput {
   readonly text: string;
   readonly maxAnchors: number;
+  /** Keep source spelling for exact matching; planner routing defaults to normalized terms. */
+  readonly caseSensitive?: boolean;
 }
 
 export interface AnchorExtractionResult {
@@ -228,8 +238,14 @@ export interface AnchorExtractionResult {
 
 interface MutableAnchor {
   term: string;
+  sourceTerm: string;
   weight: number;
   kind: SearchAnchorKind;
+}
+
+interface AnchorAccumulator {
+  readonly anchors: MutableAnchor[];
+  truncated: boolean;
 }
 
 const SENTENCE_PATH_SUFFIX = new Set([":", ";", ",", ".", "-"]);
@@ -249,19 +265,29 @@ function trimEdgeDots(value: string): string {
 }
 
 function pushAnchor(
-  out: MutableAnchor[],
+  out: AnchorAccumulator,
   raw: string,
   kind: SearchAnchorKind,
   weight: number,
+  sourceSpelling?: string,
 ): void {
   const trimmed = raw.trim();
+  if (trimmed.length > MAX_ANCHOR_CHARACTERS) {
+    out.truncated = true;
+    return;
+  }
   const withoutSentencePunctuation =
     kind === "path" && trimmed.startsWith("/")
       ? trimTrailingCharacters(trimmed, SENTENCE_PATH_SUFFIX)
       : trimmed;
   const term = withoutSentencePunctuation.toLowerCase();
   if (term.length > 0) {
-    out.push({ term, weight, kind });
+    out.anchors.push({
+      term,
+      sourceTerm: sourceSpelling ?? withoutSentencePunctuation,
+      weight,
+      kind,
+    });
   }
 }
 
@@ -270,8 +296,9 @@ function collectMatches(
   pattern: RegExp,
   kind: SearchAnchorKind,
   weight: number,
-  out: MutableAnchor[],
+  out: AnchorAccumulator,
   accept: (value: string) => boolean = () => true,
+  replacement?: string,
 ): string {
   const re = new RegExp(pattern.source, pattern.flags);
   const parts: string[] = [];
@@ -283,7 +310,7 @@ function collectMatches(
     parts.push(source.slice(cursor, match.index));
     if (accept(captured)) {
       pushAnchor(out, captured, kind, weight);
-      parts.push(" ".repeat(full.length));
+      parts.push(replacement ?? " ".repeat(full.length));
     } else {
       parts.push(full);
     }
@@ -298,7 +325,7 @@ function isDefinitionTarget(value: string): boolean {
   return !STOP_WORDS.has(value.toLowerCase());
 }
 
-function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
+function collectTechnicalTerms(source: string, out: AnchorAccumulator): string {
   let remaining = source;
   for (const entry of TECHNICAL_TERM_PATTERNS) {
     const re = new RegExp(entry.pattern.source, entry.pattern.flags);
@@ -307,7 +334,7 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
     let match = re.exec(remaining);
     while (match !== null) {
       const full = match[0];
-      pushAnchor(out, entry.term, "identifier", 0.85);
+      pushAnchor(out, entry.term, "identifier", 0.85, full);
       parts.push(remaining.slice(cursor, match.index), " ".repeat(full.length));
       cursor = match.index + full.length;
       match = re.exec(remaining);
@@ -318,11 +345,15 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
   return remaining;
 }
 
-function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
+function tokenizeRemaining(remaining: string, out: AnchorAccumulator): number {
   let considered = 0;
   for (const raw of remaining.split(TOKEN_SPLIT_RE)) {
     const normalizedRaw = trimEdgeDots(raw);
     if (normalizedRaw.length === 0) {
+      continue;
+    }
+    if (normalizedRaw.length > MAX_ANCHOR_CHARACTERS) {
+      out.truncated = true;
       continue;
     }
     considered += 1;
@@ -334,20 +365,21 @@ function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
       continue;
     }
     if (token.includes(".")) {
-      out.push({ term: token, weight: 0.8, kind: "identifier" });
+      out.anchors.push({ term: token, sourceTerm: normalizedRaw, weight: 0.8, kind: "identifier" });
       continue;
     }
-    out.push({ term: token, weight: 0.5, kind: "literal" });
+    out.anchors.push({ term: token, sourceTerm: normalizedRaw, weight: 0.5, kind: "literal" });
   }
   return considered;
 }
 
-function dedup(anchors: readonly MutableAnchor[]): MutableAnchor[] {
+function dedup(anchors: readonly MutableAnchor[], caseSensitive: boolean): MutableAnchor[] {
   const best = new Map<string, MutableAnchor>();
   for (const anchor of anchors) {
-    const existing = best.get(anchor.term);
+    const key = caseSensitive ? anchor.sourceTerm : anchor.term;
+    const existing = best.get(key);
     if (existing === undefined || anchor.weight > existing.weight) {
-      best.set(anchor.term, { ...anchor });
+      best.set(key, { ...anchor });
     }
   }
   return Array.from(best.values());
@@ -358,26 +390,72 @@ function sortAnchors(anchors: MutableAnchor[]): MutableAnchor[] {
     if (a.weight !== b.weight) {
       return b.weight - a.weight;
     }
-    return a.term.localeCompare(b.term);
+    return compareStrings(a.term, b.term);
   });
 }
 
-function freeze(anchors: readonly MutableAnchor[]): readonly SearchAnchor[] {
-  return anchors.map((a) => ({ term: a.term, weight: a.weight, kind: a.kind }));
+function freeze(
+  anchors: readonly MutableAnchor[],
+  caseSensitive: boolean,
+): readonly SearchAnchor[] {
+  return anchors.map((a) => ({
+    term: caseSensitive ? a.sourceTerm : a.term,
+    weight: a.weight,
+    kind: a.kind,
+  }));
+}
+
+function collectQuotedTargets(
+  text: string,
+  collected: AnchorAccumulator,
+  replacement?: string,
+  accept: (value: string) => boolean = () => true,
+): string {
+  let remaining = collectMatches(
+    text,
+    QUOTED_DOUBLE_RE,
+    "quoted",
+    1,
+    collected,
+    accept,
+    replacement,
+  );
+  remaining = collectMatches(
+    remaining,
+    QUOTED_SINGLE_RE,
+    "quoted",
+    1,
+    collected,
+    accept,
+    replacement,
+  );
+  return collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected, accept, replacement);
+}
+
+// Internal planner seam: quoted target contents are data, not instructions or diagnostic intent.
+// Extraction and contextual classification use the same contraction-safe quotation grammar.
+export function queryContextOutsideQuotes(text: string): string {
+  return collectQuotedTargets(text, { anchors: [], truncated: false });
+}
+
+// Same quote parser as extraction: the marker denotes accepted target data, never query prose.
+export function queryShapeOutsideTargets(text: string, targets: readonly SearchAnchor[]): string {
+  const terms = new Set(targets.map((target) => target.term));
+  const shape = collectQuotedTargets(text, { anchors: [], truncated: false }, " \0 ", (value) =>
+    terms.has(value.trim().toLowerCase()),
+  );
+  return shape.replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
+    terms.has(token.toLowerCase()) ? " \0 " : token,
+  );
 }
 
 export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionResult {
-  const { text, maxAnchors } = input;
+  const { text, maxAnchors, caseSensitive = false } = input;
   if (text.length === 0) {
     return { anchors: [], truncated: false, tokensConsidered: 0 };
   }
-  if (text.length > MAX_INPUT_LENGTH) {
-    return { anchors: [], truncated: true, tokensConsidered: 0 };
-  }
-  const collected: MutableAnchor[] = [];
-  let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
-  remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
-  remaining = collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+  const collected: AnchorAccumulator = { anchors: [], truncated: false };
+  let remaining = collectQuotedTargets(text, collected);
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
@@ -405,11 +483,36 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
     collected,
     isDefinitionTarget,
   );
+  // Consume compound filenames before their snake/kebab fragments. Simple dotted technical
+  // aliases still reach the canonical technical-term pass below.
+  remaining = collectMatches(remaining, FILENAME_RE, "identifier", 0.8, collected, (value) =>
+    /[_-]/u.test(value),
+  );
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
+  remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);
-  const merged = sortAnchors(dedup(collected));
-  const truncated = merged.length > maxAnchors;
-  const final = truncated ? merged.slice(0, maxAnchors) : merged;
-  return { anchors: freeze(final), truncated, tokensConsidered };
+  const selected = selectBoundedAnchors(collected, maxAnchors, caseSensitive);
+  return { ...selected, tokensConsidered };
+}
+
+function selectBoundedAnchors(
+  collected: AnchorAccumulator,
+  maxAnchors: number,
+  caseSensitive: boolean,
+): Omit<AnchorExtractionResult, "tokensConsidered"> {
+  const sorted = freeze(sortAnchors(dedup(collected.anchors, caseSensitive)), caseSensitive);
+  const selected: SearchAnchor[] = [];
+  let characters = 0;
+  let truncated = collected.truncated;
+  for (const anchor of sorted) {
+    const nextCharacters = characters + anchor.term.length + Number(selected.length > 0);
+    if (selected.length >= maxAnchors || nextCharacters > MAX_ANCHOR_CHARACTERS) {
+      truncated = true;
+      continue;
+    }
+    selected.push(anchor);
+    characters = nextCharacters;
+  }
+  return { anchors: selected, truncated };
 }

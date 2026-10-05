@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Bounded small-document evidence for grounded Repository Search (Issue #1285).
 //
 // Repository Search stays code-first, but a document that the user has EXPLICITLY connected to the
@@ -56,7 +57,7 @@ import { createHash } from "node:crypto";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 
 // ─── Bounds ──────────────────────────────────────────────────────────────────
-export const MAX_DOCUMENT_INPUT_BYTES = 2 * 1024 * 1024; // 2 MiB, enforced before parser execution
+export const MAX_DOCUMENT_INPUT_BYTES = MAX_RECURSIVE_TEXT_FILE_BYTES; // Enforced before parser execution
 export const MAX_DOCUMENT_EXTRACTED_BYTES = 32 * 1024; // per-document extracted-text ceiling
 export const MAX_TOTAL_DOCUMENT_EXTRACTED_BYTES = 64 * 1024; // per grounded request, across documents
 export const MAX_DOCUMENT_WINDOW_BYTES = 8 * 1024; // per excerpt window (matches the pack assembler)

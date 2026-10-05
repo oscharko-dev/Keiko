@@ -11,6 +11,7 @@ import {
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  searchText,
   type SemanticSearchMatch,
   type SemanticSearchProvider,
   type WorkspaceDirEntry,
@@ -38,7 +39,14 @@ import {
   configuredRepoSemanticSearchProviderFor,
   localizeMatchLine,
   type RepositoryPodRetrievalObservation,
+  type RepositoryPodSemanticSearchContext,
 } from "./grounded-repo-semantic-search.js";
+
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const ROOT = "/repo";
 const EMBEDDING_MODEL = "text-embedding-3-small";
@@ -147,6 +155,9 @@ function testFs(files: Record<string, string>): WorkspaceFs {
       return fileStat(files, key, abs);
     },
     readDir: (abs: string): readonly WorkspaceDirEntry[] => childEntries(files, abs),
+    iterateDirectory: async function* (abs): AsyncIterable<WorkspaceDirEntry> {
+      for (const item of childEntries(files, abs)) yield await Promise.resolve(item);
+    },
     realPath: (abs: string): string => abs,
     exists: (abs: string): boolean => abs === ROOT || keyFor(abs) !== undefined,
     readFileBytes: (abs: string, maxBytes: number): Promise<Uint8Array> => {
@@ -290,24 +301,6 @@ async function seedRepositoryPod(
   return { store };
 }
 
-const SEARCH_DOCUMENTS = [
-  {
-    scopePath: "src/auth.ts",
-    text: "export function renewSession() {\n  return refresh token rotation;\n}\n",
-  },
-  {
-    scopePath: "src/billing.ts",
-    text: "export function reconcile() {\n  return invoice ledger totals;\n}\n",
-  },
-] as const;
-
-async function search(provider: SemanticSearchProvider): Promise<readonly SemanticSearchMatch[]> {
-  return provider.search({
-    query: QUERY,
-    documents: SEARCH_DOCUMENTS,
-  });
-}
-
 async function searchMissingCandidate(
   provider: SemanticSearchProvider,
 ): Promise<readonly SemanticSearchMatch[]> {
@@ -315,6 +308,57 @@ async function searchMissingCandidate(
     query: QUERY,
     documents: [],
   });
+}
+
+function unavailablePod(mode: string): RepositoryPodSemanticSearchContext | undefined {
+  if (mode === "pod-absent") return undefined;
+  const store = openKnowledgeStore({ dbPath: ":memory:" });
+  store.close();
+  return { store, repositoryRoot: ROOT };
+}
+
+function unavailablePodFiles(): Record<string, string> {
+  return {
+    ...Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [
+        `deep/group-${String(index)}/manual.txt`,
+        "Ordinary handbook background.\n".repeat(100),
+      ]),
+    ),
+    "src/auth.ts": "export const note = 'session renewal refresh token';\n",
+  };
+}
+
+async function retrieveWithOptionalProvider(
+  fs: WorkspaceFs,
+  provider: SemanticSearchProvider | undefined,
+  activityLog: ReturnType<typeof createBufferedServerLogSink>,
+): ReturnType<typeof retrieveConnectedContextPack> {
+  return retrieveConnectedContextPack(
+    {
+      workspaceRoot: ROOT,
+      scope: {
+        schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+        scopeId: "unavailable-pod",
+        workspaceRoot: ROOT,
+        kind: "workspace-root",
+        relativePaths: [],
+        conversationId: undefined,
+        connectedAtMs: 1,
+        explicitConnection: true,
+      },
+      query: { ...QUERY, text: "Investigate session renewal" },
+    },
+    {
+      correlationId: "unavailable-pod-review-0001",
+      activityLog,
+      fs,
+      nowMs: () => 1,
+      detectWorkspace: testWorkspace,
+      answerer: { answer: () => Promise.resolve("") },
+      ...(provider === undefined ? {} : { repoSemanticSearchProvider: provider }),
+    },
+  );
 }
 
 describe("localizeMatchLine (GEN-AI-GROUNDING-006, RB-4)", () => {
@@ -396,38 +440,87 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     deps.store.close();
   });
 
-  it("never embeds whole candidate files when the repository pod is absent", async () => {
-    const embeddingRequest = vi.fn(
-      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
-        Promise.resolve({
-          ok: true,
-          value: { vector: vectorFor(request.input), modelId: request.modelId },
-        }),
-    );
-    const deps = depsWith(config(true), embeddingRequest);
-    const observations: RepositoryPodRetrievalObservation[] = [];
-    const fs = testFs({
-      "src/auth.ts": "export function renewSession() {\n  return refresh token rotation;\n}\n",
-      "src/billing.ts": "export function reconcile() {\n  return invoice ledger totals;\n}\n",
-    });
-    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
-      fs,
-      maxCandidates: 8,
-      observePodRetrieval: (observation) => observations.push(observation),
-    });
+  it.each(["pod-absent", "pod-unavailable"])(
+    "keeps full lexical search without a semantic session or document embedding: %s",
+    async (mode) => {
+      const embeddingRequest = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({ ok: false, kind: "unsupported-model" }),
+      );
+      const deps = depsWith(config(true), embeddingRequest);
+      const observations: RepositoryPodRetrievalObservation[] = [];
+      const fs = testFs(unavailablePodFiles());
+      const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+        fs,
+        repositoryPod: unavailablePod(mode),
+        observePodRetrieval: (observation) => observations.push(observation),
+      });
+      try {
+        // The factory already resolved the pod. The observation must precede any workspace scan.
+        expect(observations).toEqual([
+          {
+            mode,
+            referenceCount: 0,
+            denseCandidateCount: 0,
+            lexicalCandidateCount: 0,
+            lexicalOrFallbackUsed: true,
+          },
+        ]);
+        const scope = { scopeId: "unavailable-pod", workspace: testWorkspace(), relativePaths: [] };
+        const baseline = await searchText(scope, QUERY, undefined, { fs, nowMs: () => 1 });
+        const result = await searchText(scope, QUERY, undefined, {
+          fs,
+          nowMs: () => 1,
+          ...(provider === undefined ? {} : { semanticSearchProvider: provider }),
+        });
+        expect(result.atoms).toEqual(baseline.atoms);
+        expect(result.atoms.map((atom) => atom.scopePath)).toContain("src/auth.ts");
+        expect(result.coverage).toMatchObject({ filesScanned: 65, incomplete: false, reasons: [] });
+        expect(result.coverage).toEqual(baseline.coverage);
+        expect(provider).toBeUndefined();
+        expect(embeddingRequest).not.toHaveBeenCalled();
+        expect(observations).toHaveLength(1);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
 
-    expect(provider).toBeDefined();
-    if (provider === undefined) throw new Error("expected semantic provider");
-
-    const hits = await search(provider);
-
-    expect(hits).toEqual([]);
-    expect(embeddingRequest).not.toHaveBeenCalled();
-    expect(observations).toEqual([
-      expect.objectContaining({ mode: "pod-absent", referenceCount: 0 }),
-    ]);
-    deps.store.close();
-  });
+  it.each(["pod-absent", "pod-unavailable"])(
+    "persists unavailable source decisions from the configured factory: %s",
+    async (mode) => {
+      const embeddingRequest = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({ ok: false, kind: "unsupported-model" }),
+      );
+      const deps = depsWith(config(true), embeddingRequest);
+      const fs = testFs(unavailablePodFiles());
+      const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+        fs,
+        repositoryPod: unavailablePod(mode),
+      });
+      try {
+        const log = createBufferedServerLogSink();
+        const result = await retrieveWithOptionalProvider(fs, provider, log);
+        expect(result.pack.files.map((file) => file.scopePath)).toContain("src/auth.ts");
+        const event = log.events.find(
+          (entry) => entry.op === "search.connected-context.source-details",
+        );
+        expect(event?.extra).toMatchObject({
+          semanticProviderDisposition: "unavailable",
+          semanticProviderCallCount: 0,
+        });
+        expect(embeddingRequest).not.toHaveBeenCalled();
+        expect(JSON.stringify(event)).not.toContain(ROOT);
+        expect(JSON.stringify(event)).not.toContain("session renewal");
+        const line = expectActivityLogProof(
+          "search.connected-context.source-details.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(line).toHaveProperty("correlationId", "unavailable-pod-review-0001");
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
 
   it("serves fresh intersected pod vectors with a chunk-refined line and no document embedding", async () => {
     const files: Record<string, string> = {
@@ -463,6 +556,17 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     } as const;
     const hits = await provider.search(searchRequest);
     const repeatedHits = await provider.search(searchRequest);
+    const windowHits = await provider.search({
+      query: QUERY,
+      documents: [
+        {
+          scopePath: "src/auth.ts",
+          text: (files["src/auth.ts"] ?? "").split("\n").slice(1).join("\n"),
+          startLine: 2,
+        },
+      ],
+    });
+    expect(windowHits).toEqual(hits);
     const inputs = embeddingRequest.mock.calls.map(([request]) => request.input);
 
     expect(hits, `embedding inputs: ${JSON.stringify(inputs)}`).toEqual([
@@ -534,7 +638,26 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     );
 
     expect(authFile).toBeDefined();
-    expect(semanticAtom?.atom.lineRange).toEqual({ startLine: 2, endLine: 2 });
+    const rawMatches = await provider.search({
+      query: { ...QUERY, text: "Investigate session renewal in src/auth.ts" },
+      documents: [{ scopePath: "src/auth.ts", text: files["src/auth.ts"] ?? "" }],
+    });
+    expect(rawMatches.find((match) => match.scopePath === "src/auth.ts")?.line).toBe(2);
+    const search = await searchText(
+      { workspace: testWorkspace(), scopeId: "repository-semantic-scope", relativePaths: [] },
+      { ...QUERY, text: "Investigate session renewal in src/auth.ts" },
+      undefined,
+      { fs, semanticSearchProvider: provider, nowMs: () => 1 },
+    );
+    const searchAtom = search.atoms.find(
+      (atom) =>
+        atom.scopePath === "src/auth.ts" &&
+        atom.provenance.tool.includes("configured-repo-semantic-search"),
+    );
+    // Search owns the precise matched line; assembly owns the subsequently read source window.
+    expect(searchAtom?.lineRange).toEqual({ startLine: 2, endLine: 2 });
+    expect(semanticAtom?.atom.lineRange).toEqual({ startLine: 1, endLine: 4 });
+    expect(semanticAtom?.content).toBe(files["src/auth.ts"]);
     expect(embeddingRequest.mock.calls.some(([request]) => request.input.startsWith("Path:"))).toBe(
       false,
     );
@@ -1002,14 +1125,19 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         }),
     );
     const deps = depsWith(config(true), embeddingRequest);
+    const fs = testFs({ "src/auth.ts": "export const note = 'session renewal';\n" });
+    const pod = await seedRepositoryPod(deps, fs, ["src/auth.ts"]);
+    embeddingRequest.mockClear();
     const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
-      fs: testFs({}),
+      fs,
       maxCandidates: 8,
+      repositoryPod: { store: pod.store, repositoryRoot: ROOT },
     });
     if (provider === undefined) throw new Error("expected semantic provider");
 
     await expect(searchMissingCandidate(provider)).resolves.toEqual([]);
     expect(embeddingRequest).not.toHaveBeenCalled();
+    pod.store.close();
     deps.store.close();
   });
 });

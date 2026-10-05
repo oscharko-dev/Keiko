@@ -1,9 +1,10 @@
 // Secret redaction at the boundary. Every provider-derived string passes through
 // redact() before it can reach an error message, log call, or serialised artefact.
 //
-// ReDoS-safe by construction: every built-in pattern is a single linear character class with one
-// bounded or open quantifier (no nesting), so none can backtrack catastrophically. Caller-supplied
-// literals are escaped via escapeRegExp before any RegExp is built, so no caller-controlled
+// Private-key blocks use one boundary scan, including conservative masking of an unclosed block.
+// URL patterns start only at a scheme boundary, avoiding repeated scans within a long scheme-like
+// string. The remaining built-in patterns use flat character classes and bounded alternatives.
+// Caller-supplied literals are escaped via escapeRegExp before any RegExp is built, so no caller-controlled
 // metacharacter reaches the regex engine. This keeps the CodeQL js/polynomial-redos required
 // gate green (ADR-0002).
 
@@ -30,8 +31,7 @@ const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
-const PEM_PRIVATE_KEY_BLOCK_PATTERN =
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+const PRIVATE_KEY_BOUNDARY_PATTERN = /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
 const GERMAN_IBAN_PATTERN = /\bDE\d{2}(?: ?\d{4}){4} ?\d{2}\b/gi;
 const INTERNATIONAL_GERMAN_PHONE_PATTERN =
@@ -75,8 +75,11 @@ const SECRET_KEY_VALUE_PATTERN = new RegExp(
 );
 
 // scheme://user:password@host — strip the userinfo credentials from any URL or DSN. One linear
+// Leading diff punctuation/digits are consumed once before the first scheme letter, so a valid
+// URL behind them remains detectable without retrying within a long scheme run. One linear
 // userinfo class on each side of the ':' and bounded by '@', so no catastrophic backtracking.
-const URL_CREDENTIALS_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi;
+const URL_CREDENTIALS_PATTERN =
+  /(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi;
 
 // scheme://<userinfo>@host with NO ':' in the userinfo. A personal-access token used as the
 // username (https://<pat>@github.com/o/r.git — common for GitHub/GitLab) carries no colon, so the
@@ -87,7 +90,7 @@ const URL_CREDENTIALS_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/
 // matching the existing intent of stripping credentials rather than usernames. Scoped to the URL
 // authority (a real scheme:// must precede the userinfo), so general '@' text is not over-matched.
 // ReDoS-safe: one linear userinfo class bounded by '@', no nesting.
-const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+@/gi;
+const URL_USERINFO_PATTERN = /(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+@/gi;
 const SSH_USERINFO_SCHEME = /^(?:git\+)?ssh(?:\+git)?:\/\/$/i;
 
 const BUILTIN_PATTERNS: readonly RegExp[] = [
@@ -96,8 +99,6 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
   STRIPE_KEY_PATTERN,
-  PEM_PRIVATE_KEY_BLOCK_PATTERN,
-  PEM_PRIVATE_KEY_HEADER_PATTERN,
 ];
 
 function escapeRegExp(value: string): string {
@@ -207,16 +208,29 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
 // Strips known secret shapes and any caller-supplied literal secrets from `input`.
 // `additionalSecrets` lets the caller pass exact apiKey/baseUrl/env values it holds
 // so even non-standard key formats are scrubbed.
-export function redact(input: string, additionalSecrets: readonly string[] = []): string {
-  let output = input
-    .replace(BEARER_PATTERN, `Bearer ${REDACTED}`)
-    .replace(BASIC_AUTH_PATTERN, `Basic ${REDACTED}`)
+// Source projections may preserve each masked span's LF/CRLF delimiters so cited line numbers
+// remain physical file coordinates. The default diagnostic/provider projection is unchanged.
+export function redact(
+  input: string,
+  additionalSecrets: readonly string[] = [],
+  options: { readonly preserveSourceLineBreaks?: boolean } = {},
+): string {
+  const preserveSourceLineBreaks = options.preserveSourceLineBreaks === true;
+  let output = redactPrivateKeyBlocks(input, preserveSourceLineBreaks)
+    .replace(BEARER_PATTERN, (span) =>
+      redactedSourceSpan(span, `Bearer ${REDACTED}`, preserveSourceLineBreaks),
+    )
+    .replace(BASIC_AUTH_PATTERN, (span) =>
+      redactedSourceSpan(span, `Basic ${REDACTED}`, preserveSourceLineBreaks),
+    )
     .replace(GENERIC_API_KEY_HEADER_PATTERN, `$1${REDACTED}`)
     .replace(GENERIC_API_KEY_ASSIGNMENT_PATTERN, `$1${REDACTED}`)
     .replace(SECRET_KEY_VALUE_PATTERN, `$1$2${REDACTED}`)
     .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
     .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
-      SSH_USERINFO_SCHEME.test(scheme) ? match : `${scheme}${REDACTED}@`,
+      SSH_USERINFO_SCHEME.test(scheme.slice(scheme.search(/[a-z]/i)))
+        ? match
+        : `${scheme}${REDACTED}@`,
     )
     .replace(GERMAN_IBAN_PATTERN, REDACTED)
     .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
@@ -229,9 +243,50 @@ export function redact(input: string, additionalSecrets: readonly string[] = [])
     if (secret.length === 0) {
       continue;
     }
-    output = output.replace(new RegExp(escapeRegExp(secret), "g"), REDACTED);
+    output = output.replace(new RegExp(escapeRegExp(secret), "g"), (span) =>
+      redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks),
+    );
   }
   return output;
+}
+
+// Scan each boundary once. Repeated unterminated BEGIN headers must not re-scan the remaining
+// source for an END, and an unfinished key body must not become evidence merely because it is cut.
+function redactedSourceSpan(
+  span: string,
+  replacement: string,
+  preserveSourceLineBreaks: boolean,
+): string {
+  // Preserve only the source span's line delimiters. Neither its body nor its columns survive.
+  return preserveSourceLineBreaks
+    ? replacement + (span.match(/\r?\n/gu)?.join("") ?? "")
+    : replacement;
+}
+
+function redactPrivateKeyBlocks(input: string, preserveSourceLineBreaks: boolean): string {
+  const chunks: string[] = [];
+  let copiedThrough = 0;
+  let openBlockStart: number | undefined;
+  for (const boundary of input.matchAll(PRIVATE_KEY_BOUNDARY_PATTERN)) {
+    if (boundary[1] === "BEGIN" && openBlockStart === undefined) {
+      chunks.push(input.slice(copiedThrough, boundary.index));
+      openBlockStart = boundary.index;
+    } else if (boundary[1] === "END") {
+      const span = input.slice(
+        openBlockStart ?? copiedThrough,
+        boundary.index + boundary[0].length,
+      );
+      chunks.push(redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks));
+      copiedThrough = boundary.index + boundary[0].length;
+      openBlockStart = undefined;
+    }
+  }
+  chunks.push(
+    openBlockStart === undefined
+      ? input.slice(copiedThrough)
+      : redactedSourceSpan(input.slice(openBlockStart), REDACTED, preserveSourceLineBreaks),
+  );
+  return chunks.join("");
 }
 
 // A literal shorter than this is too generic to scrub safely: redacting a 2-char value would

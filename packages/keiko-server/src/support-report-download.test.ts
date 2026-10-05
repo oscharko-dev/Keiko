@@ -1,0 +1,987 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { gunzipSync } from "node:zlib";
+import * as crypto from "node:crypto";
+import * as zlib from "node:zlib";
+import {
+  createClientOnlySupportReport,
+  parseSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  MAX_SUPPORT_REPORT_BYTES,
+  supportReportFileName,
+  isSupportReportDownloadPath,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  cacheSupportReportDownload,
+  MAX_SUPPORT_REPORT_DELIVERY_BYTES,
+  SupportReportDeliveryCapacityError,
+  handleDownloadSupportReport,
+} from "./support-report-download.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { matchRoute, STREAMING, type RouteContext } from "./routes.js";
+import type { UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+
+vi.mock("node:zlib", { spy: true });
+vi.mock("node:crypto", { spy: true });
+
+const report = {
+  fileName: supportReportFileName(1, "aabbccddeeff".padEnd(32, "0"), Date.UTC(2026, 9, 3)),
+  reportJson: '{"kind":"keiko.support.report"}',
+};
+function deps(sessionId: string | undefined): UiHandlerDeps {
+  return {
+    codingAppSessionChannel: {
+      verifySession: () => (sessionId === undefined ? undefined : { sessionId }),
+    },
+  } as unknown as UiHandlerDeps;
+}
+function context(downloadPath: string): RouteContext {
+  const req = new IncomingMessage(new Socket());
+  return {
+    req,
+    res: new ServerResponse(req),
+    params: { downloadId: downloadPath.split("/").at(-1) ?? "" },
+    url: new URL(downloadPath, "http://localhost"),
+    correlationId: "download-test",
+  };
+}
+function attachmentBytes(value: unknown): Buffer {
+  if (!Buffer.isBuffer(value)) throw new TypeError("Expected opaque gzip attachment bytes");
+  return value;
+}
+function decodeAttachment(value: unknown): string {
+  return gunzipSync(attachmentBytes(value)).toString("utf8");
+}
+function holdCompression(): () => void {
+  let finish = (): void => {
+    throw new TypeError("Compression not entered");
+  };
+  vi.mocked(zlib.gzip).mockImplementationOnce((buffer, options, callback) => {
+    finish = (): void => {
+      callback(null, zlib.gzipSync(buffer, options));
+    };
+  });
+  return (): void => {
+    finish();
+  };
+}
+function applyDeliveryPressure(
+  owner: UiHandlerDeps,
+  reason: "byte-pressure" | "entry-pressure",
+): void {
+  const artifact =
+    reason === "byte-pressure"
+      ? { ...report, reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES) }
+      : report;
+  const count = reason === "byte-pressure" ? 2 : 128;
+  for (let index = 0; index < count; index += 1)
+    cacheSupportReportDownload(owner, "protected-session", artifact);
+}
+function expectRetryFailures(sink: ReturnType<typeof createBufferedServerLogSink>): void {
+  const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
+  expect(failures).toHaveLength(2);
+  for (const failure of failures)
+    expect(
+      expectActivityLogProof(
+        "support.report.ui.failed.lifecycle",
+        formatActivityLogProofLine(failure),
+      ),
+    ).toMatchObject({
+      parentCorrelationId: "retry-creation",
+      reason: "unavailable",
+      failureKind: "RangeError",
+    });
+}
+function expectSingleDeliveryFailure(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  downloadPath: string,
+  canonical: string,
+): void {
+  const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
+  expect(failures).toHaveLength(1);
+  expect(
+    expectActivityLogProof(
+      "support.report.ui.failed.lifecycle",
+      formatActivityLogProofLine(failures[0] ?? {}),
+    ),
+  ).toMatchObject({
+    correlationId: "download-test",
+    parentCorrelationId: "failed-delivery-creation",
+    reason: "unavailable",
+    failureKind: "RangeError",
+    causeChain: ["TypeError"],
+  });
+  expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+  const lines = sink.lines().join("\n");
+  for (const privateValue of [downloadPath, canonical, "private-write-detail", "private-cause"])
+    expect(lines).not.toContain(privateValue);
+}
+function expectEvictionEvidence(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  reason: "byte-pressure" | "entry-pressure",
+): void {
+  const released = sink.events.filter(
+    (event) =>
+      event.op === "support.report.ui.delivery-released" &&
+      event.correlationId === "evicted-creation",
+  );
+  expect(released).toHaveLength(1);
+  expect(
+    expectActivityLogProof(
+      "support.report.ui.delivery-released.line",
+      formatActivityLogProofLine(released[0] ?? {}),
+    ),
+  ).toMatchObject({ reason, retainedBytes: Buffer.byteLength(report.reportJson) });
+  const refusal = sink.events.find((event) => event.op === "support.report.ui.download-refused");
+  expect(
+    expectActivityLogProof(
+      "support.report.ui.download-refused.line",
+      formatActivityLogProofLine(refusal ?? {}),
+    ),
+  ).toMatchObject({
+    parentCorrelationId: "evicted-creation",
+    reason: "expired-or-unknown",
+    httpStatus: 404,
+  });
+}
+afterEach(() => {
+  vi.useRealTimers();
+  resetServerLogger();
+  vi.clearAllMocks();
+});
+describe("authenticated canonical report attachment", () => {
+  it.each([
+    { session: undefined, status: 403, reason: "no-session", known: true },
+    { session: "other-session", status: 404, reason: "other-session", known: true },
+    { session: "owner-session", status: 404, reason: "expired-or-unknown", known: false },
+    { session: undefined, status: 403, reason: "no-session", known: false },
+  ])("records routine refusal evidence for $reason without claiming delivery", async (control) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps(control.session);
+    const cached = cacheSupportReportDownload(owner, "owner-session", report, "creation-test");
+    expect(isSupportReportDownloadPath(cached.downloadPath)).toBe(true);
+    const ctx = context(
+      control.known ? cached.downloadPath : "/api/diagnostics/report/download/unknown",
+    );
+    expect(await handleDownloadSupportReport(ctx, owner)).toMatchObject({ status: control.status });
+    const refusal = sink.events.find((event) => event.op === "support.report.ui.download-refused");
+    expect(refusal).toMatchObject({
+      level: "info",
+      correlationId: ctx.correlationId,
+    });
+    expect(refusal?.parentCorrelationId).toBe(control.known ? "creation-test" : undefined);
+    expect(refusal?.extra).toMatchObject({
+      reason: control.reason,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(
+      expectActivityLogProof(
+        "support.report.ui.download-refused.line",
+        formatActivityLogProofLine(refusal ?? {}),
+      ),
+    ).toMatchObject({
+      reason: control.reason,
+      httpStatus: control.status,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);
+    expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+  });
+  it("matches the registered download handler for the path emitted by the cache", () => {
+    const cached = cacheSupportReportDownload(deps("owner-session"), "owner-session", report);
+    expect(matchRoute("GET", cached.downloadPath)).toMatchObject({
+      definition: { handler: handleDownloadSupportReport },
+      params: { downloadId: cached.downloadPath.split("/").at(-1) },
+    });
+  });
+  it.each(["absent", "invalid", "revoked", "expired"] as const)(
+    "does not disclose protected cache membership to an %s session through the registered route",
+    async (authority) => {
+      let now = Date.now();
+      const registry = createSessionRegistry({ now: () => now, idleTtlMs: 1_000 });
+      const mint = registry.mint("local");
+      const owner = deps(mint.session.sessionId);
+      const channel = owner.codingAppSessionChannel;
+      if (channel === undefined) throw new TypeError("Expected session verifier");
+      vi.spyOn(channel, "verifySession").mockImplementation(registry.verify);
+      const cached = cacheSupportReportDownload(owner, mint.session.sessionId, report);
+      if (authority === "revoked") registry.revoke(mint.session.sessionId);
+      if (authority === "expired") now += 1_001;
+      const outcomes = [];
+      for (const path of [
+        cached.downloadPath,
+        `/api/diagnostics/report/download/${crypto.randomUUID()}`,
+      ]) {
+        const ctx = context(path);
+        if (authority !== "absent")
+          ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${authority === "invalid" ? "invalid-cookie" : mint.cookieToken}`;
+        const matched = matchRoute("GET", path);
+        if (typeof matched !== "object") throw new TypeError("Expected registered download route");
+        const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+        const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+        outcomes.push(await matched.definition.handler(ctx, owner));
+        expect(headers).not.toHaveBeenCalled();
+        expect(end).not.toHaveBeenCalled();
+      }
+      expect(outcomes[0]).toMatchObject({ status: 403 });
+      expect(outcomes[1]).toEqual(outcomes[0]);
+      expect(zlib.gzip).not.toHaveBeenCalled();
+    },
+  );
+  it("validates the download identity before retaining bytes or arming expiry", () => {
+    vi.useFakeTimers();
+    const owner = deps("owner-session");
+    vi.mocked(crypto.randomUUID).mockReturnValueOnce(
+      "invalid" as ReturnType<typeof crypto.randomUUID>,
+    );
+    expect(() => cacheSupportReportDownload(owner, "owner-session", report)).toThrow(TypeError);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("keeps a single admitted boundary-size artifact repeatable after compression", async () => {
+    const owner = deps("owner-session");
+    const boundary = {
+      ...report,
+      reportJson: '"' + "x".repeat(MAX_SUPPORT_REPORT_BYTES - 2) + '"',
+    };
+    const cached = cacheSupportReportDownload(owner, "owner-session", boundary);
+    for (let index = 0; index < 2; index += 1) {
+      const ctx = context(cached.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(boundary.reportJson);
+    }
+  });
+  it("records a gzip callback failure as a causal delivery failure", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(
+      owner,
+      "owner-session",
+      report,
+      "report-creation-123",
+    );
+    vi.mocked(zlib.gzip).mockImplementationOnce((_buffer, _options, callback) => {
+      callback(new Error("Compression unavailable"), Buffer.alloc(0));
+    });
+    const ctx = context(cached.downloadPath);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toMatchObject({ status: 500 });
+    expect(end).not.toHaveBeenCalled();
+    const failure = sink.events.find((event) => event.op === "support.report.ui.failed");
+    expect(failure).toMatchObject({
+      correlationId: ctx.correlationId,
+      parentCorrelationId: "report-creation-123",
+    });
+    expect(failure?.extra).toMatchObject({ reason: "unavailable" });
+    expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+  });
+  it.each(["writeHead", "end", "error-event"] as const)(
+    "records exactly one causal failure when attachment delivery fails at %s",
+    async (stage) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("owner-session");
+      const canonical = createClientOnlySupportReport("delivery-fault", "session-unavailable");
+      const cached = cacheSupportReportDownload(
+        owner,
+        "owner-session",
+        canonical,
+        "failed-delivery-creation",
+      );
+      const ctx = context(cached.downloadPath);
+      const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      const destroy = vi.spyOn(ctx.res, "destroy");
+      const error = new RangeError("private-write-detail", {
+        cause: new TypeError("private-cause"),
+      });
+      if (stage !== "error-event")
+        (stage === "writeHead" ? headers : end).mockImplementationOnce(() => {
+          throw error;
+        });
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      if (stage === "error-event") ctx.res.emit("error", error);
+      else expect(destroy).toHaveBeenCalledOnce();
+      if (stage === "writeHead") expect(end).not.toHaveBeenCalled();
+      for (const event of ["finish", "close", "error"])
+        expect(ctx.res.listenerCount(event)).toBe(0);
+      ctx.res.emit("finish");
+      ctx.res.emit("close");
+      expectSingleDeliveryFailure(sink, cached.downloadPath, canonical.reportJson);
+    },
+  );
+  it("retries a failed shared gzip and charges only the successfully retained attachment", async () => {
+    vi.useFakeTimers();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report, "retry-creation");
+    vi.mocked(zlib.gzip).mockImplementationOnce((_buffer, _options, callback) => {
+      callback(new RangeError("private-compression-failure"), Buffer.alloc(0));
+    });
+    const failed = await Promise.all(
+      [1, 2].map(() => handleDownloadSupportReport(context(cached.downloadPath), owner)),
+    );
+    expect(failed).toEqual([
+      expect.objectContaining({ status: 500 }),
+      expect.objectContaining({ status: 500 }),
+    ]);
+    expect(zlib.gzip).toHaveBeenCalledTimes(1);
+    const ctx = context(cached.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(zlib.gzip).toHaveBeenCalledTimes(2);
+    const compressed = attachmentBytes(end.mock.calls[0]?.[0]);
+    expect(decodeAttachment(compressed)).toBe(report.reportJson);
+    ctx.res.emit("finish");
+    expectRetryFailures(sink);
+    expect(sink.events.filter((event) => event.op === "support.report.ui.delivered")).toHaveLength(
+      1,
+    );
+    await vi.advanceTimersByTimeAsync(cached.downloadExpiresAtMs - Date.now());
+    const released = sink.events.filter(
+      (event) => event.op === "support.report.ui.delivery-released",
+    );
+    expect(released).toHaveLength(1);
+    expect(
+      expectActivityLogProof(
+        "support.report.ui.delivery-released.line",
+        formatActivityLogProofLine(released[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "retry-creation",
+      reason: "expired",
+      retainedBytes: compressed.length,
+      reportBytes: Buffer.byteLength(report.reportJson),
+    });
+    expect(sink.lines().join("\n")).not.toContain("private-compression-failure");
+  });
+  it.each(["byte-pressure", "entry-pressure"] as const)(
+    "refuses an artifact released under %s while gzip is pending",
+    async (reason) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("protected-session");
+      const cached = cacheSupportReportDownload(
+        owner,
+        "protected-session",
+        report,
+        "evicted-creation",
+      );
+      const ctx = context(cached.downloadPath);
+      const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      const finishCompression = holdCompression();
+      const pending = handleDownloadSupportReport(ctx, owner);
+      applyDeliveryPressure(owner, reason);
+      finishCompression();
+      expect(await pending).toMatchObject({ status: 404 });
+      expect(headers).not.toHaveBeenCalled();
+      expect(end).not.toHaveBeenCalled();
+      expectEvictionEvidence(sink, reason);
+      expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+      expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);
+      expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+        status: 404,
+      });
+    },
+  );
+  it("compresses concurrent and repeated downloads once off the event loop", async () => {
+    const gzip = vi.mocked(zlib.gzip);
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    const responses = Array.from({ length: 3 }, () => context(cached.downloadPath));
+    const ends = responses.map((ctx) => {
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      return vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    });
+    await Promise.all(responses.map((ctx) => handleDownloadSupportReport(ctx, owner)));
+    expect(gzip).toHaveBeenCalledTimes(1);
+    for (const end of ends)
+      expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(report.reportJson);
+    const repeated = context(cached.downloadPath);
+    vi.spyOn(repeated.res, "writeHead").mockReturnValue(repeated.res);
+    vi.spyOn(repeated.res, "end").mockReturnValue(repeated.res);
+    await handleDownloadSupportReport(repeated, owner);
+    expect(gzip).toHaveBeenCalledTimes(1);
+  });
+  it("rechecks the original session after pending compression before releasing protected bytes", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const registry = createSessionRegistry();
+    const mint = registry.mint("local");
+    const owner = deps(mint.session.sessionId);
+    const channel = owner.codingAppSessionChannel;
+    if (channel === undefined) throw new TypeError("Missing session channel");
+    vi.spyOn(channel, "verifySession").mockImplementation(registry.verify);
+    const cached = cacheSupportReportDownload(
+      owner,
+      mint.session.sessionId,
+      report,
+      "creation-test",
+    );
+    const ctx = context(cached.downloadPath);
+    ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`;
+    const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    const finishCompression = holdCompression();
+    const pending = handleDownloadSupportReport(ctx, owner);
+    registry.revoke(mint.session.sessionId);
+    finishCompression();
+    expect(await pending).toMatchObject({ status: 403 });
+    expect(headers).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+    const refusal = sink.events.filter(
+      (event) => event.op === "support.report.ui.download-refused",
+    );
+    expect(refusal).toHaveLength(1);
+    expect(
+      expectActivityLogProof(
+        "support.report.ui.download-refused.line",
+        formatActivityLogProofLine(refusal[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: ctx.correlationId,
+      parentCorrelationId: "creation-test",
+      reason: "no-session",
+      httpStatus: 403,
+    });
+    expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+  });
+  it.each(["expiry", "destroyed-response"] as const)(
+    "does not send protected bytes after %s during compression",
+    async (control) => {
+      vi.useFakeTimers();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("owner-session");
+      const cached = cacheSupportReportDownload(owner, "owner-session", report, "creation-test");
+      const ctx = context(cached.downloadPath);
+      const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      const finishCompression = holdCompression();
+      const pending = handleDownloadSupportReport(ctx, owner);
+      if (control === "expiry") vi.setSystemTime(cached.downloadExpiresAtMs);
+      else ctx.res.destroy();
+      finishCompression();
+      const result = await pending;
+      expect(result).toEqual(
+        control === "expiry" ? expect.objectContaining({ status: 404 }) : STREAMING,
+      );
+      expect(headers).not.toHaveBeenCalled();
+      expect(end).not.toHaveBeenCalled();
+      const op =
+        control === "expiry" ? "support.report.ui.download-refused" : "support.report.ui.failed";
+      const failure = sink.events.filter((event) => event.op === op);
+      expect(failure).toHaveLength(1);
+      const line = formatActivityLogProofLine(failure[0] ?? {});
+      const proof =
+        control === "expiry"
+          ? expectActivityLogProof("support.report.ui.download-refused.line", line)
+          : expectActivityLogProof("support.report.ui.failed.lifecycle", line);
+      expect(proof).toMatchObject({
+        correlationId: ctx.correlationId,
+        ...(control === "expiry"
+          ? { reason: "expired-or-unknown", httpStatus: 404, parentCorrelationId: "creation-test" }
+          : { errorKind: "cancelled", parentCorrelationId: "creation-test" }),
+      });
+      expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+      expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);
+    },
+  );
+  it("does not claim a delivered attachment until the response finishes", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    const ctx = context(cached.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    await handleDownloadSupportReport(ctx, owner);
+    expect(sink.events.filter((line) => line.op === "support.report.ui.delivered")).toEqual([]);
+    ctx.res.emit("close");
+    expect(sink.events.filter((line) => line.op === "support.report.ui.delivered")).toEqual([]);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({ op: "support.report.ui.failed", errorKind: "cancelled" }),
+    );
+  });
+  it("actively releases the transient delivery at its declared expiry", async () => {
+    vi.useFakeTimers();
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(cached.downloadExpiresAtMs - Date.now());
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+  });
+  it.each(
+    (["client-only", "session-bound"] as const).flatMap((authority) =>
+      (["expired", "byte-pressure", "entry-pressure"] as const).map((reason) => ({
+        authority,
+        reason,
+      })),
+    ),
+  )(
+    "records $authority $reason disposal under its creation correlation without capability material",
+    async ({ authority, reason }) => {
+      vi.useFakeTimers();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("protected-session");
+      const artifact =
+        authority === "session-bound"
+          ? report
+          : createClientOnlySupportReport("original-client-cause", "session-unavailable");
+      const target = cacheSupportReportDownload(
+        owner,
+        authority === "session-bound" ? "protected-session" : undefined,
+        artifact,
+        "original-report-creation",
+      );
+      if (reason === "expired")
+        await vi.advanceTimersByTimeAsync(target.downloadExpiresAtMs - Date.now());
+      if (reason !== "expired") applyDeliveryPressure(owner, reason);
+      const release = sink.events.find(
+        (event) => event.op === "support.report.ui.delivery-released",
+      );
+      expect(release?.correlationId).toBe("original-report-creation");
+      const line = formatActivityLogProofLine(release ?? {});
+      expect(
+        expectActivityLogProof("support.report.ui.delivery-released.line", line),
+      ).toMatchObject({
+        reason,
+        reportBytes: Buffer.byteLength(artifact.reportJson),
+        retainedBytes: Buffer.byteLength(artifact.reportJson),
+        deliveryAuthority: authority,
+        evidenceScope: authority === "session-bound" ? "server" : "client-only",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(line).not.toContain(target.downloadPath);
+      expect(line).not.toContain(artifact.fileName);
+      expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+      expect(await handleDownloadSupportReport(context(target.downloadPath), owner)).toMatchObject({
+        status: 404,
+      });
+    },
+  );
+
+  it.each(["creation-test", undefined])(
+    "releases compressed retained bytes once across prune and timer for creation %s",
+    async (creationCorrelationId) => {
+      vi.useFakeTimers();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("owner-session");
+      const artifact = { ...report, reportJson: '"' + "x".repeat(10_000) + '"' };
+      const cached = cacheSupportReportDownload(
+        owner,
+        "owner-session",
+        artifact,
+        creationCorrelationId,
+      );
+      const ctx = context(cached.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      await handleDownloadSupportReport(ctx, owner);
+      const bytes = attachmentBytes(end.mock.calls[0]?.[0]).length;
+      expect(bytes).toBeLessThan(Buffer.byteLength(artifact.reportJson));
+      vi.setSystemTime(cached.downloadExpiresAtMs);
+      expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+        status: 404,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const released = sink.events.filter(
+        (event) => event.op === "support.report.ui.delivery-released",
+      );
+      expect(released).toHaveLength(1);
+      expect(
+        expectActivityLogProof(
+          "support.report.ui.delivery-released.line",
+          formatActivityLogProofLine(released[0] ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: creationCorrelationId ?? UNKNOWN_CORRELATION_ID,
+        reason: "expired",
+        reportBytes: Buffer.byteLength(artifact.reportJson),
+        retainedBytes: bytes,
+        deliveryAuthority: "session-bound",
+        evidenceScope: "server",
+      });
+    },
+  );
+  it("withdraws expired delivery and cancels its timer even when the log sink throws", async () => {
+    vi.useFakeTimers();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report, "creation-test");
+    const write = vi.spyOn(sink, "write").mockImplementationOnce(() => {
+      throw new TypeError("private-sink-failure");
+    });
+    vi.setSystemTime(cached.downloadExpiresAtMs);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+    expect(
+      write.mock.calls.filter(([event]) => event.op === "support.report.ui.delivery-released"),
+    ).toHaveLength(1);
+  });
+  it("delivers standard gzip preserving exact canonical producer bytes and strict integrity", async () => {
+    const canonicalReport = createClientOnlySupportReport("gzip-attachment", "session-unavailable");
+    const owner = deps(undefined);
+    const cached = cacheSupportReportDownload(owner, undefined, canonicalReport);
+    const ctx = context(cached.downloadPath);
+    const writeHead = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        "Content-Type": "application/gzip",
+        "Content-Disposition": `attachment; filename="${canonicalReport.fileName}.gz"`,
+      }),
+    );
+    const bytes: unknown = end.mock.calls[0]?.[0];
+    if (!Buffer.isBuffer(bytes)) throw new TypeError("Expected opaque gzip attachment bytes");
+    const decoded = gunzipSync(bytes).toString("utf8");
+    expect(decoded).toBe(canonicalReport.reportJson);
+    expect(parseSupportReport(decoded)).toEqual(parseSupportReport(canonicalReport.reportJson));
+    expect(writeHead.mock.calls[0]?.[1]).not.toHaveProperty("Content-Encoding");
+  });
+  it("preserves protected artifacts when unauthenticated limited reports fill the shared cache", async () => {
+    const owner = deps("protected-session");
+    const full = cacheSupportReportDownload(owner, "protected-session", report);
+    const limited = createClientOnlySupportReport("limited-flood", "session-unavailable");
+    for (let index = 0; index < 140; index += 1)
+      cacheSupportReportDownload(owner, undefined, limited);
+    const ctx = context(full.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(report.reportJson);
+  });
+
+  it("keeps a boundary protected report and a canonical limited report independently downloadable", async () => {
+    const owner = deps("protected-session");
+    const boundary = { ...report, reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES) };
+    const protectedTarget = cacheSupportReportDownload(owner, "protected-session", boundary);
+    const limited = createClientOnlySupportReport(
+      "limited-boundary-coexistence",
+      "session-unavailable",
+    );
+    const limitedTarget = cacheSupportReportDownload(owner, undefined, limited);
+    for (const [target, expected] of [
+      [protectedTarget, boundary],
+      [limitedTarget, limited],
+    ] as const) {
+      const ctx = context(target.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(expected.reportJson);
+    }
+  });
+
+  it("evicts limited evidence first under aggregate byte pressure below the count ceiling", async () => {
+    const owner = deps("protected-session");
+    const limited = createClientOnlySupportReport("limited-byte-pressure", "session-unavailable");
+    let remaining =
+      MAX_SUPPORT_REPORT_DELIVERY_BYTES -
+      Buffer.byteLength(limited.reportJson) -
+      Buffer.byteLength(report.reportJson) +
+      1;
+    const protectedTargets: { downloadPath: string; text: string }[] = [];
+    while (remaining > 0) {
+      const text = "x".repeat(Math.min(MAX_SUPPORT_REPORT_BYTES, remaining));
+      const cached = cacheSupportReportDownload(owner, "protected-session", {
+        ...report,
+        reportJson: text,
+      });
+      protectedTargets.push({ downloadPath: cached.downloadPath, text });
+      remaining -= Buffer.byteLength(text);
+    }
+    const limitedTarget = cacheSupportReportDownload(owner, undefined, limited);
+    const latest = cacheSupportReportDownload(owner, "protected-session", report);
+    expect(
+      await handleDownloadSupportReport(context(limitedTarget.downloadPath), owner),
+    ).toMatchObject({ status: 404 });
+    for (const target of [
+      ...protectedTargets,
+      { downloadPath: latest.downloadPath, text: report.reportJson },
+    ]) {
+      const ctx = context(target.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(target.text);
+    }
+  });
+
+  it("preserves existing limited bytes when a larger limited replacement cannot fit beside protected bytes", async () => {
+    const owner = deps("protected-session");
+    const earlier = createClientOnlySupportReport("limited-existing", "session-unavailable");
+    const larger = createClientOnlySupportReport("limited-incoming", "session-unavailable", {
+      errorKind: "unavailable",
+      context: ["kind:sse-error"],
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+    });
+    expect(Buffer.byteLength(larger.reportJson)).toBeGreaterThan(
+      Buffer.byteLength(earlier.reportJson),
+    );
+    cacheSupportReportDownload(owner, "protected-session", {
+      ...report,
+      reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES),
+    });
+    cacheSupportReportDownload(owner, "protected-session", {
+      ...report,
+      reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES - Buffer.byteLength(earlier.reportJson)),
+    });
+    const target = cacheSupportReportDownload(owner, undefined, earlier);
+    expect(() => cacheSupportReportDownload(owner, undefined, larger)).toThrow(
+      SupportReportDeliveryCapacityError,
+    );
+    const ctx = context(target.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    const canonical = decodeAttachment(end.mock.calls[0]?.[0]);
+    expect(canonical).toBe(earlier.reportJson);
+    expect(parseSupportReport(canonical).incident.incidentId).toBe(
+      parseSupportReport(earlier.reportJson).incident.incidentId,
+    );
+  });
+
+  it("refuses limited delivery when protected artifacts occupy the whole existing capacity", async () => {
+    const owner = deps("protected-session");
+    const first = cacheSupportReportDownload(owner, "protected-session", report);
+    for (let index = 1; index < 128; index += 1)
+      cacheSupportReportDownload(owner, "protected-session", report);
+    const limited = createClientOnlySupportReport("limited-capacity", "session-unavailable");
+    expect(() => cacheSupportReportDownload(owner, undefined, limited)).toThrow(
+      SupportReportDeliveryCapacityError,
+    );
+    const ctx = context(first.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+  });
+
+  it("delivers only canonical client-only bytes without granting protected report authority", async () => {
+    const owner = deps(undefined);
+    const limited = createClientOnlySupportReport("client-report-download", "session-unavailable");
+    const cached = cacheSupportReportDownload(owner, undefined, limited);
+    const ctx = context(cached.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(limited.reportJson);
+    expect(() => cacheSupportReportDownload(owner, undefined, report)).toThrow();
+    expect(() =>
+      cacheSupportReportDownload(owner, undefined, { ...report, evidenceScope: "client-only" }),
+    ).toThrow();
+    const full = cacheSupportReportDownload(owner, "protected-session", report);
+    expect(await handleDownloadSupportReport(context(full.downloadPath), owner)).toMatchObject({
+      status: 403,
+    });
+  });
+
+  it("serves exact canonical bytes as an HTTP attachment without another generation", async () => {
+    const canonicalReport = createClientOnlySupportReport(
+      "opaque-canonical",
+      "session-unavailable",
+    );
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", canonicalReport);
+    const ctx = context(cached.downloadPath);
+    const writeHead = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(canonicalReport.reportJson);
+    expect(writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        "Content-Disposition": `attachment; filename="${canonicalReport.fileName}.gz"`,
+        "Content-Type": "application/gzip",
+        "Content-Length": String(attachmentBytes(end.mock.calls[0]?.[0]).length),
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      }),
+    );
+  });
+  it("records attachment delivery without logging report bytes or the resource reference", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(
+      owner,
+      "owner-session",
+      {
+        ...report,
+        summary: {
+          status: "complete",
+          reasons: [],
+          recordCount: 1,
+          reportDigest: "a".repeat(64),
+          incidentId: "b".repeat(32),
+          manifestUnreadableCount: 0,
+          manifestReusedCount: 0,
+        },
+      },
+      "report-creation-request",
+    );
+    const ctx = context(cached.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    await handleDownloadSupportReport(ctx, owner);
+    expect(sink.events.some((line) => line.op === "support.report.ui.delivered")).toBe(false);
+    ctx.res.emit("finish");
+    const event = sink.events.find((line) => line.op === "support.report.ui.delivered");
+    if (event === undefined) throw new Error("Expected body-free attachment delivery evidence");
+    const proof = expectActivityLogProof(
+      "support.report.ui.delivered.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(proof).toMatchObject({
+      reportBytes: Buffer.byteLength(report.reportJson),
+      transportBytes: attachmentBytes(end.mock.calls[0]?.[0]).length,
+      correlationId: "download-test",
+      parentCorrelationId: "report-creation-request",
+      reportDigest: "a".repeat(64),
+      completeness: "complete",
+      evidenceScope: "server",
+      deliveryAuthority: "session-bound",
+    });
+    expect(sink.lines().join("\n")).not.toContain(report.reportJson);
+    expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);
+  });
+  it("records actual client-only evidence independently of session-bound delivery authority", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const limited = createClientOnlySupportReport("scope-projection", "session-unavailable");
+    const cached = cacheSupportReportDownload(owner, "owner-session", limited);
+    const ctx = context(cached.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    await handleDownloadSupportReport(ctx, owner);
+    ctx.res.emit("finish");
+    const event = sink.events.find((line) => line.op === "support.report.ui.delivered");
+    expect(event?.extra).toMatchObject({
+      evidenceScope: "client-only",
+      deliveryAuthority: "session-bound",
+      reportBytes: Buffer.byteLength(limited.reportJson),
+      transportBytes: attachmentBytes(end.mock.calls[0]?.[0]).length,
+    });
+  });
+  it("requires the original session and server instance even when the reference is known", async () => {
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    expect(
+      await handleDownloadSupportReport(context(cached.downloadPath), deps(undefined)),
+    ).toMatchObject({ status: 403 });
+    expect(
+      await handleDownloadSupportReport(context(cached.downloadPath), deps("other-session")),
+    ).toMatchObject({ status: 404 });
+    const channel = owner.codingAppSessionChannel;
+    if (channel === undefined) throw new TypeError("Missing session channel");
+    const verify = vi.spyOn(channel, "verifySession").mockReturnValue(undefined);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 403,
+    });
+    verify.mockReturnValue({
+      sessionId: "other-session",
+    } as never);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+  });
+  it("refuses revoked and expired sessions through the real session verifier", async () => {
+    let now = Date.now();
+    const registry = createSessionRegistry({ now: () => now, idleTtlMs: 1_000 });
+    const mint = registry.mint("local");
+    const owner = {
+      codingAppSessionChannel: { verifySession: registry.verify },
+    } as unknown as UiHandlerDeps;
+    const cached = cacheSupportReportDownload(owner, mint.session.sessionId, report);
+    const ctx = context(cached.downloadPath);
+    ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`;
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    now += 1_001;
+    expect(await handleDownloadSupportReport(ctx, owner)).toMatchObject({ status: 403 });
+    const fresh = registry.mint("local");
+    const freshArtifact = cacheSupportReportDownload(owner, fresh.session.sessionId, report);
+    const revoked = context(freshArtifact.downloadPath);
+    revoked.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${fresh.cookieToken}`;
+    registry.revoke(fresh.session.sessionId);
+    expect(await handleDownloadSupportReport(revoked, owner)).toMatchObject({ status: 403 });
+  });
+
+  it("expires references and bounds aggregate retained UTF-8 bytes", async () => {
+    vi.useFakeTimers();
+    const owner = deps("owner-session");
+    const first = cacheSupportReportDownload(owner, "owner-session", {
+      ...report,
+      reportJson: "é".repeat(MAX_SUPPORT_REPORT_BYTES / 2),
+    });
+    let remaining = MAX_SUPPORT_REPORT_DELIVERY_BYTES - MAX_SUPPORT_REPORT_BYTES;
+    while (remaining > 0) {
+      const bytes = Math.min(remaining, MAX_SUPPORT_REPORT_BYTES);
+      cacheSupportReportDownload(owner, "other-session", {
+        ...report,
+        reportJson: "x".repeat(bytes),
+      });
+      remaining -= bytes;
+    }
+    const next = cacheSupportReportDownload(owner, "owner-session", report);
+    expect(await handleDownloadSupportReport(context(first.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+    vi.setSystemTime(next.downloadExpiresAtMs + 1);
+    expect(await handleDownloadSupportReport(context(next.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+  });
+  it("rejects unsafe filenames and oversized report bytes before retaining them", () => {
+    const owner = deps("owner-session");
+    expect(() =>
+      cacheSupportReportDownload(owner, "owner-session", {
+        ...report,
+        fileName: "../private.json",
+      }),
+    ).toThrow(TypeError);
+    expect(() =>
+      cacheSupportReportDownload(owner, "owner-session", {
+        ...report,
+        reportJson: "é".repeat(MAX_SUPPORT_REPORT_BYTES / 2 + 1),
+      }),
+    ).toThrow(TypeError);
+  });
+});

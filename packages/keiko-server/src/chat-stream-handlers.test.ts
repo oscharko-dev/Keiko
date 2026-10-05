@@ -1,4 +1,11 @@
 import * as promptBudget from "./chat-prompt-budget.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "./coding-app-session/_support.js";
 import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
@@ -346,6 +353,23 @@ function streamingModel(content: string, onFirstDelta?: () => void): StreamingMo
   return { model, recorded, calls };
 }
 
+function pausedActivityModel(
+  started: ReturnType<typeof deferred<undefined>>,
+  completion: ReturnType<typeof deferred<undefined>>,
+): ModelPort {
+  const wait = async (): Promise<NormalizedResponse> => {
+    started.resolve(undefined);
+    await completion.promise;
+    return normalizedResponse("Completed answer.");
+  };
+  return {
+    call: wait,
+    async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+      yield { type: "done", response: await wait() };
+    },
+  };
+}
+
 function deps(model: ModelPort, overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     config: customModelConfig(CHAT_MODEL),
@@ -649,6 +673,80 @@ afterEach(() => {
 });
 
 describe("desktop chat SSE streaming handler", () => {
+  it.each([
+    ["buffered", "unknown-chat"],
+    ["streamed", "unknown-chat"],
+    ["buffered", "empty-content"],
+    ["streamed", "empty-content"],
+    ["buffered", "unknown-model"],
+    ["streamed", "unknown-model"],
+  ] as const)(
+    "does not renew a paired session for a rejected %s %s request",
+    async (kind, reason) => {
+      let clock = 0;
+      const registry = createSessionRegistry({ now: () => clock });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      clock = 10 * 60_000;
+      const req = makeReq({
+        chatId: reason === "unknown-chat" ? "missing-chat" : seedChat(),
+        projectPath: projectDir,
+        content: reason === "empty-content" ? "" : "Inspect.",
+        modelId: reason === "unknown-model" ? "missing-model" : CHAT_MODEL,
+      });
+      req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[kind](
+        routeContext(req, captureResWithEvents().res),
+        deps(streamingModel("must not run").model, { codingAppSessionChannel: channel }),
+      );
+      expect(typeof result === "object" ? result.status : 0).toBeGreaterThanOrEqual(400);
+      expect(registry.inspect(paired.cookieToken)?.lastSeenAtMs).toBe(0);
+      clock = 31 * 60_000;
+      expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
+  it.each(["buffered", "streamed"] as const)(
+    "protects an existing paired session throughout a long %s model wait",
+    async (kind) => {
+      let clock = 0;
+      const registry = createSessionRegistry({ now: () => clock });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      const started = deferred<undefined>();
+      const completion = deferred<undefined>();
+      const req = makeReq({
+        chatId: seedChat(),
+        projectPath: projectDir,
+        content: "Inspect this.",
+      });
+      req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const request = handlers[kind](
+        routeContext(req, captureResWithEvents().res),
+        deps(pausedActivityModel(started, completion), { codingAppSessionChannel: channel }),
+      );
+      await started.promise;
+      clock = 31 * 60_000;
+      const authorityWhilePending = registry.inspect(paired.cookieToken);
+      completion.resolve(undefined);
+      await request;
+      expect(authorityWhilePending).toBeDefined();
+      expect(registry.inspect(paired.cookieToken)?.lastSeenAtMs).toBe(clock);
+      clock = 62 * 60_000;
+      expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
   it("regenerates the latest answer after manual compaction crosses its user boundary", async () => {
     const chatId = seedChat();
     seedMessage(chatId, "user", "Older notes. ".repeat(1000));
@@ -4028,6 +4126,62 @@ describe("git-change description-authority admission on the streaming send path 
         },
       }),
     );
+  });
+
+  it("refuses a stale source identity before starting a Git description stream", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const original = store.findChatById(chatId);
+    if (original === undefined) throw new TypeError("Missing fixture chat");
+    const expectedGroundingScopeIdentity = canonicalChatTurnGroundingScopeIdentity(original);
+    const description = await initializeGitChangeDescriptionFixture(projectDir);
+    store.updateChat(chatId, { gitChangeScopes: [description.scope] });
+    const { model, calls } = streamingModel("must not run");
+    const captured = captureRes();
+    const mintDescriptionAuthority =
+      vi.fn<NonNullable<UiHandlerDeps["mintDescriptionAuthority"]>>();
+    const result = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "refine description",
+            expectedGroundingScopeIdentity,
+            memory: { enabled: false, budgetTokens: 0, mode: "supervised-coding", context: {} },
+          }),
+          captured.res,
+        ),
+        correlationId: "stale-stream-git-description",
+      },
+      {
+        ...deps(model),
+        ...description.deps,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        mintDescriptionAuthority,
+        gitChangeDescriptionAuthorityPort: {
+          current: (scope) => ({
+            scope,
+            effectiveMode: "supervised-coding",
+            expiresAt: "9999-12-31T23:59:59.999Z",
+          }),
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+    });
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(calls.count).toBe(0);
+    expect(mintDescriptionAuthority).not.toHaveBeenCalled();
+    expect(store.listMessages(chatId)).toEqual([]);
+    const rejection = sink.events.find((event) => event.op === "chat.send.rejected");
+    expect(rejection?.correlationId).toBe("stale-stream-git-description");
+    expect(rejection?.extra?.reason).toBe("grounding-scope");
   });
 
   it("admits the streamed turn once a live description authority record exists for the exact scope", async () => {

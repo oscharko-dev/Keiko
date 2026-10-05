@@ -2,11 +2,13 @@
 // normalization, the closed record schema, and the public/private projection boundary.
 
 import { describe, expect, it } from "vitest";
+import { canonicalSupportJson } from "./support-report-json.js";
+import { clientOnlySupportReportSections } from "./support-report-producer.js";
 import { ACTIVITY_LOG_FAILURE_SURFACES } from "./activity-log-registry.generated.js";
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
-  SUPPORT_INCIDENT_SLOT_COUNT,
+  SUPPORT_INCIDENT_TTL_MS,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   defectFingerprintPreimage,
   isSupportIncidentSurface,
@@ -324,7 +326,7 @@ describe("the closed record schema", () => {
         return rest;
       })(),
     ],
-    ["an out-of-bounds slotIndex", { ...record(), slotIndex: SUPPORT_INCIDENT_SLOT_COUNT }],
+    ["an out-of-bounds slotIndex", { ...record(), slotIndex: Number.MAX_SAFE_INTEGER + 1 }],
     ["a negative slotIndex", { ...record(), slotIndex: -1 }],
   ])("rejects %s", (_label, value) => {
     expect(parseSupportIncidentRecord(value)).toBeUndefined();
@@ -359,9 +361,10 @@ describe("the closed record schema", () => {
     expect(supportIncidentSlotClaimFileName(0)).toBe("slot-00.claim");
     expect(supportIncidentSlotClaimFileName(31)).toBe("slot-31.claim");
     expect(parseSupportIncidentSlotClaimFileName("slot-07.claim")).toBe(7);
-    expect(parseSupportIncidentSlotClaimFileName("slot-99.claim")).toBeUndefined();
+    expect(parseSupportIncidentSlotClaimFileName("slot-99.claim")).toBe(99);
+    expect(parseSupportIncidentSlotClaimFileName("slot-099.claim")).toBeUndefined();
     expect(parseSupportIncidentSlotClaimFileName(`incident-${INCIDENT_ID}.json`)).toBeUndefined();
-    expect(() => supportIncidentSlotClaimFileName(SUPPORT_INCIDENT_SLOT_COUNT)).toThrow(RangeError);
+    expect(() => supportIncidentSlotClaimFileName(Number.MAX_SAFE_INTEGER + 1)).toThrow(RangeError);
     expect(() => supportIncidentSlotClaimFileName(-1)).toThrow(RangeError);
 
     // parseSupportIncidentFileName is the one function state-paths.ts calls for ownership, so both
@@ -380,6 +383,24 @@ describe("the closed record schema", () => {
 });
 
 describe("public and private projections", () => {
+  it("projects the effective expiry of an immutable historical fourteen-day incident", () => {
+    const original = incident();
+    const legacy = { ...original, expiresAtMs: original.createdAtMs + 336 * 60 * 60_000 };
+    expect(
+      parseSupportIncidentRecord({ ...record(), expiresAtMs: legacy.expiresAtMs }),
+    ).toBeDefined();
+    const raw = JSON.stringify(legacy);
+    expect(supportIncidentPrivateProjection(legacy).expiresAtMs).toBe(
+      legacy.createdAtMs + SUPPORT_INCIDENT_TTL_MS,
+    );
+    expect(JSON.stringify(legacy)).toBe(raw);
+  });
+
+  it("does not extend an earlier explicit expiry in the private projection", () => {
+    const original = incident();
+    expect(supportIncidentPrivateProjection(original).expiresAtMs).toBe(original.expiresAtMs);
+  });
+
   it("makes the public projection a strict subset of the private one", () => {
     const publicView = supportIncidentPublicProjection(incident());
     const privateView = supportIncidentPrivateProjection(incident());
@@ -421,10 +442,81 @@ describe("public and private projections", () => {
   });
 });
 
+describe("JSON-compatible optional private report fields", () => {
+  function limitedProjection(): ReturnType<typeof supportIncidentPrivateProjection> {
+    return clientOnlySupportReportSections({
+      incidentId: INCIDENT_ID,
+      nowMs: 2000,
+      build: supportIncidentBuild("1.0.5", "darwin-arm64"),
+      defectFingerprint: FINGERPRINT,
+      availabilityReason: "service-unavailable",
+      failure: { errorKind: "internal", context: ["stage:files-source-preview"] },
+    }).incident;
+  }
+
+  it("distinguishes an intact limited artifact from sufficient server evidence", () => {
+    const limited = limitedProjection();
+    expect(limited).toMatchObject({
+      integrity: "supported",
+      completeness: "complete",
+      loss: "none",
+      sufficiencyStatus: "insufficient",
+      lineCount: 0,
+      segments: [],
+      clientReport: { serverEvidence: "unavailable", availabilityReason: "service-unavailable" },
+      correlation: { rootCorrelationId: "id000001", childCorrelationIds: [] },
+    });
+    expect(limited.sufficiencyReasons).toEqual(["no-registered-failure", "no-registered-evidence"]);
+  });
+
+  it.each(["clientReport", "failure", "errorEvidence"] as const)(
+    "rejects an explicitly undefined %s before canonical serialization",
+    (key) => {
+      const base = limitedProjection();
+      const value =
+        key === "clientReport"
+          ? { ...base, clientReport: undefined }
+          : key === "failure"
+            ? { ...base, clientReport: { ...base.clientReport, failure: undefined } }
+            : {
+                ...base,
+                clientReport: {
+                  ...base.clientReport,
+                  failure: { ...base.clientReport?.failure, errorEvidence: undefined },
+                },
+              };
+      expect(parseSupportIncidentPrivateProjection(base)).toEqual(base);
+      expect(() => canonicalSupportJson(base)).not.toThrow();
+      expect(parseSupportIncidentPrivateProjection(value)).toBeUndefined();
+      expect(() => canonicalSupportJson(value)).toThrow();
+    },
+  );
+});
+
 describe("received private incident projection", () => {
   const projection = supportIncidentPrivateProjection(incident());
   const segment = projection.segments[0];
   if (segment === undefined) throw new TypeError("missing production projection segment");
+
+  it.each([
+    { serverEvidence: "available", availabilityReason: "session-unavailable" },
+    { serverEvidence: "unavailable", availabilityReason: "customer private prose" },
+    {
+      serverEvidence: "unavailable",
+      availabilityReason: "session-unavailable",
+      message: "private",
+    },
+  ])("rejects unbounded or invented client report metadata %j", (clientReport) => {
+    expect(parseSupportIncidentPrivateProjection({ ...projection, clientReport })).toBeUndefined();
+  });
+  it("rejects client-only labels attached to retained server evidence", () => {
+    expect(
+      parseSupportIncidentPrivateProjection({
+        ...projection,
+        clientReport: { serverEvidence: "unavailable", availabilityReason: "session-unavailable" },
+      }),
+    ).toBeUndefined();
+  });
 
   it("accepts the owning producer's complete closed projection", () => {
     expect(parseSupportIncidentPrivateProjection(projection)).toEqual(projection);

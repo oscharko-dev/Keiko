@@ -161,14 +161,13 @@ export {
 export {
   computeDefectFingerprint,
   dismissSupportIncident,
+  completePreparedSupportIncident,
   listSupportIncidents,
   readSupportIncident,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
   supportIncidentEligibleOperation,
   supportIncidentSegmentFiles,
-  MAX_REGISTERED_FAILURE_INCIDENTS,
-  MAX_SUPPORT_INCIDENTS,
   MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE,
   SUPPORT_INCIDENT_IN_FLIGHT_GRACE_MS,
   SUPPORT_INCIDENT_OPERATIONS,
@@ -184,3 +183,8 @@ export {
   type SupportIncidentRejection,
   type SupportIncidentSegmentFile,
 } from "./support-incident.js";
+
+export {
+  supportIncidentRetentionPolicy,
+  type SupportIncidentRetentionPolicy,
+} from "./support-incident-retention.js";

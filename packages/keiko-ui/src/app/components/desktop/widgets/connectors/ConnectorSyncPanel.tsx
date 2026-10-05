@@ -1,11 +1,12 @@
+"use client";
+
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238, ADR-0128 D5) — per-connector sync surface.
 //
 // Triggers a human-initiated sync for the selected scope, polls the job to terminal state (live
 // progress updates, mirroring the memory-consolidation poll convention used elsewhere in the BFF),
 // supports cancellation, and renders the terminal change summary plus degradation remediation copy
 // keyed to the backend failure reason codes. Presentation reuses the #1856 pod-refresh atoms.
-
-"use client";
 
 import { useEffect, useState, type ReactNode } from "react";
 import type {
@@ -15,7 +16,7 @@ import type {
   AtlassianSyncJobState,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+
 import type {
   AtlassianConnectorsClient,
   StartAtlassianSyncInput,

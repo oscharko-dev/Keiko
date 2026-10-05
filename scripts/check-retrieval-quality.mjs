@@ -33,7 +33,7 @@ const DEFAULT_BUDGET_PATH = resolve(HERE, "check-retrieval-quality.budget.json")
 const MEM_ROOT = "/quality";
 const FIXED_NOW = () => 1_700_000_000_000;
 const EVAL_K = 5;
-const CASES = [
+export const WORKSPACE_QUALITY_CASES = [
   {
     id: "java-maven-version-declaration",
     category: "project-metadata",
@@ -204,6 +204,7 @@ const CASES = [
     intent: "targeted-code-search",
     query: "Where is the Service version field defined?",
     files: {
+      ".git": "gitdir: fixture-metadata\n",
       "src/main/java/com/acme/Service.java":
         "package com.acme;\nclass Service { String version; }\n",
       "target/classes/com/acme/Service.class": "version version version\n",
@@ -217,6 +218,19 @@ const CASES = [
       "build/generated/Stub.java",
       "api/user.pb.go",
     ],
+  },
+  {
+    id: "ordinary-generated-directory-text",
+    category: "ordinary-folder",
+    intent: "targeted-code-search",
+    query: "Which manual documents OrdinaryManualProbe?",
+    files: {
+      "build/manual.html": "<p>OrdinaryManualProbe: maintenance every 750 hours.</p>\n",
+      "dist/manual.html": "<p>OrdinaryManualProbe: service pressure 12 bar.</p>\n",
+    },
+    expectedTop: "build/manual.html",
+    relevantPaths: ["build/manual.html", "dist/manual.html"],
+    expectedLinePattern: /OrdinaryManualProbe/u,
   },
   {
     id: "terraform-version-declaration",
@@ -618,7 +632,7 @@ export async function runRetrievalQualityCheck({
   fail,
   localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
   regressionProbes = runLocalKnowledgeRegressionProbes,
-  workspaceCases = CASES,
+  workspaceCases = WORKSPACE_QUALITY_CASES,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
   const onFail =

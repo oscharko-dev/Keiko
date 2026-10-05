@@ -96,11 +96,13 @@ export class ContextOverflowError extends GatewayError {
 // RateLimitError construction maps HTTP 429, see openai-adapter.ts's mapHttpError) is not forced
 // to lie about it.
 const DEFAULT_RATE_LIMIT_HTTP_STATUS = 429;
+type RetryAfterHeaderState = "absent" | "valid" | "unparseable" | "elapsed";
 
 export class RateLimitError extends GatewayError {
   readonly code = ERROR_CODES.RATE_LIMIT;
   readonly retryable = true;
   readonly retryAfterMs: number | null;
+  readonly retryAfterHeader: RetryAfterHeaderState | undefined;
   // NEW: carried so a diagnostic record or a retry log line does not have to infer "429" from
   // errorKind === GATEWAY_RATE_LIMIT — a downstream consumer (e.g. a replay-script builder) can
   // read the status directly off the same shape ProviderError already exposes it through.
@@ -111,10 +113,12 @@ export class RateLimitError extends GatewayError {
     retryAfterMs: number | null = null,
     secrets: readonly string[] = [],
     httpStatus: number = DEFAULT_RATE_LIMIT_HTTP_STATUS,
+    retryAfterHeader?: RetryAfterHeaderState,
   ) {
     super(message, secrets);
     this.retryAfterMs = retryAfterMs;
     this.httpStatus = httpStatus;
+    this.retryAfterHeader = retryAfterHeader;
   }
 }
 
@@ -136,9 +140,9 @@ export class CircuitOpenError extends GatewayError {
 // Provider 5xx responses are transient by the providers' own contracts (both
 // OpenAI-compatible and Anthropic APIs document retry-with-backoff for
 // 500/502/503/529); everything else a ProviderError carries (4xx validation,
-// permission, not-found …) is terminal. Streaming calls never enter the retry
-// loop (Gateway.chatStream is deliberately not wrapped in executeWithRetry), so
-// this flag re-enables retries for idempotent, buffered calls only.
+// permission, not-found …) is terminal. Streamed calls retry only startup failures
+// before delivering output;
+// once an answer starts, the caller must never generate it again automatically.
 const RETRYABLE_PROVIDER_HTTP_STATUS: ReadonlySet<number> = new Set([500, 502, 503, 529]);
 
 export class ProviderError extends GatewayError {
@@ -147,10 +151,20 @@ export class ProviderError extends GatewayError {
   readonly code: ErrorCode = ERROR_CODES.PROVIDER_ERROR;
   readonly retryable: boolean;
   readonly httpStatus: number;
+  readonly retryAfterMs: number | null;
+  readonly retryAfterHeader: RetryAfterHeaderState | undefined;
 
-  constructor(message: string, httpStatus: number, secrets: readonly string[] = []) {
+  constructor(
+    message: string,
+    httpStatus: number,
+    secrets: readonly string[] = [],
+    retryAfterMs: number | null = null,
+    retryAfterHeader?: RetryAfterHeaderState,
+  ) {
     super(message, secrets);
     this.httpStatus = httpStatus;
+    this.retryAfterMs = retryAfterMs;
+    this.retryAfterHeader = retryAfterHeader;
     this.retryable = RETRYABLE_PROVIDER_HTTP_STATUS.has(httpStatus);
   }
 }

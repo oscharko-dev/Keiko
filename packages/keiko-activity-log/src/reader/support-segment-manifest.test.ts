@@ -290,6 +290,46 @@ describe("segment manifests (#3531)", () => {
     expect(manifest).toMatchObject({ lossLineCount: 2, processLossLineCount: 2 });
   });
 
+  it("rebuilds version2 process-loss counts under pin protection semantics", () => {
+    const process = fixtureProcess(3303, "abcdef03");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, {
+        op: "activity-log.pin.quota-exhausted",
+        correlationId: "pin-protection-failure",
+        fields: {
+          pinQuotaBytes: 1,
+          requestedPinnedBytes: 512,
+          protectedPinnedBytes: 0,
+          protectedSegmentCount: 0,
+          unprotectedSegmentCount: 1,
+          unprotectedBytes: 512,
+          unprotectedSeqSpan: 1,
+          unknownSpanSegmentCount: 0,
+          activePinCount: 1,
+          completeness: "partial",
+          loss: "event-dropped",
+        },
+      }),
+    ]);
+    ensure();
+    const directory = segmentManifestDirectory(stateDir);
+    const name = readdirSync(directory).find((entry) => entry.includes("-3303-")) ?? "";
+    const path = join(directory, name);
+    const manifest = parseSegmentManifest(
+      readFileSync(path, "utf8"),
+      parseSegmentManifestFileName(name) ?? "",
+    );
+    expect(manifest).toMatchObject({ processLossLineCount: 0 });
+    writeFileSync(path, JSON.stringify({ ...manifest, schemaVersion: 2, processLossLineCount: 1 }));
+    ensure();
+    expect(
+      parseSegmentManifest(readFileSync(path, "utf8"), parseSegmentManifestFileName(name) ?? ""),
+    ).toMatchObject({
+      schemaVersion: SEGMENT_MANIFEST_SCHEMA_VERSION,
+      processLossLineCount: 0,
+    });
+  });
+
   it("classifies a torn tail as truncated and never as a line of evidence", () => {
     writeHistory();
     ensure();

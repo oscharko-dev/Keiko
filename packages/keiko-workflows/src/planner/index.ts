@@ -22,8 +22,16 @@ export type {
   ExplorationPlanState,
   RetrievalRing,
   RetrievalRingKind,
+  QueryTargetDecision,
 } from "./plan.js";
-export { createExplorationPlan, directDefinitionSymbol } from "./plan.js";
+export {
+  DEFAULT_LEXICAL_MATCH_LIMIT,
+  createExplorationPlan,
+  directDefinitionSymbol,
+  isDirectEvidenceLookup,
+  resolveQueryTargetDecision,
+  requiresRelationshipOrHistoryRings,
+} from "./plan.js";
 
 export type { GovernorState, GovernorStatus } from "./governor.js";
 export { advanceRing, applyUsage, canContinue, complete, createGovernor } from "./governor.js";

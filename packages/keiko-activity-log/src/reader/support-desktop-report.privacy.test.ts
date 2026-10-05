@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activityLogEvent,
   ACTIVITY_LOG_OPERATION_REGISTRY,
+  SUPPORT_INCIDENT_UNATTRIBUTED,
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 import { createFileServerLogSink, closeFileServerLogSinks } from "../server-log.js";
@@ -20,6 +22,7 @@ import {
 } from "../log-redaction.js";
 import { createInitialToolCatalog } from "../../../keiko-tool-catalog/src/legacy.js";
 import { emitToolLifecycleEvent } from "../../../keiko-server/src/tool-catalog/catalogToolLifecycle.js";
+import { computeDefectFingerprint } from "../defect-fingerprint.js";
 import { recordRegisteredFailureIncident } from "../support-incident.js";
 import { createDesktopSupportReport } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
@@ -307,7 +310,24 @@ describe("desktop report privacy through real producers and compressed evidence"
       PRIVATE_VERSION,
       ClientAcmePayrollError.name,
     ]);
-    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("degraded");
+    const analyzed = analyzeSupportReport(response.reportJson);
+    // ADR-0173: manual attribution never fingerprints a frame that privacy cannot export.
+    // Its redacted failing line remains useful, but the unknown site is explicitly degraded.
+    expect(report.incident).toMatchObject({
+      trigger: "user-report",
+      op: SUPPORT_INCIDENT_UNATTRIBUTED,
+      frameCount: 0,
+      defectFingerprint: computeDefectFingerprint(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
+    });
+    const failure = analyzed.analysis.timelines
+      .flatMap((timeline) => timeline.lines)
+      .find((line) => line.op === "server.diagnostic.failure");
+    expect(failure).toMatchObject({ op: "server.diagnostic.failure", errorKind: "internal" });
+    expect(failure?.frames).toBeUndefined();
+    expect(extracted).toContain('"causeChain":["Error"]');
+    expect(analyzed.selection.status).toBe("degraded");
+    expect(analyzed.selection.reasons).toContain("evidence-partial");
+    expect(report.selection.status).toBe("degraded");
     expect(report.selection.reasons).toContain("evidence-partial");
     expect(report.selection.reasons).not.toContain("unsupported-evidence");
   });
@@ -322,7 +342,22 @@ describe("desktop report privacy through real producers and compressed evidence"
     expect(incident?.status).toBe("created");
     const response = createDesktopSupportReport(stateDir, ROOT_ID);
     const report = parseSupportReport(response.reportJson);
-    expect(inflateEvidence(report)).not.toContain(PRIVATE_FRAME);
+    const extracted = inflateEvidence(report);
+    expectPrivateEvidenceRemoved(response.reportJson, extracted, [
+      PRIVATE_FRAME,
+      PRIVATE_VERSION,
+      ClientAcmePayrollError.name,
+    ]);
+    expect(report.incident).toMatchObject({ trigger: "registered-failure", frameCount: 1 });
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(
+      analyzed.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "server.diagnostic.failure"),
+    ).toBe(false);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("no-registered-failure");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
     expect(report.selection.status).toBe("insufficient");
     expect(report.selection.reasons).toContain("evidence-not-retained");
     expect(report.selection.reasons).not.toContain("unsupported-evidence");

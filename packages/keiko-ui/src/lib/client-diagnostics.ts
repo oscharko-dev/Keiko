@@ -43,9 +43,14 @@ import {
   type ClientDiagnosticGitClientOperation,
   type ClientDiagnosticAnswerCopy,
   type ClientDiagnosticAnswerSpeech,
+  type ClientDiagnosticCitationActivation,
+  type ClientSupportReportDelivery,
+  type ClientSupportReportPreparation,
+  type ClientFilesScopeDecision,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
+  type ClientModuleLoadFailure,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
   type ClientDiagnosticKind,
@@ -57,12 +62,18 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type HealthDiagnosticsInvalidReason,
+  type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
   type ClientComposerActivity,
   type ClientComposerCodeStage,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  clientDefectContext,
+  type ActivityLogErrorKind,
+  type ClientOnlySupportReportInput,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 // Routine desktop-window stage evidence (`useWindowStageEvidence`) rides `meta.stageReport` instead
 // of the `kind`/`gitChangeDescription`/`workspaceTrustBinding` fields above, which all describe a
@@ -78,6 +89,7 @@ export type ClientDiagnosticStageReport = (
       readonly ordinal: number;
       readonly durationMs: number;
       readonly navigationOutcome?: ClientNavigationOutcome | undefined;
+      readonly preview?: ClientSourcePreviewCounts | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
@@ -140,7 +152,8 @@ export interface ClientDiagnosticMeta {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly moduleLoadFailure?: ClientModuleLoadFailure | undefined;
+  readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
@@ -160,9 +173,14 @@ export interface ClientDiagnosticMeta {
   // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
   // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
+  readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
+  readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
+  readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
+  readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
+  readonly failureStage?: ClientStageId | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
   readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
   readonly gitRetryAttemptReport?: ClientDiagnosticGitRetryAttemptReport | undefined;
@@ -170,16 +188,49 @@ export interface ClientDiagnosticMeta {
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
 
+/** Bounded acknowledgement wait shared by the diagnostic adapter and explicit report action. */
+export const CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS = 15_000;
+
 export type ClientDiagnosticDeliveryRetry = (
   correlationId: string,
   signal: AbortSignal,
 ) => Promise<boolean | undefined>;
 
 let deliveryRetry: ClientDiagnosticDeliveryRetry | undefined;
+let failureLookup: ((correlationId: string) => ClientOnlySupportReportInput["failure"]) | undefined;
 
 /** The installed transport owns delivery; the sink and report UI do not choose a transport. */
-export function setClientDiagnosticDeliveryRetry(retry: ClientDiagnosticDeliveryRetry): void {
+export function setClientDiagnosticDeliveryRetry(
+  retry: ClientDiagnosticDeliveryRetry,
+  lookup?: (correlationId: string) => ClientOnlySupportReportInput["failure"],
+): void {
   deliveryRetry = retry;
+  failureLookup = lookup;
+}
+
+/** The existing transport cache supplies only closed failure facts, never its diagnostic message. */
+export function retainedClientDiagnosticFailure(
+  correlationId: string,
+): ClientOnlySupportReportInput["failure"] {
+  return failureLookup?.(correlationId);
+}
+
+export function clientDiagnosticFailureFacts(
+  meta: Pick<
+    ClientDiagnosticMeta,
+    "errorEvidence" | "errorKind" | "kind" | "renderFailure" | "moduleLoadFailure" | "failureStage"
+  >,
+): NonNullable<ClientOnlySupportReportInput["failure"]> {
+  return {
+    ...(meta.errorEvidence === undefined ? {} : { errorEvidence: meta.errorEvidence }),
+    errorKind: meta.errorKind ?? "unknown",
+    context: clientDefectContext({
+      clientKind: meta.kind,
+      renderFailure: meta.renderFailure,
+      moduleLoadFailure: meta.moduleLoadFailure,
+      stage: meta.failureStage?.replaceAll(" ", "-"),
+    }),
+  };
 }
 
 /** Undefined means this selector is not a retained browser-only diagnostic. */
@@ -247,6 +298,7 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
 export interface GlobalClientFailure {
   readonly ordinal: number;
   readonly correlationId: string | undefined;
+  readonly failure?: ClientOnlySupportReportInput["failure"];
 }
 
 let globalFailure: GlobalClientFailure | null = null;
@@ -270,10 +322,15 @@ export function dismissGlobalClientFailure(ordinal: number): void {
   for (const listener of globalFailureListeners) listener();
 }
 
-function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
-  if (meta?.globalFailure !== true) return;
+/** Keeps the original report action stable while later errors remain transport-visible. */
+export function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
+  if (globalFailure !== null || meta?.globalFailure !== true) return;
   if (meta.kind !== "window-error" && meta.kind !== "unhandled-rejection") return;
-  globalFailure = { ordinal: ++globalFailureOrdinal, correlationId: meta.correlationId };
+  globalFailure = {
+    ordinal: ++globalFailureOrdinal,
+    correlationId: meta.correlationId,
+    failure: clientDiagnosticFailureFacts(meta),
+  };
   for (const listener of globalFailureListeners) listener();
 }
 
@@ -334,4 +391,17 @@ function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseRea
 export function sseStreamErrorDiagnostic(stream: string, readyState: number | undefined): string {
   const readyStateText = readyState === undefined ? "unknown" : String(readyState);
   return `[keiko] ${stream} sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`; // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
+}
+
+/** Emits an ownership decision on the existing routine diagnostic transport under its attempt. */
+export function reportFilesScopeDecision(
+  correlationId: string,
+  decision: ClientFilesScopeDecision,
+  parentCorrelationId?: string,
+): void {
+  reportClientDiagnostic("Keiko Files scope ownership decision.", {
+    correlationId,
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+    filesScopeDecision: decision,
+  });
 }

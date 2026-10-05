@@ -77,6 +77,13 @@ workspace index reject stale or substituted records. This keeps the security-rel
 testable with an in-memory fake, confines production workspace IO to one auditable adapter, and
 keeps consumers independent of the host filesystem API.
 
+Uncapped recursive directory searches require the port's `iterateDirectory` capability. A legacy
+port without it fails with the existing workspace-read error before any array enumeration; it can
+still serve explicitly selected files and finite, bounded inventory discovery. The search never
+substitutes native filesystem access for a missing caller capability. The native iterator closes
+each directory before queued children are visited, so depth does not accumulate open descriptors
+and needs no artificial corpus-depth ceiling.
+
 The production `stat` and `exists` operations use no-follow metadata semantics: a symlink is
 reported as a symlink entry rather than dereferenced. Detection reads manifests and ignore metadata
 only through the bounded same-descriptor lane; a custom port without that capability yields absent
@@ -190,8 +197,14 @@ Filtering has two independent tiers:
    last-match-wins precedence. This tier only narrows results; it can never re-include a denied
    path because the deny tier runs first and independently.
 
-Glob translation emits only linear regex pieces (`[^/]*` for `*`, `.*` for `**`), so there is no
-nested unbounded quantifier and therefore no catastrophic backtracking (ReDoS).
+Individually simple regex fragments do not prove that their concatenation is safe: repeated
+wildcards separated by literals can cause exponential backtracking. Repository filename queries
+and their include/exclude filters therefore use the existing `compileGlob` owner with an iterative
+active-state matcher. Each path code point visits each compiled pattern state once, using memory
+proportional to the pattern length. This preserves `*`, `**`, `**/`, `?`, literal punctuation and
+Unicode simple case folding without a new pattern-count or corpus-size cutoff. Brace expansion and
+extglobs remain unsupported. Deny and ignore policy are separate from filename query matching;
+their documented grammar alone does not establish a performance guarantee.
 
 ### D4 — Deterministic, explainable context-pack selection with byte-budgeting and redaction
 

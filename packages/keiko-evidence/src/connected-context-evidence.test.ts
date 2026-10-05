@@ -4,9 +4,16 @@ import type { ContextAssemblyDiagnostics } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
+  validateContextProfile,
+  validateContextAssemblyDiagnostics,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation";
+import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCounts,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -174,6 +181,116 @@ function assertNoSensitiveText(manifest: EvidenceManifest): void {
 }
 
 describe("connected-context evidence", () => {
+  it("persists the declared input ceiling with a valid redacted context profile", () => {
+    const store = createInMemoryEvidenceStore();
+    persistConnectedContextEvidence(
+      {
+        runId: "binding-input-ceiling",
+        modelId: "example-chat-model",
+        workspaceRoot: "/repo",
+        pack: pack(),
+        contextAssembly: {
+          ...assemblyDiagnosticsWithCalibratedTokenAccounting(),
+          profile: deriveContextProfile({
+            maxInputTokens: 128_000,
+            inputTokenLimit: 16_000,
+            reservedOutputTokens: 8_000,
+            safetyMarginTokens: 4_000,
+          }),
+        },
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 42,
+      },
+      { store, env: {} },
+    );
+    const manifest = requireManifest(loadEvidence(store, "binding-input-ceiling"));
+    const diagnostics = manifest.contextAssembly;
+    if (diagnostics === undefined) throw new TypeError("Missing persisted context diagnostics.");
+    expect(diagnostics.profile.inputTokenLimit).toBe(16_000);
+    expect(validateContextProfile(diagnostics.profile).ok).toBe(true);
+    expect(validateContextAssemblyDiagnostics(diagnostics).ok).toBe(true);
+  });
+
+  it.each([
+    [null, null],
+    [null, 30_000],
+    [32, null],
+    [32, 30_000],
+  ] as const)(
+    "retains independent read/time boundedness: files=%s, time=%s",
+    (filesReadMax, elapsedMsMax) => {
+      const source = pack();
+      const store = createInMemoryEvidenceStore();
+      const result = persistConnectedContextEvidence(
+        {
+          runId: "nullable-budget",
+          modelId: "example-chat-model",
+          workspaceRoot: "/workspace",
+          pack: {
+            ...source,
+            budget: {
+              ...source.budget,
+              filesReadMax,
+              elapsedMsMax,
+            },
+          },
+          citationCount: 1,
+          elapsedMs: 42,
+          startedAt: NOW,
+          finishedAt: NOW + 42,
+        },
+        { store, env: {} },
+      );
+      const budget = requireConnectedContext(result.manifest).budget;
+      expect(budget).toMatchObject({
+        filesReadBounded: filesReadMax !== null,
+        elapsedMsBounded: elapsedMsMax !== null,
+      });
+      expect(budget.limits.filesReadMax).toBe(filesReadMax ?? undefined);
+      expect(budget.limits.elapsedMsMax).toBe(elapsedMsMax ?? undefined);
+    },
+  );
+
+  it("persists exact omission totals separately from bounded redacted path details", () => {
+    const source = pack();
+    const omitted = Array.from({ length: MAX_OMITTED_CONTEXT_ENTRIES }, (_, index) => ({
+      scopePath: `src/omitted-${String(index)}.ts`,
+      reason: "budget-exhausted" as const,
+      omittedAtMs: NOW,
+    }));
+    const store = createInMemoryEvidenceStore();
+    persistConnectedContextEvidence(
+      {
+        runId: "large-omissions",
+        modelId: "example-chat-model",
+        workspaceRoot: "/workspace",
+        pack: {
+          ...source,
+          omitted,
+          omittedCounts: {
+            ...connectedContextOmittedCounts({ omitted: [] }),
+            "budget-exhausted": 8000,
+          },
+        },
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 42,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const manifest = requireManifest(loadEvidence(store, "large-omissions"));
+    const audit = requireConnectedContext(manifest);
+    expect(audit.omitted).toHaveLength(MAX_OMITTED_CONTEXT_ENTRIES);
+    expect(audit.omittedCounts?.["budget-exhausted"]).toBe(8000);
+    expect(audit.summary.omittedCount).toBe(8000);
+    expect(manifest.context?.totalCandidates).toBe(8001);
+    expect(manifest.context?.droppedForBudget).toBe(8000);
+    assertNoSensitiveText(manifest);
+  });
+
   it("persists a parseable metadata-only manifest without query or excerpt text", () => {
     const store = createInMemoryEvidenceStore();
     const result = persistConnectedContextEvidence(

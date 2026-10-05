@@ -2,6 +2,7 @@
 // observable production append path, and exposed on /api/health as a closed, body-free block.
 
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +24,8 @@ import {
 } from "./activity-log-readiness.js";
 import { resetServerLogFailureNotices, type ActivityLogStoreHealth } from "./server-log.js";
 import { resetServerLogger } from "./server-logger.js";
+import { createDesktopSupportReport } from "./reader/support-desktop-report.js";
+import { analyzeSupportReport, parseSupportReport } from "./reader/support-report.js";
 
 // A stub of the store's own health snapshot type — readiness has no parallel shape to fake.
 function healthyStorage(overrides: Partial<ActivityLogStoreHealth> = {}): ActivityLogStoreHealth {
@@ -96,6 +99,35 @@ describe("diagnostic readiness", () => {
     const snapshot = checkActivityLogReadiness({ stateDir, env: { KEIKO_LOG_LEVEL: "silent" } });
     expect(snapshot).toMatchObject({ readiness: "degraded", reasons: ["level-silent"] });
     expect(readinessLines(stateDir)).toHaveLength(1);
+  });
+
+  it("includes actual degraded readiness in a manual report without a health GET selector", () => {
+    vi.stubEnv("KEIKO_LOG_LEVEL", "silent");
+    const snapshot = checkActivityLogReadiness({ stateDir, env: { KEIKO_LOG_LEVEL: "silent" } });
+    expect(snapshot.readiness).toBe("degraded");
+    expect(() => createDesktopSupportReport(stateDir, "successful-health-observation")).toThrow(
+      "selection-unavailable",
+    );
+    const response = createDesktopSupportReport(stateDir);
+    expect(readinessLines(stateDir)).toHaveLength(1);
+    const report = parseSupportReport(response.reportJson);
+    const events: unknown = JSON.parse(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
+    );
+    const analysis = analyzeSupportReport(response.reportJson);
+    expect(analysis.analysis.clusters).toContainEqual(
+      expect.objectContaining({ op: "activity-log.readiness" }),
+    );
+    const record: unknown = expect.objectContaining({
+      op: "activity-log.readiness",
+      errorKind: "unavailable",
+      readiness: snapshot.readiness,
+      reasons: snapshot.reasons,
+      writer: snapshot.writer,
+      lostEvents: snapshot.lostEvents,
+    });
+    expect(events).toContainEqual(expect.objectContaining({ record }));
+    expect(response.evidenceScope).toBeUndefined();
   });
 
   it("is unavailable with sink-unwritable when the probe write cannot be persisted", () => {

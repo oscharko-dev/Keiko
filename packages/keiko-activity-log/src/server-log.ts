@@ -1268,6 +1268,8 @@ const ACTIVITY_LOG_RETENTION_PRUNED_OPERATION = defineActivityLogOperation({
     prunedSegmentCount: { type: "integer", dataClass: "count", required: true },
     prunedLegacyFileCount: { type: "integer", dataClass: "count", required: true },
     prunedBytes: { type: "integer", dataClass: "count", required: true },
+    prunedUnprotectedPinnedSegmentCount: { type: "integer", dataClass: "count", required: false },
+    prunedUnprotectedPinnedBytes: { type: "integer", dataClass: "count", required: false },
     prunedByAgeCount: { type: "integer", dataClass: "count", required: true },
     prunedByBudgetCount: { type: "integer", dataClass: "count", required: true },
     failedDeletionCount: { type: "integer", dataClass: "count", required: true },
@@ -1442,8 +1444,9 @@ const ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION = defineActivityLogOperation({
     unknownSpanSegmentCount: { type: "integer", dataClass: "count", required: true },
     activePinCount: { type: "integer", dataClass: "count", required: true },
   },
-  causal: "correlation",
-  lifecycle: "loss",
+  // This observes the shared pin pool during maintenance, not one pin request's lifecycle.
+  causal: "none",
+  lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["activity-log-pin"],
   proofIds: ["activity-log.pin.quota-exhausted.emitted-line"],
@@ -2072,10 +2075,11 @@ function retentionPrunedEvidence(
   correlationId: string | undefined,
 ): ServerLogEvent {
   const status = retentionStatus(outcome);
+  const pinnedEvidenceLost = outcome.prunedUnprotectedPinnedSegmentCount > 0;
   return activityLogEvent(
     ACTIVITY_LOG_RETENTION_PRUNED_OPERATION,
     {
-      level: status === "pruned" ? "info" : "warn",
+      level: status === "pruned" && !pinnedEvidenceLost ? "info" : "warn",
       correlationId: correlationIdOrUnknown(correlationId),
       ...(status === "pruned" ? {} : { errorKind: "durability-failed" as const }),
     },
@@ -2084,6 +2088,8 @@ function retentionPrunedEvidence(
       prunedSegmentCount: outcome.prunedSegmentCount,
       prunedLegacyFileCount: outcome.prunedLegacyFileCount,
       prunedBytes: outcome.prunedBytes,
+      prunedUnprotectedPinnedSegmentCount: outcome.prunedUnprotectedPinnedSegmentCount,
+      prunedUnprotectedPinnedBytes: outcome.prunedUnprotectedPinnedBytes,
       prunedByAgeCount: outcome.prunedByAgeCount,
       prunedByBudgetCount: outcome.prunedByBudgetCount,
       failedDeletionCount: outcome.failedNames.length,
@@ -2092,8 +2098,8 @@ function retentionPrunedEvidence(
       protectedPinnedBytes: outcome.protection.protectedBytes,
       retentionBudgetBytes: config.retentionBytes,
       retentionDays: config.retentionDays,
-      completeness: status === "pruned" ? "complete" : "partial",
-      loss: "none",
+      completeness: status === "pruned" && !pinnedEvidenceLost ? "complete" : "partial",
+      loss: pinnedEvidenceLost ? "event-dropped" : "none",
     },
   );
 }
@@ -2270,7 +2276,7 @@ function pinQuotaExhaustedEvidence(
       unknownSpanSegmentCount: facts.unknownSpanSegmentCount,
       activePinCount: facts.pinCount,
       completeness: "partial",
-      loss: "event-dropped",
+      loss: "none",
     },
   );
 }
@@ -2632,7 +2638,7 @@ function unprotectedSpan(
   return { seqSpan, unknown };
 }
 
-// Exactly one loss marker per exhaustion episode: the first pass that finds pinned evidence the
+// Exactly one protection-failure marker per exhaustion episode: the first pass that finds pinned evidence the
 // quota cannot hold reports it — measured before retention may delete those segments — and later
 // passes stay quiet until the quota holds every pin again.
 function queueQuotaEvidence(
@@ -3528,7 +3534,7 @@ function persistPinEvidence(active: ActiveLog, cursor: WriteCursor, facts: PinEv
  * inside it) or an explicit set of segments against retention until `expiresAtMs`. Seals this
  * process's active segment, publishes one closed-grammar pin record, and evidences the request.
  * Pinned segments are protected only within the reserved pin quota; a pin the quota cannot hold is
- * still recorded, reports `quotaStatus: "exceeded"`, and produces one quota-exhaustion loss marker.
+ * still recorded, reports `quotaStatus: "exceeded"`, and produces one protection-failure marker.
  */
 export function pinActivityLogWindow(
   stateDir: string,

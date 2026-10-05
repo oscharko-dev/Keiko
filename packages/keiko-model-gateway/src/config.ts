@@ -1323,6 +1323,7 @@ function buildProviderCapabilityBody(
     kind,
     contextWindow,
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
+    ...optionalInputTokenLimit(raw, path),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
     ...optionalToolCallingVerification(raw, path, kind),
@@ -1398,6 +1399,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "contextWindow",
   "contextWindowAssumed",
   "contextWindowReported",
+  "maxInputTokens",
   "maxOutputTokens",
   "toolCalling",
   "toolCallingVerification",
@@ -1433,6 +1435,16 @@ function requireBoolean(value: unknown, path: string): boolean {
     throw new ConfigInvalidError(`${path} must be a boolean`);
   }
   return value;
+}
+
+function optionalInputTokenLimit(
+  value: Record<string, unknown>,
+  path: string,
+): Pick<ModelCapability, "maxInputTokens"> {
+  if (value.maxInputTokens === undefined) return {};
+  const limit = requireNonNegativeIntStrict(value.maxInputTokens, `${path}.maxInputTokens`);
+  if (limit === 0) throw new ConfigInvalidError(`${path}.maxInputTokens must be positive`);
+  return { maxInputTokens: limit };
 }
 
 function requireNonNegativeIntStrict(value: unknown, path: string): number {
@@ -1681,6 +1693,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     kind,
     contextWindow,
     maxOutputTokens: requireNonNegativeIntStrict(value.maxOutputTokens, `${path}.maxOutputTokens`),
+    ...optionalInputTokenLimit(value, path),
     toolCalling: requireBoolean(value.toolCalling, `${path}.toolCalling`),
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
     streaming: requireBoolean(value.streaming, `${path}.streaming`),

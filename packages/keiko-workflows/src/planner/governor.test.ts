@@ -42,9 +42,11 @@ function happyQuery(): RetrievalQuery {
   };
 }
 
+const FINITE_READ_BUDGET = { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 };
+
 function readyPlan(): ExplorationPlan {
   return createExplorationPlan(
-    { scope: happyScope(), query: happyQuery() },
+    { scope: happyScope(), query: happyQuery(), budget: FINITE_READ_BUDGET },
     { nowMs: () => 1_700_000_000_000 },
   );
 }
@@ -67,6 +69,13 @@ function makeGovernor(): GovernorState {
 }
 
 describe("createGovernor", () => {
+  it("keeps unlimited default reads governed by the other finite dimensions", () => {
+    const plan = createExplorationPlan({ scope: happyScope(), query: happyQuery() });
+    const state = applyUsage(createGovernor(plan), delta({ filesRead: 40 }));
+    expect(canContinue(state)).toBe(true);
+    expect(state.usage.filesRead).toBe(40);
+  });
+
   it("throws when the plan is not in ready state", () => {
     const blocked: ExplorationPlan = { ...readyPlan(), state: "clarification-needed" };
     expect(() => createGovernor(blocked)).toThrow(RangeError);
@@ -93,18 +102,19 @@ describe("applyUsage", () => {
 
   it("exceeding filesRead budget transitions to budget-exhausted with named dimension", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     expect(g.status).toBe("budget-exhausted");
     expect(g.stopReason).toContain("filesRead");
   });
 
   it("exceeding multiple dimensions at once names each in stopReason", () => {
-    let g = makeGovernor();
+    const plan = readyPlan();
+    let g = createGovernor({ ...plan, budget: { ...plan.budget, elapsedMsMax: 30_000 } });
     g = applyUsage(
       g,
       delta({
-        filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1,
-        elapsedMs: DEFAULT_EXPLORATION_BUDGET.elapsedMsMax + 1,
+        filesRead: FINITE_READ_BUDGET.filesReadMax + 1,
+        elapsedMs: 30_001,
       }),
     );
     expect(g.status).toBe("budget-exhausted");
@@ -117,10 +127,15 @@ describe("applyUsage", () => {
     expect(() => applyUsage(g, delta({ searchCalls: -1 }))).toThrow(RangeError);
   });
 
-  it("throws RangeError for a non-integer usage delta", () => {
-    const g = makeGovernor();
-    expect(() => applyUsage(g, delta({ filesRead: 1.5 }))).toThrow(RangeError);
-  });
+  it.each(["filesRead", "elapsedMs"] as const)(
+    "throws RangeError for a non-integer %s delta despite fractional contract usage being valid",
+    (dimension) => {
+      const g = makeGovernor();
+      expect(() => applyUsage(g, delta({ [dimension]: 1.5 }))).toThrow(RangeError);
+      expect(g.usage).toEqual(delta());
+      expect(g.status).toBe("running");
+    },
+  );
 
   it("throws RangeError for a non-finite usage delta", () => {
     const g = makeGovernor();
@@ -135,7 +150,7 @@ describe("canContinue", () => {
 
   it("returns false immediately after budget-exhausted", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     expect(canContinue(g)).toBe(false);
   });
 });
@@ -157,7 +172,7 @@ describe("advanceRing", () => {
 
   it("does not advance after budget exhaustion", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     const advanced = advanceRing(g);
     expect(advanced).toBe(g);
     expect(advanced.currentRingIndex).toBe(0);
@@ -173,7 +188,7 @@ describe("complete", () => {
 
   it("does not overwrite budget-exhausted terminal state", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     const completed = complete(g);
     expect(completed).toBe(g);
     expect(completed.status).toBe("budget-exhausted");

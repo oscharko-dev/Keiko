@@ -172,6 +172,9 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
   },
   causal: "correlation",
   lifecycle: "state",
+  diagnosticWhen: [
+    { field: "verificationStatus", values: ["failed", "timed-out", "resource-exceeded"] },
+  ],
   analyzerProjection: "timeline",
   failureClasses: ["verification-runner-refusal", "verification-runner-failure"],
   proofIds: ["editor.verification.execute.emitted-line"],
@@ -212,6 +215,7 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
   },
   causal: "correlation",
   lifecycle: "end",
+  diagnosticWhen: [{ field: "state", values: ["failed", "timed-out", "cancelled"] }],
   analyzerProjection: "process-lifecycle",
   failureClasses: ["verification-dependency-bootstrap"],
   proofIds: ["editor.verification.dependencies.emitted-line"],

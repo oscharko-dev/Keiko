@@ -24,7 +24,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateInstallMode, UpdatePreflightReport } from "@oscharko-dev/keiko-contracts";
 import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -38,6 +38,18 @@ import {
   type SecurityLogEvent,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
+
+import {
+  dismissSupportIncident,
+  listSupportIncidents,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-activity-log";
+import {
+  occupySupportIncidentRetentionForTests,
+  releaseSupportIncidentReservationForTests,
+  resetServerLogger,
+  supportIncidentReservationsForTests,
+} from "../support/activity-log-test-support.js";
 
 import { runAuditCli } from "../../packages/keiko-cli/src/audit.js";
 import type { CliIo } from "../../packages/keiko-cli/src/runner.js";
@@ -254,6 +266,55 @@ describe("Activity Log scenario: lifecycle-crash storage lifecycle", () => {
       completeness: "complete",
       loss: "none",
     });
+  });
+});
+
+// Candidate retention is owned by keiko-activity-log, independent of its HTTP consumers.
+describe("Activity Log scenario: lifecycle-crash incident retention", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = tempStateDir("keiko-scenario-incident-retention-");
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    vi.stubEnv("KEIKO_LOG_LEVEL", "debug");
+    resetServerLogger();
+  });
+
+  afterEach(() => {
+    resetServerLogger();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("records candidate quota rejection and later admission after reservation release", async () => {
+    const startedAtMs = Date.now();
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const prior = recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" });
+    if (prior.status !== "created") throw new TypeError("Missing prior diagnostic lifecycle");
+    expect(
+      dismissSupportIncident(stateDir, prior.record.incidentId, {
+        correlationId: prior.record.correlation.rootCorrelationId,
+      }),
+    ).toBe("dismissed");
+    const capacity = occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" })).toEqual({
+      status: "rejected",
+      reason: "quota-exhausted",
+    });
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+    releaseSupportIncidentReservationForTests(stateDir, capacity - 1);
+    releaseSupportIncidentReservationForTests(stateDir, capacity - 2);
+    expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" }).status).toBe(
+      "created",
+    );
+    expect(listSupportIncidents(stateDir)).toHaveLength(1);
+    const trace = await expectActivityLogScenario("lifecycle-crash.loss", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["support.incident.rejected", "support.incident.created"],
+    });
+    expect(trace.failureClasses).toContain("support-incident");
   });
 });
 

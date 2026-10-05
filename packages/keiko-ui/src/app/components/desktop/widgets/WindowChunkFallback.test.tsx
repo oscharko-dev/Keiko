@@ -83,8 +83,12 @@ describe("createWindowChunkFallback", () => {
         vi.advanceTimersByTime(WINDOW_STAGE_STALL_MS);
       });
 
-      expect(screen.getByRole("status")).toHaveAttribute("data-window-chunk", "stalled");
-      expect(screen.getByRole("status")).toHaveTextContent("This window did not finish loading.");
+      const stalledStatus = screen
+        .getAllByRole("status")
+        .filter((status) => status.getAttribute("data-window-chunk") === "stalled");
+      expect(stalledStatus).toHaveLength(1);
+      expect(stalledStatus[0]).toHaveAttribute("data-window-chunk", "stalled");
+      expect(stalledStatus[0]).toHaveTextContent("This window did not finish loading.");
       expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
         expect.stringMatching(/^desktop window chunk #\d+: stalled after 10000ms$/u),
         {

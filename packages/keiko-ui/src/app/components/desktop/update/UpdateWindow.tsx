@@ -1,6 +1,11 @@
 "use client";
 
 import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -22,7 +27,7 @@ import {
   ApiError,
   type UpdateSessionClaimRequest,
 } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type {
   UpdatePreflightReport,

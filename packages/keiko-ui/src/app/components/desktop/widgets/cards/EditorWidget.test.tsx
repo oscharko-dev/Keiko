@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import { resetFilesNavigationEvidenceForTests } from "@/lib/files-navigation-evidence";
 import { useEffect, useLayoutEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
@@ -16,6 +17,7 @@ import {
   fetchEditorSettings,
   fetchWorkspaceSnippets,
   fetchFilesContent,
+  fetchFilesPreview,
   fetchGitStatus,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
@@ -117,6 +119,7 @@ vi.mock("../../../../../lib/api", async () => {
     fetchEditorSettings: vi.fn(),
     fetchWorkspaceSnippets: vi.fn(),
     fetchFilesContent: vi.fn(),
+    fetchFilesPreview: vi.fn(),
     fetchGitStatus: vi.fn(),
     saveFilesContent: vi.fn(),
     mutateWorkspaceSnippets: vi.fn(),
@@ -382,6 +385,7 @@ function workspaceSnippetSnapshot(
 }
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   delete document.documentElement.dataset.theme;
   restoreEventSource();
   resetSharedEventSourcesForTests();
@@ -441,6 +445,7 @@ beforeEach(() => {
     maxChanges: 500,
   });
   vi.mocked(fetchFilesContent).mockReset().mockResolvedValue(fileResponse());
+  vi.mocked(fetchFilesPreview).mockReset();
   vi.mocked(saveFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(requestEditorSymbols).mockResolvedValue({ symbols: [], truncated: false });
   vi.mocked(requestEditorSemanticTokens).mockResolvedValue({
@@ -549,8 +554,10 @@ describe("EditorWidget — empty state", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByRole("note")).toHaveTextContent(
-      "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+    await waitFor(() =>
+      expect(screen.getByRole("note")).toHaveTextContent(
+        "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+      ),
     );
   });
 });
@@ -667,9 +674,157 @@ describe("EditorWidget — load", () => {
     expect(fetchFilesContent).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["UNSUPPORTED_FILE", "FILE_TOO_LARGE"])(
+    "shows a read-only source for %s while keeping the editor unavailable",
+    async (code) => {
+      const records: ClientDiagnosticMeta[] = [];
+      resetFilesNavigationEvidenceForTests();
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) records.push(meta);
+      });
+      vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+        new ApiError(code, "Unsupported editable content.", 400),
+      );
+      vi.mocked(fetchFilesPreview).mockResolvedValue({
+        root: "/repo",
+        path: "legacy.html",
+        name: "legacy.html",
+        sizeBytes: 100,
+        modifiedAt: 1,
+        extension: "html",
+        mime: "text/html",
+        symlink: false,
+        kind: "text",
+        content: "Ölwechsel 425 Stunden",
+        truncated: false,
+        maxBytes: 2_097_152,
+        canEdit: false,
+      });
+      render(<EditorRuntimeWidget root="/repo" file="legacy.html" />);
+      expect(
+        await screen.findByRole("region", { name: "File preview: legacy.html" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "File preview: legacy.html" })).toHaveTextContent(
+        "Ölwechsel 425 Stunden",
+      );
+      expect(screen.queryByTestId("editor-surface")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
+      expect(saveFilesContent).not.toHaveBeenCalled();
+      const correlation = vi.mocked(fetchFilesContent).mock.calls[0]?.[2];
+      expect(records).toContainEqual(
+        expect.objectContaining({ correlationId: correlation, errorKind: expect.any(String) }),
+      );
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          parentCorrelationId: correlation,
+          stageReport: expect.objectContaining({ stage: "files source preview", phase: "settled" }),
+        }),
+      );
+      fireEvent.keyDown(screen.getByRole("button", { name: "Close preview" }), { key: "Escape" });
+      expect(screen.queryByRole("region", { name: "File preview: legacy.html" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Show source preview" }));
+      expect(
+        await screen.findByRole("region", { name: "File preview: legacy.html" }),
+      ).toBeVisible();
+    },
+  );
+
+  it("restores source fallback only for its failed document and never a newly selected root", async () => {
+    const preview = {
+      root: "/repo",
+      path: "manual.html",
+      name: "manual.html",
+      sizeBytes: 30,
+      modifiedAt: 1,
+      extension: "html",
+      mime: "text/html",
+      symlink: false,
+      kind: "text" as const,
+      content: "legacy source",
+      truncated: false,
+      maxBytes: 2_097_152,
+      canEdit: false,
+    };
+    vi.mocked(fetchFilesContent)
+      .mockRejectedValueOnce(new ApiError("UNSUPPORTED_FILE", "Not editable.", 400))
+      .mockResolvedValueOnce(fileResponse());
+    vi.mocked(fetchFilesPreview).mockResolvedValue(preview);
+    const view = render(
+      <EditorRuntimeWidget
+        root="/repo"
+        file="manual.html"
+        openFiles={["manual.html", "src/app.ts"]}
+      />,
+    );
+    await screen.findByRole("region", { name: "File preview: manual.html" });
+    view.rerender(
+      <EditorRuntimeWidget
+        root="/repo"
+        file="src/app.ts"
+        openFiles={["manual.html", "src/app.ts"]}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    view.rerender(
+      <EditorRuntimeWidget
+        root="/repo"
+        file="manual.html"
+        openFiles={["manual.html", "src/app.ts"]}
+      />,
+    );
+    await screen.findByRole("region", { name: "File preview: manual.html" });
+    expect(fetchFilesContent).toHaveBeenCalledTimes(2);
+    expect(fetchFilesPreview).toHaveBeenCalledTimes(2);
+    vi.mocked(fetchFilesContent).mockReturnValueOnce(new Promise(() => undefined));
+    view.rerender(<EditorRuntimeWidget root="/other" file="manual.html" />);
+    expect(screen.queryByRole("region", { name: "File preview: manual.html" })).toBeNull();
+    expect(fetchFilesPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("records an unsupported reconciliation failure without replacing the dirty buffer", async () => {
+    await renderLoaded();
+    const records: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) records.push(meta);
+    });
+    act(() => {
+      surface.props?.onContentChange({ text: "unsaved local edit\n", sizeBytes: 19 }, "human");
+    });
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+      new ApiError("UNSUPPORTED_FILE", "Not editable.", 400),
+    );
+    await act(async () => {
+      await expect(requestEditorBufferReconciliation("/repo")).rejects.toMatchObject({
+        code: "UNSUPPORTED_FILE",
+      });
+    });
+    const correlation = vi.mocked(fetchFilesContent).mock.calls.at(-1)?.[2];
+    expect(records).toContainEqual(
+      expect.objectContaining({ correlationId: correlation, errorKind: expect.any(String) }),
+    );
+    expect(fetchFilesPreview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Show source preview" })).toBeNull();
+    expect(surface.props?.buffer.content.text).toBe("unsaved local edit\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(JSON.stringify(records)).not.toContain("unsaved local edit");
+  });
+
+  it.each(["DENIED", "STALE_SESSION", "READ_FAILED"])(
+    "does not retry a %s load through source preview",
+    async (code) => {
+      vi.mocked(fetchFilesPreview).mockClear();
+      vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+        new ApiError(code, "Refused target.", 409),
+      );
+      render(<EditorRuntimeWidget root="/repo" file="refused.html" />);
+      await screen.findByText("Refused target.");
+      expect(fetchFilesPreview).not.toHaveBeenCalled();
+    },
+  );
+
   it("surfaces a load failure in the card", async () => {
     vi.mocked(fetchFilesContent).mockRejectedValueOnce(
-      new ApiError("FILE_TOO_LARGE", "This file is too large to edit here.", 413),
+      new ApiError("PAYLOAD_TOO_LARGE", "This file is too large to edit here.", 413),
     );
     render(<EditorRuntimeWidget root="/repo" file="big.bin" />);
     expect(await screen.findByText(/this file is too large to edit here/i)).toBeInTheDocument();
@@ -3413,7 +3568,7 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     loading.unmount();
 
     vi.mocked(fetchFilesContent).mockRejectedValueOnce(
-      new ApiError("UNSUPPORTED_FILE", "This file cannot be edited.", 400),
+      new ApiError("DENIED", "This file cannot be edited.", 403),
     );
     const error = render(
       <EditorRuntimeWidget windowId="editor-error" root="/repo" file="src/app.ts" />,

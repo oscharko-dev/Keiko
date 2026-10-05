@@ -27,7 +27,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
@@ -71,9 +71,11 @@ function tmp(prefix: string): string {
 }
 
 function ctx(body: unknown, correlationId: string): RouteContext {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
+  req.complete = true;
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
+    req,
+    res: new ServerResponse(req),
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
     correlationId,

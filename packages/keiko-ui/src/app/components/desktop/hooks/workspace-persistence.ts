@@ -15,6 +15,7 @@ import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { AppWindow, Connection } from "../windows/types";
+import { isConnectedScopeFingerprint } from "./workspaceScopeIdentity";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
@@ -953,6 +954,7 @@ function collapsedConnectionKey(connection: Connection): string {
     connectionEndpointKey(connection.a, connection.b),
     connection.boundChatWindowId ?? null,
     connection.boundScopeElided === true,
+    connection.boundScopeFingerprint ?? null,
     connection.boundConnectorKind ?? null,
     connection.boundConnectorId ?? null,
   ]);
@@ -997,6 +999,7 @@ function sanitizedConnectionEndpoints(
 function hasElidedScopeSnapshot(conn: Readonly<Record<string, unknown>>): boolean {
   return (
     conn.boundScopeElided === true ||
+    isConnectedScopeFingerprint(conn.boundScopeFingerprint) ||
     typeof conn.boundRoot === "string" ||
     typeof conn.boundScopeKind === "string" ||
     typeof conn.boundRelativePath === "string"
@@ -1059,6 +1062,9 @@ function sanitizeConnection(
       b: endpoints.b,
       ...(boundChatWindowId === undefined ? {} : { boundChatWindowId }),
       ...(hasElidedScopeSnapshot(conn) ? { boundScopeElided: true } : {}),
+      ...(isConnectedScopeFingerprint(conn.boundScopeFingerprint)
+        ? { boundScopeFingerprint: conn.boundScopeFingerprint }
+        : {}),
       ...boundConnector,
       ...boundGitChange,
     },

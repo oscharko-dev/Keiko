@@ -134,6 +134,37 @@ describe("OpenCode launch profile", () => {
     expect(finalPermissionAction(config.permissions, "keiko_submit_changeset")).toBe("deny");
   });
 
+  it("distinguishes creation from digest-bound edits of existing files", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
+      randomBytes: (): Buffer => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected fixed managed launch profile");
+    const prompt = record(record(profile.configValue.agents).build).system;
+    expect(prompt).toContain("Read every existing file before you edit it");
+    expect(prompt).toContain("For a new file, use a /dev/null source diff");
+    expect(prompt).toContain(createHash("sha256").update("", "utf8").digest("hex"));
+  });
+
+  it("teaches the launched agent to refine truncated search without inventing pagination", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
+      randomBytes: (): Buffer => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected fixed managed launch profile");
+    const prompt = record(record(profile.configValue.agents).build).system;
+    expect(prompt).not.toContain("continuation cursors");
+    expect(prompt).toContain("truncationReasons");
+    expect(prompt).toContain("includeGlobs");
+    expect(prompt).toContain("An empty truncated result does not prove absence");
+    expect(prompt).toContain("literal mode for an exact phrase");
+    expect(prompt).toContain("lexical mode for natural-language concepts");
+  });
+
   it("documents every model-visible tool and the built-in prohibition in the agent prompt", () => {
     // The V2 child resolves the coding model with its default agent; the governed system
     // override is what live models actually receive, so every
@@ -271,6 +302,34 @@ describe("OpenCode launch profile", () => {
         randomBytes: () => Buffer.alloc(31),
       }),
     ).toEqual({ ok: false, reason: "secret-generation-failed" });
+  });
+
+  it.each([0, -1, Number.NaN, 1.5])("refuses malformed input ceilings: %s", (inputTokenLimit) => {
+    expect(
+      resolveOpenCodeContextGeometry({
+        maxPromptTokens: 128_000,
+        inputTokenLimit,
+        maxOutputTokens: 8_000,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("honors a declared input ceiling independently of the total context window", () => {
+    expect(
+      resolveOpenCodeContextGeometry({
+        maxPromptTokens: 128_000,
+        inputTokenLimit: 16_000,
+        maxOutputTokens: 8_000,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      }),
+    ).toEqual({
+      contextWindowTokens: 24_000,
+      maxInputTokens: 16_000,
+      maxOutputTokens: 8_000,
+    });
   });
 
   it("derives model-specific limits below the raw JSON transport ceiling", () => {

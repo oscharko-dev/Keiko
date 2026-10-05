@@ -1,7 +1,7 @@
 import type { UiHandlerDeps } from "../deps.js";
 import { errorBody, type RouteContext, type RouteDefinition, type RouteResult } from "../routes.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
-import { readJsonRequestBody } from "../bounded-request-body.js";
+import { readJsonRequestBodyOutcome } from "../bounded-request-body.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
 function unavailable(ctx: RouteContext): RouteResult {
@@ -36,9 +36,11 @@ export async function updateCodingHistory(
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) return unavailable(ctx);
   const history = deps.codingRuntimeOrchestrator?.getHistory();
   const id = ctx.params.id ?? "";
-  if (history?.detail(id, ctx.correlationId ?? UNKNOWN_CORRELATION_ID) === undefined)
-    return unavailable(ctx);
-  const raw = await readJsonRequestBody(ctx.req, 4096, ctx.correlationId);
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  if (history?.detail(id, correlationId) === undefined) return unavailable(ctx);
+  const outcome = await readJsonRequestBodyOutcome(ctx.req, 4096, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const raw = outcome.value;
   const blocked = updateBlocked(raw, ctx, deps);
   if (blocked !== undefined) return blocked;
   if (!validPatch(raw))
@@ -46,7 +48,7 @@ export async function updateCodingHistory(
       status: 400,
       body: errorBody("INVALID_REQUEST", "Invalid coding task update.", ctx.correlationId),
     };
-  const task = history.update(id, raw, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+  const task = history.update(id, raw, correlationId);
   return { status: 200, body: { task } };
 }
 
@@ -55,8 +57,6 @@ function updateBlocked(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult | undefined {
-  if ((raw.status === 400 || raw.status === 413) && "body" in raw)
-    return { status: raw.status, body: raw.body };
   if (deps.codingRuntimeOrchestrator?.hasLiveRun() && raw.status === "completed")
     return {
       status: 409,

@@ -1,4 +1,3 @@
-import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the bff surface — the keiko-server HTTP/BFF layer (the
 // `request` close line, the bounded request-body reader, chat admission and PR-description turn
 // authority, and the server diagnostic sink).
@@ -6,6 +5,8 @@ import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Each scenario drives a production entry point of this surface with the real production file
 // writer under a temporary KEIKO_STATE_DIR and reconstructs the persisted log through
 // `keiko support analyze` to a complete report (tests/support/activity-log-scenario.ts).
+
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";

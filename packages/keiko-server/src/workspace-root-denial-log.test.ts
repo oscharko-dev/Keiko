@@ -1,12 +1,14 @@
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
-import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError, WorkspaceNotFoundError } from "@oscharko-dev/keiko-workspace";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { describe, expect, it } from "vitest";
 import {
+  isExpectedWorkspaceRootFailure,
   recordManagedRootRequestDenial,
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
+  recordWorkspaceRootUnavailable,
 } from "./workspace-root-denial-log.js";
 import {
   expectActivityLogProof,
@@ -14,6 +16,62 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 describe("workspace root denial activity", () => {
+  it.each(["ENOTCONN", "EHOSTDOWN", "EHOSTUNREACH", "ENXIO", "ENODEV", "ECONNRESET", "EBUSY"])(
+    "recognizes transient root availability failure %s without treating unknown failures as safe",
+    (code) => {
+      expect(isExpectedWorkspaceRootFailure(Object.assign(new Error("private"), { code }))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(["EMFILE", "ENFILE"])("classifies %s as a server resource failure", (code) => {
+    const sink = createBufferedServerLogSink();
+    recordWorkspaceRootUnavailable(Object.assign(new Error("private-detail"), { code }), {
+      activityLog: sink,
+      correlationId: "root-resource-failure",
+    });
+    const proof = expectActivityLogProof(
+      "workspace.root.denied.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(proof).toMatchObject({ errorKind: "internal", failureKind: code });
+  });
+
+  it("recognizes only declared root failures and known filesystem errors", () => {
+    expect(
+      isExpectedWorkspaceRootFailure(new WorkspaceNotFoundError("gone", "/private/root")),
+    ).toBe(true);
+    for (const code of [
+      "ENOENT",
+      "ENOTDIR",
+      "EACCES",
+      "EPERM",
+      "ELOOP",
+      "EIO",
+      "ESTALE",
+      "EMFILE",
+      "ENFILE",
+      "ETIMEDOUT",
+    ])
+      expect(
+        isExpectedWorkspaceRootFailure(Object.assign(new Error("private-root"), { code })),
+      ).toBe(true);
+    for (const error of [
+      new TypeError("private-bug"),
+      new Error("private-bug"),
+      { code: "UNKNOWN_ROOT_CODE" },
+      null,
+    ])
+      expect(isExpectedWorkspaceRootFailure(error)).toBe(false);
+    const hostile = Object.defineProperty({}, "code", {
+      get: () => {
+        throw new Error("private-getter");
+      },
+    });
+    expect(isExpectedWorkspaceRootFailure(hostile)).toBe(false);
+  });
+
   it("emits the authoritative typed denial without path or message content", () => {
     const sink = createBufferedServerLogSink();
     const deniedPath = "/private/customer/.env";
@@ -77,6 +135,51 @@ describe("workspace root denial activity", () => {
       errorKind: "internal",
       extra: { failureKind: "Error" },
     });
+  });
+
+  it.each([
+    ["ENOENT", "unavailable"],
+    ["ENOTDIR", "unavailable"],
+    ["ELOOP", "unavailable"],
+    ["EACCES", "permission-denied"],
+    ["EPERM", "permission-denied"],
+  ])("preserves the actual root failure %s in a body-free stored line", (code, errorKind) => {
+    const sink = createBufferedServerLogSink();
+    const error = Object.assign(new Error("private-root-message-canary"), { code });
+    error.stack =
+      "Error: private-root-message-canary\n    at root (/private/work/Keiko/packages/keiko-server/src/grounded-qa.ts:584:9)";
+    recordWorkspaceRootUnavailable(error, {
+      activityLog: sink,
+      correlationId: "ordinary-root-unavailable-0001",
+    });
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    expect(expectActivityLogProof("workspace.root.denied.line", line)).toMatchObject({
+      correlationId: "ordinary-root-unavailable-0001",
+      errorKind,
+      failureKind: code,
+      frames: ["packages/keiko-server/src/grounded-qa.ts:584:9"],
+      reason: "ordinary-root-unavailable",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(line).not.toContain("private-root-message-canary");
+    expect(line).not.toContain("/private/work");
+  });
+
+  it("preserves the filesystem cause of a wrapped root error", () => {
+    const sink = createBufferedServerLogSink();
+    const error = new WorkspaceNotFoundError("root unavailable", "/private/customer/root");
+    error.cause = Object.assign(new Error("private-cause-canary"), { code: "EACCES" });
+    recordWorkspaceRootUnavailable(error, { activityLog: sink, correlationId: "wrapped-root" });
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    expect(expectActivityLogProof("workspace.root.denied.line", line)).toMatchObject({
+      correlationId: "wrapped-root",
+      errorKind: "permission-denied",
+      failureKind: "EACCES",
+      causeChain: ["Error"],
+    });
+    expect(line).not.toContain("private-cause-canary");
+    expect(line).not.toContain("/private/customer/root");
   });
 
   it("rejects unregistered denial fields and excludes them from runtime evidence", () => {

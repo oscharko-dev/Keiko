@@ -1,6 +1,7 @@
 "use client";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { SupportReportButton } from "../../SupportReportButton";
 import {
   CodingWorkbenchRepositorySelector,
   type WorkbenchExecutionLocation,
@@ -30,6 +31,7 @@ import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-j
 import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffCodeErrorKind } from "@/lib/http";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
@@ -81,6 +83,7 @@ import {
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import type {
+  CodingWorkbenchClientError,
   CodingWorkbenchMutationKind,
   CodingWorkbenchMutationState,
   CodingWorkbenchRuntimeState,
@@ -158,6 +161,7 @@ import {
   modelSourceLabel,
   startBlockedReason,
   visibleAlert,
+  visibleAlertFailure,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
@@ -1022,12 +1026,29 @@ interface WorkbenchContentProps {
   readonly runIsActive: boolean;
 }
 
-function WorkbenchAlert({ message }: { readonly message: string | null }): ReactNode {
+function WorkbenchAlert({
+  message,
+  failure,
+}: {
+  readonly message: string | null;
+  readonly failure: CodingWorkbenchClientError | null;
+}): ReactNode {
   if (message === null) return null;
   return (
     <p className={styles.alert} role="alert">
       <span aria-hidden="true">!</span> {message}
+      {workbenchFailureReport(failure)}
     </p>
+  );
+}
+
+function workbenchFailureReport(failure: CodingWorkbenchClientError | null): ReactNode {
+  if (failure === null) return null;
+  return (
+    <SupportReportButton
+      correlationId={failure.correlationId}
+      failure={{ errorKind: bffCodeErrorKind(failure.code), context: [] }}
+    />
   );
 }
 
@@ -1123,7 +1144,7 @@ function WorkbenchContent({
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
       <div className={styles.body}>
-        <WorkbenchAlert message={alert} />
+        <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
         <WorkbenchColumns {...columns} />
       </div>
     </section>

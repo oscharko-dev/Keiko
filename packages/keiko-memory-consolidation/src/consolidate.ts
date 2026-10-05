@@ -94,6 +94,9 @@ const CONSOLIDATION_SUMMARY_FALLBACK_OPERATION = defineActivityLogOperation({
       values: ["absent", "invalid-output", "union-not-preserved", "generator-threw"],
     },
   },
+  diagnosticWhen: [
+    { field: "reason", values: ["invalid-output", "union-not-preserved", "generator-threw"] },
+  ],
   causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",

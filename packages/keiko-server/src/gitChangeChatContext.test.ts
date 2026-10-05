@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,7 +69,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-async function scopeAndDeps(): Promise<{
+async function scopeAndDeps(rawModelOutput?: string): Promise<{
   readonly scope: ChatGitChangeScope;
   readonly deps: UiHandlerDeps;
   readonly chat: ReturnType<typeof vi.fn>;
@@ -111,12 +112,14 @@ async function scopeAndDeps(): Promise<{
     const statement = { text: "Update the exported value.", evidenceIds: [evidenceId] };
     return Promise.resolve({
       modelId: "description-model",
-      content: JSON.stringify({
-        summary: [statement],
-        keyChanges: [statement],
-        risks: [],
-        reviewerFocus: [],
-      }),
+      content:
+        rawModelOutput ??
+        JSON.stringify({
+          summary: [statement],
+          keyChanges: [statement],
+          risks: [],
+          reviewerFocus: [],
+        }),
       finishReason: "stop",
       toolCalls: [],
       structuredOutput: null,
@@ -160,7 +163,12 @@ async function scopeAndDeps(): Promise<{
       }),
     },
     activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
-    prDescriptionGeneration: { gateway: { chat }, config, log: { write: vi.fn() }, now: () => NOW },
+    prDescriptionGeneration: {
+      gateway: { chat },
+      config,
+      log: { write: (event: ServerLogEvent): void => void events.push(event) },
+      now: () => NOW,
+    },
   } as unknown as UiHandlerDeps;
   return { scope, deps, chat, events };
 }
@@ -214,6 +222,39 @@ describe("Git-change Chat shared description core", () => {
     expect(JSON.stringify(setup.events)).not.toContain("Emphasize the behavior change");
     expect(JSON.stringify(setup.events)).not.toContain("Earlier draft");
   });
+
+  it.each(["complete", "partial", "fallback"] as const)(
+    "retains actual %s Chat outcome through its generation lineage",
+    async (outcome) => {
+      if (outcome === "partial") {
+        writeFileSync(join(root, "second.ts"), "export const second = 2;\n");
+        git(["add", "second.ts"]);
+        git(["commit", "-m", "second change"]);
+      }
+      const setup = await scopeAndDeps(outcome === "fallback" ? "not json" : undefined);
+      const result = await generateGitChangeChatDescription({
+        deps: setup.deps,
+        projectPath: root,
+        scope: setup.scope,
+        correlationId: "chat-generation-lineage",
+        signal: new AbortController().signal,
+        history: [],
+        latestIntent: "Explain the change",
+      });
+      expect(result.status).toBe("generated");
+      if (result.status !== "generated") throw new TypeError("Missing generation");
+      expect(result.artifact.outcome).toBe(outcome);
+      const selected = observedFailureQuery(setup.events).events.filter(
+        (entry) => entry.parsed.correlationId === "chat-generation-lineage",
+      );
+      expect(
+        selected.some((entry) => entry.parsed.view.op === "pr-description.chat.generated"),
+      ).toBe(outcome !== "complete");
+      expect(
+        selected.some((entry) => entry.parsed.view.op === "pr-description.generation.completed"),
+      ).toBe(outcome !== "complete");
+    },
+  );
 
   it("rejects head drift before model egress", async () => {
     const setup = await scopeAndDeps();

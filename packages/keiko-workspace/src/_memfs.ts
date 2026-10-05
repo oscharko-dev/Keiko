@@ -341,6 +341,16 @@ function findMemoryFileKey(
   return Object.hasOwn(files, relativePath) ? relativePath : undefined;
 }
 
+// The fixture inventory already lives in memory. Preserve instrumented receiver methods so
+// membership changes and injected directory failures remain observable through either port.
+async function* memoryDirectoryEntries(
+  this: WorkspaceFs,
+  absolutePath: string,
+): AsyncIterable<WorkspaceDirEntry> {
+  const entries = await Promise.resolve(this.readDir(absolutePath));
+  yield* entries;
+}
+
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const keyByAbsolutePath = new Map<string, string>();
   for (const key of Object.keys(files)) {
@@ -371,6 +381,7 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
       const entries = childrenOf(root, files, absolutePath);
       return maxEntries === undefined ? entries : entries.slice(0, maxEntries);
     },
+    iterateDirectory: memoryDirectoryEntries,
     realPath: (absolutePath: string): string => absolutePath,
     exists: (absolutePath: string): boolean =>
       findKey(absolutePath) !== undefined || canonicalPath(absolutePath) === canonicalRoot,

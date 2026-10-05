@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
   link,
   mkdtemp,
@@ -1781,12 +1782,20 @@ describe("desktop files browser", () => {
     });
   });
 
-  it("refuses invalid UTF-8 even for known text extensions and preserves bytes on save", async () => {
+  it("refuses malformed UTF-16 without admitting replacement decoding", async () => {
+    await writeFile(join(root, "malformed.txt"), Buffer.from([0xff, 0xfe, 0x61]));
+    expect(await readFilesPreview(store, root, "malformed.txt", buildRedactor({}))).toMatchObject({
+      kind: "binary",
+      reason: "unsupported",
+    });
+  });
+
+  it("previews valid UTF-16 while refusing editing and preserving bytes on save", async () => {
     const badBytes = Buffer.from([0xff, 0xfe, 0x61, 0x0a]);
     await writeFile(join(root, "bad.txt"), badBytes);
 
     const preview = await readFilesPreview(store, root, "bad.txt", buildRedactor({}));
-    expect(preview).toMatchObject({ kind: "binary", reason: "unsupported", extension: "txt" });
+    expect(preview).toMatchObject({ kind: "text", canEdit: false, extension: "txt" });
 
     await expect(readFilesContent(store, root, "bad.txt")).rejects.toMatchObject({
       status: 400,
@@ -1804,6 +1813,93 @@ describe("desktop files browser", () => {
     expect(await readFile(join(root, "bad.txt"))).toEqual(badBytes);
   });
 
+  it.each(["é", "€", "😀"])(
+    "previews, opens and saves UTF-8 characters crossing the classification prefix (%s)",
+    async (character) => {
+      const content = `${"a".repeat(4095)}${character} valid tail\n`;
+      await writeFile(join(root, "boundary"), content);
+      expect(await readFilesPreview(store, root, "boundary", buildRedactor({}))).toMatchObject({
+        kind: "text",
+        canEdit: true,
+        content,
+      });
+      expect((await readFilesContent(store, root, "boundary")).content).toBe(content);
+      const saved = await writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "boundary",
+        content: `${content}updated\n`,
+      });
+      expect(saved.content).toBe(`${content}updated\n`);
+      expect(await readFile(join(root, "boundary"), "utf8")).toBe(saved.content);
+    },
+  );
+
+  it.each([
+    Buffer.concat([Buffer.alloc(4095, 97), Buffer.from([0xc3])]),
+    Buffer.concat([Buffer.alloc(4094, 97), Buffer.from([0xc3, 0x28]), Buffer.from("tail")]),
+    Buffer.concat([Buffer.alloc(4095, 97), Buffer.from([0xff]), Buffer.from("tail")]),
+    Buffer.concat([Buffer.alloc(4095, 97), Buffer.from([0]), Buffer.from("tail")]),
+  ])("does not admit invalid UTF-8 or NUL in the prefix (%#)", async (bytes) => {
+    await writeFile(join(root, "invalid"), bytes);
+    expect(await readFilesPreview(store, root, "invalid", buildRedactor({}))).toMatchObject({
+      kind: "binary",
+      reason: "unsupported",
+    });
+    await expect(readFilesContent(store, root, "invalid")).rejects.toMatchObject({
+      code: "UNSUPPORTED_FILE",
+    });
+    await expect(
+      writeFilesContent({ store, rootInput: root, pathInput: "invalid", content: "replacement" }),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_FILE" });
+    expect(await readFile(join(root, "invalid"))).toEqual(bytes);
+  });
+
+  it.each([
+    Buffer.concat([
+      Buffer.from('<meta charset="ISO-2022-JP">\n'),
+      Buffer.from([0x1b, 0x24, 0x42, 0x24, 0x22, 0x1b, 0x28, 0x42]),
+    ]),
+    Buffer.from('<meta charset="windows-1252">\nASCII handbook text\n'),
+    Buffer.from('<meta charset="Shift_JIS">\nASCII handbook text\n'),
+  ])("refuses editor open/save for explicitly declared legacy HTML (%#)", async (bytes) => {
+    await writeFile(join(root, "legacy-admission.html"), bytes);
+    expect(
+      await readFilesPreview(store, root, "legacy-admission.html", buildRedactor({})),
+    ).toMatchObject({ canEdit: false });
+    await expect(readFilesContent(store, root, "legacy-admission.html")).rejects.toMatchObject({
+      code: "UNSUPPORTED_FILE",
+    });
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "legacy-admission.html",
+        content: "replacement",
+      }),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_FILE" });
+    expect(await readFile(join(root, "legacy-admission.html"))).toEqual(bytes);
+  });
+
+  it("allows a UTF-8 BOM to override a legacy HTML declaration at a split prefix", async () => {
+    const header = '\ufeff<meta charset="Shift_JIS">\n';
+    const content = `${header}${"a".repeat(4095 - Buffer.byteLength(header))}€ valid tail\n`;
+    await writeFile(join(root, "bom-boundary.html"), content);
+    expect(
+      await readFilesPreview(store, root, "bom-boundary.html", buildRedactor({})),
+    ).toMatchObject({ kind: "text", canEdit: true });
+    expect((await readFilesContent(store, root, "bom-boundary.html")).content).toBe(
+      content.slice(1),
+    );
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "bom-boundary.html",
+      content: "updated",
+    });
+    expect(saved.content).toBe("updated");
+  });
+
   it("treats a mostly-printable file containing a supplementary-plane character as editable text", async () => {
     // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair. The printable-ratio scan iterates by
     // Unicode code point and must not misclassify it as a non-printable control character (which
@@ -1818,19 +1914,133 @@ describe("desktop files browser", () => {
     expect(opened.content).toBe(content);
   });
 
-  it("caps large text previews", async () => {
-    const content = `${"a".repeat(1_000_050)}tail`;
-    await writeFile(join(root, "large.txt"), content);
-
-    const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
-
-    expect(preview.kind).toBe("text");
+  it.each([
+    [
+      "legacy.html",
+      Buffer.concat([
+        Buffer.from('<meta charset="windows-1252">'),
+        Buffer.from([0xd6]),
+        Buffer.from("lwechsel 425 Stunden"),
+      ]),
+    ],
+    ["wide.txt", Buffer.from("\ufeffÖlwechsel 600 Stunden", "utf16le")],
+  ])("previews searchable legacy text without permitting editing (%s)", async (name, bytes) => {
+    await writeFile(join(root, name), bytes);
+    const preview = await readFilesPreview(store, root, name, buildRedactor({}));
+    expect(preview).toMatchObject({ kind: "text", canEdit: false, truncated: false });
     if (preview.kind === "text") {
-      expect(preview.truncated).toBe(true);
-      expect(preview.content).toHaveLength(1_000_000);
-      expect(preview.maxBytes).toBe(1_000_000);
+      expect(preview.content).toContain("Ölwechsel");
+      expect(preview).toHaveProperty("sourceTextBytesRead", bytes.length);
     }
+    await expect(readFilesContent(store, root, name, buildRedactor({}))).rejects.toMatchObject({
+      code: "UNSUPPORTED_FILE",
+    });
   });
+
+  it("reports source bytes before preview redaction changes the displayed length", async () => {
+    const content = "Private source content to redact";
+    await writeFile(join(root, "redacted.txt"), content);
+    const preview = await readFilesPreview(store, root, "redacted.txt", (value) =>
+      value === content ? "removed" : value,
+    );
+    expect(preview).toMatchObject({
+      kind: "text",
+      content: "removed",
+      sourceTextBytesRead: Buffer.byteLength(content),
+    });
+  });
+
+  it("previews the complete eligible source up to 2 MiB without widening editing", async () => {
+    const content = `${"a".repeat(MAX_RECURSIVE_TEXT_FILE_BYTES - 9)}ENDSOURCE`;
+    await writeFile(join(root, "eligible.txt"), content);
+    const preview = await readFilesPreview(store, root, "eligible.txt", buildRedactor({}));
+    expect(preview).toMatchObject({
+      kind: "text",
+      canEdit: false,
+      truncated: false,
+      maxBytes: MAX_RECURSIVE_TEXT_FILE_BYTES,
+    });
+    if (preview.kind === "text") expect(preview.content).toBe(content);
+    await expect(
+      readFilesContent(store, root, "eligible.txt", buildRedactor({})),
+    ).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
+  });
+
+  it("rejects a binary tail before displaying an apparently textual source", async () => {
+    await writeFile(
+      join(root, "late-binary.html"),
+      Buffer.concat([Buffer.from("a".repeat(6000)), Buffer.from([0]), Buffer.from("tail")]),
+    );
+    expect(
+      await readFilesPreview(store, root, "late-binary.html", buildRedactor({})),
+    ).toMatchObject({ kind: "binary", reason: "unsupported" });
+  });
+
+  it.each(["é", "€", "😀"])(
+    "keeps a safe truncated preview above the search ceiling (%s)",
+    async (tail) => {
+      const prefix = "a".repeat(MAX_TEXT_PREVIEW_BYTES - 1);
+      await writeFile(
+        join(root, "large.txt"),
+        `${prefix}${tail}${"z".repeat(MAX_RECURSIVE_TEXT_FILE_BYTES)}`,
+      );
+      const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
+      expect(preview).toMatchObject({
+        kind: "text",
+        truncated: true,
+        canEdit: false,
+        maxBytes: MAX_TEXT_PREVIEW_BYTES,
+        content: prefix,
+        sourceTextBytesRead: MAX_TEXT_PREVIEW_BYTES,
+      });
+    },
+  );
+
+  it("rejects binary previews after only the classification prefix", async () => {
+    await writeFile(join(root, "large.bin"), Buffer.alloc(1_800_000));
+    const requested: number[] = [];
+    const boundedRead = nodeWorkspaceFs.readFileBytes;
+    if (boundedRead === undefined) throw new TypeError("Missing bounded reader");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (path, maxBytes, policy, expected) => {
+        requested.push(maxBytes);
+        return boundedRead.call(nodeWorkspaceFs, path, maxBytes, policy, expected);
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs },
+    };
+    expect(
+      await readFilesPreview(store, root, "large.bin", buildRedactor({}), resolvedRoot),
+    ).toMatchObject({ kind: "binary", reason: "unsupported" });
+    expect(requested).toEqual([4096]);
+  });
+
+  it.each(["utf16le", "latin1"] as const)(
+    "redacts secrets after decoding %s previews",
+    async (encoding) => {
+      const secret = ["registered-preview-secret-", "0123456789"].join("");
+      const content =
+        encoding === "utf16le"
+          ? `\ufeffÖlwechsel api_key=${secret}\n`
+          : `<meta charset="windows-1252">Ölwechsel api_key=${secret}\n`;
+      await writeFile(join(root, "secret.html"), Buffer.from(content, encoding));
+      const preview = await readFilesPreview(
+        store,
+        root,
+        "secret.html",
+        buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+      );
+      expect(preview).toMatchObject({ kind: "text", canEdit: false });
+      if (preview.kind !== "text") throw new TypeError("Expected text preview");
+      expect(preview.content).toContain("Ölwechsel");
+      expect(preview.content).toContain("[REDACTED]");
+      expect(preview.content).not.toContain(secret);
+    },
+  );
 
   it("caps large image previews to metadata", async () => {
     await writeFile(join(root, "huge.png"), Buffer.alloc(3_000_001, 1));

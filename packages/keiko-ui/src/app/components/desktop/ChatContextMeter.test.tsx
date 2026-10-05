@@ -2,6 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ChatContextMeter } from "./ChatContextMeter";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
@@ -36,6 +38,7 @@ function contextSession(): Parameters<typeof ChatContextMeterContainer>[0]["sess
       updatedAt: 1,
     },
     selectedModel: "fixture",
+    models: [],
     messages: [],
     sending: false,
     regeneratingMessageId: undefined,
@@ -147,6 +150,60 @@ describe("Chat context window breakdown", () => {
     expect(knowledge).toHaveTextContent("25%");
   });
 
+  it("describes the actual conversation lane without a hardcoded policy cap", () => {
+    const panel = openGroundedPanel({ ...groundedStatus(), conversationInputBudgetTokens: 768 });
+    const policy = [...panel.querySelectorAll("p")].find((paragraph) =>
+      paragraph.textContent?.includes("retrieved fresh"),
+    );
+    expect(policy).toHaveTextContent("768 tokens");
+    expect(policy).not.toHaveTextContent("8,000");
+    expect(policy).not.toHaveTextContent("a third");
+  });
+
+  it("does not invent a conversation policy cap when lane metadata is absent", () => {
+    const { conversationInputBudgetTokens: _tokens, ...status } = groundedStatus();
+    const panel = openGroundedPanel(status);
+    const policy = [...panel.querySelectorAll("p")].find((paragraph) =>
+      paragraph.textContent?.includes("retrieved fresh"),
+    );
+    expect(policy).toHaveTextContent("Conversation history uses its own input budget.");
+    expect(policy).not.toHaveTextContent(/8,000|a third|current conversation input budget is/u);
+  });
+
+  it("explains a grounded conversation lane separately from available source capacity", () => {
+    const panel = openGroundedPanel({
+      ...groundedStatus(),
+      conversationInputBudgetTokens: 8_000,
+      autoCompactionAtTokens: 8_052,
+      contextWindowTokens: 128_000,
+      inputBudgetTokens: 116_000,
+      reservedOutputTokens: 8_000,
+      safetyMarginTokens: 4_000,
+      segments: [
+        { id: "system", tokens: 310 },
+        { id: "messages", tokens: 3_871, count: 4 },
+        { id: "knowledge", tokens: 542, count: 4 },
+        { id: "free", tokens: 3_329 },
+        { id: "compaction-buffer", tokens: 800 },
+        { id: "source-capacity", tokens: 107_148 },
+        { id: "output-reserve", tokens: 8_000 },
+        { id: "safety-margin", tokens: 4_000 },
+      ],
+      estimatedInputTokens: 4_723,
+    });
+    expect(within(panel).getByText("Additional source capacity")).toBeInTheDocument();
+    expect(within(panel).getByText("Conversation headroom")).toBeInTheDocument();
+    expect(
+      within(panel).getByText(
+        "Keiko compacts the conversation at 90% of its 8,000-token lane. Source capacity is separate.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText("3,329 conversation tokens until automatic compaction."),
+    ).toBeInTheDocument();
+    expect(within(panel).queryByText(/90% of usable input capacity/)).toBeNull();
+  });
+
   it("warns when references were left out and states the measured request size", () => {
     const panel = openGroundedPanel();
     expect(within(panel).getByRole("note")).toHaveTextContent(
@@ -159,14 +216,14 @@ describe("Chat context window breakdown", () => {
     expect(within(panel).getByText(/never summarized/u)).toBeInTheDocument();
   });
 
-  it("states Keiko's estimate beside a differing provider measurement", () => {
+  it("distinguishes the previous request estimate from the next request's breakdown", () => {
     const panel = openGroundedPanel({
       ...groundedStatus(),
       lastRequest: { promptTokens: 5_901, measured: true, estimatedTokens: 6_420 },
     });
     expect(
       within(panel).getByText(
-        "Last knowledge request: 5,901 tokens (measured by the provider). Keiko estimated 6,420; the breakdown above uses that estimate.",
+        "Last knowledge request: 5,901 tokens (measured by the provider). Keiko estimated that request at 6,420 tokens. The breakdown above estimates the next request.",
       ),
     ).toBeInTheDocument();
   });
@@ -238,7 +295,9 @@ describe("Chat context meter presentation details", () => {
     cleanup();
     await loadLocaleMessages("de");
     const german = renderMeter(withSegments([{ id: "messages", tokens: 735, count: 4 }]), "de");
-    expect(within(german).getByRole("heading")).toHaveTextContent("Gesprächskontext 81,7 %");
+    await waitFor(() =>
+      expect(within(german).getByRole("heading")).toHaveTextContent("Gesprächskontext 81,7 %"),
+    );
     expect(within(german).getByText("73,5 %")).toBeInTheDocument();
   });
 
@@ -251,7 +310,7 @@ describe("Chat context meter presentation details", () => {
       ]),
       "de",
     );
-    expect(within(panel).getByText("Systemanweisungen")).toBeInTheDocument();
+    expect(await within(panel).findByText("Systemanweisungen")).toBeInTheDocument();
     expect(within(panel).getByText("Wissensquellen")).toBeInTheDocument();
     expect(within(panel).queryByText(/System-Anweisungen|Quellen \(Wissen\)/u)).toBeNull();
   });
@@ -302,7 +361,7 @@ describe("Chat context meter presentation details", () => {
       "de",
     );
     expect(
-      within(panel).getByText("600 Tokens bei 1 zusammengefassten Nachricht eingespart."),
+      await within(panel).findByText("600 Tokens bei 1 zusammengefassten Nachricht eingespart."),
     ).toBeInTheDocument();
   });
 
@@ -316,8 +375,8 @@ describe("Chat context meter presentation details", () => {
       "de",
     );
     expect(
-      within(panel).getByText(
-        "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hat 6.420 geschätzt; die Aufteilung oben nutzt diese Schätzung.",
+      await within(panel).findByText(
+        "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf 6.420 Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
       ),
     ).toBeInTheDocument();
   });
@@ -482,6 +541,66 @@ describe("Chat context request diagnostics", () => {
     contextApi.report.mockClear();
   });
 
+  it("keeps a requested compaction pending when selected model metadata refreshes", async () => {
+    const session = contextSession();
+    const initial = meterCapability("fixture", 12_000);
+    const updated = meterCapability("fixture", 48_000);
+    contextApi.fetch.mockResolvedValue({ ...meterModelStatus(initial), canCompact: true });
+    let finish: ((value: ChatContextStatusWire) => void) | undefined;
+    contextApi.compact.mockImplementation(
+      () => new Promise<ChatContextStatusWire>((resolve) => (finish = resolve)),
+    );
+    const view = render(<ChatContextMeterContainer session={{ ...session, models: [initial] }} />);
+    const ring = await screen.findByRole("button", { name: /Conversation context:/ });
+    fireEvent.click(ring);
+    fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+    await waitFor(() => expect(contextApi.compact).toHaveBeenCalledOnce());
+    const signal: unknown = contextApi.compact.mock.calls[0]?.[3];
+    if (!(signal instanceof AbortSignal)) throw new TypeError("missing compaction signal");
+    contextApi.fetch.mockResolvedValue({ ...meterModelStatus(updated), canCompact: true });
+    view.rerender(<ChatContextMeterContainer session={{ ...session, models: [updated] }} />);
+    expect(signal.aborted).toBe(false);
+    expect(screen.getByRole("button", { name: "Compacting context…" })).toBeDisabled();
+    expect(contextApi.compact).toHaveBeenCalledOnce();
+    await act(async () => finish?.(meterModelStatus(initial)));
+    await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledTimes(2));
+    expect(contextApi.report).not.toHaveBeenCalled();
+  });
+
+  it.each(["model", "scope", "chat"])(
+    "cancels pending compaction when its actual %s authority changes",
+    async (changed) => {
+      const session = contextSession();
+      if (session.activeChat === undefined) throw new TypeError("missing fixture chat");
+      let finish: ((value: ChatContextStatusWire) => void) | undefined;
+      contextApi.compact.mockImplementation(
+        () => new Promise<ChatContextStatusWire>((resolve) => (finish = resolve)),
+      );
+      const view = render(<ChatContextMeterContainer session={session} />);
+      fireEvent.click(await screen.findByRole("button", { name: /Conversation context:/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+      const signal: unknown = contextApi.compact.mock.calls[0]?.[3];
+      if (!(signal instanceof AbortSignal)) throw new TypeError("missing compaction signal");
+      const next = {
+        ...session,
+        loading: true,
+        selectedModel: changed === "model" ? "other-model" : session.selectedModel,
+        activeChat: {
+          ...session.activeChat,
+          ...(changed === "chat" ? { id: "other-chat" } : {}),
+          ...(changed === "scope" ? { groundingScopeIdentity: "changed-scope-identity" } : {}),
+        },
+      };
+      view.rerender(<ChatContextMeterContainer session={next} />);
+      expect(signal.aborted).toBe(true);
+      expect(screen.queryByRole("button", { name: "Compacting context…" })).toBeNull();
+      await act(async () => finish?.(status(1_000)));
+      expect(screen.queryByRole("button", { name: "Compacting context…" })).toBeNull();
+      expect(contextApi.compact).toHaveBeenCalledOnce();
+      expect(contextApi.report).not.toHaveBeenCalled();
+    },
+  );
+
   it("refreshes a newly persisted user turn while the answer is pending without per-token requests", async () => {
     const session = contextSession();
     const view = render(<ChatContextMeterContainer session={session} />);
@@ -510,6 +629,33 @@ describe("Chat context request diagnostics", () => {
       />,
     );
     expect(contextApi.fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it("refreshes when connected sources change before another message is sent", async () => {
+    const session = contextSession();
+    if (session.activeChat === undefined) throw new Error("missing fixture chat");
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    contextApi.fetch.mockResolvedValue(status(1_000));
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{
+          ...session,
+          activeChat: {
+            ...session.activeChat,
+            connectedScopes: [
+              {
+                kind: "workspace-root",
+                relativePaths: [],
+                connectedAtMs: 2,
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    await screen.findByRole("button", { name: /approximately 10% used/ });
+    expect(contextApi.fetch).toHaveBeenCalledTimes(2);
   });
 
   it("reports a correlated status failure without its response body or chat identity", async () => {
@@ -688,3 +834,179 @@ it("stops reading after the polling cap while the window probe stays pending", a
 });
 
 afterEach(() => vi.useRealTimers());
+
+describe("independent model input ceilings", () => {
+  it.each([16_384, 32_768])(
+    "does not present a nonbinding input ceiling of %s as another restriction",
+    (inputLimitTokens) => {
+      const panel = openGroundedPanel({ ...groundedStatus(), inputLimitTokens });
+      expect(within(panel).queryByText(/Model input limit:/)).toBeNull();
+      expect(panel.textContent).toContain("context window 16,384");
+    },
+  );
+
+  it("does not infer a binding ceiling from an unsegmented legacy estimate", () => {
+    const panel = openGroundedPanel({ ...status(2_000), inputLimitTokens: 8_000 });
+    expect(within(panel).queryByText(/Model input limit:/)).toBeNull();
+  });
+
+  it("shows the physical window, usable input and unavailable share without inventing free capacity", () => {
+    render(
+      <ChatContextMeter
+        status={{
+          ...status(2_000),
+          contextWindowTokens: 32_000,
+          inputBudgetTokens: 8_000,
+          inputLimitTokens: 8_000,
+          reservedOutputTokens: 2_000,
+          safetyMarginTokens: 1_000,
+          compaction: undefined,
+          segments: [
+            { id: "system", tokens: 300 },
+            { id: "messages", tokens: 1_700, count: 2 },
+            { id: "free", tokens: 5_200 },
+            { id: "compaction-buffer", tokens: 800 },
+            { id: "input-capacity-unavailable", tokens: 21_000 },
+            { id: "output-reserve", tokens: 2_000 },
+            { id: "safety-margin", tokens: 1_000 },
+          ],
+        }}
+        busy={false}
+        compacting={false}
+        error={false}
+        onCompact={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+    const panel = screen.getByRole("region", { name: "Conversation context" });
+    expect(within(panel).getByText("Unavailable for input")).toBeInTheDocument();
+    expect(within(panel).getByText("Model input limit: 8,000 tokens.")).toBeInTheDocument();
+    expect(within(panel).getByText("21,000")).toBeInTheDocument();
+    expect(panel.textContent).toContain("32,000");
+    expect(screen.getByRole("button", { name: /approximately 25% used/ })).toBeInTheDocument();
+  });
+});
+
+it("does not walk unchanged history again for an unrelated container render", async () => {
+  contextApi.fetch.mockResolvedValue(status(1_000));
+  const session = contextSession();
+  const historyWalk = vi.spyOn(session.messages, "map");
+  const view = render(<ChatContextMeterContainer session={session} />);
+  await screen.findByRole("button", { name: /Conversation context:/ });
+  const walksAfterSettlement = historyWalk.mock.calls.length;
+  expect(walksAfterSettlement).toBeGreaterThan(0);
+  view.rerender(<ChatContextMeterContainer session={{ ...session }} />);
+  expect(historyWalk).toHaveBeenCalledTimes(walksAfterSettlement);
+  expect(contextApi.fetch).toHaveBeenCalledOnce();
+});
+
+function meterCapability(id: string, window: number): ModelCapability {
+  return {
+    id,
+    kind: "chat",
+    contextWindow: window,
+    maxInputTokens: Math.floor(window / 2),
+    maxOutputTokens: Math.floor(window / 8),
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "",
+    preferredUseCases: [],
+    knownLimitations: [],
+  };
+}
+
+function meterModelStatus(model: ModelCapability): ChatContextStatusWire {
+  const profile = deriveContextProfileFromCapability(model);
+  return {
+    modelId: model.id,
+    contextWindowTokens: profile.maxInputTokens,
+    inputLimitTokens: model.maxInputTokens,
+    inputBudgetTokens: profile.effectiveInputBudget,
+    reservedOutputTokens: profile.reservedOutputTokens,
+    safetyMarginTokens: profile.safetyMarginTokens,
+    estimatedInputTokens: 100,
+    canCompact: false,
+  };
+}
+
+it("refreshes an idle selected alias when its catalog geometry changes", async () => {
+  const session = contextSession();
+  const initial = meterCapability("fixture", 12_000);
+  const updated = meterCapability("fixture", 48_000);
+  contextApi.fetch
+    .mockReset()
+    .mockResolvedValueOnce(meterModelStatus(initial))
+    .mockResolvedValueOnce(meterModelStatus(updated));
+  const view = render(<ChatContextMeterContainer session={{ ...session, models: [initial] }} />);
+  await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledOnce());
+  view.rerender(<ChatContextMeterContainer session={{ ...session, models: [updated] }} />);
+  await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+  const panel = screen.getByRole("region", { name: "Conversation context" });
+  expect(within(panel).getByText("48,000")).toBeInTheDocument();
+  expect(within(panel).getByText("24,000")).toBeInTheDocument();
+  expect(within(panel).queryByText(/Model input limit:/)).toBeNull();
+});
+
+it("ignores catalog geometry changes for an unselected alias", async () => {
+  const session = contextSession();
+  const selected = meterCapability("fixture", 12_000);
+  contextApi.fetch.mockReset().mockResolvedValue(meterModelStatus(selected));
+  const view = render(
+    <ChatContextMeterContainer
+      session={{ ...session, models: [selected, meterCapability("other", 32_000)] }}
+    />,
+  );
+  await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledOnce());
+  view.rerender(
+    <ChatContextMeterContainer
+      session={{ ...session, models: [selected, meterCapability("other", 96_000)] }}
+    />,
+  );
+  await act(async () => Promise.resolve());
+  expect(contextApi.fetch).toHaveBeenCalledOnce();
+});
+
+it("shows fifteen selected models' distinct geometry without reusing the previous model", async () => {
+  const windows = [
+    4_096, 8_192, 16_384, 24_576, 32_768, 48_000, 64_000, 96_000, 128_000, 160_000, 200_000,
+    256_000, 500_000, 1_000_000, 2_000_000,
+  ];
+  const models = windows.map((window, index) => meterCapability(`alias-${String(index)}`, window));
+  const session = contextSession();
+  contextApi.fetch
+    .mockReset()
+    .mockImplementation((_chat: string, _path: string, modelId: string) => {
+      const model = models.find((candidate) => candidate.id === modelId);
+      if (model === undefined) throw new Error("Missing selected test model");
+      return Promise.resolve(meterModelStatus(model));
+    });
+  const view = render(
+    <ChatContextMeterContainer session={{ ...session, selectedModel: models[0]?.id, models }} />,
+  );
+  for (const model of models) {
+    view.rerender(
+      <ChatContextMeterContainer session={{ ...session, selectedModel: model.id, models }} />,
+    );
+    await waitFor(() =>
+      expect(contextApi.fetch).toHaveBeenLastCalledWith(
+        session.activeChat?.id,
+        session.activeChat?.projectPath,
+        model.id,
+        expect.any(AbortSignal),
+      ),
+    );
+    await screen.findByRole("button", { name: /Conversation context: approximately/ });
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+    const panel = screen.getByRole("region", { name: "Conversation context" });
+    expect(within(panel).getByText(model.contextWindow.toLocaleString("en"))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+  }
+});

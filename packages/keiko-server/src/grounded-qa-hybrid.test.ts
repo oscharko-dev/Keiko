@@ -1,17 +1,20 @@
+import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 // Tests for the hybrid grounded path (Epic #189 Slice 2). Drives `handleGroundedAsk` with
 // injected seams (no real embeddings, no real workspace) while keeping a REAL KnowledgeStore so
 // `selectedCapsulesForScope` resolves actual capsule rows and `scopeStateFailure` detects not-ready
 // states. Every test is mutation-robust: a single-line change in the source — a swapped count, a
 // missing `.source` tag, a dropped skip-uncertainty — must make at least one assertion fail.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  validateConnectedContextPack,
   type ConnectedContextPack,
   type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -47,12 +50,20 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
-import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import {
+  buildSelectedScopeFrom,
+  handleGroundedAsk,
+  modelWindowAwareBudget,
+  sizeExclusionLines,
+  type GroundedRunner,
+  type HybridSeam,
+} from "./grounded-qa.js";
+import { groundedSourceScopeFingerprint } from "./grounded-qa-multi-source.js";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
-import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   parseGatewayConfig,
@@ -71,6 +82,7 @@ import {
   hashString32,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
+  type HybridGroundedAskCtx,
 } from "./grounded-qa-hybrid.js";
 import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -78,12 +90,18 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { WorkspaceNotFoundError } from "@oscharko-dev/keiko-workspace";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -155,6 +173,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -719,6 +738,194 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it.each([false, true])(
+    "persists and replays the exact hybrid compaction flag: %s",
+    async (compacted) => {
+      const { capsuleId } = await seedReadyCapsule("Compacted History Docs");
+      const chatId = makeHybridChat(
+        [
+          {
+            kind: "directory",
+            relativePaths: ["src/alpha.ts"],
+            root: tempRoot("compaction-repo"),
+            connectedAtMs: NOW,
+          },
+        ],
+        [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+      );
+      if (compacted) seedGermanContinuity(chatId);
+      const profile = deriveContextProfile({
+        maxInputTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        safetyMarginTokens: 4_000,
+      });
+      const owner = hybridDeps({
+        contextProfile: profile,
+        evidenceStore: createInMemoryEvidenceStore(),
+      });
+      const pack = attachContextBudgetDiagnostics(
+        folderPack("src/alpha.ts", 0.9, "compacted-alpha"),
+        profile,
+      );
+      const answerer = vi.fn(sentinelAnswerer());
+      const seam: HybridSeam = {
+        folderRetriever: folderRetrieverFor(new Map([["src/alpha.ts", pack]])),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: answerer,
+      };
+      const request = JSON.stringify({
+        chatId,
+        content: "Explain alpha.",
+        clientTurnId: "compacted-hybrid-replay",
+      });
+      const first = await handleGroundedAsk(routeCtx(request), owner, undefined, undefined, seam);
+      expect(first.status, JSON.stringify(first.body)).toBe(200);
+      const answer = asHybrid(first.body as GroundedAnswer);
+      expect(answer).not.toHaveProperty("memory");
+      expect(answer.contextPack.folder.contextSummary?.compactionActive).toBe(compacted);
+      expect(store.findMessageById(answer.assistantMessageId)?.groundedAnswer).toEqual(answer);
+      const replay = await handleGroundedAsk(routeCtx(request), owner, undefined, undefined, seam);
+      expect(replay).toEqual(first);
+      expect(answerer).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("joins a hybrid root refusal to its request with the actual filesystem cause", async () => {
+    const { capsuleId } = await seedReadyCapsule("Root Failure Docs");
+    const scope: ChatConnectedScope = {
+      root: tempRoot("hybrid-root"),
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([scope], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "hybrid-root-failure";
+    const failure = new WorkspaceNotFoundError("root disappeared", "/private/customer/root");
+    failure.cause = Object.assign(new Error("filesystem-private-canary"), { code: "ELOOP" });
+    try {
+      const result = await handleGroundedAsk(
+        { ...routeCtx(JSON.stringify({ chatId, content: "Explain alpha" })), correlationId },
+        hybridDeps(),
+        undefined,
+        undefined,
+        {
+          folderRetriever: () => Promise.reject(failure),
+          connectorRetrieve: singleConnectorRetrieve(capsuleId),
+          answer: sentinelAnswerer("Answer from the surviving source [1].", { count: 0 }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: 400,
+        body: { error: { message: "Connected scope root is not accessible." } },
+      });
+      const failures = sink.events.filter((event) => event.op === "workspace.root.denied");
+      expect(failures).toHaveLength(1);
+      const line = formatActivityLogProofLine(failures[0] ?? {});
+      expect(expectActivityLogProof("workspace.root.denied.line", line)).toMatchObject({
+        correlationId,
+        failureKind: "ELOOP",
+        errorKind: "unavailable",
+        causeChain: ["Error"],
+      });
+      expect(JSON.stringify([result.body, line])).not.toContain("filesystem-private-canary");
+      expect(JSON.stringify([result.body, line])).not.toContain("/private/customer/root");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("projects semantic folder provenance into the actual hybrid answer prompt", async () => {
+    const { capsuleId } = await seedReadyCapsule("Context docs");
+    const scope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/context.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("semantic-context"),
+    };
+    const chatId = makeHybridChat([scope], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const pack = folderPack("src/context.ts", 0.9, "context-atom");
+    const semanticPack = {
+      ...pack,
+      files: pack.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          atom: {
+            ...excerpt.atom,
+            provenance: {
+              ...excerpt.atom.provenance,
+              kind: "model-rerank" as const,
+              tool: "repo.semanticSearch:context",
+            },
+          },
+        })),
+      })),
+    };
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Describe the context." })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(new Map([["src/context.ts", semanticPack]])),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: (_system, user) => {
+          expect(user).toContain(
+            "Related semantic context (not verified as an exact literal match)",
+          );
+          expect(user).toContain("repo.semanticSearch:context");
+          return Promise.resolve("Retrieved context [1].");
+        },
+      },
+    );
+    expect(result.status).toBe(200);
+  });
+
+  it("keeps selected alias attribution while hybrid folder access uses the canonical root", async () => {
+    const { capsuleId } = await seedReadyCapsule("Alias documents");
+    const canonicalRoot = tempRoot("canonical-folder");
+    const selectedRoot = join(tmp, "selected-folder");
+    symlinkSync(canonicalRoot, selectedRoot, "dir");
+    const scope: ChatConnectedScope = {
+      root: selectedRoot,
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([scope], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("Missing hybrid alias fixture chat");
+    const observed: string[] = [];
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Explain alpha" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: (input) => {
+          observed.push(input.scope.workspaceRoot);
+          return folderRetrieverFor(
+            new Map([["src/alpha.ts", folderPack("src/alpha.ts", 1, "alias")]]),
+          )(input);
+        },
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(HYBRID_ANSWER_SENTINEL, { count: 0 }),
+      },
+    );
+    expect(result.status).toBe(200);
+    expect(observed).toEqual([realpathSync(canonicalRoot)]);
+    expect(store.findChatById(chatId)?.connectedScopes).toEqual([scope]);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).not.toHaveLength(0);
+    expect(answer.citations.map((citation) => citation.sourceScopeFingerprint)).toEqual(
+      answer.citations.map(() =>
+        groundedSourceScopeFingerprint(buildSelectedScopeFrom(chat, scope, "selected-alias")),
+      ),
+    );
+  });
+
   it("returns groundingKind 'hybrid' with source-tagged citations, correct contextPack counts, and the answerer's content", async () => {
     // Arrange
     const { capsuleId: capId, label: connectorLabel } = await seedReadyCapsule("Alpha Docs");
@@ -781,6 +988,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.citations.length).toBeGreaterThan(0);
     for (const citation of answer.citations) {
       expect(citation.source).toBe("alpha-repo");
+      expect(citation.sourceScopeFingerprint).toMatch(/^[0-9a-f]{64}$/u);
       expect(typeof citation.marker).toBe("number");
       expect(Number(citation.marker) >= 1).toBe(true);
     }
@@ -921,6 +1129,69 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       };
     };
     expect(manifest.connectedContext?.summary?.citationCount).toBe(0);
+  });
+
+  it("records both citation kinds when a hybrid answer uses numeric markers", async () => {
+    const { capsuleId } = await seedReadyCapsule("Numeric Causal Docs");
+    const chatId = makeHybridChat(
+      [
+        {
+          kind: "directory",
+          relativePaths: ["src/numeric.ts"],
+          connectedAtMs: NOW,
+          root: tempRoot("numeric-log-repo"),
+        },
+      ],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const correlationId = "hybrid-numeric-citation-evidence";
+    const result = await handleGroundedAsk(
+      {
+        ...routeCtx(JSON.stringify({ chatId, content: "Which evidence supports this?" })),
+        correlationId,
+      },
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(
+          new Map([["src/numeric.ts", folderPack("src/numeric.ts", 0.7, "numeric-atom")]]),
+        ),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer("Supported evidence [1] and an unknown source [99]."),
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const lines = sink.events.filter((event) => event.op === "search.citations.reconciled");
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) =>
+      expectActivityLogProof("search.citations.reconciled.line", formatActivityLogProofLine(line)),
+    );
+    expect(parsed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          citationKind: "numeric",
+          correlationId,
+          outcome: "cited-with-dangling",
+          referenceCount: 2,
+          attachedCount: 1,
+          danglingMarkerCount: 1,
+        }),
+        expect.objectContaining({
+          citationKind: "file",
+          correlationId,
+          outcome: "uncited",
+          attachedCount: 0,
+          danglingMarkerCount: 0,
+        }),
+      ]),
+    );
+    const numeric = parsed.find((line) => line.citationKind === "numeric");
+    expect(numeric).not.toHaveProperty("weakOverlapCount");
+    expect(JSON.stringify(parsed)).not.toContain("Supported evidence");
+    expect(JSON.stringify(parsed)).not.toContain("src/numeric.ts");
   });
 
   it("surfaces an unknown numeric evidence marker as unsupported", async () => {
@@ -1337,6 +1608,62 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
   // PR #3678 review: the hybrid prompt was sent without fitting it to the model's window. The
   // highest-ranked candidates that fit are kept, and the prompt share reports the trim.
+  it("renders folder line offsets and unavailable counts in the actual hybrid prompt", async () => {
+    const { capsuleId } = await seedReadyCapsule("Maintenance documents");
+    const chatId = makeHybridChat(
+      [
+        {
+          kind: "workspace-root",
+          root: tempRoot("maintenance"),
+          relativePaths: [],
+          connectedAtMs: NOW,
+        },
+      ],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const base = folderPack("src/service.html", 1, "maintenance-source");
+    const pack: ConnectedContextPack = {
+      ...base,
+      usage: {
+        ...base.usage,
+        excerptBytes: Buffer.byteLength("<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n"),
+      },
+      files: base.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          atom: { ...excerpt.atom, lineRange: { startLine: 181, endLine: 183 } },
+          content: "<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n",
+          contentBytes: Buffer.byteLength("<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n"),
+        })),
+      })),
+      omitted: [
+        { scopePath: "src/unavailable.html", reason: "tool-unavailable", omittedAtMs: NOW },
+      ],
+    };
+    let prompt = "";
+    expect(validateConnectedContextPack(pack)).toMatchObject({ ok: true });
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Which maintenance interval is documented?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+        connectorRetrieve: () => Promise.resolve({ references: [], noEvidence: true }),
+        answer: (_system, user) => {
+          prompt = user;
+          return Promise.resolve("Maintenance: 731 hours [1].");
+        },
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(prompt).toContain("182 | <p>Maintenance: 731 hours.</p>");
+    expect(prompt).toContain("- tool-unavailable: 1");
+    expect(prompt).toContain("Candidate file evidence unavailable for reading/retrieval: 1.");
+    expect(prompt).not.toContain(".env");
+  });
+
   it("keeps the highest-ranked candidates that fit the model's input budget", async () => {
     const { capsuleId: capA } = await seedReadyCapsule("Window Beta Docs");
     const { capsuleId: capB } = await seedReadyCapsule("Window Gamma Docs");
@@ -1484,54 +1811,58 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(body.error.message).not.toContain("clarification needed:");
   });
 
-  it("returns no evidence without calling the model when connector retrieval returns zero references", async () => {
-    const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
-    const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
-    const chatId = makeHybridChat(
-      [],
-      [
-        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
-        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
-      ],
-    );
-    const connectorRetrieve: ConnectorRetrieve = () =>
-      Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
+  it.each([
+    ["What evidence exists?", "No matching evidence was found for this search."],
+    ["Welche Belege gibt es?", "Keine passenden Belege für diese Suche gefunden."],
+  ])(
+    "returns localized no evidence without calling the model for zero references: %s",
+    async (question, expected) => {
+      const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
+      const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
+      const chatId = makeHybridChat(
+        [],
+        [
+          { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+          { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        ],
+      );
+      const connectorRetrieve: ConnectorRetrieve = () =>
+        Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
 
-    const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "What evidence exists?" })),
-      hybridDeps(),
-      undefined,
-      undefined,
-      { connectorRetrieve, answer: throwingHybridAnswerer() },
-    );
+      const result = await handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId, content: question })),
+        hybridDeps(),
+        undefined,
+        undefined,
+        { connectorRetrieve, answer: throwingHybridAnswerer() },
+      );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = asHybrid(result.body as GroundedAnswer);
-    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
-    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
-    // A deterministic abstention sent no prompt, so it reports no prompt context.
-    expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
-    expect(answer.citations).toHaveLength(0);
-    expect(answer.knowledgeCitations).toHaveLength(0);
-    expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
-    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
-    expect(answer.retrievalActivity?.summary.unavailableCount).toBe(2);
-    expect(answer.retrievalActivity?.summary.referenceCount).toBe(0);
-    expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
-    expect(answer.retrievalActivity?.pods).toHaveLength(2);
-    expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).toEqual([
-      "unavailable",
-      "unavailable",
-    ]);
-    for (const pod of answer.retrievalActivity?.pods ?? []) {
-      expect(pod.reasonCodes).toContain("no-vectors");
-      expect(pod.counts.referenceCount).toBe(0);
-      expect(pod.counts.citationCount).toBe(0);
-    }
-    expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
-    expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
-  });
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answer.content).toBe(expected);
+      // A deterministic abstention sent no prompt, so it reports no prompt context.
+      expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
+      expect(answer.citations).toHaveLength(0);
+      expect(answer.knowledgeCitations).toHaveLength(0);
+      expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+      expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
+      expect(answer.retrievalActivity?.summary.unavailableCount).toBe(2);
+      expect(answer.retrievalActivity?.summary.referenceCount).toBe(0);
+      expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
+      expect(answer.retrievalActivity?.pods).toHaveLength(2);
+      expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).toEqual([
+        "unavailable",
+        "unavailable",
+      ]);
+      for (const pod of answer.retrievalActivity?.pods ?? []) {
+        expect(pod.reasonCodes).toContain("no-vectors");
+        expect(pod.counts.referenceCount).toBe(0);
+        expect(pod.counts.citationCount).toBe(0);
+      }
+      expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
+      expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
+    },
+  );
 
   // PR #3678 review: the entailment verdict line minted its own correlation, so the displayed
   // unsupported-claim total could not be joined to the grounded request it describes.
@@ -1580,60 +1911,317 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     }
   });
 
-  it("answers from explicit personal context without projecting empty hybrid sources", async () => {
-    const { capsuleId: capA } = await seedReadyCapsule("Memory Empty A Docs");
-    const { capsuleId: capB } = await seedReadyCapsule("Memory Empty B Docs");
-    const chatId = makeHybridChat(
-      [],
-      [
-        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
-        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
-      ],
-    );
-    const chat = store.findChatById(chatId);
-    if (chat === undefined) throw new Error("expected hybrid chat");
-    let answererCalls = 0;
-    let entailmentPortResolutions = 0;
-    const result = await runHybridGroundedAsk({
-      chat,
-      content: "What package manager do I prefer?",
-      answerContent:
-        "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
-      answerOnlyContextAvailable: true,
-      modelId: ENTAILMENT_MODEL,
-      contextProfile: undefined,
-      deps: hybridDeps({
-        config: entailmentGatewayConfig(),
-        configPresent: true,
-        modelPortFactory: (): ModelPort => {
-          entailmentPortResolutions += 1;
-          return { call: () => Promise.reject(new Error("no supported claim should be judged")) };
+  it.each(["[src/preferences.ts:42]", "`src/preferences.ts:42`", "src/preferences.ts:42"])(
+    "reports an unsupported hybrid source location: %s",
+    async (fabricated) => {
+      const { capsuleId: capA } = await seedReadyCapsule("Memory Empty A Docs");
+      const { capsuleId: capB } = await seedReadyCapsule("Memory Empty B Docs");
+      const chatId = makeHybridChat(
+        [],
+        [
+          { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+          { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        ],
+      );
+      const chat = store.findChatById(chatId);
+      if (chat === undefined) throw new Error("expected hybrid chat");
+      let answererCalls = 0;
+      let entailmentPortResolutions = 0;
+      const result = await runHybridGroundedAsk({
+        chat,
+        content: "What package manager do I prefer?",
+        answerContent:
+          "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+        answerOnlyContextAvailable: true,
+        modelId: ENTAILMENT_MODEL,
+        contextProfile: undefined,
+        deps: hybridDeps({
+          config: entailmentGatewayConfig(),
+          configPresent: true,
+          modelPortFactory: (): ModelPort => {
+            entailmentPortResolutions += 1;
+            return { call: () => Promise.reject(new Error("no supported claim should be judged")) };
+          },
+        }),
+        signal: new AbortController().signal,
+        connectorRetrieve: () =>
+          Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
+        answer: () => {
+          answererCalls += 1;
+          return Promise.resolve(`You prefer pnpm ${fabricated}.`);
         },
-      }),
-      signal: new AbortController().signal,
-      connectorRetrieve: () =>
-        Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
-      answer: () => {
-        answererCalls += 1;
-        return Promise.resolve("You prefer pnpm [src/preferences.ts:42].");
+      });
+
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answererCalls).toBe(1);
+      expect(entailmentPortResolutions).toBe(1);
+      expect(answer.content).toContain("src/preferences.ts:42");
+      expect(answer.citations).toEqual([]);
+      expect(answer.knowledgeCitations).toEqual([]);
+      expect(answer.evidenceRunId).toBeUndefined();
+      expect(answer.evidenceRunIds).toEqual([]);
+      expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
+      // PR #3678 review: the answer-only request reached the model, so the context meter must see
+      // the prompt it sent, like the Knowledge Pod and folder paths report theirs.
+      const { promptContext } = result.body as GroundedAnswer;
+      expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
+      expect(promptContext?.sentReferenceCount).toBe(0);
+    },
+  );
+});
+
+async function hybridReviewContext(): Promise<HybridGroundedAskCtx> {
+  const { capsuleId } = await seedReadyCapsule("Hybrid review docs");
+  const chatId = makeHybridChat(
+    [{ kind: "workspace-root", root: tempRoot("review"), relativePaths: [], connectedAtMs: NOW }],
+    [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+  );
+  const chat = store.findChatById(chatId);
+  if (chat === undefined) throw new Error("Missing review chat");
+  return {
+    chat,
+    content: "Explain the connected source",
+    modelId: CHAT_MODEL,
+    contextProfile: undefined,
+    deps: hybridDeps(),
+    correlationId: "hybrid-review-request",
+    signal: new AbortController().signal,
+    folderRetriever: folderRetrieverFor(new Map([["", folderPack("src/review.ts", 1, "review")]])),
+    connectorRetrieve: () => Promise.resolve({ references: [], noEvidence: true }),
+    answer: () => Promise.resolve("Source behavior [1]."),
+  };
+}
+
+async function hybridFanoutContext(): Promise<HybridGroundedAskCtx> {
+  const context = await hybridReviewContext();
+  const folders: ChatConnectedScope[] = Array.from({ length: 6 }, (_, index) => ({
+    kind: "workspace-root",
+    relativePaths: [],
+    connectedAtMs: NOW,
+    root: tempRoot(`hybrid-fanout-${String(index)}`),
+  }));
+  const connectors: ChatLocalKnowledgeScope[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    const { capsuleId } = await seedReadyCapsule(`Fanout docs ${String(index)}`);
+    connectors.push({ kind: "capsule", capsuleId, connectedAtMs: NOW });
+  }
+  const chat = store.findChatById(makeHybridChat(folders, connectors));
+  if (chat === undefined) throw new TypeError("Missing hybrid fanout chat");
+  return { ...context, chat };
+}
+
+function largeHybridOmissionPack(): ConnectedContextPack {
+  return {
+    ...folderPack("src/review.ts", 1, "review"),
+    omitted: Array.from({ length: 2000 }, (_, index) => ({
+      scopePath: `src/${String(index)}-${"long-directory-name/".repeat(8)}large.html`,
+      reason: "size-exceeded",
+      omittedAtMs: NOW,
+    })),
+  };
+}
+
+function assertHybridWindowFitLine(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  promptTokens: number,
+  inputBudget: number,
+): void {
+  const events = sink.events.filter((event) => event.op === "search.prompt.window-fitted");
+  expect(events).toHaveLength(1);
+  const line = formatActivityLogProofLine(events[0] ?? {});
+  expect(expectActivityLogProof("search.prompt.window-fitted.line", line)).toMatchObject({
+    correlationId: "hybrid-review-request",
+    state: "trimmed",
+    referenceCount: 1,
+    sentReferenceCount: 1,
+    promptTokens,
+    inputBudget,
+    completeness: "complete",
+    loss: "none",
+  });
+  expect(JSON.stringify(line)).not.toContain("long-directory-name");
+}
+
+describe("hybrid model budget and runtime truth", () => {
+  it("uses the selected model budget before retrieving folder excerpts", async () => {
+    const ctx = await hybridReviewContext();
+    const profile = deriveContextProfile({
+      maxInputTokens: 32000,
+      reservedOutputTokens: 1024,
+      safetyMarginTokens: 64,
+    });
+    const deps = hybridDeps({ contextProfile: profile });
+    const budgets: ExplorationBudget[] = [];
+    const result = await runHybridGroundedAsk({
+      ...ctx,
+      deps,
+      contextProfile: profile,
+      folderRetriever: async (input) => {
+        budgets.push(input.budget ?? DEFAULT_EXPLORATION_BUDGET);
+        const out = await folderRetrieverFor(
+          new Map([["", folderPack("src/review.ts", 1, "review")]]),
+        )(input);
+        return { ...out, pack: { ...out.pack, budget: input.budget ?? out.pack.budget } };
       },
     });
+    expect(result.status).toBe(200);
+    expect(budgets).toEqual([modelWindowAwareBudget(deps, CHAT_MODEL)]);
+    expect(asHybrid(result.body as GroundedAnswer).contextPack.folder.budget).toEqual(budgets[0]);
+  });
 
+  it("includes safe size-exclusion metadata in the actual model prompt", async () => {
+    const ctx = await hybridReviewContext();
+    const pack: ConnectedContextPack = {
+      ...folderPack("src/review.ts", 1, "review"),
+      omitted: [{ scopePath: "src/large.html", reason: "size-exceeded", omittedAtMs: NOW }],
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+    let prompt = "";
+    const result = await runHybridGroundedAsk({
+      ...ctx,
+      folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+      answer: (_system, user) => {
+        prompt = user;
+        return Promise.resolve("Source behavior [1].");
+      },
+    });
+    expect(result.status).toBe(200);
+    for (const line of sizeExclusionLines(pack, ctx.deps.redactor)) expect(prompt).toContain(line);
+    expect(prompt).not.toContain(".env");
+    expect(prompt).toContain("not file-content evidence");
+  });
+
+  it("fits large exclusion inventories while retaining answer evidence and exact prompt metrics", async () => {
+    const ctx = await hybridReviewContext();
+    // Path metadata now has its own 4 KiB envelope. A small configured model keeps this
+    // regression exercising actual prompt fitting, rather than demanding a fictitious trim.
+    const profile = deriveContextProfile({
+      maxInputTokens: 2048,
+      reservedOutputTokens: 1024,
+      safetyMarginTokens: 64,
+    });
+    const pack = largeHybridOmissionPack();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let sentTokens = 0;
+    let prompt = "";
+    const result = await runHybridGroundedAsk({
+      ...ctx,
+      contextProfile: profile,
+      deps: hybridDeps({ contextProfile: profile }),
+      folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+      answer: (system, user) => {
+        prompt = user;
+        sentTokens = countGatewayPromptTokens(
+          {
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          },
+          profile.tokenAccounting,
+        );
+        return Promise.resolve("Source behavior [1].");
+      },
+    });
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answererCalls).toBe(1);
-    expect(entailmentPortResolutions).toBe(1);
-    expect(answer.content).toContain("src/preferences.ts:42");
-    expect(answer.citations).toEqual([]);
-    expect(answer.knowledgeCitations).toEqual([]);
-    expect(answer.evidenceRunId).toBeUndefined();
-    expect(answer.evidenceRunIds).toEqual([]);
-    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
-    // PR #3678 review: the answer-only request reached the model, so the context meter must see
-    // the prompt it sent, like the Knowledge Pod and folder paths report theirs.
-    const { promptContext } = result.body as GroundedAnswer;
-    expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
-    expect(promptContext?.sentReferenceCount).toBe(0);
+    expect(prompt).toContain("evidence for src/review.ts");
+    expect(prompt).toContain("Files excluded by file-size policy: 2000.");
+    expect(prompt).toContain("Additional excluded paths not listed:");
+    expect(sentTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect((result.body as GroundedAnswer).promptContext?.estimatedPromptTokens).toBe(sentTokens);
+    assertHybridWindowFitLine(sink, sentTokens, profile.effectiveInputBudget);
+  });
+
+  it("measures wall time through retrieval, model wait and entailment", async () => {
+    const ctx = await hybridReviewContext();
+    const clock = { now: NOW };
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+    try {
+      const result = await runHybridGroundedAsk({
+        ...ctx,
+        folderRetriever: async (input) => {
+          clock.now += 1000;
+          return folderRetrieverFor(new Map([["", folderPack("src/review.ts", 1, "review")]]))(
+            input,
+          );
+        },
+        answer: () => {
+          clock.now += 35000;
+          return Promise.resolve("Source behavior [1].");
+        },
+        entailmentStageFactory: () => ({
+          evaluate: (): ReturnType<EntailmentStage["evaluate"]> => Promise.resolve([]),
+          evaluateNumeric: (): ReturnType<EntailmentStage["evaluateNumeric"]> =>
+            Promise.resolve([]),
+          evaluateHybrid: (): ReturnType<EntailmentStage["evaluate"]> => {
+            clock.now += 2000;
+            return Promise.resolve([]);
+          },
+        }),
+      });
+      expect(result.status).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answer.elapsedMs).toBe(38000);
+      expect(answer.contextPack.folder.elapsedMs).toBe(38000);
+      expect(answer.contextPack.folder.usage.elapsedMs).toBe(7);
+      expect(store.listMessages(ctx.chat.id).at(-1)?.groundedAnswer?.elapsedMs).toBe(38000);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each(["folder", "connector"] as const)(
+    "aborts the other retrieval branch after a fatal %s failure",
+    async (failedSource) => {
+      const ctx = await hybridFanoutContext();
+      const parent = new AbortController();
+      const release = deferred<undefined>();
+      const failure = new TypeError("fatal hybrid fixture");
+      const signals: (AbortSignal | undefined)[] = [];
+      const retrieve = async (
+        kind: "folder" | "connector",
+        signal?: AbortSignal,
+      ): Promise<never> => {
+        signals.push(signal);
+        if (kind === failedSource) throw failure;
+        await release.promise;
+        signal?.throwIfAborted();
+        throw new Error("sibling should have been cancelled");
+      };
+      const run = runHybridGroundedAsk({
+        ...ctx,
+        signal: parent.signal,
+        folderRetriever: (_input, signal) => retrieve("folder", signal),
+        connectorRetrieve: (_store, _scope, _selected, signal) => retrieve("connector", signal),
+        answer: () => {
+          throw new Error("failed retrieval must not answer");
+        },
+      });
+      try {
+        await expect(run).rejects.toBe(failure);
+        expect(signals).toHaveLength(8);
+        expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+        expect(signals.every((signal) => signal?.reason === failure)).toBe(true);
+        expect(parent.signal.aborted).toBe(false);
+      } finally {
+        release.resolve(undefined);
+        await setImmediate();
+      }
+      expect(signals).toHaveLength(8);
+    },
+  );
+
+  it("preserves unexpected failures for the route diagnostic owner without a raw 500 response", async () => {
+    const ctx = await hybridReviewContext();
+    const failure = new TypeError("private-file /customer/secrets.sql failed");
+    await expect(
+      runHybridGroundedAsk({
+        ...ctx,
+        answer: () => Promise.reject(failure),
+      }),
+    ).rejects.toBe(failure);
   });
 });
 
@@ -1816,9 +2404,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
-    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.content).toBe("No matching evidence was found for this search.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -2010,6 +2596,54 @@ describe("hybrid grounded ask — folder retrieval concurrency", () => {
 // Before the fix, return internalError() terminated the entire run.
 
 describe("hybrid grounded ask — folder pack-validation failure is skipped, not aborted", () => {
+  it("skips a closed assembler omission failure while retaining connector evidence", async () => {
+    const { capsuleId } = await seedReadyCapsule("Assembly Connector");
+    const source: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/bad.ts"],
+      root: tempRoot("invalid-assembly"),
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([source], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "hybrid-pack-validation-review";
+    const result = await handleGroundedAsk(
+      {
+        ...routeCtx(JSON.stringify({ chatId, content: "Explain connected sources" })),
+        correlationId,
+      },
+      hybridDeps({ diagnostics: { record: (record) => records.push(record) } }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: (input) => failInvalidOmissionAssembly(input.scope),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+      },
+    );
+    expect(result.status).toBe(200);
+    const validationRecords = records.filter(
+      (record) => record.diagnosticStage === "grounded-pack-validation",
+    );
+    expect(validationRecords).toHaveLength(1);
+    expect(validationRecords[0]).toMatchObject({
+      correlationId,
+      diagnosticOutcome: "source-skipped",
+      diagnosticStage: "grounded-pack-validation",
+      sourceIndex: 0,
+      originalCode: "CONTEXT_PACK_OMISSIONS_INVALID",
+      validatorThrew: true,
+    });
+    expect(validationRecords[0]).not.toHaveProperty("httpStatus");
+    expect(validationRecords[0]?.validationReasons).toContain("omissions-invalid-path");
+    expect(validationRecords[0]?.violationCount).toBeGreaterThan(0);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
+    expect(answer.uncertainty.some((marker) => marker.kind === "pack-validation-failed")).toBe(
+      true,
+    );
+  });
+
   it("1 bad-pack folder + 1 healthy folder + 1 connector → 200 with healthy-folder and connector citations, skip in uncertainty", async () => {
     const { capsuleId: capId, label: connLabel } = await seedReadyCapsule("Fix3 Connector");
 
@@ -2042,9 +2676,11 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       answer: sentinelAnswerer(),
     };
 
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "hybrid-pack-validation-review";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "What works?" })),
-      hybridDeps(),
+      { ...routeCtx(JSON.stringify({ chatId, content: "What works?" })), correlationId },
+      hybridDeps({ diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       undefined,
       hybrid,
@@ -2099,9 +2735,11 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       ["src/b2.ts", { ...folderPack("src/b2.ts", 0.5, "b2-atom"), stableId: "" }],
     ]);
 
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "hybrid-pack-validation-review";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "Connector only?" })),
-      hybridDeps(),
+      { ...routeCtx(JSON.stringify({ chatId, content: "Connector only?" })), correlationId },
+      hybridDeps({ diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       undefined,
       {
@@ -3132,9 +3770,7 @@ describe("shared byte budget — oversized evidence fails closed", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
 
-    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
-    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.content).toBe("No matching evidence was found for this search.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -3739,8 +4375,12 @@ describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
     for (const key of Object.keys(
       DEFAULT_EXPLORATION_BUDGET,
     ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
-      const sum = observedBudgets.reduce((total, budget) => total + budget[key], 0);
       const cap = DEFAULT_EXPLORATION_BUDGET[key];
+      if (cap === null) {
+        expect(observedBudgets.map((budget) => budget[key])).toEqual([null, null, null]);
+        continue;
+      }
+      const sum = observedBudgets.reduce((total, budget) => total + (budget[key] ?? 0), 0);
       expect(
         sum,
         `dimension ${key} exceeded cap ${String(cap)} (sum=${String(sum)})`,

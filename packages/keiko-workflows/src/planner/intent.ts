@@ -1,9 +1,13 @@
 // Deterministic retrieval-intent classification for connected-context planning.
 // This module is intentionally pure: no IO, no clock, no model calls.
 
+import { extractAnchors } from "./anchors.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
-import { ecosystemMetadataIntentPatterns } from "@oscharko-dev/keiko-workspace";
+import {
+  ecosystemMetadataIntentPatterns,
+  requestedSourceInspectionExtensions,
+} from "@oscharko-dev/keiko-workspace";
 
 export type RetrievalIntent =
   | "project-metadata"
@@ -108,6 +112,19 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
 ];
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
+  {
+    term: "orientation",
+    pattern: /\bwas\s+(?:(?:kannst|konntest)\s+du\s+)?(?:siehst|sehen|erkennst|erkennen)\b/iu,
+  },
+  { term: "orientation", pattern: /\bwhat\s+(?:(?:can|do)\s+you\s+)?(?:see|notice|recognize)\b/iu },
+  {
+    term: "overview",
+    pattern: /^(?:please\s+)?tell\s+me\s+everything[.!?\s]*$/iu,
+  },
+  {
+    term: "overview",
+    pattern: /^(?:bitte\s+)?(?:zeig|zeige|erklaere|erkläre)\s+mir\s+alles[.!?\s]*$/iu,
+  },
   { term: "architecture", pattern: /\barchitecture\b|\barchitektur\b/iu },
   { term: "overview", pattern: /\boverview\b|\bueberblick\b|\büberblick\b/iu },
   { term: "structure", pattern: /\bstructure\b|\bstruktur\b|\baufbau\b/iu },
@@ -122,7 +139,14 @@ const DIAGNOSTIC_PATTERNS: readonly IntentPattern[] = [
   { term: "failure", pattern: /\bfail(?:ed|ing|ure)?\b|\bscheitert\b|\bkaputt\b/iu },
   { term: "broken", pattern: /\bbreak(?:s|ing)?\b|\bbroken\b|\bcrash(?:es|ed|ing)?\b/iu },
   { term: "bug", pattern: /\bbug\b|\bdefect\b|\bregression\b/iu },
-  { term: "http-status", pattern: /\b[45]\d{2}\b|\bhttp\b/iu },
+  {
+    term: "http-status",
+    pattern: /\bhttp(?:\/\d(?:\.\d)?)?\s*(?:[:=-]\s*)?[45]\d{2}\b/iu,
+  },
+  {
+    term: "http-status",
+    pattern: /\b(?:response\s+)?status(?:\s+code)?\s*(?:[:=-]\s*)?[45]\d{2}\b/iu,
+  },
 ];
 
 const TARGETED_CODE_PATTERNS: readonly IntentPattern[] = [
@@ -191,18 +215,34 @@ function classifyByPatterns(
   return terms.length === 0 ? undefined : { intent, normalizedTerms: terms };
 }
 
+function classifyShortTarget(text: string): RetrievalIntentClassification {
+  const concrete = extractAnchors({ text, maxAnchors: 1 }).anchors[0];
+  return concrete !== undefined &&
+    concrete.kind !== "literal" &&
+    /[\p{L}\p{N}]/u.test(concrete.term)
+    ? { intent: "targeted-code-search", normalizedTerms: [concrete.term] }
+    : { intent: "clarification-needed", normalizedTerms: [] };
+}
+
 export function classifyRetrievalIntent(
   queryText: string,
   _scope?: SelectedScope,
 ): RetrievalIntentClassification {
   const trimmed = queryText.trim();
   const normalized = normalizeQueryText(trimmed);
-  if (trimmed.length === 0 || searchableTokens(normalized).length === 0) {
-    return { intent: "clarification-needed", normalizedTerms: [] };
+  if (trimmed.length === 0) return { intent: "clarification-needed", normalizedTerms: [] };
+  if (searchableTokens(normalized).length === 0) {
+    return classifyShortTarget(trimmed);
   }
 
   return (
     classifyByPatterns(trimmed, normalized, DIAGNOSTIC_PATTERNS, "diagnostic-search") ??
+    (requestedSourceInspectionExtensions(trimmed).length > 0
+      ? {
+          intent: "targeted-code-search",
+          normalizedTerms: searchableTokens(normalized).slice(0, 8),
+        }
+      : undefined) ??
     classifyByPatterns(trimmed, normalized, PROJECT_METADATA_PATTERNS, "project-metadata") ??
     classifyByPatterns(trimmed, normalized, TARGETED_CODE_PATTERNS, "targeted-code-search") ??
     classifyByPatterns(

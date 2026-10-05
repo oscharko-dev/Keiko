@@ -1,3 +1,4 @@
+import { extractAnchors } from "@oscharko-dev/keiko-workflows";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
@@ -10,8 +11,11 @@ import {
   currentRedactionSecrets,
   type UiHandlerDeps,
 } from "./deps.js";
-import { captureChatHistory, stampHistoryRevision } from "./chat-history-snapshot.js";
-import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import {
+  captureChatHistoryWithCheckpoint,
+  stampHistoryRevision,
+  type GatewayHistorySnapshot,
+} from "./chat-history-snapshot.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import type { ChatMessage } from "./store/index.js";
@@ -30,7 +34,15 @@ export function groundedConversationContinuity(
   originalQuery = user.content,
 ): GroundedConversationContinuity {
   const profile = continuityProfile(deps, modelId);
-  const snapshot = captureContinuityHistory(deps, user, profile, correlationId);
+  const snapshot = captureChatHistoryWithCheckpoint({
+    store: deps.store,
+    evidenceStore: deps.evidenceStore,
+    chatId: user.chatId,
+    currentUserMessageId: user.id,
+    profile,
+    redactionSecrets: currentRedactionSecrets(deps),
+    correlationId,
+  });
   const historyPrefix = snapshot.history.filter((message) => message.id !== user.id);
   if (historyPrefix.length === 0 && snapshot.earlierCompaction === undefined) {
     return { answerContext: "", retrievalContent: user.content, compaction: undefined };
@@ -59,45 +71,23 @@ export function groundedConversationContinuity(
       assembly.compaction,
       snapshot.historyRevision ?? 0,
       profile.maxInputTokens,
+      profile.effectiveInputBudget,
     ),
   };
 }
 
-function captureContinuityHistory(
-  deps: UiHandlerDeps,
-  user: ChatMessage,
-  profile: ContextProfile,
-  correlationId: string | undefined,
-): ReturnType<typeof captureChatHistory> {
-  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
-  const checkpoint = loadChatContinuityCheckpoint(
-    deps.evidenceStore,
-    user.chatId,
-    deps.store.chatHistoryRevision(user.chatId),
-    correlationId,
-    (disposition) => {
-      checkpointDisposition = disposition;
-    },
-  );
-  return captureChatHistory(
-    deps.store,
-    user.chatId,
-    user.id,
-    profile,
-    currentRedactionSecrets(deps),
-    checkpoint,
-    { correlationId, checkpointDisposition },
-  );
-}
-
 function previousUserQuestion(history: readonly ChatMessage[]): string | undefined {
-  return [...history].reverse().find((message) => message.role === "user")?.content;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message?.role === "user") return message.content;
+  }
+  return undefined;
 }
 
 function assembleContinuity(
   deps: UiHandlerDeps,
   user: ChatMessage,
-  snapshot: ReturnType<typeof captureChatHistory>,
+  snapshot: GatewayHistorySnapshot,
   profile: ContextProfile,
   historyPrefix: readonly ChatMessage[],
   query: { readonly originalQuery: string; readonly correlationId: string | undefined },
@@ -132,7 +122,10 @@ function assembleContinuity(
  * sources, which are never compacted — they are fetched fresh per question and trimmed by rank.
  */
 export function groundedHistoryLaneTokens(modelProfile: ContextProfile): number {
-  return Math.max(512, Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3)));
+  return Math.min(
+    modelProfile.effectiveInputBudget,
+    Math.max(512, Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3))),
+  );
 }
 
 /** The profile a grounded question compacts its conversation lane against; the meter projects it. */
@@ -168,7 +161,7 @@ function renderContinuityMessages(
 }
 
 const REFERENT_PATTERNS: readonly RegExp[] = [
-  /\b(?:dazu|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
+  /\b(?:dazu|dafür|hierfür|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
   /\b(?:was|wie|warum)\s+(?:ist|bedeutet|funktioniert)\s+(?:das|dies)\s*[.!?]*$/iu,
   /\b(?:explain|summarize|compare|continue|clarify|describe)\s+(?:it|this|that|them|these|those)\s*[.!?]*$/iu,
 ];
@@ -198,11 +191,14 @@ function matchesReferentCommand(
   suffixes: ReadonlySet<string>,
 ): boolean {
   for (const match of content.matchAll(prefix)) {
-    const remainder = stripReferentSuffix(
-      trimReferentPunctuation(content.slice(match.index + match[0].length)),
-      suffixes,
-    );
-    if (object.test(remainder)) return true;
+    const remainder = content.slice(match.index + match[0].length);
+    let command = trimReferentPunctuation(remainder.split(/[,;]/u, 1)[0] ?? remainder);
+    let stripped = stripReferentSuffix(command, suffixes);
+    while (stripped !== command) {
+      command = stripped;
+      stripped = stripReferentSuffix(command, suffixes);
+    }
+    if (object.test(command)) return true;
   }
   return false;
 }
@@ -210,9 +206,10 @@ function matchesReferentCommand(
 function needsReferentResolution(content: string): boolean {
   return (
     REFERENT_PATTERNS.some((pattern) => pattern.test(content)) ||
+    isAnaphoricTestRequest(content) ||
     matchesReferentCommand(
       content,
-      /\b(?:erkläre?|beschreibe?|prüfe?|vergleiche?|fasse?)\s+/giu,
+      /\b(?:erkl(?:ä|ae)re?|beschreibe?|pr(?:ü|ue)fe?|vergleiche?|fasse?)\s+/giu,
       /^(?:mir\s+)?(?:das|dies|dieses|diesen|diese|diesem)$/iu,
       GERMAN_REFERENT_SUFFIXES,
     ) ||
@@ -225,6 +222,43 @@ function needsReferentResolution(content: string): boolean {
   );
 }
 
+function isAnaphoricTestRequest(content: string): boolean {
+  if (!/\b(?:tests?|testfälle|testcases|vitest)\b/iu.test(content)) return false;
+  return (
+    /\bfor\s+(?:this|that|the proposed)\s+(?:function|code|implementation|component)\b/iu.test(
+      content,
+    ) ||
+    /\bfür\s+(?:diese|die vorgeschlagene)\s+(?:funktion|implementierung|komponente)\b/iu.test(
+      content,
+    )
+  );
+}
+
+function isNamedCamelTarget(query: string, term: string): boolean {
+  return [...query.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/gu)].some(
+    (match) => match[0].toLowerCase() === term && /[a-z][A-Z]/u.test(match[0]),
+  );
+}
+
+function isNamedDottedTarget(term: string): boolean {
+  if (!term.includes(".")) return false;
+  if (/^\d+(?:\.\d+)+$/u.test(term)) return false;
+  return !/^(?:\p{L}\.)+\p{L}$/u.test(term);
+}
+
+function hasIndependentQueryTarget(query: string): boolean {
+  return extractAnchors({ text: query, maxAnchors: 8 }).anchors.some(
+    (anchor) =>
+      anchor.kind === "path" ||
+      anchor.kind === "quoted" ||
+      (anchor.kind === "identifier" &&
+        (anchor.weight >= 0.9 ||
+          anchor.term.includes("_") ||
+          isNamedDottedTarget(anchor.term) ||
+          (anchor.weight >= 0.85 && isNamedCamelTarget(query, anchor.term)))),
+  );
+}
+
 function resolvedRetrievalContent(
   content: string,
   query: string,
@@ -232,6 +266,13 @@ function resolvedRetrievalContent(
 ): string {
   // The existing anchor planner accepts at most 4096 characters. Never shorten the current query.
   const remaining = Math.min(1500, 4096 - content.length - 1);
-  if (remaining <= 0 || previous === undefined || !needsReferentResolution(query)) return content;
-  return `${content}\n${previous.slice(0, remaining)}`;
+  if (
+    remaining <= 0 ||
+    previous === undefined ||
+    !needsReferentResolution(query) ||
+    hasIndependentQueryTarget(query)
+  )
+    return content;
+  const prefix = previous.slice(0, remaining).replace(/[\uD800-\uDBFF]$/u, "");
+  return `${content}\n${prefix}`;
 }

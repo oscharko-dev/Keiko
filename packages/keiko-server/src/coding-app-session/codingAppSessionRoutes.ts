@@ -36,6 +36,7 @@ import { SSE_HEADERS } from "../sse.js";
 import { createSessionStreamWriter, createSessionStreamTransport } from "./sessionStreamWriter.js";
 import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
 import {
+  APP_SESSION_ACTIVE_COOKIE_COUNT,
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
   readSessionCookie,
@@ -85,7 +86,15 @@ const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionPair",
-  fields: {},
+  fields: {
+    expiredSessionCount: { type: "integer", dataClass: "count", required: false },
+    evictedSessionClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      values: ["none", "inactive", "active"],
+      required: false,
+    },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -101,7 +110,10 @@ const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOp
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionLocalSession",
-  fields: {},
+  fields: {
+    cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true },
+    projectionCount: { type: "integer", dataClass: "count", required: true },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -255,11 +267,12 @@ function ackResult(headers?: RouteResult["headers"]): RouteResult {
 function issuedCookie(
   req: IncomingMessage,
   cookieToken: string,
+  maxAgeSeconds = APP_SESSION_COOKIE_MAX_AGE_SECONDS,
 ): Readonly<Record<string, readonly string[]>> {
   return {
     "Set-Cookie": serializeSessionCookies(cookieToken, {
       secure: requestIsSecure(req),
-      maxAgeSeconds: APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+      maxAgeSeconds,
     }),
   };
 }
@@ -284,7 +297,7 @@ export async function handleCodingAppSessionPair(
     activityLogEvent(
       CODING_APP_SESSION_PAIRED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      result.capacityDecision ?? {},
     ),
   );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
@@ -293,22 +306,26 @@ export async function handleCodingAppSessionPair(
 /**
  * POST /local-session — confirm an already authenticated browser session without minting authority.
  * Missing, forged, expired and revoked cookies remain content-free. Only launcher-attested /pair
- * issues a session; ordinary reloads preserve the valid cookie without a new prompt.
+ * issues a session; ordinary reloads refresh every scoped projection of the verified existing
+ * bearer so newly protected routes work after an upgrade. Registry absolute expiry remains unchanged.
  */
 export function handleCodingAppSessionLocalSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const result = deps.codingAppSessionChannel?.ensureLocalSession(readSessionCookie(ctx.req));
-  if (result?.status !== "active") return ackResult();
+  const cookieToken = readSessionCookie(ctx.req);
+  const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken);
+  if (result?.status !== "active" || cookieToken === undefined) return ackResult();
+  const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
+  const headers = issuedCookie(ctx.req, cookieToken, maxAgeSeconds);
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      { cookieMaxAgeSeconds: maxAgeSeconds, projectionCount: APP_SESSION_ACTIVE_COOKIE_COUNT },
     ),
   );
-  return ackResult();
+  return ackResult(headers);
 }
 
 function currentSnapshot(

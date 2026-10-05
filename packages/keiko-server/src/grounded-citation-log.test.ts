@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   expectActivityLogProof,
@@ -15,6 +16,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   logAnswerAssessment,
   logCitationReconciliation,
+  reconcileAndLogInlineCitations,
   logCitationSupport,
   summarizeCitationReconciliation,
   type CitationReconciliationEvidence,
@@ -87,6 +89,45 @@ describe("logCitationReconciliation", () => {
     return sink;
   }
 
+  it("persists unknown, ambiguous and prose-filtered file locations without paths or answer text", () => {
+    const sink = capture();
+    const result = reconcileAndLogInlineCitations(
+      "Known [source:1|src/main.ts:2]. Ambiguous `src/main.ts:3`. Unknown src/private/ghost.ts:5. package.json: 2 scripts.",
+      {
+        scopePaths: new Set(["src/main.ts"]),
+        sourceIdsByPath: new Map([["src/main.ts", new Set(["1", "2"])]]),
+        lineWindowsBySourceId: new Map(
+          ["1", "2"].map((source) => [
+            source,
+            new Map([["src/main.ts", [{ startLine: 1, endLine: 10 }]]]),
+          ]),
+        ),
+      },
+      "file-citations-proof-0001",
+    );
+    expect(result.unsupported).toHaveLength(2);
+    const event = sink.events.find((entry) => entry.op === "search.citations.reconciled");
+    const persisted = expectActivityLogProof(
+      "search.citations.reconciled.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "file-citations-proof-0001",
+      citationKind: "file",
+      outcome: "cited-with-dangling",
+      referenceCount: 2,
+      attachedCount: 1,
+      danglingMarkerCount: 2,
+      ambiguousMarkerCount: 1,
+      droppedImplicitCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(persisted).not.toHaveProperty("weakOverlapCount");
+    expect(persisted).not.toHaveProperty("groupedMarkerCount");
+    expect(sink.lines().join("\n")).not.toMatch(/private|ghost|src\/|scripts|Known/u);
+  });
+
   it("resolves the search.citations.reconciled Activity Log proof body-free", () => {
     const sink = capture();
     const answer = "Die Anwendungen laufen auf Java 17 [1, 7, 8].";
@@ -123,6 +164,37 @@ describe("logCitationReconciliation", () => {
     expect(serialized).not.toContain("Java 17");
     expect(serialized).not.toContain("[1, 7, 8]");
   });
+
+  it.each([
+    ["Known [1].", [1], false],
+    ["Unknown [7].", [], true],
+    ["No evidence is available.", [], false],
+  ] as const)("retains only failed marker reconciliation for %s", (answer, attached, failed) => {
+    const sink = capture();
+    logCitationReconciliation(
+      evidence({ answer, attachedIndices: attached }),
+      "citation-required-selection",
+    );
+    const query = observedFailureQuery(sink.events);
+    expect(
+      query.events.filter((event) => event.parsed.view.op === "search.citations.reconciled"),
+    ).toHaveLength(failed ? 1 : 0);
+  });
+
+  it.each(["none", "judge-undecided", "no-judge", "unjudged-citation"] as const)(
+    "retains the actual %s support decision only when verification is unavailable",
+    (supportCaveat) => {
+      const sink = capture();
+      logCitationSupport(
+        { supportCaveat, weakCitationCount: 1, hiddenProseClaimCount: 0 },
+        "support-required-selection",
+      );
+      const query = observedFailureQuery(sink.events);
+      expect(
+        query.events.filter((event) => event.parsed.view.op === "search.citations.support-settled"),
+      ).toHaveLength(supportCaveat === "none" ? 0 : 1);
+    },
+  );
 
   // PR #3678 review: the caveat is decided after the citation line, so its reason has its own line.
   it("resolves the search.citations.support-settled Activity Log proof body-free", () => {

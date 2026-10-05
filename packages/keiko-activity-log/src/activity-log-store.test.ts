@@ -5,10 +5,17 @@
 // `server-log.test.ts` ("activity log store policy"); the registered conflict-evidence line is
 // proven through the production formatter in `server-log.activity-log-proof.test.ts`.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as filesystem from "node:fs";
+import { once } from "node:events";
+import { Worker } from "node:worker_threads";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof filesystem>()),
+}));
 import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
@@ -26,6 +33,7 @@ import {
   writeActivityLogPolicyRecord,
   type ActivityLogFileEntry,
   type ActivityLogPolicyValues,
+  type ActivityLogPinRecord,
   type ActivityLogWriterIdentity,
 } from "./activity-log-store.js";
 
@@ -40,6 +48,7 @@ function makeLogsDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -64,6 +73,41 @@ function identity(
 
 function policyPath(dir: string): string {
   return join(dir, ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
+}
+
+const PAUSED_POLICY_WRITER = `
+const { parentPort, workerData } = require("node:worker_threads");
+const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const gate = new Int32Array(workerData.gate);
+import(workerData.moduleUrl).then(({ writeActivityLogPolicyRecord }) => {
+  const write = fs.writeSync;
+  fs.writeSync = (descriptor, payload, offset, length) => {
+    fs.writeSync = write;
+    syncBuiltinESMExports();
+    const prefix = workerData.partial ? write(descriptor, payload, offset, 1) : 0;
+    parentPort.postMessage("policy-incomplete");
+    if (Atomics.wait(gate, 0, 0, 10000) === "timed-out") throw new Error("Reader did not resume writer");
+    return prefix + write(descriptor, payload, offset + prefix, length - prefix);
+  };
+  syncBuiltinESMExports();
+  writeActivityLogPolicyRecord(workerData.directory, workerData.directory, workerData.record);
+  Atomics.store(gate, 1, 1);
+  Atomics.notify(gate, 1);
+});
+`;
+
+function finishPolicyAfterRead(directory: string, gate: Int32Array): void {
+  const close = filesystem.closeSync;
+  const inode = filesystem.statSync(policyPath(directory)).ino;
+  vi.spyOn(filesystem, "closeSync").mockImplementation((descriptor): void => {
+    const policy = filesystem.fstatSync(descriptor).ino === inode;
+    close(descriptor);
+    if (!policy) return;
+    Atomics.store(gate, 0, 1);
+    Atomics.notify(gate, 0);
+    expect(Atomics.wait(gate, 1, 0, 10000)).not.toBe("timed-out");
+  });
 }
 
 function segmentEntry(
@@ -91,6 +135,125 @@ function seedActiveSegment(dir: string, pid: number, instanceId: string): void {
 }
 
 describe("Activity Log store policy record I/O (#3554)", () => {
+  it.each([false, true])(
+    "retries an incomplete concurrent policy publication once (partial JSON: %s)",
+    async (partial) => {
+      const directory = makeLogsDir();
+      const gate = new Int32Array(new SharedArrayBuffer(8));
+      const record = { schemaVersion: 1, ...VALUES_A };
+      const worker = new Worker(PAUSED_POLICY_WRITER, {
+        eval: true,
+        workerData: {
+          moduleUrl: new URL("../dist/activity-log-store.js", import.meta.url).href,
+          directory,
+          record,
+          gate: gate.buffer,
+          partial,
+        },
+      });
+      try {
+        expect(await once(worker, "message")).toEqual(["policy-incomplete"]);
+        finishPolicyAfterRead(directory, gate);
+        const read = vi.spyOn(artifactFiles, "openSafeArtifactFile");
+        expect(
+          readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+        ).toStrictEqual(record);
+        expect(read).toHaveBeenCalledTimes(2);
+      } finally {
+        await worker.terminate();
+      }
+    },
+  );
+
+  it.each(["", "{", "not JSON"])(
+    "refuses persistent incomplete policy %j after one retry",
+    (text) => {
+      const directory = makeLogsDir();
+      writeFileSync(policyPath(directory), text, { mode: 0o600 });
+      const read = vi.spyOn(artifactFiles, "openSafeArtifactFile");
+      expect(() =>
+        readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+      ).toThrow(SafeArtifactFileError);
+      expect(read).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("allows bootstrap absence but refuses present corrupt or unsafe policy for admission", () => {
+    const dir = makeLogsDir();
+    expect(
+      readActivityLogPolicyRecord(join(dir, "bootstrap"), join(dir, "bootstrap"), {
+        requireReadable: true,
+      }),
+    ).toBeUndefined();
+    expect(readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toBeUndefined();
+    writeActivityLogPolicyRecord(dir, dir, { schemaVersion: 1, ...VALUES_A });
+    expect(readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toStrictEqual({
+      schemaVersion: 1,
+      ...VALUES_A,
+    });
+    chmodSync(policyPath(dir), 0o644);
+    expect(() => readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toThrow(
+      SafeArtifactFileError,
+    );
+    chmodSync(policyPath(dir), 0o600);
+    writeFileSync(policyPath(dir), "not json at all");
+    expect(() => readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toThrow(
+      SafeArtifactFileError,
+    );
+    expect(readActivityLogPolicyRecord(dir, dir)).toBeUndefined();
+  });
+
+  it("refuses a broken policy symlink rather than substituting the bootstrap policy", () => {
+    const dir = makeLogsDir();
+    symlinkSync(join(dir, "missing.json"), policyPath(dir));
+    const read = vi.spyOn(artifactFiles, "openSafeArtifactFile");
+    expect(() => readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toThrow(
+      SafeArtifactFileError,
+    );
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry a policy with unsafe permissions or a valid-JSON invalid schema", () => {
+    const directory = makeLogsDir();
+    writeActivityLogPolicyRecord(directory, directory, { schemaVersion: 1, ...VALUES_A });
+    chmodSync(policyPath(directory), 0o644);
+    const read = vi.spyOn(artifactFiles, "openSafeArtifactFile");
+    expect(() =>
+      readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+    ).toThrow(SafeArtifactFileError);
+    expect(read).toHaveBeenCalledOnce();
+    chmodSync(policyPath(directory), 0o600);
+    writeFileSync(policyPath(directory), JSON.stringify({ schemaVersion: 99, ...VALUES_A }));
+    read.mockClear();
+    expect(() =>
+      readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+    ).toThrow(SafeArtifactFileError);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry a hard-linked policy", () => {
+    const directory = makeLogsDir();
+    writeActivityLogPolicyRecord(directory, directory, { schemaVersion: 1, ...VALUES_A });
+    filesystem.linkSync(policyPath(directory), join(directory, "linked-policy.json"));
+    const read = vi.spyOn(artifactFiles, "openSafeArtifactFile");
+    expect(() =>
+      readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+    ).toThrow(SafeArtifactFileError);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("refuses bootstrap absence beneath a symlinked ancestor", () => {
+    const dir = makeLogsDir();
+    const actual = join(dir, "actual");
+    mkdirSync(join(actual, "nested"), { recursive: true, mode: 0o700 });
+    const alias = join(dir, "alias");
+    symlinkSync(actual, alias);
+    for (const directory of [join(alias, "missing"), join(alias, "nested", "missing")])
+      expect(() =>
+        readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+      ).toThrow(SafeArtifactFileError);
+    expect(readActivityLogPolicyRecord(join(actual, "missing"), actual)).toBeUndefined();
+  });
   it("publishes the first record exclusively; a second creator loses the race", () => {
     const dir = makeLogsDir();
     writeActivityLogPolicyRecord(dir, dir, { schemaVersion: 1, ...VALUES_A });
@@ -394,4 +557,71 @@ describe("applyActivityLogRetention active reservations (#3557)", () => {
       admitsAnotherSegment([active("0a0b0c0d", 1, segmentBytes - 512), active("0e0e0e0e", 1, 0)]),
     ).toBe(false);
   });
+});
+
+describe("retention of quota-unprotected pin evidence", () => {
+  const atMs = Date.UTC(2026, 8, 18);
+  const config = resolveActivityLogStorageConfig({ KEIKO_LOG_PIN_QUOTA_BYTES: "100" });
+
+  function sealed(index: number, sizeBytes: number, startMs = atMs): ActivityLogFileEntry {
+    const name = activityLogSegmentFileName(
+      { startMs, pid: 4242, instanceId: "0a0b0c0d", index },
+      "sealed",
+    );
+    const file = parseActivityLogFileName(name);
+    if (file === undefined) throw new TypeError("Expected a sealed segment name");
+    return { file, path: name, sizeBytes, mtimeMs: startMs };
+  }
+
+  function pin(pinId: string): ActivityLogPinRecord {
+    return {
+      schemaVersion: 1,
+      pinId,
+      reason: "incident",
+      createdAtMs: atMs,
+      expiresAtMs: atMs + 60 * 86_400_000,
+      scope: { kind: "window", fromMs: atMs - 1, toMs: atMs + 1 },
+    };
+  }
+
+  it.each([true, false])(
+    "counts only successfully removed pinned evidence: removal=%s",
+    (removed) => {
+      const protectedEntry = sealed(1, 100);
+      const lostEntry = sealed(2, 200);
+      const failedEntry = sealed(3, 300);
+      const ordinaryEntry = sealed(4, 400, atMs + 2000);
+      const attempted: string[] = [];
+      const outcome = applyActivityLogRetention(
+        {
+          files: [protectedEntry, lostEntry, failedEntry, ordinaryEntry],
+          pins: [pin("0123456789abcdef01234567"), pin("abcdef012345678901234567")],
+          pinRecordBytes: 0,
+          config,
+          nowMs: atMs + 30 * 86_400_000,
+          reserveBytes: 0,
+          skipNames: new Set(),
+        },
+        (entry) => {
+          attempted.push(entry.file.name);
+          return entry === ordinaryEntry || (entry === lostEntry && removed);
+        },
+      );
+      expect(attempted).toEqual([
+        lostEntry.file.name,
+        failedEntry.file.name,
+        ordinaryEntry.file.name,
+      ]);
+      expect(outcome.protection.protectedNames).toEqual(new Set([protectedEntry.file.name]));
+      expect(outcome).toMatchObject({
+        prunedSegmentCount: removed ? 2 : 1,
+        prunedBytes: removed ? 600 : 400,
+        prunedUnprotectedPinnedSegmentCount: removed ? 1 : 0,
+        prunedUnprotectedPinnedBytes: removed ? 200 : 0,
+        failedNames: removed
+          ? [failedEntry.file.name]
+          : [lostEntry.file.name, failedEntry.file.name],
+      });
+    },
+  );
 });

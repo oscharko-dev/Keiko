@@ -27,6 +27,7 @@ import {
 import {
   recordClientDiagnosticLoss,
   reportClientDiagnostic,
+  retainedClientDiagnosticFailure,
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
   takeClientDiagnosticLoss,
@@ -611,6 +612,38 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
 // rather than the failure-shaped message/kind wire body above. The console still gets the exact
 // same human-readable text (nothing here decorates or replaces it) — only the POST body changes.
 describe("fanOutClientDiagnostic stage evidence", () => {
+  it.each(["started", "settled"] as const)(
+    "preserves a validated parent for a %s source preview",
+    (phase) => {
+      vi.spyOn(console, "debug").mockImplementation(() => undefined);
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const stageReport =
+        phase === "started"
+          ? { stage: "files source preview" as const, phase, ordinal: 1 }
+          : { stage: "files source preview" as const, phase, ordinal: 1, durationMs: 3 };
+      fanOutClientDiagnostic("private customer source path", {
+        correlationId: "source-preview-123",
+        parentCorrelationId: "editor-read-123",
+        stageReport,
+      });
+      expect(lastPostedBody(fetchMock)).toMatchObject({
+        kind: "stage",
+        correlationId: "source-preview-123",
+        parentCorrelationId: "editor-read-123",
+        phase,
+      });
+      expect(isClientStageIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+      fanOutClientDiagnostic("private customer source path", {
+        correlationId: "source-preview-123",
+        parentCorrelationId: "/customer/private?token=secret",
+        stageReport,
+      });
+      expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
+      expect(JSON.stringify(lastPostedBody(fetchMock))).not.toMatch(/customer|token|secret/u);
+    },
+  );
+
   it("posts the closed stage wire shape for a started report, never the message body", () => {
     const consoleDebug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -686,6 +719,29 @@ describe("fanOutClientDiagnostic stage evidence", () => {
     expect(isClientDiagnosticIngestRequest(body)).toBe(true);
   });
 
+  it("preserves closed source-preview counts through the existing stage transport", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("private document body", {
+      stageReport: {
+        stage: "files source preview",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 3,
+        navigationOutcome: "applied",
+        preview: { previewKind: "text", sourceTextBytesRead: 2048, canEdit: false },
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body.preview).toEqual({
+      previewKind: "text",
+      sourceTextBytesRead: 2048,
+      canEdit: false,
+    });
+    expect(isClientStageIngestRequest(body)).toBe(true);
+    expect(JSON.stringify(body)).not.toContain("private");
+  });
   it("preserves correlated body-free bulk-deletion counts through the stage transport", () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -1263,4 +1319,183 @@ it("posts reduced production frames and closed causes through the existing trans
   expect(JSON.stringify(fetchMock.mock.calls)).not.toMatch(
     /private browser detail|private wrapper|https?:/,
   );
+});
+
+it("posts report download initiation through the routine budget and preserves failure capacity", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  for (let index = 0; index < 25; index += 1) {
+    fanOutClientDiagnostic("Keiko support report download initiated.", {
+      correlationId: "ui_support-download-0001",
+      supportReportDelivery: "manual",
+    });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_support-download-0001",
+    supportReportDelivery: "manual",
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("reuses the existing retained original failure while exposing no diagnostic message", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse()));
+  fanOutClientDiagnostic("registered static diagnostic", {
+    correlationId: "retained-original-failure-123",
+    kind: "window-error",
+    errorKind: "internal",
+    errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+  });
+  expect(retainedClientDiagnosticFailure("retained-original-failure-123")).toEqual({
+    errorKind: "internal",
+    errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+    context: ["kind:window-error"],
+  });
+  expect(retainedClientDiagnosticFailure("unrelated-request-123")).toBeUndefined();
+});
+
+it("posts fallback report preparation through routine capacity without raw artifact bytes", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const supportReportPreparation = {
+    reportBytes: 1024,
+    evidenceScope: "client-only" as const,
+    completeness: "complete" as const,
+    loss: "none" as const,
+    availabilityReason: "service-unavailable" as const,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Keiko support report prepared locally.", {
+      correlationId: "ui_support-preparation-0001",
+      supportReportPreparation,
+    });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_support-preparation-0001",
+    supportReportPreparation,
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("reportJson");
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("posts scope ownership decisions through routine capacity and preserves failure capacity", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const filesScopeDecision = {
+    decision: "automatic-suppressed" as const,
+    sourceCount: 1,
+    candidateCount: 2,
+    bindingFingerprint: "a".repeat(64),
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Keiko Files scope ownership decision.", {
+      correlationId: "ui_scope-decision-0001",
+      filesScopeDecision,
+    });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_scope-decision-0001",
+    filesScopeDecision,
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(retainedClientDiagnosticFailure("ui_scope-decision-0001")).toBeUndefined();
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("preserves queue refusal parent and recovery count on the existing routine transport", () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const refusal = {
+    correlationId: "ui_refused-action-0001",
+    parentCorrelationId: "ui_blocking-action-0001",
+    filesScopeDecision: {
+      decision: "timeout-rejected" as const,
+      mutationSurface: "git-change" as const,
+    },
+  };
+  fanOutClientDiagnostic("Keiko Files scope ownership decision.", refusal);
+  expect(lastPostedBody(fetchMock)).toMatchObject(refusal);
+  const recovery = {
+    correlationId: "ui_blocking-action-0001",
+    filesScopeDecision: {
+      decision: "timeout-recovered" as const,
+      mutationSurface: "files" as const,
+      rejectionCount: 2,
+    },
+  };
+  fanOutClientDiagnostic("Keiko Files scope ownership decision.", recovery);
+  expect(lastPostedBody(fetchMock)).toMatchObject(recovery);
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
+  expect(retainedClientDiagnosticFailure("ui_refused-action-0001")).toBeUndefined();
+});
+
+it("posts failed local preparation through routine capacity without replacing failure evidence", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const supportReportPreparation = {
+    outcome: "failed" as const,
+    errorKind: "unavailable" as const,
+    durationMs: 5,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Keiko local support report preparation failed.", {
+      correlationId: "ui_local-preparation-failure",
+      supportReportPreparation,
+    });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ supportReportPreparation });
+  expect(isClientDiagnosticIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("reportJson");
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("delivers citation activation as routine closed evidence without consuming failure capacity", async () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  setClientDiagnosticWriter(fanOutClientDiagnostic);
+  for (let index = 0; index < 8; index++) {
+    reportClientDiagnostic("[keiko] citation activation settled", {
+      correlationId: `ui_citation-${String(index)}`,
+      citationActivation: {
+        reason: "absent",
+        outcome: "picker-opened",
+        rootCount: 2,
+        matchCount: 0,
+      },
+    });
+  }
+  reportClientDiagnostic("[keiko] error boundary caught Error", {
+    kind: "window-error",
+    errorKind: "unavailable",
+  });
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(9));
+  const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as unknown;
+  expect(isClientDiagnosticIngestRequest(body)).toBe(true);
+  expect(body).toMatchObject({
+    citationActivation: { reason: "absent", outcome: "picker-opened", rootCount: 2, matchCount: 0 },
+    correlationId: "ui_citation-0",
+  });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    kind: "window-error",
+    errorKind: "unavailable",
+  });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });

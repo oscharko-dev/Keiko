@@ -278,6 +278,11 @@ export function readDeclaredChildGeometry(
       ...geometry,
       runMetadata: {
         maxPromptTokens: profile.runMetadata.maxPromptTokens,
+        ...(profile.runMetadata.inputTokenLimit === undefined
+          ? {}
+          : {
+              inputTokenLimit: profile.runMetadata.inputTokenLimit,
+            }),
         maxOutputTokens: profile.runMetadata.maxOutputTokens,
         maxInputMessages: profile.runMetadata.maxInputMessages,
         maxRequestBytes: profile.runMetadata.maxRequestBytes,

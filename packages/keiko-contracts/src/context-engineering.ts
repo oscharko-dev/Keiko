@@ -79,7 +79,7 @@ export type ContextBudgetPressure = "low" | "moderate" | "high" | "exceeded";
 // Model-agnostic. The ONLY place the window size lives. effectiveInputBudget is derived,
 // never authored independently.
 
-// Optional, opaque provider/model metadata. Never drives behavior; for disclosure only.
+// Optional provider/model identity for observation provenance; never grants model capabilities.
 export interface ContextModelMetadata {
   readonly id?: string | undefined;
   readonly provider?: string | undefined;
@@ -89,6 +89,8 @@ export interface ContextModelMetadata {
 export interface ContextProfile {
   readonly schemaVersion: typeof CONTEXT_ENGINEERING_SCHEMA_VERSION;
   readonly maxInputTokens: number;
+  /** Optional independent prompt-input ceiling; maxInputTokens remains the whole model window. */
+  readonly inputTokenLimit?: number | undefined;
   readonly reservedOutputTokens: number;
   readonly safetyMarginTokens: number;
   readonly effectiveInputBudget: number;
@@ -96,7 +98,7 @@ export interface ContextProfile {
   readonly tokenEstimatorId: string;
   // Content-free source metadata for the counter used by prompt-budget accounting.
   readonly tokenAccounting?: ContextTokenAccounting | undefined;
-  // Opaque provider/model metadata. Optional, never drives behavior.
+  // Optional provider/model identity; binds observations without granting capabilities.
   readonly model?: ContextModelMetadata | undefined;
 }
 
@@ -343,6 +345,8 @@ export interface ContextCompactionRecord {
         readonly throughMessageId: string;
         readonly historyRevision: number;
         readonly contextWindowTokens?: number | undefined;
+        /** Usable input budget when this checkpoint was assembled; absent on legacy records. */
+        readonly effectiveInputBudget?: number | undefined;
       }
     | undefined;
   // ── PR1 fields (unchanged) ───────────────────────────────
@@ -681,22 +685,27 @@ export function maxUtf8BytesForTokenBudget(tokenBudget: number): number {
       );
 }
 
-// Derives effectiveInputBudget = maxInputTokens − reservedOutputTokens − safetyMarginTokens,
+// Derives the usable input from the whole window and an optional independent input ceiling.
 // clamped to >= 0. Pure. Used to build a ContextProfile from a customer model window override.
 export function deriveContextProfile(input: {
   readonly maxInputTokens: number;
+  readonly inputTokenLimit?: number | undefined;
   readonly reservedOutputTokens: number;
   readonly safetyMarginTokens: number;
   readonly tokenAccounting?: ContextTokenAccounting | undefined;
 }): ContextProfile {
   const effective = Math.max(
     0,
-    input.maxInputTokens - input.reservedOutputTokens - input.safetyMarginTokens,
+    Math.min(
+      input.maxInputTokens - input.reservedOutputTokens - input.safetyMarginTokens,
+      input.inputTokenLimit ?? Number.POSITIVE_INFINITY,
+    ),
   );
   const tokenAccounting = input.tokenAccounting ?? DEFAULT_CONTEXT_TOKEN_ACCOUNTING;
   return {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     maxInputTokens: input.maxInputTokens,
+    ...(input.inputTokenLimit === undefined ? {} : { inputTokenLimit: input.inputTokenLimit }),
     reservedOutputTokens: input.reservedOutputTokens,
     safetyMarginTokens: input.safetyMarginTokens,
     effectiveInputBudget: effective,
@@ -761,7 +770,12 @@ export function effectiveContextWindow(
 export function deriveContextProfileFromCapability(
   capability: Pick<
     ModelCapability,
-    "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting" | "contextWindowAssumed"
+    | "id"
+    | "contextWindow"
+    | "maxInputTokens"
+    | "maxOutputTokens"
+    | "tokenAccounting"
+    | "contextWindowAssumed"
   >,
 ): ContextProfile {
   const maxInputTokens = effectiveContextWindow(capability);
@@ -773,6 +787,7 @@ export function deriveContextProfileFromCapability(
   return {
     ...deriveContextProfile({
       maxInputTokens,
+      inputTokenLimit: capability.maxInputTokens,
       reservedOutputTokens,
       safetyMarginTokens,
       tokenAccounting: capability.tokenAccounting,

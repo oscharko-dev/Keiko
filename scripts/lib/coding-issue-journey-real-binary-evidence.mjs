@@ -54,6 +54,7 @@ function admittedGeometry(admission) {
       "maxOutputTokens",
       "maxInputMessages",
       "maxRequestBytes",
+      ...(Object.hasOwn(admission ?? {}, "inputTokenLimit") ? ["inputTokenLimit"] : []),
     ])
   ) {
     return undefined;

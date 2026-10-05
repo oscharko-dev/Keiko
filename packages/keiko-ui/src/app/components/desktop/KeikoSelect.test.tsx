@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +54,7 @@ describe("KeikoSelect menu geometry", () => {
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(280, 300, 110, 36));
     await user.click(trigger);
     const menu = document.querySelector(".ksel-menu");
+    expect(menu?.parentElement).toBe(document.body);
     expect(menu).toHaveClass("ksel-menu-open-up");
     expect(menu).toHaveStyle({ left: "104px", top: "16px", width: "300px" });
     expect(screen.getAllByRole("option")).toHaveLength(20);
@@ -589,6 +591,7 @@ describe("KeikoSelect interactions", () => {
           meta: { kind: "other", selectDismissal: { reason: "escape", focus: "trigger" } },
         },
       ]);
+      await expectDiagnosticWireAccepted(diagnostics);
     });
 
     it("reports the option focus location when Escape closes the menu from an option", async () => {
@@ -795,5 +798,110 @@ describe("KeikoSelect interactions", () => {
     await user.click(trigger);
     fireEvent.blur(window);
     expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+  });
+});
+
+describe("KeikoSelect native modal ownership", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetClientDiagnosticWriter();
+  });
+
+  it("keeps overflow tooltips inside the active native modal", async () => {
+    const diagnostics = captureDiagnostics();
+    const user = userEvent.setup();
+    render(
+      <dialog open aria-label="Modal choice">
+        <KeikoSelect
+          ariaLabel="Long choice"
+          value="long"
+          onValueChange={vi.fn()}
+          sections={[{ options: [{ value: "long", label: "A long selectable option" }] }]}
+        />
+      </dialog>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Modal choice" });
+    await user.click(screen.getByRole("combobox", { name: "Long choice" }));
+    vi.useFakeTimers();
+    const option = screen.getByRole("option", { name: "A long selectable option" });
+    const label = option.querySelector(".ksel-option-label");
+    if (label === null) throw new Error("Missing option label");
+    Object.defineProperties(label, {
+      clientWidth: { configurable: true, value: 80 },
+      scrollWidth: { configurable: true, value: 240 },
+    });
+    fireEvent.pointerEnter(option);
+    act(() => vi.advanceTimersByTime(1_500));
+    expect(screen.getByRole("tooltip").closest("dialog")).toBe(dialog);
+    expect(diagnostics).toEqual([]);
+    fireEvent.keyDown(option, { key: "Escape" });
+    expect(diagnostics).toEqual([
+      {
+        message: "[keiko] select menu dismissed by Escape (focus=option)",
+        meta: { kind: "other", selectDismissal: { reason: "escape", focus: "option" } },
+      },
+    ]);
+  });
+});
+
+describe("select capture Escape ownership", () => {
+  afterEach(() => resetClientDiagnosticWriter());
+  it.each(["trigger", "search", "option"] as const)(
+    "consumes %s Escape before target bubble handlers and dialog dismissal",
+    async (focus) => {
+      const diagnostics = captureDiagnostics();
+      const dialogKeyDown = vi.fn();
+      render(
+        <dialog open aria-label="Select host">
+          <KeikoSelect
+            ariaLabel="Choice"
+            value="one"
+            onValueChange={vi.fn()}
+            searchPlaceholder="Filter"
+            sections={[{ options: [{ value: "one", label: "One" }] }]}
+          />
+        </dialog>,
+      );
+      screen
+        .getByRole("dialog", { name: "Select host" })
+        .addEventListener("keydown", dialogKeyDown);
+      const trigger = screen.getByRole("combobox", { name: "Choice" });
+      fireEvent.click(trigger);
+      const search = await screen.findByRole("searchbox");
+      const target =
+        focus === "trigger"
+          ? trigger
+          : focus === "search"
+            ? search
+            : screen.getByRole("option", { name: "One" });
+      target.focus();
+      target.addEventListener("keydown", (event) => event.stopPropagation(), { once: true });
+      fireEvent.keyDown(target, { key: "Escape" });
+      expect(screen.queryByRole("option", { name: "One" })).toBeNull();
+      expect(screen.getByRole("dialog", { name: "Select host" })).toBeInTheDocument();
+      expect(dialogKeyDown).not.toHaveBeenCalled();
+      expect(trigger).toHaveFocus();
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.meta?.selectDismissal).toEqual({ reason: "escape", focus });
+    },
+  );
+  it("reports menu chrome focus without misclassifying it as an option", async () => {
+    const diagnostics = captureDiagnostics();
+    render(
+      <KeikoSelect
+        ariaLabel="Choice"
+        value="one"
+        onValueChange={vi.fn()}
+        sections={[{ options: [{ value: "one", label: "One" }] }]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Choice" }));
+    await screen.findByRole("option", { name: "One" });
+    const menu = document.querySelector(".ksel-menu");
+    if (!(menu instanceof HTMLElement)) throw new Error("Missing menu.");
+    menu.tabIndex = -1;
+    menu.focus();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(diagnostics[0]?.meta?.selectDismissal).toEqual({ reason: "escape", focus: "menu" });
   });
 });

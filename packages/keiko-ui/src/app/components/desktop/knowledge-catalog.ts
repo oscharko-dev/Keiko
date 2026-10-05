@@ -1,3 +1,7 @@
+import type {
+  OptionalWidgetTranslate as I18nTranslate,
+  WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
 // The Knowledge Pod / Pod Set catalog behind the chat scope header (grounding picker + the pills
 // naming each bound source). One module owns the shared cache, the refresh policy and the
 // body-free diagnostics so the chat cannot drift from what the Knowledge Pods panel shows.
@@ -23,8 +27,7 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { responseCorrelationIdOf } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
-import type { I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import {
   capsulesForKnowledgePodUi,
   capsuleSetsForKnowledgePodUi,

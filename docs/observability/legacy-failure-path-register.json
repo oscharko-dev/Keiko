@@ -5031,18 +5031,6 @@
     },
     {
       "path": "packages/keiko-server/src/grounded-qa.ts",
-      "owner": "canonicalGroundedRoot",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/grounded-qa.ts",
-      "owner": "isValidGroundedPack",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/grounded-qa.ts",
       "owner": "parseJsonObject",
       "kind": "unregistered-catch",
       "count": 1
@@ -7779,12 +7767,6 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspaceActions.ts",
-      "owner": "connectionUnbindAccepted",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspaceActions.ts",
       "owner": "parseSelectedScreenIds",
       "kind": "unregistered-catch",
       "count": 1
@@ -7792,12 +7774,6 @@
     {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspaceActions.ts",
       "owner": "resolveBindAcceptance",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspaceActions.ts",
-      "owner": "settleOptimisticGitConnection",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -8138,20 +8114,8 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/api.ts",
-      "owner": "sendDesktopChatStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/clipboard.ts",
       "owner": "copyTextToClipboard",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/coding-app-session-client.ts",
-      "owner": "redeemCodingAppSessionPairingFragment",
       "kind": "unregistered-catch",
       "count": 1
     },

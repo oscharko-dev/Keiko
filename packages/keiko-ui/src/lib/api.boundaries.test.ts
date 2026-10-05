@@ -10,6 +10,7 @@ import {
   createDesktopChat,
   createProject,
   fetchChatMessages,
+  fetchChats,
   fetchConfig,
   fetchEvidenceList,
   fetchEvidenceManifest,
@@ -78,6 +79,15 @@ function streamResponse(text: string): Response {
 describe("API BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("selects a chat by encoded identity without requesting a larger list page", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse({ chats: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchChats("/workspace/with space", "scoped-chat-read", "chat&one");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/chats?projectPath=%2Fworkspace%2Fwith%20space&id=chat%26one",
+    );
   });
 
   it("keeps a caller-supplied voice turn correlation on both chat transports", async () => {
@@ -368,7 +378,7 @@ describe("API BFF boundary helpers", () => {
     expect(handlers.onCancelled).toHaveBeenCalledTimes(1);
   });
 
-  it("throws StreamingUnavailableError for pre-stream JSON failures and null bodies", async () => {
+  it("allows explicit capability fallback but preserves ambiguous null-body failures", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -377,7 +387,12 @@ describe("API BFF boundary helpers", () => {
           jsonResponse({ error: { code: "STREAMING_UNSUPPORTED", message: "buffered only" } }, 409),
         )
         .mockResolvedValueOnce(
-          new Response(null, { headers: { "Content-Type": "text/event-stream" } }),
+          new Response(null, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "X-Keiko-Correlation-Id": "null-body-boundary",
+            },
+          }),
         ),
     );
     const handlers = {
@@ -391,9 +406,14 @@ describe("API BFF boundary helpers", () => {
     await expect(
       sendDesktopChatStream(input, new AbortController().signal, handlers),
     ).rejects.toBeInstanceOf(StreamingUnavailableError);
-    await expect(
-      sendDesktopChatStream(input, new AbortController().signal, handlers),
-    ).rejects.toMatchObject({ code: "STREAMING_UNSUPPORTED", message: "Response body was null." });
+    const missingBody = sendDesktopChatStream(input, new AbortController().signal, handlers);
+    await expect(missingBody).rejects.toBeInstanceOf(ApiError);
+    await expect(missingBody).rejects.not.toBeInstanceOf(StreamingUnavailableError);
+    await expect(missingBody).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "Response body was null.",
+      correlationId: "null-body-boundary",
+    });
   });
 });
 
@@ -429,15 +449,23 @@ describe("fetchHealth diagnostic readiness", () => {
   });
 
   it.each([
-    ["an unknown state", { ...degraded, readiness: "fine" }],
-    ["an unknown reason", { ...degraded, reasons: ["disk-on-fire"] }],
-    ["a degraded state without a reason", { ...degraded, reasons: [] }],
-    ["a ready state that names a reason", { ...degraded, readiness: "ready" }],
-    ["a negative lost-event count", { ...degraded, lostEvents: -1 }],
-    ["a string", "degraded"],
-  ])("drops %s and keeps the version", async (_label, diagnostics) => {
-    stubHealth(diagnostics);
+    ["an unknown state", { ...degraded, readiness: "fine" }, "readiness-value"],
+    ["an unknown reason", { ...degraded, reasons: ["disk-on-fire"] }, "snapshot-shape"],
+    ["a degraded state without a reason", { ...degraded, reasons: [] }, "snapshot-shape"],
+    ["a ready state that names a reason", { ...degraded, readiness: "ready" }, "snapshot-shape"],
+    ["a negative lost-event count", { ...degraded, lostEvents: -1 }, "snapshot-shape"],
+    ["a string", "degraded", "snapshot-shape"],
+  ])(
+    "drops %s, keeps the version, and exposes unavailable diagnostics",
+    async (_label, diagnostics, diagnosticsInvalidReason) => {
+      stubHealth(diagnostics);
 
-    await expect(fetchHealth()).resolves.toEqual({ status: "ok", version: "1.0.0" });
-  });
+      await expect(fetchHealth()).resolves.toEqual({
+        status: "ok",
+        version: "1.0.0",
+        diagnosticsInvalid: true,
+        diagnosticsInvalidReason,
+      });
+    },
+  );
 });

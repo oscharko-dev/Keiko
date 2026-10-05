@@ -1,3 +1,9 @@
+"use client";
+
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 // Issue #540 (Epic #532) — Relationship inspector panel.
 //
 // Renders the 10 inspector sections from inspector-spec.md in exact order.
@@ -21,8 +27,6 @@
 //   arun-btn (globals.css:1972), arun-btn.primary (globals.css:1986).
 //
 // WCAG 2.2 AA: 24×24 touch targets, focus-visible rings, aria-busy, aria-live regions.
-
-"use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -53,7 +57,6 @@ import type {
 import { deriveImpact, type ImpactOrigin } from "../../../../relationships/impact";
 import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 import { RelationshipImpactCard } from "./RelationshipImpactCard";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 // ─── Authority disclaimer constant (inspector-spec.md §6) ─────────────────────
 // Verbatim string — never interpolated, never translated (Wave 3 non-goal).

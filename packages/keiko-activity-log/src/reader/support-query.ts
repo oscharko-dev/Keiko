@@ -17,12 +17,14 @@
 //             [first closure event - contextMs, last closure event + contextMs], plus each of those
 //             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
 //             lifetime without a start is complete only while its segments still run unbroken and
-//             intact from its first one. A user-reported incident also selects every event of its
-//             pinned window and takes every correlation that appears there as a root.
+//             intact from its first one. A user-reported incident also selects its pinned window's
+//             diagnostic roots; independent successful activity is bounded optional context.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
-// NEVER A SILENT TRUNCATION. A closure that does not fit the report budget (or exceeds the
+// NEVER A SILENT TRUNCATION. The canonical report record ceiling applies while streaming.
+// Required closure and lifetime records take precedence over optional context. A closure that
+// does not fit the report budget (or exceeds the
 // correlation bound, which also bounds its process lifetimes) returns no events and is
 // `insufficient` with `report-budget-exceeded`; a selection the log no longer holds (a closure
 // member, or a lifetime's start) is `insufficient` with `evidence-not-retained`; an unreadable
@@ -36,11 +38,13 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
+  MAX_SUPPORT_REPORT_RECORDS,
   activityLogOperationSchema,
   diagnosticSufficiencyStatus,
   parseActivityLogSegmentId,
   type ActivityLogCompletenessState,
   type ActivityLogLossState,
+  type ActivityLogOperationRegistration,
   type DiagnosticSufficiencyReason,
   type DiagnosticSufficiencyStatus,
   type SupportLifetimeProvenance,
@@ -128,7 +132,7 @@ export interface SupportClosureSelection {
   readonly kind: "closure";
   readonly queryClass: "correlation" | "incident" | "defect-fingerprint";
   readonly roots: readonly string[];
-  // Pinned windows whose events are selected and whose correlations become roots.
+  // Pinned windows whose diagnostic events are selected and whose correlations become roots.
   readonly windows: readonly SupportQueryWindow[];
   readonly requiredClasses: SupportRequiredClasses;
   // True when the selection's descriptor could not be resolved (no open incident record).
@@ -192,7 +196,7 @@ export interface SupportQueryResult {
   };
   readonly query: {
     readonly class: SupportQueryClass;
-    readonly limits: SupportQueryLimits;
+    readonly limits: SupportQueryLimits & { readonly maxResultRecords: number };
   };
   readonly segments: {
     readonly total: number;
@@ -231,6 +235,7 @@ export interface SupportQueryResult {
     readonly state: SupportQueryTruncation;
     readonly omittedContextEventCount: number;
     readonly requiredBytes: number;
+    readonly requiredRecordCount: number;
   };
   readonly coverage: {
     readonly requiredClassCount: number;
@@ -270,6 +275,10 @@ export interface SupportQueryInput {
 
 function knownCorrelation(value: string | undefined): value is string {
   return value !== undefined && value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID;
+}
+
+function isNonCausal(parsed: ParsedLine): boolean {
+  return activityLogOperationSchema(parsed.view.op)?.causal === "none";
 }
 
 function lineMs(parsed: ParsedLine): number {
@@ -335,33 +344,115 @@ function* acceptedLines(
 
 // ─── Budgeted collection ───────────────────────────────────────────────────────────────────────
 
+function selectedEvent(accepted: AcceptedLine, role: SupportQueryEventRole): SupportSelectedEvent {
+  return {
+    file: accepted.line.file,
+    index: accepted.line.index,
+    text: accepted.line.text,
+    bytes: accepted.line.byteLength + 1,
+    parsed: accepted.parsed,
+    role,
+  };
+}
+
 class EventCollector {
   public readonly events: SupportSelectedEvent[] = [];
   public requiredBytes = 0;
   public candidateCount = 0;
   public exceeded = false;
 
-  public constructor(private readonly budgetBytes: number) {}
+  public constructor(
+    private readonly budgetBytes: number,
+    private readonly budgetRecords = MAX_SUPPORT_REPORT_RECORDS,
+  ) {}
 
   public add(accepted: AcceptedLine, role: SupportQueryEventRole): void {
     const bytes = accepted.line.byteLength + 1;
     this.candidateCount += 1;
     this.requiredBytes += bytes;
     if (this.exceeded) return;
-    if (this.requiredBytes > this.budgetBytes) {
-      // Never a partial selection: everything retained so far is released at once.
+    if (this.requiredBytes > this.budgetBytes || this.candidateCount > this.budgetRecords) {
+      // Required closure is all-or-nothing.
       this.exceeded = true;
       this.events.length = 0;
       return;
     }
-    this.events.push({
-      file: accepted.line.file,
-      index: accepted.line.index,
-      text: accepted.line.text,
-      bytes,
-      parsed: accepted.parsed,
-      role,
-    });
+    this.events.push(selectedEvent(accepted, role));
+  }
+}
+
+interface RankedContextEvent {
+  readonly event: SupportSelectedEvent;
+  readonly distance: number;
+}
+
+function compareContext(left: RankedContextEvent, right: RankedContextEvent): number {
+  return (
+    left.distance - right.distance ||
+    left.event.file.order - right.event.file.order ||
+    left.event.index - right.event.index
+  );
+}
+
+// Keep a worst-first heap inside both remaining budgets. Each admitted candidate costs O(log K),
+// independent of log length; later nearby events can replace earlier distant context. Oversized
+// optional lines cannot prevent other fitting evidence from being selected.
+class ContextCollector {
+  private readonly queue: RankedContextEvent[] = [];
+  private retainedBytes = 0;
+  public candidateCount = 0;
+
+  public constructor(
+    private readonly budgetBytes: number,
+    private readonly budgetRecords: number,
+  ) {}
+
+  public get events(): readonly SupportSelectedEvent[] {
+    return this.queue.map(({ event }) => event);
+  }
+
+  public add(accepted: AcceptedLine, distance: number): void {
+    this.candidateCount += 1;
+    const bytes = accepted.line.byteLength + 1;
+    if (this.budgetRecords <= 0 || bytes > this.budgetBytes) return;
+    this.push({ event: selectedEvent(accepted, "context"), distance });
+    this.retainedBytes += bytes;
+    while (this.queue.length > this.budgetRecords || this.retainedBytes > this.budgetBytes) {
+      this.retainedBytes -= this.removeWorst()?.event.bytes ?? 0;
+    }
+  }
+
+  private push(entry: RankedContextEvent): void {
+    this.queue.push(entry);
+    let index = this.queue.length - 1;
+    while (index > 0) {
+      const parentIndex = Math.floor((index - 1) / 2);
+      const parent = this.queue[parentIndex];
+      if (parent === undefined || compareContext(parent, entry) >= 0) break;
+      this.queue[index] = parent;
+      index = parentIndex;
+    }
+    this.queue[index] = entry;
+  }
+
+  private removeWorst(): RankedContextEvent | undefined {
+    const worst = this.queue[0];
+    const last = this.queue.pop();
+    if (last === undefined || this.queue.length === 0) return worst;
+    let index = 0;
+    while (index * 2 + 1 < this.queue.length) {
+      const leftIndex = index * 2 + 1;
+      const left = this.queue[leftIndex];
+      const right = this.queue[leftIndex + 1];
+      if (left === undefined) break;
+      const useRight = right !== undefined && compareContext(left, right) < 0;
+      const child = useRight ? right : left;
+      if (compareContext(last, child) >= 0) break;
+      this.queue[index] = child;
+      index = useRight ? leftIndex + 1 : leftIndex;
+    }
+    this.queue[index] = last;
+    return worst;
   }
 }
 
@@ -402,6 +493,7 @@ function expandClosure(state: EngineState, closure: ClosureState, frontier: Fron
   const up = new Set<string>();
   const down = new Set<string>();
   for (const { parsed } of acceptedLines(state, files, false)) {
+    if (isNonCausal(parsed)) continue;
     const id = parsed.correlationId;
     const parent = parsed.view.parentCorrelationId;
     if (!knownCorrelation(id) || !knownCorrelation(parent)) continue;
@@ -449,24 +541,140 @@ function windowCandidate(
   );
 }
 
-/** Every known correlation that appears inside the windows, in first-seen order (bounded). */
+function successfulHttpStatus(status: unknown): boolean {
+  return typeof status === "number" && status >= 200 && status < 400;
+}
+
+function informationalLevel(level: string | undefined): boolean {
+  return level === "info" || level === "debug";
+}
+
+/** Independent successful transport is optional context, never a mandatory diagnostic root. */
+function routineHttpSuccess(accepted: AcceptedLine): boolean {
+  const view = accepted.parsed.view;
+  const schema = activityLogOperationSchema(view.op);
+  return (
+    schema?.category === "http" &&
+    schema.lifecycle !== "failure" &&
+    informationalLevel(view.level) &&
+    view.errorKind === undefined &&
+    !knownCorrelation(view.parentCorrelationId) &&
+    successfulHttpStatus(view.status) &&
+    view.extra?.aborted !== true &&
+    !declaredDiagnosticFacts(schema, view.extra)
+  );
+}
+
+/** Only positively complete, independent activity may become optional manual-report context. */
+function routineWindowActivity(accepted: AcceptedLine): boolean {
+  const view = accepted.parsed.view;
+  const schema = activityLogOperationSchema(view.op);
+  if (schema === undefined || schema.category === "diagnostic") return false;
+  if (schema.category === "http") return routineHttpSuccess(accepted);
+  if (knownCorrelation(view.parentCorrelationId)) return false;
+  return (
+    schema.lifecycle !== "failure" &&
+    schema.lifecycle !== "loss" &&
+    informationalLevel(view.level) &&
+    !hasFailureFacts(accepted) &&
+    !declaredDiagnosticFacts(schema, view.extra)
+  );
+}
+
+function declaredDiagnosticFacts(
+  schema: ActivityLogOperationRegistration,
+  fields: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  if (fields === undefined) return false;
+  return (
+    schema.diagnosticWhen?.some((condition) => {
+      const value = fields[condition.field];
+      if ("positive" in condition)
+        return typeof value === "number" && Number.isFinite(value) && value > 0;
+      const expectedValues: readonly unknown[] = condition.values;
+      return expectedValues.includes(value);
+    }) ?? false
+  );
+}
+
+function hasFailureFacts({ parsed: { view } }: AcceptedLine): boolean {
+  const fields = view.extra;
+  if (fields === undefined) return true;
+  return (
+    view.errorKind !== undefined ||
+    view.status !== undefined ||
+    view.frames !== undefined ||
+    view.causeChain !== undefined ||
+    fields.failureKind !== undefined ||
+    fields.errorClass !== undefined ||
+    fields.completeness !== "complete" ||
+    fields.loss !== "none"
+  );
+}
+
+type OpenWindowLifecycles = Map<string, Map<string, number>>;
+
+function advanceWindowLifecycle(
+  pending: OpenWindowLifecycles,
+  correlationId: string,
+  failureClass: string,
+  starts: boolean,
+): void {
+  const classes = pending.get(correlationId) ?? new Map<string, number>();
+  const previous = classes.get(failureClass) ?? 0;
+  if (starts) {
+    classes.set(failureClass, previous + 1);
+    pending.set(correlationId, classes);
+  } else {
+    if (previous > 1) classes.set(failureClass, previous - 1);
+    else classes.delete(failureClass);
+    if (classes.size === 0) pending.delete(correlationId);
+  }
+}
+
+// A start is not routine success. Match the same registered class and correlation, as the existing
+// sufficiency analyzer does. Only open correlations occupy the existing closure budget; class keys
+// come from the finite registry rather than arbitrary event data.
+function noteWindowLifecycle(pending: OpenWindowLifecycles, accepted: AcceptedLine): void {
+  const id = accepted.parsed.correlationId;
+  const schema = activityLogOperationSchema(accepted.parsed.view.op);
+  if (!knownCorrelation(id) || schema === undefined || schema.causal === "none") return;
+  const closing = schema.lifecycle === "end" || schema.lifecycle === "failure";
+  if (schema.lifecycle !== "start" && !closing) return;
+  const classes = schema.failureClasses.length === 0 ? [schema.op] : schema.failureClasses;
+  for (const failureClass of classes) {
+    advanceWindowLifecycle(pending, id, failureClass, !closing);
+  }
+}
+
+function windowRootResult(
+  roots: ReadonlySet<string>,
+  pending: ReadonlyMap<string, ReadonlyMap<string, number>>,
+  limit: number,
+): { readonly roots: readonly string[]; readonly exceeded: boolean } {
+  const selected = new Set([...roots, ...pending.keys()]);
+  return { roots: [...selected], exceeded: selected.size > limit };
+}
+
+/** Every diagnostic correlation inside the windows, in first-seen order (bounded). */
 function windowRoots(
   state: EngineState,
   windows: readonly SupportQueryWindow[],
 ): { readonly roots: readonly string[]; readonly exceeded: boolean } {
   const roots = new Set<string>();
   if (windows.length === 0) return { roots: [], exceeded: false };
+  const pending: OpenWindowLifecycles = new Map();
+  const limit = state.input.limits.maxClosureCorrelations;
   const files = candidateFiles(state, (loaded, file) => windowCandidate(windows, loaded, file));
   for (const accepted of acceptedLines(state, files, true)) {
+    if (!windows.some((window) => lineInWindow(window, accepted))) continue;
+    noteWindowLifecycle(pending, accepted);
     const id = accepted.parsed.correlationId;
-    if (!knownCorrelation(id) || !windows.some((window) => lineInWindow(window, accepted)))
-      continue;
-    roots.add(id);
-    if (roots.size > state.input.limits.maxClosureCorrelations) {
-      return { roots: [...roots], exceeded: true };
-    }
+    if (knownCorrelation(id) && !isNonCausal(accepted.parsed) && !routineWindowActivity(accepted))
+      roots.add(id);
+    if (roots.size > limit || pending.size > limit) return windowRootResult(roots, pending, limit);
   }
-  return { roots: [...roots], exceeded: false };
+  return windowRootResult(roots, pending, limit);
 }
 
 // ─── Closure events and context ────────────────────────────────────────────────────────────────
@@ -489,7 +697,8 @@ function closureRole(
   windows: readonly SupportQueryWindow[],
 ): SupportQueryEventRole | undefined {
   const id = accepted.parsed.correlationId;
-  if (knownCorrelation(id) && members.has(id)) return "closure";
+  if (knownCorrelation(id) && !isNonCausal(accepted.parsed) && members.has(id)) return "closure";
+  if (routineWindowActivity(accepted)) return undefined;
   return windows.some((window) => lineInWindow(window, accepted)) ? "window" : undefined;
 }
 
@@ -564,6 +773,7 @@ interface ContextScope {
   readonly toMs: number;
   readonly lifetimes: ReadonlySet<string>;
   readonly selected: ReadonlySet<string>;
+  readonly selectedTimes: readonly number[];
 }
 
 /**
@@ -759,7 +969,24 @@ function contextScope(
   }
   if (contextMs <= 0 || lifetimes.size === 0 || !Number.isFinite(first)) return undefined;
   const selected = new Set(selectedEvents.map((event) => eventKey(event.file, event.index)));
-  return { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected };
+  const selectedTimes = [...new Set(events.map((event) => lineMs(event.parsed)))].sort(
+    (a, b) => a - b,
+  );
+  return { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected, selectedTimes };
+}
+
+function nearestSelectedTime(atMs: number, times: readonly number[]): number {
+  let low = 0;
+  let high = times.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((times[middle] ?? Number.POSITIVE_INFINITY) < atMs) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(
+    Math.abs(atMs - (times[low] ?? Number.POSITIVE_INFINITY)),
+    Math.abs(atMs - (times[low - 1] ?? Number.NEGATIVE_INFINITY)),
+  );
 }
 
 function manifestMayHoldLifetimes(
@@ -772,8 +999,17 @@ function manifestMayHoldLifetimes(
   );
 }
 
-function isContextLine(accepted: AcceptedLine, scope: ContextScope): boolean {
-  if (knownCorrelation(accepted.parsed.correlationId)) return false;
+function isContextLine(
+  accepted: AcceptedLine,
+  scope: ContextScope,
+  windows: readonly SupportQueryWindow[],
+): boolean {
+  if (
+    knownCorrelation(accepted.parsed.correlationId) &&
+    !isNonCausal(accepted.parsed) &&
+    !(routineWindowActivity(accepted) && windows.some((window) => lineInWindow(window, accepted)))
+  )
+    return false;
   const key = lifetimeKey(accepted.parsed);
   if (key === undefined || !scope.lifetimes.has(key)) return false;
   const ms = lineMs(accepted.parsed);
@@ -791,6 +1027,7 @@ function collectContext(
   events: readonly SupportSelectedEvent[],
   selectedEvents: readonly SupportSelectedEvent[],
   budgetBytes: number,
+  windows: readonly SupportQueryWindow[],
 ): ContextSelection {
   const { contextMs, maxContextEvents } = state.input.limits;
   const scope = contextScope(events, selectedEvents, contextMs);
@@ -801,17 +1038,18 @@ function collectContext(
       manifestTimeOverlaps(loaded.manifest, scope.fromMs, scope.toMs) &&
       manifestMayHoldLifetimes(loaded.manifest, scope.lifetimes),
   );
-  const collector = new EventCollector(budgetBytes);
-  let omitted = 0;
+  const recordBudget = Math.min(
+    maxContextEvents,
+    MAX_SUPPORT_REPORT_RECORDS - selectedEvents.length,
+  );
+  const collector = new ContextCollector(budgetBytes, recordBudget);
   for (const accepted of acceptedLines(state, files, true)) {
-    if (!isContextLine(accepted, scope)) continue;
-    if (collector.candidateCount < maxContextEvents) collector.add(accepted, "context");
-    else omitted += 1;
+    if (!isContextLine(accepted, scope, windows)) continue;
+    collector.add(accepted, nearestSelectedTime(lineMs(accepted.parsed), scope.selectedTimes));
   }
-  if (collector.exceeded) {
-    return { events: [], omitted: collector.candidateCount + omitted, truncated: true };
-  }
-  return { events: collector.events, omitted, truncated: omitted > 0 };
+  const context = collector.events;
+  const omitted = collector.candidateCount - context.length;
+  return { events: context, omitted, truncated: omitted > 0 };
 }
 
 // ─── Event queries ─────────────────────────────────────────────────────────────────────────────
@@ -1102,6 +1340,7 @@ interface SelectionOutcome {
   readonly events: readonly SupportSelectedEvent[];
   readonly candidateEventCount: number;
   readonly requiredBytes: number;
+  readonly requiredRecordCount: number;
   readonly omittedContextEventCount: number;
   readonly truncation: SupportQueryTruncation;
   readonly reasons: readonly DiagnosticSufficiencyReason[];
@@ -1162,6 +1401,7 @@ function budgetExceededOutcome(
     events: [],
     candidateEventCount: collected?.collector.candidateCount ?? 0,
     requiredBytes,
+    requiredRecordCount: collected?.collector.candidateCount ?? 0,
     omittedContextEventCount: 0,
     truncation: "budget-exceeded",
     reasons: ["report-budget-exceeded"],
@@ -1206,7 +1446,13 @@ function runClosureSelection(
   const overflow = closureOverflow(state, selection, closure, collected);
   if (overflow !== undefined) return overflow;
   const remaining = state.input.limits.maxResultBytes - collected.collector.requiredBytes;
-  const context = collectContext(state, closureEvents, collected.collector.events, remaining);
+  const context = collectContext(
+    state,
+    closureEvents,
+    collected.collector.events,
+    remaining,
+    selection.windows,
+  );
   const reasons: DiagnosticSufficiencyReason[] = [
     ...missingClosureReasons(closure, collected.observed),
   ];
@@ -1218,8 +1464,10 @@ function runClosureSelection(
   );
   return {
     events,
-    candidateEventCount: collected.collector.candidateCount + context.events.length,
+    candidateEventCount:
+      collected.collector.candidateCount + context.events.length + context.omitted,
     requiredBytes: collected.collector.requiredBytes,
+    requiredRecordCount: collected.collector.candidateCount,
     omittedContextEventCount: context.omitted,
     truncation: context.truncated ? "context-truncated" : "none",
     reasons,
@@ -1235,6 +1483,7 @@ function runEventSelection(state: EngineState, selection: SupportEventSelection)
     events: collector.exceeded ? [] : collector.events,
     candidateEventCount: collector.candidateCount,
     requiredBytes: collector.requiredBytes,
+    requiredRecordCount: collector.candidateCount,
     omittedContextEventCount: 0,
     truncation: collector.exceeded ? "budget-exceeded" : "none",
     reasons: collector.exceeded ? ["report-budget-exceeded"] : [],
@@ -1281,6 +1530,15 @@ function withUnreadable(
   return unreadable ? [...reasons, "segment-unreadable"] : reasons;
 }
 
+function queryTruncation(outcome: SelectionOutcome): SupportQueryResult["truncation"] {
+  return {
+    state: outcome.truncation,
+    omittedContextEventCount: outcome.omittedContextEventCount,
+    requiredBytes: outcome.requiredBytes,
+    requiredRecordCount: outcome.requiredRecordCount,
+  };
+}
+
 function queryResult(
   state: EngineState,
   outcome: SelectionOutcome,
@@ -1304,17 +1562,16 @@ function queryResult(
       catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
       manifestSchemaVersion: SEGMENT_MANIFEST_SCHEMA_VERSION,
     },
-    query: { class: queryClass, limits: state.input.limits },
+    query: {
+      class: queryClass,
+      limits: { ...state.input.limits, maxResultRecords: MAX_SUPPORT_REPORT_RECORDS },
+    },
     segments: segmentSummary(state),
     closure: outcome.closure,
     lifetimes: outcome.lifetimes,
     integrity: integrity.summary,
     loss: { state: integrity.summary.loss, lossEventCount: lossEventCount(outcome.events) },
-    truncation: {
-      state: outcome.truncation,
-      omittedContextEventCount: outcome.omittedContextEventCount,
-      requiredBytes: outcome.requiredBytes,
-    },
+    truncation: queryTruncation(outcome),
     coverage: sufficiency.coverage,
     diagnosticSufficiency: sufficiency.diagnosticSufficiency,
     metrics: {
@@ -1394,7 +1651,8 @@ export function renderSupportQuery(result: SupportQueryResult): string {
   }
   lines.push(
     `Events: ${String(metrics.resultEventCount)} (${String(metrics.selectedBytes)} bytes), ` +
-      `truncation ${result.truncation.state}`,
+      `truncation ${result.truncation.state}; required ${String(result.truncation.requiredRecordCount)} records ` +
+      `(${String(result.truncation.requiredBytes)} bytes)`,
   );
   return `${[...lines, ...result.events.map(renderEvent)].join("\n")}\n`;
 }

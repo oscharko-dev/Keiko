@@ -414,3 +414,27 @@ describe("ScopeConnectButton", () => {
     });
   });
 });
+
+it("guards additive connections with the rendered chat baseline", async () => {
+  const chat = makeChat({ groundingScopeIdentity: "gsi-v1:" + "a".repeat(64) });
+  const updateScope = vi.fn().mockResolvedValue({ chat });
+  render(
+    <ScopeConnectButton
+      chat={chat}
+      chatId={chat.id}
+      scopeKind="workspace-root"
+      currentScopeKind={undefined}
+      candidateRelativePaths={[]}
+      updateScope={updateScope}
+      now={() => 10}
+    />,
+  );
+  await userEvent.setup().click(screen.getByRole("button"));
+  await waitFor(() =>
+    expect(updateScope).toHaveBeenCalledWith(
+      chat.id,
+      [{ kind: "workspace-root", relativePaths: [], connectedAtMs: 10 }],
+      chat.groundingScopeIdentity,
+    ),
+  );
+});

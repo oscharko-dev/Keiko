@@ -4,6 +4,8 @@
 export const WORKSPACE_CONTRACT_SCHEMA_VERSION = 1 as const;
 export const WORKSPACE_OPAQUE_REF_MAX_CHARS = 96 as const;
 export const WORKSPACE_PORTABLE_PATH_MAX_BYTES = 4096 as const;
+/** Inclusive source-file eligibility shared by recursive search, text preview and extraction. */
+export const MAX_RECURSIVE_TEXT_FILE_BYTES = 2_097_152;
 
 declare const workspaceContractBrand: unique symbol;
 

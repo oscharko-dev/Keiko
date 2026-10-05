@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   candidateBucketForPath,
+  hasSymbolRelationshipQuery,
   legacyDiscoveryPolicy,
   orderCandidatesForSearch,
   policyOmissionReason,
@@ -22,6 +23,28 @@ const query = (text: string): RetrievalQuery => ({
   caseSensitive: false,
   maxResults: 100,
   emittedAtMs: 0,
+});
+
+describe("hasSymbolRelationshipQuery", () => {
+  it.each([
+    "Use only read values, no guesses.",
+    "USE ONLY CITED EVIDENCE.",
+    "Verwende nur gelesene Werte, keine Vermutungen.",
+    "Verwende nur belegte Quellen.",
+  ])("does not treat an evidence-only output directive as a relationship: %s", (text) => {
+    expect(hasSymbolRelationshipQuery(text)).toBe(false);
+  });
+
+  it.each([
+    "Which functions use LateDefinitionProbe?",
+    "Welche Funktionen verwenden LateDefinitionProbe?",
+    "Verwende LateDefinitionProbe für die Berechnung.",
+    "Which callers use LateDefinitionProbe? Use only read values.",
+    "Use only cited sources imported by LateDefinitionProbe.",
+    "Verwende nur gelesene Werte aus Funktionen, die LateDefinitionProbe aufrufen.",
+  ])("preserves genuine relationships and mixed directives: %s", (text) => {
+    expect(hasSymbolRelationshipQuery(text)).toBe(true);
+  });
 });
 
 describe("resolveSearchPolicy", () => {
@@ -80,6 +103,23 @@ describe("orderCandidatesForSearch", () => {
       deniedByDiscovery: 0,
     });
     expect(ordered[0]?.relativePath).toBe("packages/core/src/PaymentReconciler.ts");
+  });
+
+  it.each([
+    "Find FairValueProbe. Verwende nur gelesene Werte, keine Vermutungen.",
+    "Find FairValueProbe. Use only read values, no guesses.",
+  ])("does not derive relationship ranking from evidence-only output: %s", (text) => {
+    const { diagnostics } = orderCandidatesForSearch({
+      files: [file("src/FairValueProbe.ts")],
+      query: query(text),
+      policy,
+      ignoredByDiscovery: 0,
+      deniedByDiscovery: 0,
+    });
+    expect(diagnostics.rankedCandidates[0]?.signals).toContainEqual({
+      name: "query-intent-boost",
+      value: 0,
+    });
   });
 
   it("expands test-style identifiers so their source file path receives the path-term bonus", () => {

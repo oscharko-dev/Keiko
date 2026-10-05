@@ -9,7 +9,14 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { createExplorationPlan, type ExplorationPlan } from "./plan.js";
+import {
+  DEFAULT_LEXICAL_MATCH_LIMIT,
+  createExplorationPlan,
+  directDefinitionSymbol,
+  isDirectEvidenceLookup,
+  requiresRelationshipOrHistoryRings,
+  type ExplorationPlan,
+} from "./plan.js";
 
 function happyScope(overrides: Partial<SelectedScope> = {}): SelectedScope {
   return {
@@ -49,6 +56,62 @@ function plan(
 }
 
 describe("createExplorationPlan", () => {
+  it("plans a connected long stacktrace with a technical target after its old intake boundary", () => {
+    const result = plan({
+      scope: happyScope({ explicitConnection: true }),
+      query: happyQuery({ text: `${"the ".repeat(1500)} Which code handles LateCrashProbe?` }),
+    });
+    expect(result.state).toBe("ready");
+    expect(result.clarification).toBeUndefined();
+    expect(result.anchors.map((anchor) => anchor.term)).toContain("latecrashprobe");
+    expect(result.rings.map((ring) => ring.kind)).toContain("lexical");
+  });
+
+  it("retains every requested technical target independently of the routing hint working set", () => {
+    const symbols = Array.from(
+      { length: 8 },
+      (_, index) => `TargetProbe${String.fromCharCode(65 + index)}`,
+    );
+    const result = plan({
+      query: happyQuery({
+        text: `Trace ${symbols.join(" ")} ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations`,
+      }),
+    });
+    expect(result.anchors).toHaveLength(8);
+    expect(result.targetDecision?.targets).toHaveLength(12);
+    expect(result.targetDecision?.targets.map((anchor) => anchor.term)).toEqual(
+      expect.arrayContaining(symbols.map((symbol) => symbol.toLowerCase())),
+    );
+  });
+
+  it("honors an explicit target intake limit without certifying the clipped direct request", () => {
+    const result = plan({
+      query: happyQuery({ text: "Where are FirstWorkerProbe and SecondWorkerProbe defined?" }),
+      maxAnchors: 1,
+    });
+    expect(result.anchors).toHaveLength(1);
+    expect(result.targetDecision?.targets).toHaveLength(1);
+    expect(result.targetDecision?.kind).toBe("contextual");
+    expect(result.targetDecision?.definitionSymbol).toBeUndefined();
+  });
+  it.each([
+    { excerptBytesMax: 1024, modelInputTokensMax: 4096 },
+    { excerptBytesMax: 4096, modelInputTokensMax: 1024 },
+  ])("bounds retained lexical metadata by accepted context dimensions %j", (capacity) => {
+    const p = createExplorationPlan(
+      {
+        scope: happyScope({ explicitConnection: true }),
+        query: happyQuery({ maxResults: DEFAULT_LEXICAL_MATCH_LIMIT }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, ...capacity },
+      },
+      { nowMs: () => 1_700_000_000_000 },
+    );
+    const lexical = p.rings.find((ring) => ring.kind === "lexical");
+    expect(lexical?.searchLimits.maxMatchesReturned).toBe(1024);
+    expect(lexical?.searchLimits.maxFilesScanned).toBeNull();
+    expect(lexical?.searchLimits.elapsedMsMax).toBeNull();
+  });
+
   it("happy path: well-formed scope + path/identifier query → ready, lexical + structural", () => {
     const p = plan();
     expect(p.state).toBe("ready");
@@ -127,16 +190,31 @@ describe("createExplorationPlan", () => {
     expect(p.clarification).toBeUndefined();
   });
 
-  it("explicitConnection: workspace-root still asks for clarification on generic prompts", () => {
+  it("implicit workspace-root still asks for clarification on generic prompts", () => {
     const scope = happyScope({
       kind: "workspace-root",
       relativePaths: [],
-      explicitConnection: true,
+      explicitConnection: false,
     });
     const q = happyQuery({ text: "tell me everything" });
     const p = plan({ scope, query: q });
     expect(p.state).toBe("clarification-needed");
     expect(p.clarification?.reason).toBe("too-generic");
+  });
+
+  it.each([
+    "tell me everything",
+    "Was siehst du?",
+    "Wie funktioniert die Anmeldung?",
+    "Warum ist die Suche kaputt?",
+  ])("searches an explicitly connected repository without requiring a code anchor: %s", (text) => {
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(p.state).toBe("ready");
+    expect(p.rings.length).toBeGreaterThan(0);
+    expect(p.budget).toEqual(DEFAULT_EXPLORATION_BUDGET);
   });
 
   it("explicitConnection: workspace-root allows project metadata lookups", () => {
@@ -178,6 +256,84 @@ describe("createExplorationPlan", () => {
     expect(p.anchors.some((anchor) => anchor.term === "windowframe")).toBe(true);
     expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(p.clarification).toBeUndefined();
+  });
+
+  it.each([
+    "Untersuche den aktuell verbundenen Ordner rekursiv. Wo sind LateAuxiliaryProbe und DeepAuxiliaryProbe implementiert, und welche Werte liefern sie? Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen und unterscheide fehlende Evidenz von nicht vorhandenen Dateien.",
+    "Was steht in ADR-987654 und RFC-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen.",
+  ])("keeps unparsed multi-clause source questions contextual: %s", (text) => {
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(p.state).toBe("ready");
+    expect(p.targetDecision?.kind).toBe("contextual");
+    expect(p.rings[0]?.kind).toBe("lexical");
+  });
+
+  it("preserves one-symbol lexical narrowing separately from multi-target direct evidence", () => {
+    const query = happyQuery({ text: "Where are WindowFrame and ChatPanel implemented?" });
+    const anchors = [
+      { term: "windowframe", kind: "identifier", weight: 0.85 },
+      { term: "chatpanel", kind: "identifier", weight: 0.85 },
+    ] as const;
+    expect(isDirectEvidenceLookup(query, anchors)).toBe(true);
+    expect(directDefinitionSymbol(query, anchors)).toBeUndefined();
+    expect(directDefinitionSymbol(query, anchors.slice(0, 1))).toBeUndefined();
+    expect(
+      directDefinitionSymbol(
+        happyQuery({ text: "Where is WindowFrame implemented?" }),
+        anchors.slice(0, 1),
+      ),
+    ).toBe("windowframe");
+  });
+
+  it.each([
+    "Wo ist LateDefinitionProbe in den verbundenen Dateien implementiert? Erstelle eine vollständige Tabelle für alle 96 Dateien mit Dateinummer, tatsächlichem Rückgabewert und belegter Definitionszeile. Verwende nur gelesene Werte, keine Vermutungen. Lange Kommentarblöcke vor der Funktion sind keine Implementierung. Gib jeden Rückgabewert an und zitiere jede Definitionszeile.",
+    "Where is LateDefinitionProbe implemented? Create a complete table for all 96 files with their actual return values and cited definition lines. Use only read values, no guesses. Long comments before the function are not implementations.",
+  ])("retains targets without interpreting output prose as literal-only syntax: %s", (text) => {
+    const query = happyQuery({ text });
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query,
+    });
+    expect(p.state).toBe("ready");
+    expect(requiresRelationshipOrHistoryRings(query)).toBe(false);
+    expect(isDirectEvidenceLookup(query, p.anchors)).toBe(false);
+    expect(p.targetDecision?.kind).toBe("contextual");
+    expect(p.targetDecision?.targets.map((target) => target.term)).toContain("latedefinitionprobe");
+    expect(p.rings[0]?.kind).toBe("lexical");
+  });
+
+  it.each([
+    "Wo ist LateDefinitionProbe implementiert und welche Funktionen verwenden LateDefinitionProbe? Verwende nur gelesene Werte, keine Vermutungen.",
+    "Where is LateDefinitionProbe defined and which callers use it? Use only read values, no guesses.",
+    "Where is LateDefinitionProbe defined and imported? Use only cited evidence.",
+    "Where is LateDefinitionProbe defined and when was it changed? Use only read values.",
+  ])("preserves real relationships alongside evidence directives: %s", (text) => {
+    const query = happyQuery({ text });
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query,
+    });
+    expect(requiresRelationshipOrHistoryRings(query)).toBe(true);
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
+  });
+
+  it.each([
+    "Where are WindowFrame and ChatPanel defined and called by their callers?",
+    "Where are WindowFrame and ChatPanel implemented and imported?",
+    "Where are WindowFrame and ChatPanel defined and exercised by integration tests?",
+    "Where are WindowFrameTest and ChatPanelSpec implemented?",
+    "Where are WindowFrame and ChatPanel defined and how have they changed?",
+    "Where are WindowFrame and ChatPanel defined and why do they fail?",
+    "Trace the implementation of WindowFrame and ChatPanel from route to handler.",
+  ])("preserves requested relationships and diagnostics for multiple targets: %s", (text) => {
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
   it("explicitConnection: workspace-root allows lowercase definition lookups", () => {
@@ -396,7 +552,7 @@ describe("createExplorationPlan", () => {
     expect(p.planId).toMatch(/^pl-[0-9a-f]{16}$/);
   });
 
-  it("budget slicing: every ring's searchLimits are integers ≥ 1", () => {
+  it("budget slicing: output limits stay finite while source scan time is uncapped", () => {
     const p = plan({
       scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
       query: happyQuery({ text: "look at src/a/b.ts and `Foo` and src/c/d.ts" }),
@@ -404,22 +560,42 @@ describe("createExplorationPlan", () => {
     expect(p.state).toBe("ready");
     for (const ring of p.rings) {
       const limits = ring.searchLimits;
-      for (const v of [
-        limits.maxFilesScanned,
-        limits.maxMatchesReturned,
-        limits.maxBytesPerFileScanned,
-        limits.elapsedMsMax,
-      ]) {
+      for (const v of [limits.maxMatchesReturned, limits.maxBytesPerFileScanned]) {
         expect(Number.isInteger(v)).toBe(true);
         expect(v).toBeGreaterThanOrEqual(1);
+      }
+      expect(limits.elapsedMsMax).toBeNull();
+      if (ring.kind === "lexical") {
+        expect(limits.maxFilesScanned).toBeNull();
+        expect(limits.maxMatchesReturned).toBe(DEFAULT_LEXICAL_MATCH_LIMIT);
       }
       expect(limits.maxBytesPerFileScanned).toBeGreaterThanOrEqual(8192);
     }
   });
 
+  it("preserves finite enrichment file ceilings and slices an explicit elapsed budget per ring", () => {
+    const p = createExplorationPlan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text: "Where is WindowFrame defined and used?" }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 10_000 },
+    });
+    expect(p.state).toBe("ready");
+    expect(
+      p.rings.map(({ kind, searchLimits: { maxFilesScanned, elapsedMsMax } }) => ({
+        kind,
+        maxFilesScanned,
+        elapsedMsMax,
+      })),
+    ).toEqual([
+      { kind: "lexical", maxFilesScanned: null, elapsedMsMax: 5500 },
+      { kind: "structural", maxFilesScanned: 614, elapsedMsMax: 3000 },
+      { kind: "git-history", maxFilesScanned: 307, elapsedMsMax: 1500 },
+    ]);
+  });
+
   it("decouples lexical scan breadth from the excerpt-byte budget so multi-file scopes are reachable", () => {
     // Epic #177 retrieval fix. Lexical/structural scanning is transient — each candidate file is
-    // read to match lines, then discarded — and is bounded by elapsedMsMax, NOT by the excerpt-byte
+    // read to match lines, then discarded — and honors explicit deadlines/cancellation, not the excerpt-byte
     // budget the model context is built from. The previous coupling
     // (maxFilesScanned * maxBytesPerFileScanned <= excerptBytesMax * weight) capped the lexical
     // ring at ~4 files, so the search never reached a file ranked later than the alphabetically
@@ -433,14 +609,9 @@ describe("createExplorationPlan", () => {
     const lexical = p.rings.find((r) => r.kind === "lexical");
     expect(lexical).toBeDefined();
     const lexicalLimits = lexical?.searchLimits;
-    // The number of files an excerpt-byte-derived cap would have allowed (the old, buggy bound).
-    const excerptDerivedFiles = Math.floor(
-      (p.budget.excerptBytesMax * 0.55) / (lexicalLimits?.maxBytesPerFileScanned ?? 1),
-    );
-    // Scan breadth must now exceed both that excerpt-derived cap and filesReadMax, so an
-    // alphabetically-late but relevant file is still examined.
-    expect(lexicalLimits?.maxFilesScanned ?? 0).toBeGreaterThan(excerptDerivedFiles);
-    expect(lexicalLimits?.maxFilesScanned ?? 0).toBeGreaterThan(p.budget.filesReadMax);
+    // Recursive breadth has no file-count or time cap; excerpt reads retain their own limits.
+    expect(lexicalLimits?.maxFilesScanned).toBeNull();
+    expect(lexicalLimits?.elapsedMsMax).toBeNull();
     // The per-file scan read cap keeps its 8 KiB floor across every ring.
     for (const ring of p.rings) {
       expect(ring.searchLimits.maxBytesPerFileScanned).toBeGreaterThanOrEqual(8192);

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { requestGatewayReadinessChatCompletion } from "./readiness-probe.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -404,6 +406,12 @@ describe("requestGatewayReadinessChatCompletion", () => {
       level: "info",
       extra: { sentField: "max_tokens", reason: "other-cause", rejectedStatus: 400 },
     });
+    expect(activityLogEventRegistration(skipped)).toMatchObject({
+      diagnosticWhen: [{ field: "rejectedStatus", positive: true }],
+    });
+    expect(observedFailureQuery([skipped]).events.map((event) => event.parsed.view.op)).toContain(
+      "gateway.readiness.compatibility-retry.skipped",
+    );
     // A readable rejection is no failure: no error kind and no trace fields.
     expect(skipped).not.toHaveProperty("errorKind");
     expect(skipped.extra).not.toHaveProperty("frames");
@@ -556,6 +564,12 @@ describe("requestGatewayReadinessChatCompletion", () => {
       correlationId: "probe-corr-0001",
       extra: { omittedField: "max_tokens", rejectedStatus: 400 },
     });
+    expect(activityLogEventRegistration(retry)).toMatchObject({
+      diagnosticWhen: [{ field: "rejectedStatus", positive: true }],
+    });
+    expect(observedFailureQuery([retry]).events.map((event) => event.parsed.view.op)).toContain(
+      "gateway.readiness.compatibility-retry",
+    );
     expectActivityLogProof(
       "gateway.readiness.compatibility-retry.line",
       formatActivityLogProofLine(retry),
@@ -777,4 +791,43 @@ describe("requestGatewayReadinessChatCompletion", () => {
 
     expect(seenBody).not.toHaveProperty("reasoning_effort");
   });
+});
+
+it("keeps caller cancellation on a native readiness compatibility retry", async () => {
+  const controller = new AbortController();
+  const signals: AbortSignal[] = [];
+  let started: (() => void) | undefined;
+  const retryStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const fetchImpl: typeof fetch = (_url, init) => {
+    if (init?.signal === undefined || init.signal === null)
+      throw new Error("Expected fetch signal.");
+    signals.push(init.signal);
+    if (signals.length === 1) return Promise.resolve(new Response("{}", { status: 400 }));
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener(
+        "abort",
+        () => {
+          reject(new DOMException("Readiness cancelled", "AbortError"));
+        },
+        { once: true },
+      );
+      started?.();
+    });
+  };
+  const request = requestGatewayReadinessChatCompletion({
+    config: CONFIG,
+    provider: PROVIDER,
+    body: { messages: [] },
+    stream: true,
+    fetchImpl,
+    signal: controller.signal,
+  });
+  const rejected = expect(request).rejects.toThrow();
+  await retryStarted;
+  controller.abort();
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+  await rejected;
+  expect(signals).toHaveLength(2);
 });

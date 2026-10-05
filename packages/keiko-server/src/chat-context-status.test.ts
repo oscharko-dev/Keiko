@@ -1,3 +1,4 @@
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   buildGatewayAssembly,
   captureGatewayTurnSnapshot,
@@ -18,6 +19,7 @@ import type {
 import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfile,
+  deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -27,10 +29,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore, type ChatMessage } from "./store/index.js";
 import { compactChatContext, readChatContextStatus } from "./chat-context-status.js";
-import { captureChatHistory } from "./chat-history-snapshot.js";
+import { captureChatHistory, captureChatHistoryWithCheckpoint } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
@@ -81,11 +84,14 @@ function fixture(
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     store,
-    contextProfile: deriveContextProfile({
-      maxInputTokens: 32_000,
-      reservedOutputTokens: 2_000,
-      safetyMarginTokens: 1_000,
-    }),
+    contextProfile: {
+      ...deriveContextProfile({
+        maxInputTokens: 32_000,
+        reservedOutputTokens: 2_000,
+        safetyMarginTokens: 1_000,
+      }),
+      model: { id: "fixture" },
+    },
     modelPortFactory: () => {
       throw new Error("Manual compaction must not call a provider");
     },
@@ -172,9 +178,138 @@ function seedGroundedAnswer(
 // sources were the largest share of every request. The status now carries that share from the
 // latest grounded answer's body-free prompt context.
 describe("grounded context status", () => {
+  it("keeps the grounded history lane inside a tiny independent model input ceiling", () => {
+    const { deps, chatId } = fixture(0);
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const profile = deriveContextProfileFromCapability({
+      id: "tiny-input-alias",
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      maxInputTokens: 128,
+    });
+    const status = readChatContextStatus(
+      { ...deps, contextProfile: profile },
+      chatId,
+      "tiny-input-alias",
+    );
+    expect(status.conversationInputBudgetTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect(status.segments?.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(
+      profile.maxInputTokens,
+    );
+  });
+
+  it("treats an equal-window request from another model as historical source metadata", () => {
+    const { deps, chatId } = fixture(2, "Short conversation.");
+    const first = deriveContextProfileFromCapability({
+      id: "model-a",
+      contextWindow: 32_000,
+      maxOutputTokens: 2_048,
+    });
+    const second = deriveContextProfileFromCapability({
+      id: "model-b",
+      contextWindow: 32_000,
+      maxOutputTokens: 1_024,
+    });
+    const sourceMessage = {
+      role: "user" as const,
+      content: "Source: src/fact.ts\nconst fact = 42;",
+    };
+    seedGroundedAnswer(
+      deps,
+      chatId,
+      sentPromptContext(
+        {
+          messages: [sourceMessage],
+          withoutSources: [],
+          sentReferenceCount: 1,
+          availableReferenceCount: 2,
+        },
+        900,
+        first,
+      ),
+    );
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const status = readChatContextStatus({ ...deps, contextProfile: second }, chatId, "model-b");
+    expect(status.reservedOutputTokens).toBe(second.reservedOutputTokens);
+    expect(status.lastRequest).toBeUndefined();
+    expect(status.knowledgeSources).toBeUndefined();
+    expect(segmentOf(status, "knowledge").tokens).toBeGreaterThan(0);
+    expect(segmentOf(status, "knowledge").count).toBe(0);
+  });
+
+  it.each([
+    ["input", 128, 2_048],
+    ["output", 24_000, 1_024],
+  ] as const)(
+    "treats equal-window metadata after an %s limit change as historical",
+    (_kind, input, output) => {
+      const { deps, chatId } = fixture(2, "Short conversation.");
+      const first = deriveContextProfileFromCapability({
+        id: "stable-alias",
+        contextWindow: 32_000,
+        maxInputTokens: 24_000,
+        maxOutputTokens: 2_048,
+      });
+      const second = deriveContextProfileFromCapability({
+        id: "stable-alias",
+        contextWindow: 32_000,
+        maxInputTokens: input,
+        maxOutputTokens: output,
+      });
+      seedGroundedAnswer(
+        deps,
+        chatId,
+        sentPromptContext(
+          {
+            messages: [{ role: "user", content: "Source: src/fact.ts\nconst fact = 42;" }],
+            withoutSources: [],
+            sentReferenceCount: 1,
+            availableReferenceCount: 2,
+          },
+          900,
+          first,
+        ),
+      );
+      deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+      const status = readChatContextStatus(
+        { ...deps, contextProfile: second },
+        chatId,
+        "stable-alias",
+      );
+      expect(status.lastRequest).toBeUndefined();
+      expect(status.knowledgeSources).toBeUndefined();
+      expect(segmentOf(status, "knowledge").count).toBe(0);
+      expect(status.segments?.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(
+        second.maxInputTokens,
+      );
+    },
+  );
+
+  it("keeps legacy source tokens as estimates without asserting matching request metadata", () => {
+    const { deps, chatId } = fixture(2, "Short conversation.");
+    seedGroundedAnswer(deps, chatId, {
+      promptTokens: 900,
+      promptTokensMeasured: true,
+      instructionTokens: 100,
+      sourceTokens: 400,
+      sentReferenceCount: 4,
+      availableReferenceCount: 6,
+    });
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const status = readChatContextStatus(deps, chatId, "fixture");
+    expect(status.lastRequest).toBeUndefined();
+    expect(status.knowledgeSources).toBeUndefined();
+    expect(segmentOf(status, "knowledge")).toEqual({ tokens: 400, count: 0 });
+  });
+
   it("shows the latest grounded request's source share and size while the chat is grounded", () => {
     const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
     seedGroundedAnswer(deps, chatId, {
+      ...sentPromptContext(
+        { messages: [], withoutSources: [], sentReferenceCount: 4, availableReferenceCount: 16 },
+        5_901,
+        deps.contextProfile,
+      ),
       promptTokens: 5_901,
       promptTokensMeasured: true,
       estimatedPromptTokens: 6_420,
@@ -395,6 +530,37 @@ describe("grounded context status", () => {
     expect(status.pendingCompaction).toBeDefined();
   });
 
+  it("uses the same bounded conversation lane to read a saved grounded compaction", () => {
+    const { deps, chatId } = fixture();
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        safetyMarginTokens: 4_000,
+      }),
+    };
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const user = currentMessage(deps, chatId, "Continue reviewing the documentation.");
+    const continuity = groundedConversationContinuity(modelDeps, user, "fixture");
+    const compaction = continuity.compaction;
+    if (compaction === undefined) throw new Error("expected grounded compaction");
+    persistChatCompactionEvidence(modelDeps, {
+      compaction,
+      chatId,
+      modelId: "fixture",
+      messageCount: deps.store.countMessages(chatId),
+      startedAt: 1,
+      finishedAt: 2,
+      correlationId: "corr-grounded-lane-compaction",
+    });
+
+    const status = readChatContextStatus(modelDeps, chatId, "fixture");
+    expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(segmentOf(status, "summary").tokens).toBeGreaterThan(0);
+    expect(status.pendingCompaction).toBeUndefined();
+  });
+
   it("keeps a model-only chat free of a source share", () => {
     const { deps, chatId } = fixture(2);
     const status = readChatContextStatus(deps, chatId, "fixture");
@@ -439,6 +605,39 @@ describe("composer context status and manual maintenance", () => {
         ?.lines.some((entry) => entry.op === "chat.context.management"),
     ).toBe(true);
   });
+  it("records the declared input ceiling and unavailable window share from the actual meter producer", () => {
+    const { deps, chatId } = fixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const status = readChatContextStatus(
+      {
+        ...deps,
+        contextProfile: deriveContextProfile({
+          maxInputTokens: 128_000,
+          inputTokenLimit: 16_000,
+          reservedOutputTokens: 8_000,
+          safetyMarginTokens: 4_000,
+        }),
+      },
+      chatId,
+      "fixture",
+      "corr-input-geometry",
+    );
+    logChatContextManagement("inspected", status, 0, "corr-input-geometry");
+    expect(status.segments).toBeDefined();
+    if (status.segments === undefined) throw new TypeError("Expected context segments");
+    const event = sink.events.find((entry) => entry.op === "chat.context.management");
+    expect(event?.extra).toMatchObject({
+      contextWindowTokens: 128_000,
+      inputLimitTokens: 16_000,
+      inputCapacityUnavailableTokens: status.segments.find(
+        (segment) => segment.id === "input-capacity-unavailable",
+      )?.tokens,
+      reservedOutputTokens: 8_000,
+      safetyMarginTokens: 4_000,
+    });
+  });
+
   // PR #3678 review: the inspected line must let an agent rebuild the meter reading: the trigger,
   // the last knowledge request, the reference trim, the known shares and a pending probe.
   it("records the meter reading's trigger, knowledge request and shares on the inspected line", () => {
@@ -450,6 +649,7 @@ describe("composer context status and manual maintenance", () => {
         estimatedInputTokens: 9_000,
         inputBudgetTokens: 20_000,
         autoCompactionAtTokens: 12_400,
+        conversationInputBudgetTokens: 8_000,
         knowledgeSources: { tokens: 6_000, sentReferenceCount: 4, availableReferenceCount: 16 },
         lastRequest: { promptTokens: 8_800, measured: true, estimatedTokens: 9_100 },
         segments: [
@@ -457,6 +657,7 @@ describe("composer context status and manual maintenance", () => {
           { id: "summary", tokens: 300 },
           { id: "messages", tokens: 2_000, count: 6 },
           { id: "knowledge", tokens: 6_000, count: 4 },
+          { id: "source-capacity", tokens: 9_600 },
         ],
         contextWindowProbePending: true,
       },
@@ -468,6 +669,8 @@ describe("composer context status and manual maintenance", () => {
     expect(expectActivityLogProof("chat.context.management.line", line)).toMatchObject({
       correlationId: "corr-inspected-reading",
       autoCompactionAtTokens: 12_400,
+      conversationInputBudgetTokens: 8_000,
+      sourceCapacityTokens: 9_600,
       knowledgeSourceTokens: 6_000,
       sentReferenceCount: 4,
       availableReferenceCount: 16,
@@ -479,12 +682,30 @@ describe("composer context status and manual maintenance", () => {
       messageTokens: 2_000,
       contextWindowProbePending: true,
     });
+    const report = analyzeLogText(line);
+    expect(report.sufficiency.status).toBe("complete");
+    expect(
+      report.timelines
+        .find((timeline) => timeline.correlationId === "corr-inspected-reading")
+        ?.lines.some((entry) => entry.op === "chat.context.management"),
+    ).toBe(true);
+    expect(line).not.toContain("Kurze Frage");
   });
   it.each([
     "Was kostet das Modell Qwen?",
+    "Erkläre das Modell bitte genauer, z.B. seine Kontextgröße.",
     "Wie groß ist dieses Kontextfenster von Mistral?",
     "What is this model's context window?",
     "They deployed Qwen yesterday. What is its pricing?",
+    "Write Vitest tests for normalizeEmail in src/email.ts.",
+    "Schreibe dafür Vitest-Tests für config.ts.",
+    "Write tests for that function in settings.toml.",
+    "Schreibe Vitest-Testfälle für normalizeEmail in src/email.ts.",
+    "Add tests for the normalizeEmail function.",
+    "Suche im verbundenen HTML-Handbuchordner rekursiv nach LAB_MANUAL_SERVICE_INTERVAL. Welches Wartungsintervall steht dort? Nenne die belegte Datei und die Zeile.",
+    "Suche dort nach `LAB_MANUAL_SERVICE_INTERVAL`.",
+    "Find LAB_MANUAL_SERVICE_INTERVAL there and cite the source line.",
+    "Suche rekursiv nach DeepManualProbe. Nach wie vielen Betriebsstunden ist die Kalibrierung vorgesehen? Nenne die tatsächliche Quelldatei und Zeile. Prüfe dafür die aktuell verbundene Quelle erneut.",
   ])("does not add an unrelated old question to the explicit retrieval query: %s", (query) => {
     const { deps, chatId } = fixture(1, "Unrelated old payroll policy.");
     const continuity = groundedConversationContinuity(
@@ -498,9 +719,20 @@ describe("composer context status and manual maintenance", () => {
     "Wie funktioniert das?",
     "Was bedeutet das?",
     "Erkläre das bitte.",
+    "Erklaere das bitte genauer, z.B. fuer die Fehlerbehandlung.",
+    "Erkläre das bitte genauer, z.B. für die Fehlerbehandlung.",
     "How does it work?",
     "What does this mean?",
     "Summarize that.",
+    "Schreibe dafür Vitest-Testfälle, einschließlich Grenzwerten.",
+    "Schreibe dafür Vitest-Tests, z.B. für Grenzwerte.",
+    "Schreibe dafür Vitest-Tests, d.h. für Grenzwerte.",
+    "Schreibe dafür Vitest-Tests, u.a. für Grenzwerte.",
+    "Write Vitest tests for that function, e.g. edge cases.",
+    "Schreibe dafür Vitest-Tests mit dem Grenzwert 1.2.",
+    "Schreibe Vitest-Tests für diese Funktion.",
+    "Write Vitest tests for that function, including edge cases.",
+    "Add test cases for the proposed function.",
   ])("resolves a concrete anaphoric follow-up: %s", (query) => {
     const { deps, chatId } = fixture(1, "Qwen invoice extraction process.");
     const continuity = groundedConversationContinuity(
@@ -511,6 +743,26 @@ describe("composer context status and manual maintenance", () => {
     expect(continuity.retrievalContent).toContain("Qwen invoice extraction process.");
     expect(continuity.retrievalContent.startsWith(query)).toBe(true);
   });
+  it.each([0, 1])(
+    "keeps the prior question well-formed at an astral cut with offset %s",
+    (offset) => {
+      // The fixture's eight-unit prefix puts the emoji at 1498 or 1499, around the 1500-unit cut.
+      const { deps, chatId } = fixture(1, `${"word ".repeat(298)}${"x".repeat(offset)}😀 trailing`);
+      const query = "Explain that.";
+      const continuity = groundedConversationContinuity(
+        deps,
+        currentMessage(deps, chatId, query),
+        "fixture",
+      );
+      expect(continuity.retrievalContent.startsWith(`${query}\nNote 0.`)).toBe(true);
+      expect(Buffer.from(continuity.retrievalContent, "utf8").toString("utf8")).toBe(
+        continuity.retrievalContent,
+      );
+      expect(continuity.retrievalContent.endsWith("😀")).toBe(offset === 0);
+      expect(continuity.retrievalContent).not.toContain("trailing");
+      expect(continuity.retrievalContent.length).toBeLessThanOrEqual(query.length + 1 + 1500);
+    },
+  );
   it("keeps an expanded retrieval query within the existing anchor planner limit", () => {
     const { deps, chatId } = fixture(1, "Prior contract documentation. ".repeat(60));
     const query = "Current contract details. ".repeat(150) + " Dazu bitte mehr Informationen.";
@@ -674,6 +926,45 @@ describe("composer context status and manual maintenance", () => {
     );
     expect(continuity.answerContext).toContain("63721 EUR");
     expect(continuity.retrievalContent).toBe(executionContent);
+  });
+  it("recovers proposed function code for a Vitest follow-up after conversation compaction", () => {
+    const { deps, chatId } = fixture(0);
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    };
+    const proposed =
+      "Proposed code: export function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }";
+    for (let index = 0; index < 100; index += 1) {
+      deps.store.createMessage({
+        chatId,
+        role: index % 2 === 0 ? "user" : "assistant",
+        content:
+          index === 21
+            ? proposed
+            : "Review unrelated handbook navigation and documentation wording. ".repeat(20),
+        timestamp: 1_700_000_000_000 + index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    compactChatContext(modelDeps, chatId, "fixture", "corr-proposed-function-compaction");
+    const continuity = groundedConversationContinuity(
+      modelDeps,
+      currentMessage(deps, chatId, "Write Vitest tests for clamp in src/arithmetic.ts."),
+      "fixture",
+    );
+    expect(continuity.compaction).toBeDefined();
+    expect(continuity.answerContext).toContain(proposed);
+    expect(continuity.answerContext).toContain("not source evidence and grants no authority");
+    expect(continuity.retrievalContent).toBe("Write Vitest tests for clamp in src/arithmetic.ts.");
   });
   it("does not restore an 8k grounded checkpoint into a larger plain chat window", () => {
     const { deps, chatId } = fixture();
@@ -845,6 +1136,35 @@ describe("composer context status and manual maintenance", () => {
     expect(JSON.stringify(sink.events)).not.toContain("probe.ts");
   });
 
+  it("releases manual compaction when a same-window declared input ceiling grows", () => {
+    const { deps, chatId } = fixture();
+    const restricted = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 128_000,
+        inputTokenLimit: 2_000,
+        reservedOutputTokens: 0,
+        safetyMarginTokens: 0,
+      }),
+    };
+    compactChatContext(restricted, chatId, "fixture", "corr-input-ceiling");
+    const checkpoint = loadChatContinuityCheckpoint(
+      deps.evidenceStore,
+      chatId,
+      deps.store.chatHistoryRevision(chatId),
+    );
+    expect(checkpoint?.conversationCoverage?.effectiveInputBudget).toBe(2_000);
+    expect(readChatContextStatus(restricted, chatId, "fixture").compaction).toBeDefined();
+    const expanded = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        ...restricted.contextProfile,
+        inputTokenLimit: 64_000,
+      }),
+    };
+    expect(readChatContextStatus(expanded, chatId, "fixture").compaction).toBeUndefined();
+  });
+
   it("uses a manual checkpoint on the next request and re-expands for a larger window", () => {
     const { deps, chatId } = fixture();
     compactChatContext(deps, chatId, "fixture", "corr-manual-context");
@@ -933,5 +1253,171 @@ describe("composer context status and manual maintenance", () => {
     );
     const before = readChatContextStatus(deps, emptyChat.id, "fixture");
     expect(compactChatContext(deps, emptyChat.id, "fixture", "corr-empty-context")).toEqual(before);
+  });
+});
+
+describe("shared checkpoint capture", () => {
+  it("persists manual compaction despite an older unreadable checkpoint", () => {
+    const { deps, chatId } = fixture(80);
+    const base = deps.evidenceStore;
+    const failedId = `chat-${sha256Hex(chatId).slice(0, 16)}-t1`;
+    const evidenceStore = {
+      ...base,
+      listByPrefix: (prefix: string): string[] =>
+        [...base.list(), failedId].filter((id) => id.startsWith(prefix)),
+      get: (id: string): ReturnType<typeof base.get> => {
+        if (id === failedId) throw new TypeError("private-old-checkpoint");
+        return base.get(id);
+      },
+    };
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const status = compactChatContext(
+      { ...deps, evidenceStore },
+      chatId,
+      "fixture",
+      "mixed-manual-checkpoint",
+    );
+    expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(sink.events.find((event) => event.op === "chat.context.management")).toMatchObject({
+      correlationId: "mixed-manual-checkpoint",
+      extra: { outcome: "compacted" },
+    });
+    expect(sink.events.some((event) => event.op === "chat.context.failed")).toBe(false);
+    expect(JSON.stringify(sink.events)).not.toContain("private-old-checkpoint");
+  });
+  it("loads the checkpoint once when projecting an oversized context meter", () => {
+    const { deps, chatId } = fixture(80);
+    const listByPrefix = vi.fn((prefix: string) =>
+      deps.evidenceStore.list().filter((id) => id.startsWith(prefix)),
+    );
+    const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
+    const status = readChatContextStatus(measured, chatId, "fixture", "meter-read-once");
+    expect(status.pendingCompaction).toBeDefined();
+    expect(listByPrefix).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads checkpoints once before and once after manual persistence", () => {
+    const { deps, chatId } = fixture(80);
+    const listByPrefix = vi.fn((prefix: string) =>
+      deps.evidenceStore.list().filter((id) => id.startsWith(prefix)),
+    );
+    const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
+    const status = compactChatContext(measured, chatId, "fixture", "manual-read-once");
+    expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(listByPrefix).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a failed checkpoint read while projecting the context meter", () => {
+    const { deps, chatId } = fixture(80);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const listByPrefix = vi.fn((): never => {
+      throw new TypeError("private-checkpoint-read-canary");
+    });
+    const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
+    const status = readChatContextStatus(measured, chatId, "fixture", "failed-meter-read");
+    expect(status.pendingCompaction).toBeDefined();
+    expect(listByPrefix).toHaveBeenCalledTimes(1);
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.capture");
+    expect(event?.extra?.checkpointDisposition).toBe("read-failed");
+    expect(JSON.stringify(sink.events)).not.toContain("private-checkpoint-read-canary");
+  });
+
+  it.each(["listing", "manifest"])(
+    "distinguishes failed %s storage reads from absent checkpoints",
+    (failure) => {
+      const { deps, chatId } = fixture(2);
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const profile = deriveContextProfile({
+        maxInputTokens: 100,
+        reservedOutputTokens: 0,
+        safetyMarginTokens: 0,
+      });
+      const checkpoint = captureChatHistory(deps.store, chatId, "", profile, []).earlierCompaction;
+      expect(checkpoint).toBeDefined();
+      persistChatCompactionEvidence(deps, {
+        compaction: checkpoint,
+        chatId,
+        modelId: "fixture",
+        messageCount: 4,
+        startedAt: 1,
+        finishedAt: 2,
+      });
+      const fail = (): never => {
+        throw new Error("private checkpoint failure");
+      };
+      const evidenceStore = {
+        ...deps.evidenceStore,
+        ...(failure === "listing" ? { list: fail } : { get: fail }),
+      };
+      captureChatHistoryWithCheckpoint({
+        store: deps.store,
+        evidenceStore,
+        chatId,
+        currentUserMessageId: "",
+        profile,
+        redactionSecrets: [],
+        correlationId: "failed-capture",
+      });
+      const event = sink.events.find((entry) => entry.correlationId === "failed-capture");
+      expect(event?.extra?.checkpointDisposition).toBe("read-failed");
+      expect(event?.extra?.completeness).toBe("partial");
+      expectActivityLogProof(
+        "chat.continuity.capture.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("private checkpoint failure");
+    },
+  );
+
+  it("retains actual checkpoint disposition and budgets through the shared capture helper", () => {
+    const { deps, chatId } = fixture(20);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const profile = deriveContextProfile({
+      maxInputTokens: 128_000,
+      inputTokenLimit: 200,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const capture = (input = profile): ReturnType<typeof captureChatHistoryWithCheckpoint> =>
+      captureChatHistoryWithCheckpoint({
+        store: deps.store,
+        evidenceStore: deps.evidenceStore,
+        chatId,
+        currentUserMessageId: "",
+        profile: input,
+        redactionSecrets: [],
+        correlationId: "helper-capture",
+      });
+    const first = capture();
+    persistChatCompactionEvidence(deps, {
+      compaction: first.earlierCompaction,
+      chatId,
+      modelId: "fixture",
+      messageCount: 40,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    capture();
+    const enlarged = deriveContextProfile({ ...profile, inputTokenLimit: 20_000 });
+    capture(enlarged);
+    const original = deps.store.listMessages(chatId)[0];
+    if (original === undefined) throw new TypeError("Missing original message");
+    deps.store.createMessage({ ...original, content: "Earlier inserted context", timestamp: 0 });
+    capture();
+    const events = sink.events.filter((entry) => entry.correlationId === "helper-capture");
+    expect(events.map((entry) => entry.extra?.checkpointDisposition)).toEqual([
+      "none",
+      "restored",
+      "input-budget-expanded",
+      "revision-mismatch",
+    ]);
+    expect(events[2]?.extra?.effectiveInputBudgetTokens).toBe(enlarged.effectiveInputBudget);
+    expect(events[2]?.extra?.checkpointInputBudgetTokens).toBe(profile.effectiveInputBudget);
+    for (const event of events)
+      expectActivityLogProof("chat.continuity.capture.line", formatActivityLogProofLine(event));
   });
 });

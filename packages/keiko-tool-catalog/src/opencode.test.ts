@@ -228,6 +228,8 @@ describe("opencode registration set", () => {
     const tool = projection.tools.find((entry) => entry.alias === "keiko_repository_search");
     if (tool === undefined) throw new Error("Missing tool: keiko_repository_search");
     expect(tool.toolRef).toEqual({ canonicalId: "keiko.repo.search", contractVersion: 1 });
+    expect(tool.description).toContain("Git repositories and ordinary folders");
+    expect(tool.description).not.toContain("tracked workspace text");
     expect(tool.effects).toEqual(["workspace-read"]);
   });
 

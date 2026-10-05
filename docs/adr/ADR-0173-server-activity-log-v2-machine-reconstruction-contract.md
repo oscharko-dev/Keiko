@@ -51,7 +51,7 @@ parseable or partially identified line as valid v2 evidence.
 Amended by #3532 on 2026-09-18: every production process now reaches the registry-validated writer
 or reports that it cannot (D6). Lost events are counted in one bounded, closed ledger and persisted
 as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko status`,
-`keiko support export` and the desktop footer report. Every exit leaves one `process.exiting` line,
+`keiko support export` and the desktop workspace report. Every exit leaves one `process.exiting` line,
 and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
 report never carries it (D8, D9).
 
@@ -360,9 +360,12 @@ reach and adds the one relationship it cannot express today:
   request that triggered it. A rate-limited call always carries `httpStatus` on that same line —
   the provider's actual status, with `429` only as the default a standard rate-limit error
   assumes when none was supplied — so an agent reconstructing the failure never has to infer the
-  HTTP status from the error class alone; `retryAfterMs` is present on the same line only when the provider itself supplied a
-  retry value — there is no fallback default, so its absence is itself evidence that the provider
-  did not advertise one, not a gap in the record.
+  HTTP status from the error class alone; `retryAfterMs` carries a parsed provider retry value,
+  never the gateway's fallback backoff. OpenAI-compatible HTTP errors also carry the closed
+  `retryAfterHeader` observation (`absent`, `valid`, `unparseable`, or `elapsed`) on the existing
+  retry events. A rejected header therefore remains distinguishable from an absent header without
+  logging its contents. Legacy adapters that do not supply this observation retain unknown header
+  availability; absence of `retryAfterMs` alone must not be interpreted as proof of no header.
 - **BFF → WebSocket**: one correlation id is resolved once per connection at upgrade time, not
   re-minted per failure, so every diagnostic a WS session emits over its lifetime is joinable to
   the same id.
@@ -532,8 +535,23 @@ that writes or reads evidence, so their state cannot make evidence unwritable or
 `keiko support manifest verify` reports it. The heartbeat re-evaluates without a probe
 and logs every transition. A persistence loss since the last evaluation degrades readiness with
 `sink-unwritable`. `GET /api/health` returns the snapshot as `diagnostics`. `keiko status` prints
-it, and so does `keiko support export` for the exported directory. The desktop footer shows a
-degraded or unavailable state with its reasons.
+it, and so does `keiko support export` for the exported directory. The desktop workspace shows a compact notice when readiness is degraded or unavailable,
+with an error-report action. Closed technical reasons remain in the health response, Activity
+Log and exported report; the notice uses plain language. The shell owns the health poll, so
+readiness does not depend on the lazy footer module. Verified degraded or unavailable snapshots
+are displayed immediately. A failed initial health read is also displayed immediately, with its
+error-report action. After a successful health read, transport unavailability requires two consecutive
+failed polls so one transient read does not become a persistent outage notice. Failed health reads
+select their actual request correlation and captured failure facts. Invalid diagnostic metadata records
+`validation-failed` with the response correlation (the sent request id is the fallback) and the
+closed `healthDiagnosticsInvalidReason`: `null-shape`, `readiness-value`, or `snapshot-shape`.
+These are validation observations, not thrown exceptions or assertions of version skew; no synthetic
+error class or frames are added. The notice forwards the same classification into report creation.
+A verified degraded snapshot uses the existing server report selection without a GET correlation,
+so recent failure or incident-window evidence can include uncorrelated readiness and loss lines.
+Observations without verified readiness or attributable failure request client-only evidence.
+A pending or ready report keeps its original selector through health recovery. The footer displays
+the installed version.
 
 **Sufficiency is proven compositionally (#3532).** Four mechanisms close the gap between declared
 and demonstrated evidence. Each is derived from the registry, never maintained beside it.
@@ -568,6 +586,41 @@ and demonstrated evidence. Each is derived from the registry, never maintained b
 A registration never declares `frames` or `causeChain` required. Redaction omits an empty array, so
 a required one would reject the ordinary failure without Keiko frames or a cause. The generator
 reports that declaration as `registration-omitted-field-required`.
+
+Grounded diagnostics use the same registry and request correlation. `search.citations.reconciled`
+covers numeric references and file locations for Knowledge Pod, folder, multi-source and hybrid
+answers. `citationKind` identifies `numeric` or `file`; hybrid may emit one of each. Required
+reference, attached and dangling counts share the closed reconciliation outcome. File lines add
+`ambiguousMarkerCount` and `droppedImplicitCount`; optional weak-overlap/grouped counts describe
+only measurements actually made. Omitted metrics must not be interpreted as measured zeroes.
+
+`client.citation.activated` records a citation click and its source selection under the
+activation correlation. `reason` describes the source fingerprint: `matched` (one root),
+`unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
+`opened`, `open-refused`, `picker-opened`, `picker-dismissed`, or `refused`; an opened picker
+is not a successfully opened file. `rootCount` and `matchCount` explain the choice without
+recording the fingerprint, file path, source label or citation text. The registered server
+projection retains these closed fields on the existing Activity Log timeline.
+
+The `grounded-pack-validation` diagnostic carries closed `validationReasons`, `violationCount`,
+`validatorThrew`, sanitized `originalCode`, optional `sourceIndex`, and `diagnosticOutcome`.
+`source-skipped` is a warning preserving independent healthy sources; `request-failed` retains the
+failure status. Expected stale-scope refusals before admission or after generation use
+`request-refused` at warning level and return the same correlation identifier in their 409 response.
+They retain rejection and diagnostic evidence without automatically allocating an incident or pin;
+an explicit report action can still select and export their cause.
+Optional grounded-memory preparation and capture failures use the initiating request correlation,
+including the closed unknown fallback when none was supplied. Their real exception passes through
+the existing diagnostic sanitizer so safe frames and cause classes remain available without
+retaining memory content or foreign error messages. The grounded answer still succeeds without
+the optional memory enrichment.
+`search.connected-context.completion-details` separates scope-context state,
+observed/retained files and charged/capacity bytes; excerpt omitted ranges, truncated windows,
+unread files and stop reasons; and metadata observed, retained and discarded counts. These are
+phase measurements, not a claim that every discovered file reached the model.
+`workspace.root.denied` records the actual safe errno or error class as `failureKind`, preserving
+the underlying recognized cause of `WorkspaceNotFoundError`, with error kind, frames and cause
+chain when available. It no longer substitutes a constant root-not-found label for every cause.
 
 ### D7 — Process lifecycle events give the log a subject
 
@@ -638,9 +691,10 @@ The desktop exposes the same canonical report as a local JSON download at action
 The healthy workspace footer has no report action. Exact browser resize notifications and Monaco
 cancellations are classified before failure caps; they do not create incidents or report actions.
 An uncaught browser error or rejected promise
-reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
-their own action. Each active failure permits one successful download, with a 1.5-second completion
-status, while failed creation remains retryable and unmounting cancels pending work. The selected
+reveals a compact, dismissible workspace notice tied to that failure; handled contextual errors retain
+their own action. Each active failure shares one bounded report generation, keeps a download link
+available for repeated attempts, and remains visible until human dismissal. Failed creation remains
+retryable and unmounting cancels pending work. The selected
 incident and compressed event section travel together, so support can inspect the evidence without
 access to the customer's complete logs. Export uses the existing paired application session and a
 bounded worker; it never uploads externally by itself.
@@ -734,6 +788,232 @@ downloads. Keiko performs no automatic upload or disclosure. A downloaded report
 the canonical offline validator before it is analyzed; operators who use the owner-private CLI
 reader first place it in a private directory and file according to the receiving-file contract.
 
+Report creation is reported as readiness, never as download initiation or an acknowledged
+operating-system save. The report action exposes a persistent **Download report** link for a real
+user gesture; it performs no asynchronous synthetic-anchor download. The same link retries the
+prepared bytes without a second report request. The BFF serves a standard gzip HTTP attachment
+at `/api/diagnostics/report/download/:downloadId`; decompression yields the exact canonical report
+bytes. The outer gzip framing is transport, not integrity-covered report content: section/report
+digests and `sourceArtifactDigest` cover decoded canonical text. Equivalent gzip metadata may
+therefore yield the same artifact digest; exact received-file custody requires a separate file
+hash. Bounded decompression and canonical validation remain mandatory. The response has `application/gzip` content type and an attachment filename ending in
+`.json.gz`, without `Content-Encoding` that would cause transparent decoding during download.
+Full reports require the exact existing session that generated the artifact; their opaque
+reference conveys no authority. Failure to acknowledge browser diagnostic delivery does not
+remove access to retained server evidence under an already valid session.
+
+The report action's request correlation identifies its own preparation and cleanup lifecycle. It
+never substitutes for a missing original Support-ID. Full-report descriptor preparation normalizes
+the selected identity through the shared report contract before looking up retained candidates; an
+unselected manual descriptor receives a fresh opaque incident correlation. An explicitly invalid
+evidence selector is refused before reading diagnostics, rather than selecting another failure.
+
+If the local session is absent, forged or expired, an explicitly insufficient client-only report
+can be produced without reading private server state. An explicit client-only privacy selection
+uses the same branch. It never reads a log, creates an incident or retention pin, or attributes a
+registered server failure. The manual header remains unattributed with unknown error kind and zero
+frames; server evidence is empty. The optional closed `clientReport` projection records
+`serverEvidence: unavailable` and the closed reason for excluding server evidence. This field describes
+which evidence is available **in the artifact**, not whether the backend is healthy. An authorized
+explicit client-only selection records `client-only-selected`; a displayed validated client failure
+without a trustworthy original correlation records `correlation-unavailable`. Missing authority
+records `session-unavailable`. Actual selection/delivery and service failures keep
+`diagnostic-delivery-unavailable` and `service-unavailable`; a scope choice never invents such an outage.
+Both the live BFF's limited branch and
+the browser-produced report preserve the validated original Support-ID and available closed
+client failure descriptors. The bounded 1024-byte request includes complete optional stack evidence
+when it fits; otherwise that optional evidence is absent, never represented as an observed empty
+stack. Kind and closed context remain available. Unverified client descriptors stay separate from
+registered server attribution, and authenticated full reports use authoritative server evidence.
+Original messages, paths, stacks and credentials are excluded. The UI presents ordinary report readiness
+and a download action; detailed evidence availability belongs inside the report.
+
+Only validated limited bytes can be served under a client-only attachment reference without a
+session; that reference never grants access to a full report. Reports remain schema v1 with
+canonical integrity hashes. Older strict consumers may reject the new optional projection rather
+than silently claim compatibility; receiving operators use the current canonical validator and
+analyzer. If the BFF or the report module is unavailable, the resident shared canonical producer
+can compose a bounded client report locally. Local download bytes use the same standard gzip
+transport, and existing fulfilled reports preserve their canonical content during transport
+recovery. Readiness and a manual initiation never claim an operating-system save. Successful local
+preparation emits the routine `client.support-report.prepared` state on the existing diagnostic
+sink, with the original correlation when available, closed evidence scope and availability reason,
+the already measured canonical byte count, and artifact quality in `reportCompleteness` and
+`reportLoss`. The event itself is complete with no event loss when recorded successfully.
+`availabilityReason` is present only for client-only scope, and canonical structural completeness
+does not imply diagnostic sufficiency. It contains no report content or failure kind
+and creates no new failure incident. A failed local attempt uses the same preparation member's
+closed `outcome: failed` variant with only an error kind and measured duration; it never invents
+artifact bytes or availability. Ingest records `client.support-report.preparation-failed` as routine
+causal state evidence without replacing the selected browser failure or opening another incident.
+This browser-local outcome does not close a server report lifecycle and does not fabricate a server
+request start; server report failures retain their existing start and terminal obligations.
+Ordinary server preparation retains its existing lifecycle without duplicating this browser recovery state.
+Process-local delivery caching is bounded by twice the canonical per-report cap (20 MiB), 128 entries
+and a 15-minute lifetime. The server remains authoritative for attachment expiry. The browser
+projects that response's server expiry onto its local download timer using the HTTP `Date` header,
+subtracting its one-second precision uncertainty and observed time spent reading and validating
+the body after the headers arrive. Preparation before the response does not consume a newly issued
+capability's lifetime. Network transit before header receipt cannot be measured separately from
+preparation; the server's expiry check remains authoritative. The browser never rewrites the wire
+timestamp. Older responses with no `Date` retain strict local-clock bounds; malformed dates never
+grant an extended lifetime.
+The normal manual-download diagnostic retains its existing source, scope and digest.
+The aggregate byte allowance retains one ready maximum-size artifact while
+its replacement is prepared, also admitting a small canonical limited report beside one full report.
+Each artifact remains capped at 10 MiB. This is a payload-byte retention bound, not an exact resident-memory measurement: JavaScript object overhead and temporary compression buffers are additional. Only the retained raw or compressed representation is charged;
+gzip replaces its raw ownership after successful compression. Concurrent downloads share one
+compression attempt; a failed attempt releases only its memoized promise so a later user retry can
+recompress the same retained canonical bytes. After compression, delivery rechecks the original
+authority, expiry and exact live cache entry before writing an attachment. A disposed entry cannot
+later emit a delivered result. Without a valid session, both an unknown reference and a known
+protected reference return the same content-free `403` response; cache membership is not disclosed.
+Only an explicitly client-only capability may deliver without a session. An authenticated caller
+receives the existing `404` refusal for an unknown reference or one owned by another session.
+Limited entries are removed before protected
+entries under byte or count pressure; unauthenticated limited creation cannot evict a protected
+artifact. Before admitting a limited replacement, the cache checks the existing protected byte and
+entry reservations. If protected artifacts leave insufficient capacity, refusal preserves already
+prepared limited artifacts rather than evicting them in a futile attempt to fit the replacement.
+Genuine exhausted protected capacity returns a `503 SUPPORT_REPORT_UNAVAILABLE` response and
+records the closed `delivery-capacity` reason, allowing the existing browser-local report fallback
+without growing memory. Quota, evaluation and report-size refusals intentionally use the same
+recoverable preparation response; the Activity Log preserves their specific closed reasons. Only
+an active-worker `busy` refusal remains `429`; a missing requested selection retains its distinct
+`SUPPORT_REPORT_SELECTION_UNAVAILABLE` code. The routine `support.report.ui.delivery-released` state records actual expiry,
+byte-pressure or entry-pressure disposal using the original creation correlation, canonical and
+charged retained byte counts, and closed authority and evidence scope. It contains no attachment
+token, filename or report body and does not claim evidence loss or an operating-system save. Expiry makes report creation available again. The response uses `no-store`,
+`nosniff`, and the closed canonical filename. Older-server local object URLs are released on
+eviction or explicit global-error dismissal. A global error stays visible until human dismissal.
+The body-free `support.report.ui.delivered` state records canonical artifact bytes and the separate
+compressed transport byte count, without claiming that the operating system saved them. It emits
+only on response finish; `parentCorrelationId` joins the creating request and `reportDigest`
+identifies the canonical artifact. `support.report.ui.failed` records cancellation, compression
+failure and response-write failure. `support.report.ui.download-refused` records closed authority
+or unavailable-reference refusals. Neither implies a successful download. The routine
+`client.support-report.download-started` line records manual initiation and its causal link to the
+selected error. Structured delivery facts preserve the source (`server` or `browser`), evidence scope
+(`server` or `client-only`), and canonical report digest when available, including when a server report
+is served again through a local Blob. Legacy string `automatic` and `manual` values are accepted only
+for older clients. The line carries no report body, destination, filename or saved claim.
+Browser-produced reports can claim only `client-only` evidence; a server-produced report may contain
+`server` or `client-only` evidence. The ingest boundary rejects `browser` paired with `server` before
+writing a download line. These client-reported provenance fields, including `reportDigest`, are
+browser assertions, not server attestation; canonical validation of the received artifact and its
+matching server preparation/delivery evidence remain authoritative.
+
+`client.files-scope.decision` records closed source-ownership and grounding-queue state, with
+optional source/candidate counts and a binding fingerprint; it contains no source references or
+content. `CLIENT_FILES_SCOPE_DECISIONS` is the shared vocabulary: `restored`, `owned-elsewhere`,
+`released`, `blocked-ambiguous`, `fingerprint-absent`, `conflict-retried`, `ack-missing`,
+`acknowledged`, `ack-invalidated`, `automatic-suppressed`, `timeout-blocked`, `timeout-recovered`,
+`timeout-rejected` and `request-superseded`. Current queue and retry producers identify
+`mutationSurface` explicitly as `files`, `local-knowledge` or `git-change` using the same shared
+contract tuple as the validator and registered line. The original action retains its correlation
+through a timeout and later recovery. Each actually refused attempt records one `timeout-rejected`
+under its own correlation, with the blocking action as `parentCorrelationId`. Only
+`timeout-recovered` carries `rejectionCount`: the exact nonnegative safe-integer number of refused
+attempts, including zero. These are separate actions plus a recovery summary, not repeated failures
+of the original action or a count of missing log events.
+
+Git connect and refresh retain the initiating correlation through the POST and any compatibility
+read. Current replies carry the actual committed Chat and its store-owned grounding identity;
+the UI adopts that response without a second read. An unavailable or unconfirming legacy read
+records one body-free client diagnostic and a localized saved-but-not-refreshed notice, never a
+second connect POST. A provisional view retains the existing identity rather than inventing one.
+Superseded shell bindings release only their newly accepted relationship against the current
+server identity; failed late compensation keeps the existing mutation queue blocked. A changed
+Files acknowledgement records its original action as `parentCorrelationId`, with one invalidated
+candidate per owned acknowledgement.
+
+`gateway.setup.metadata.resolved` records the discovery outcome (`available`, `unavailable`,
+`cancelled` or `failed`) and elapsed time. When setup supplied explicit selections,
+`selectedModelCount` counts selected chat and embedding entries. After successful discovery,
+`metadataEnrichedModelCount` counts role-compatible selected entries with nonempty discovered
+metadata, `roleMismatchModelCount` counts discovered selections incompatible with their selected
+role, and `notDiscoveredModelCount` counts selections absent from discovery. A role-compatible
+entry without metadata belongs to none of those three subsets, so their sum need not equal the
+selected count. Discovery-only calls omit selection counts; failed or cancelled discovery can
+retain the known selected count but omits the three unmeasured result counts. The event contains
+no model identifiers, endpoints or credentials and does not claim that every selected model has a
+known context window.
+
+The shared desktop report action preserves the selected error when reporting itself fails. A
+session refusal offers report regeneration, a local service failure names application recovery, and a
+rate refusal names the bounded retry delay; none grants authority or automatically replays a write.
+An explicit report action first joins the existing same-bearer session confirmation after boot pairing.
+This restores only valid cookie projections; absent, revoked, expired or forged bearers receive no
+new authority and can still obtain the explicitly limited artifact. Cancellation during confirmation
+prevents a subsequent report POST.
+An exhausted diagnostic reservation buffer must not prevent manual export of already retained evidence. Desktop and CLI
+export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
+then compose and validate the same bounded report. An unavailable independent candidate directory or
+an oversized candidate record also permits this transient preparation after the existing body-free
+refusal evidence. Explicit correlations must first resolve to readable Activity Log evidence;
+unknown correlations and unavailable named incident/fingerprint selections remain refused. Candidate
+lookup failure never broadens a selected report to another error or bypasses guarded log reads. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
+cleanup. Admission retries the actual exclusive slot claim after a removed candidate; incomplete
+pin or fingerprint cleanup remains partial evidence without pretending that a released slot is still
+occupied. A retained or peer-replaced slot claim still prevents admission. Pin capacity likewise
+follows actual pin ownership rather than unrelated claim cleanup. In-flight reservations are never stolen. The report summary distinguishes stored from
+transient descriptors with `retentionDisposition`; a transient descriptor omits `pinDisposition`
+because it owns no retained pin and must not imply that a pin attempt occurred. Desktop and CLI
+completion events carry the canonical incident ID, report digest, actual `incidentTrigger`, and
+`retentionDisposition`; the validated selected correlation joins a transient preparation back to its
+quota-refusal evidence. `pinDisposition` is emitted only for a stored descriptor with an actual pin
+attempt. CLI analysis of an imported report does not claim local retention or pin ownership.
+After a desktop artifact is successfully prepared and
+admitted to the existing fifteen-minute memory download cache, its durable candidate and pin are
+released. This means the artifact is prepared, not that it was saved or sent. Failed preparation or
+cache admission preserves pre-existing diagnostic candidates. The owner preparation callback marks
+only a newly created retained manual candidate; cancellation, timeout, worker failure or failed
+delivery admission withdraws that exact owned candidate and its claims and pin through the existing
+retirement path. Its `support.incident.dismissed` line carries the closed `abandoned` reason and
+candidate state, never a successful-report or human-dismissal claim. Failed record inspection or
+expiry inspection emits `support.incident.retirement-failed` on the owning Activity Log port with
+the attempted incident ID, closed read/sweep stage, original reduced error class, safe frames and
+causes, and request correlation. Terminal failure labels retain a reduced machine token only within
+the registered field bound; an oversized token falls back to the shared content-free exception
+class rather than truncating its identity or losing the event. Safe frames and cause evidence remain
+unchanged. It leaves ownership intact and does not invent unavailable record metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
+transient descriptors grant no abandonment ownership. No additional report archive is created.
+
+If retirement cannot open or write its evidence sink, the existing independent diagnostic fallback
+records the original safe error evidence, request correlation and explicit event loss. An unexpected
+retirement write or pin-release exception returns `failed`; it never claims that cleanup succeeded.
+Explicit cross-graph writer ownership refusal remains an evidenced exception before mutation.
+The report-job abandonment guard preserves the original cancellation or timeout when its cleanup
+owner throws, releases the worker admission, and keeps unsuccessful cleanup eligible for retry.
+
+After successful descriptor inspection, `support.incident.retirement-started` records the actual
+withdrawal attempt under the retirement request correlation, joined to the original incident through
+its parent. The terminal dismissal closes that request lifecycle and explicitly records `removalStatus`, `claimsStatus` and `pinRelease`. A
+failed record removal preserves the intended candidate/reported state and leaves claims and the
+pin `not-attempted`; failure after removal yields `dismissed-incomplete`, with the record already
+withdrawn and remaining cleanup explicitly incomplete. The CLI reports this distinction and exits
+nonzero. Dismissal and expiry failures persist warning-level canonical error kinds, reduced original
+classes, and available frames/causes on their terminal lines. The dismissal request is joined to
+the original incident lifecycle through its parent correlation. A missing or peer-released pin is
+`not-pinned`, while a rejected pin release remains incomplete. Successful prepared completion can
+never carry `abandoned`, even if a structurally wider caller object supplies that option.
+
+When a manual descriptor's supported causal selection retains a registry-eligible failure
+under the requested root or its direct child, shared CLI and desktop composition derives a
+registered-failure identity from that retained event using the existing fingerprint, frame and
+correlation rules. Selecting a failing child directly preserves its real parent edge.
+This applies to both transient fallback descriptors and retained manual descriptors created when
+regenerating an artifact after the original diagnostic candidate was released. Only candidates
+whose original frames survive the shipped report code-inventory policy may supply the immutable
+failure fingerprint. Error diagnostics take priority over warning summaries; framed diagnostics
+take priority over unframed events at the same level. A diagnostic-category event wins the remaining
+category tie; otherwise the first retained candidate is stable. No durable candidate, pin or quota slot is created by this
+attribution. A selection without an eligible failing event keeps the unattributed manual identity;
+deeper descendant failures remain in evidence without inventing a direct parent edge.
+Unknown selected correlations remain refused before any descriptor is created. The existing
+`support.incident.rejected`, `support.report.ui.*`, HTTP request and client diagnostic events retain
+the quota, export outcome and closed recovery failure class.
+
 `keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed] [--emit-fixture PATH]`
 reads only the explicitly chosen owner-private, single-link regular file. It reads bounded chunks,
 checks UTF-8, canonical JSON, nesting, every section and record, identity and provenance, all
@@ -742,6 +1022,13 @@ escaped terminal/bidi controls), unknown sections, unsafe fields, trailing compr
 decompression bombs fail closed. Embedded segment identifiers are closed provenance values; analysis
 never resolves them against local files or the network and never executes report content or probes
 its recorded PIDs.
+
+The existing analyzer also accepts lazy option resolution after that complete validation. The CLI
+uses the validated base analysis to load tool-lifecycle validators only when needed, then derives
+the option-aware analysis and seed from the same decoded evidence. This avoids parsing, integrity
+verification and inflation a second time; synchronous analyzer calls retain their synchronous
+return type. Invalid input never reaches the resolver. The incident seed is reused for its own
+correlation, while an explicitly selected different timeline receives a separately prepared seed.
 
 The reader uses the report's exact registry/schema/catalog identity. Trusted immutable snapshots
 cover every stable release from 1.1.9 up to the current version, generated from the release tags
@@ -849,6 +1136,13 @@ fields against the generated runtime schema. Within each `(pid, instanceId)` lif
 gaps, duplicates, decreasing/reset values, and reorder deterministically. These machine states are
 included in human and JSON output; a line cannot become trusted v2 evidence merely because its JSON
 parsed successfully.
+Canonical support reports intentionally select causal evidence, so the first observed event of
+each process supplies the sequence baseline rather than declaring its unselected prefix missing.
+Later positive jumps likewise cannot establish missing process events: unrelated retained records
+may be intentionally absent from the selection. Duplicate, reset and decreasing values remain
+observable in the selected records. Declared source-integrity losses and selection reasons, plus
+malformed, unsupported, truncated and incomplete records, retain their existing fail-closed handling.
+Raw-log and bundle analysis still reports all gaps, including a missing prefix from sequence one.
 
 The compatibility and deprecation contract is explicit:
 
@@ -935,6 +1229,16 @@ counts, estimated removed-prefix and summary costs, savings, final estimated pro
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
+
+Only an explicit `STREAMING_UNSUPPORTED` response permits the browser to retry a chat request
+through buffered transport. Ambiguous non-envelope responses or a missing stream body retain the
+request identity and require reconciliation, without automatic replay.
+
+The live grounded context meter records `conversationInputBudgetTokens` and
+`sourceCapacityTokens` on `chat.context.management`. Its compaction threshold applies to the
+bounded conversation lane, not the whole model input; unused source capacity remains separately
+identified. Checkpoint validity uses that same lane profile. These fields are counts only and
+retain the existing timeline, causal correlation and sufficiency contract.
 
 Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
 `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
@@ -1036,9 +1340,13 @@ request":
   without making another provider call. Both successful and failed probes remain traceable from create, send and
   regeneration requests. Assistant-response links accept only validated correlation identities;
   malformed response bodies and invalid identities produce no fabricated link.
-  Known browser prerequisite failures use closed structured fields: a Git-sync validator chunk
-  failure records `moduleLoadFailure: git-sync` before any Git request, with a fresh correlation ID
-  shared by the UI error and diagnostic. Markdown layout evidence may carry a separately validated,
+  Known browser prerequisite failures use closed structured fields. Git validators record
+  `moduleLoadFailure: git-read`, `git-history`, or `git-sync` before any Git request, preserving the
+  caller's correlation ID or minting one shared by the UI error and diagnostic. Optional widget
+  catalog failures record `widget-locale`, `unavailable`, and one correlation ID per shared import
+  attempt. Failed catalogs retain the English fallback and defer further consumer-triggered imports
+  for five seconds on the monotonic clock; no background retry is scheduled. Markdown layout
+  evidence may carry a separately validated,
   bounded opaque `messageId`; Coding Workbench uses its run ID as the diagnostic correlation so
   provider message IDs shorter than the correlation minimum remain joinable. Native recorder
   errors retain their cause in memory; browser failure reports may also carry a closed error class,
@@ -1066,6 +1374,12 @@ request":
   browser-visible failure with the exact server request line it came from. Producers that
   structurally have no id (native `EventSource`, message-only notices) say so in their doc comments
   rather than inventing one.
+
+Desktop chat transport failures retain the original failure once under the request or echoed
+response correlation. Before validated SSE headers and a response body, their client diagnostic
+kind is `other`; after stream establishment it is `sse-error`. Idle stalls classify as `timeout`.
+Expected turn/scope admission refusals and deliberate cancellation do not create an additional
+client failure incident; their owning lifecycle evidence remains.
 
 - **Routine browser evidence is not a failure, and every browser report is a closed shape**
   (#3557). A live dev log showed 416 of 449 `client.diagnostic` lines were a window's routine
@@ -1361,7 +1675,15 @@ the segment about to open.
 - **Budget exceeded.** When the budget cannot be met, the event is dropped and counted, and
   `activity-log.pressure` reports `budget-exceeded`.
 - **Evidence.** Each pass that deletes or fails to delete is `activity-log.retention.pruned`
-  evidence.
+  evidence. `prunedUnprotectedPinnedSegmentCount` and `prunedUnprotectedPinnedBytes` count only
+  successfully removed segments requested by a still-active pin but outside its protection quota.
+  Failed removals, protected segments and ordinary unpinned retention do not enter these counts;
+  overlapping pins count each removed segment once. Actual pinned-evidence removal declares
+  `completeness: "partial"` and `loss: "event-dropped"`. The operation remains a shared-store state
+  observation: it can remove a peer's segments and must not mark the maintenance writer's own
+  retained records as dropped. Queries for missing selected evidence remain insufficient with
+  `evidence-not-retained`; unrelated complete request traces retain their own sufficiency. These
+  count fields are optional on historical records and always emitted by the current writer.
 
 Total disk use is therefore at most the byte budget plus the pin quota.
 
@@ -1391,11 +1713,24 @@ governing byte budget plus the pin quota, even when cooperating processes' own e
   inside it;
 - up to 64 named segments.
 
-At most 64 pins are active. The pin record is published before the current segment is sealed, so
+The ceiling check, rollover and pin admission all use `activeActivityLogPins`: only valid, unexpired pins count, so expired records awaiting cleanup never displace live evidence. At most 64 pins are active. The pin record is published before the current segment is sealed, so
 the next retention pass honors it. Pinned sealed segments count against `KEIKO_LOG_PIN_QUOTA_BYTES`,
 oldest pin first, and only while the quota lasts. A pin the quota cannot hold is still recorded with
 `quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
-loss marker with segment counts, bytes and the seq span. Expired and invalid pin records are removed with `activity-log.pin.expired`. `releaseActivityLogPin` removes a pin before its expiry, for example once its incident was reported or dismissed; the same line records it with `expiryReason: "released"`. Neither pin function ever throws: an unlistable directory or a failed removal is a closed, evidenced rejection, because both are reachable from a sink's own write path. #3530 provides the primitive; #3533 decides when and what to pin.
+protection-failure record with segment counts, bytes and the seq span. It declares partial protection
+and `loss: "none"`: the marker is emitted before retention may delete the unprotected segments, so
+it cannot claim an event was dropped. This is a non-causal observation of the shared pin pool:
+maintenance may carry an unrelated or unknown correlation without claiming a missing pin start.
+The support query never derives a causal root or parent/child edge from a registered `causal: none`
+operation. A quota warning inside a manual report's window remains mandatory window evidence; near
+an explicitly selected request it is process context, not part of that request's causal closure.
+Its physical correlation stays intact in exported evidence.
+Individual pin creation and expiry retain their causal lifecycle. The pin class remains degraded by `evidence-partial`;
+unrelated retained process evidence is not classified as lost. Historical registered quota records
+that declared `event-dropped` retain their exact bytes and are interpreted as this same protection
+failure. Derived manifests are rebuilt under version 3 so their process-loss count reflects this
+distinction. Confirmed write/drop counters, corrupt beginnings and missing retained segments still
+fail the existing evidence checks. Expired and invalid pin records are removed with `activity-log.pin.expired`. `releaseActivityLogPin` removes a pin before its expiry, for example once its incident was reported or dismissed; the same line records it with `expiryReason: "released"`. Neither pin function ever throws: an unlistable directory or a failed removal is a closed, evidenced rejection, because both are reachable from a sink's own write path. #3530 provides the primitive; #3533 decides when and what to pin.
 The legacy update-audit import pins its durable batch (`reason: "durable-batch"`).
 
 **Pressure and health.** `activity-log.pressure` records transitions between these closed states:
@@ -1486,16 +1821,27 @@ The first bound loses no evidence (the fingerprint's own candidate already pins 
 second can drop a defect Keiko has never seen before, purely because the shared cap was already
 spent; that case is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), throttled
 to at most one line per suppression window so a storm reports the loss once rather than flooding the
-log with one line per dropped evaluation (#3533 audit).
+log with one line per dropped evaluation (#3533 audit). That rejection's stored-record count uses a
+single directory-entry scan over regular closed-name records, including unreadable records; it does
+not open or parse their contents, follow symlinks, or run expiry cleanup. This is an observed count,
+not admission authority: exclusive slot claims still govern concurrent admission. Expiry cleanup
+continues to validate canonical record deadlines. A fresh post-publication snapshot supplies both
+the observed created count and immediate slot-retention selection, without another full parse.
+The pin-ceiling path inspects a fresh snapshot only when that ceiling is reached.
 
 On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
-minutes after, through D14's pin primitive, across every process instance) is published
-synchronously, in the same turn as the triggering write — before any later maintenance pass, this
-process's own next segment admission or another process sharing the state directory, can run against
-an unprotected window. Only the rest of candidate creation — deduplication, the quota check, and the
-record write — runs outside the logging call; it never transfers data. A duplicate or a rejected
-candidate releases the pin its trigger already published instead of leaving it to sit until its own
-TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
+minutes after, through D14's pin primitive, across every process instance) is requested
+synchronously, in the same turn as the triggering write. When capacity permits, it protects the
+window before a later maintenance pass or segment admission can remove evidence. This immediate
+request never retires another candidate to recover pin capacity: deduplication and candidate
+admission must succeed first. A newly admitted candidate whose immediate pin was rejected retries
+the existing pin manager without first deleting another candidate; a duplicate preserves the original candidate
+and its pin. Deduplication, quota admission, and the record write run outside the logging call and
+never transfer data. A duplicate or rejected candidate releases any pin its trigger already
+published instead of leaving it until its TTL. A queued candidate retains the original trigger-time
+sealed-segment snapshot when immediate protection is rejected; admission retries compare against
+that same snapshot, so evidence removed while the candidate was waiting remains observable.
+The residual race a synchronous publish cannot fully close on its own — a concurrent process's
 retention removing a sealed segment in the narrow gap between observing the window and the pin
 actually covering it — is detected by comparing that snapshot to the pin's own outcome and reported
 as the pin's `evidenceLostBeforePin`, so the window is never reported as a clean "pinned" when part
@@ -1516,36 +1862,102 @@ fingerprints do not promise cross-release grouping.
 Browser diagnostics can still be indistinguishable when they carry no usable product frame or
 closed feature context. Their retention claim is therefore scoped to the occurrence's validated
 causal reference as well as its defect fingerprint. Replaying the same request deduplicates; a later
-request retains its own window instead of discarding it under a fourteen-day coarse defect claim.
+request retains its own window instead of discarding it under a coarse defect claim.
 The local claim key is a hash and is never exported as a customer reference. Existing automatic
-slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Browser candidates
-may use only eight of the twenty-four automatic slots and at most two of the six evaluations per
-rolling minute. This reserves sixteen automatic slots and four evaluations for server failures
-without enlarging the shared bounds. The same atomic slot claims and closed rejection evidence
-apply to both classes. Server failures
-and historical version-one browser records keep their fingerprint-scoped deduplication.
+byte reservations and evaluation rate limits apply. Browser candidates may use one quarter of the
+reservation pool; all automatic candidates may use three quarters, preserving manual-report
+headroom. Browser evaluation remains at most two of the six evaluations per rolling minute,
+reserving the remaining evaluations for server failures. Existing atomic claims and closed
+rejection evidence apply to both classes. Server failures and historical version-one browser
+records keep their fingerprint-scoped deduplication.
 
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
-coverage. The store is owner-private, closed-grammar and quota-bounded (32 open candidates, 8 of them
-reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
+coverage. The store is owner-private and uses the existing governing Activity Log retention-byte
+policy to size its reservation pool. Each slot reserves one maximal 4 KiB candidate plus the two
+opaque owning-id claim payloads; there is no independent candidate-count setting. Exactly one slot
+inside this existing byte pool is held as an atomic publication reserve. The retained capacity is
+the pool less that technical slot, not an additional user quota. A replacement exclusively claims
+a free slot, writes and fsyncs its new immutable record, and only then retires an eligible older
+candidate and releases its owned claims and pin. A failed publication releases only its own new
+claims and pin and preserves prior candidates. Concurrent publishers cannot steal a held reserve;
+a fully occupied pool can restore its publication reserve by retiring one eligible older candidate
+only when every occupied pool slot has a matching durable record and owning claim, and the eligible
+class stock exceeds its governing share. Protected classes occupying overlapping indexes do not
+count as that surplus. After recovery removes a record, admission refreshes the names-only occupancy
+snapshot and retries exclusive claiming once, even if that record's pin cleanup was rejected. A peer
+that actually withdraws a prior record and its claim after the initial snapshot also permits this
+fresh retry. A missing claim alone does not: an unreadable, unsafe or still-present record preserves
+the refusal. Any peer that reclaims a free slot before the retry keeps its exclusive ownership.
+Recovery checks missing durable owners before opening claim contents and reads only the occupied
+slot owners; it does not rescan fingerprint claims or add a listing to ordinary admission. A
+confirmed claim unlink without a withdrawn record declines recovery without inventing a store
+outage. Retention evidence counts the full open
+store even when only one priority class is eligible for eviction. Each retention expiry records the
+closed `retentionCause` (`slot-pressure` or `pin-ceiling`), the actual `evictingCorrelationId` and the
+replacement's assigned `evictingIncidentId`. These are references to the displacing action, not a new
+parent edge: the victim's original lifecycle correlation and ancestry remain intact, including when
+the replacement is already its descendant. The canonical report aliases these opaque references
+through the same privacy projection as other identifiers. If full-pool reserve recovery actually
+removes a victim and the subsequent claim or publication fails, the existing rejection also records
+that exact `evictedIncidentId` and subtracts the removed victim from its retained-count snapshot.
+A refused removal emits no such rejection field; expiry by time carries no eviction fields.
+Any unpublished, torn or mismatched peer claim keeps the existing
+`quota-exhausted` refusal; failed or changed-file cleanup retains truthful partial evidence. This
+exception repairs interrupted post-publication retirement and legacy full pools without stealing
+in-flight ownership or enlarging the byte pool. Unreported
+candidates expire after twenty-four hours, including older records written with a longer expiry.
+One pure contract computes the effective deadline from the original expiry and the current lifetime;
+admission, reads, retirement, projections, recent selection and CLI output use that same deadline.
+Historical records are not rewritten. When the sweep has reached the effective deadline but is
+still before the original deadline, the existing
+`support.incident.expired` event records the closed reason `ttl-shortened`, releases the owned pin
+and claims, and retains truthful partial evidence if any cleanup fails. Sweeps at or after the original deadline use ordinary expiry. Ordinary expiry and byte
+pressure retain their distinct `expired` and `retention` reasons.
+On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
+Generated reports remain only in the existing transient download cache, without a disk archive.
+Health exposes the existing Activity Log readiness, closed reasons and lost-event count without
+scanning the incident store. The unused candidate-count/capacity projection and its
+`support.diagnostics.capacity` operation are retired: the metadata reservation and shared pin
+pool are different constraints, so a combined headroom figure was misleading. Legacy optional
+count fields remain accepted for wire compatibility but are no longer produced. Candidate
+creation, rejection and retirement continue to carry their actual counts and lifecycle evidence.
+An absent bootstrap policy permits the existing environment fallback; a present unreadable or
+corrupt governing policy still refuses diagnostic admission and is evidenced by that owner.
+An incomplete or invalid-JSON policy read is retried once immediately through the same guarded
+reader, allowing a concurrent publisher that has since finished to be observed. This bounded retry
+does not wait for a stalled publisher or eliminate the publication window. Persistent corruption
+still fails closed; unsafe filesystem reads and valid JSON outside the policy schema are not retried.
+The existing Activity Log pin ceiling remains unchanged. After durable publication, pressure at
+that ceiling retires one older eligible diagnostic candidate with an exact owned `incident` window
+pin, preserving one free pin slot inside the existing ceiling for the next publication. Its own
+newly published candidate is never selected for this cleanup. Durable-batch and other unowned pins
+are preserved. A legacy or foreign-filled pin pool can still refuse protection: the new record
+truthfully retains its rejected pin outcome instead of claiming a recovered pin. A failed owned
+pin release also remains evidenced and does not claim recovered capacity. The before/after segment
+check still reports any evidence lost before the new pin; no cleanup invents recovered bytes.
 
-Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
+Both the defectFingerprint dedup rule and the byte-reservation pool hold atomically across every process
 sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
 processes could each read as "still free": a registered failure claims its deduplication key's own
 `fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
-candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
+candidate claims one of a bounded pool of `slot-<nonnegative safe integer>.claim` files (automatics from slot 0 up, user
 reports from the top down, so the reserve holds without a shared counter) before its record is
 written. Both claim grammars are recognized by the same `parseSupportIncidentFileName` the
 repair/uninstall ownership predicate already calls, so state-paths.ts needed no change to own them.
-A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
+Legacy two-digit slot claims remain readable; no destructive migration is required. Reservation
+indices are generated lazily against the actual occupied claims, without allocating an array sized
+to the configured byte pool. A claim releases with its record on dismissal, expiry, rolling eviction
+or successful preparation into the download cache. Between a claim and its record, and between
 a record's exclusive create and its bytes, another process can see a claim without a record or an
 unreadable record at any moment, so such a file is treated as in flight until it is older than a
 one-minute grace by its own mtime: a repeat of the same retention key deduplicates onto the id
 the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
 recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
-against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same
-pass. An occurrence that finds an abandoned claim the sweep could not remove, or a claim still torn
+against a fresh, per-claim read before removal. A validated retained owner from the same sweep
+can justify keeping its claim without another body read; if a peer removes that owner afterward,
+cleanup waits for the next sweep. An owner absent from that snapshot must still be read freshly:
+a peer may have published it in the meantime. Snapshot absence never authorizes deletion. An occurrence that finds an abandoned claim the sweep could not remove, or a claim still torn
 on a second read, gives up as `store-unavailable` rather than publish a second candidate.
 Acknowledge, dismiss and report remain explicit human actions; nothing is disclosed automatically.
 
@@ -1601,17 +2013,58 @@ or after its first heartbeat; the selection is `evidence-not-retained` and carri
 first heartbeat, when one is retained, as the proof a receiver recomputes. Legacy files carry no
 segment index and prove no beginning. The result accounts for each selected lifetime's start as
 `selected`, `absent` or `lost`, and a report carries that account. A user-reported incident also
-selects its pinned window and takes every correlation in it as a root.
+selects diagnostic correlations in its pinned window as roots. Independently correlated, registered
+HTTP transport with no causal parent, an explicit successful numeric status (200–399), no warning, error, error kind
+or aborted flag is optional context under the existing 256-event cap; unknown or failed transport
+remains mandatory. Other independently correlated, registered non-diagnostic activity is also
+optional only when it is informational or debug, explicitly complete and loss-free, has no failure
+lifecycle, failure facts or uncertain status, and names no causal parent. Diagnostic, warning,
+error, partial and loss evidence remains mandatory. An operation may declare `diagnosticWhen` in its
+existing registration: an exact closed enum/boolean value match or a positive count makes the event
+mandatory even when its level is informational. Conditions reference existing scalar fields, are
+validated against their declared types and closed values, and are preserved by the canonical registry;
+there is no expression language or reader-side operation list. Unrelated metadata and successful
+values remain optional. These conditions govern retention, not a fabricated severity or failure kind.
+An owner must declare a failure outcome or positive failure counter that would otherwise be optional:
+rejected provider output, degraded readiness, failed verification, unavailable storage, and actual
+source inspection failures cannot depend on the optional-context allowance. Normal selection,
+file-size, binary, and result-budget exclusions do not imply a technical failure. Regression proofs
+use the actual producer, registered writer, scanner and incident query with zero optional context;
+healthy control records prove that the declaration does not turn every event into a diagnostic.
+Registrations without this optional metadata retain their existing selection semantics. A registered causal start without a later matching
+end or failure in the pinned logical-log window also makes its correlation mandatory. Matching follows the
+existing analyzer's correlation and registered failure class; a terminal from another class does
+not settle it, and a later restart or unmatched concurrent start remains open. The streaming scan
+retains only open correlations under the existing closure bound, with finite registered class keys;
+completed lifecycles release that bookkeeping. Crossing the bound reports explicit insufficiency,
+never a silently omitted start. An open lifecycle is retained evidence, not an invented error or
+timeout; out-of-order evidence is retained conservatively rather than guessed complete. Successful ancestors and descendants of a
+selected diagnostic root remain part of its complete causal closure. The incident header evaluates the evidence actually exported,
+including declared selection loss and budget reasons, rather than a separate unexported window.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every
 start, beginning line and heartbeat proof it requires, measured even when the closure alone exceeds
-the budget, so the stated size is one that fits. The lifetimes measured are bounded like the
+the budget, independently of record capacity. The lifetimes measured are bounded like the
 closure's correlations; beyond that bound the requirement is unknown (0). Evidence retention removed
 is `evidence-not-retained`; an unreadable candidate segment is `segment-unreadable`. Only optional
 context may be dropped, declared as `context-truncated`. Every result carries its provenance,
 integrity, coverage, loss and truncation, and exactly one sufficiency status from the per-class
 projection `keiko support analyze` uses.
+
+The query applies the canonical 20,000-record parsing ceiling while streaming, before report
+encoding. Required causal and lifetime-anchor records take precedence; fitting optional context is
+retained and the rest is counted as omitted. Both byte and record requirements are reported
+separately. A required closure that cannot fit remains explicitly insufficient rather than being
+presented as a complete partial chain. The existing `support.query.completed` event carries the
+required record count alongside its byte count. Older reports without that count remain readable.
+
+Optional context is ranked by its distance to the nearest selected closure event time, with log
+order breaking ties. A bounded heap keeps nearby events within the remaining record and byte
+budgets; an individually oversized optional event is omitted without blocking later fitting
+context. This is a streaming selection, not a byte-packing optimization. The final evidence stays
+in log order, required roots and edges retain priority, and every omitted context event still
+contributes to `context-truncated` and its count.
 
 **No database.** Manifests and streaming meet the measured need: a checked-in long-history test
 bounds peak memory and proves that manifest-pruned segment bodies are never opened. A database

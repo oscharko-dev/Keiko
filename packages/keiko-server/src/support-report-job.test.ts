@@ -1,9 +1,50 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  closeFileServerLogSinks,
+  listSupportIncidents,
+  recordUserReportedIncident,
+  recordRegisteredFailureIncident,
+  dismissSupportIncident,
+  reportServerLogFailure,
+} from "@oscharko-dev/keiko-activity-log";
+import {
+  parseActivityLogPinFileName,
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as filesystem from "node:fs";
+import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
+
+vi.mock("@oscharko-dev/keiko-activity-log", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-activity-log")>();
+  return {
+    ...actual,
+    dismissSupportIncident: vi.fn(actual.dismissSupportIncident),
+    reportServerLogFailure: vi.fn(actual.reportServerLogFailure),
+  };
+});
+
+vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
+  const actual = await importOriginal<typeof artifactFiles>();
+  return {
+    ...actual,
+    removeSafeArtifactFile: vi.fn(actual.removeSafeArtifactFile),
+    openSafeArtifactFile: vi.fn(actual.openSafeArtifactFile),
+  };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof filesystem>();
+  return { ...actual, closeSync: vi.fn(actual.closeSync) };
+});
 
 const workers = vi.hoisted(() => ({
   instances: [] as EventEmitter[],
   terminate: vi.fn(),
+  postMessage: vi.fn(),
   prepare:
     vi.fn<
       (typeof import("@oscharko-dev/keiko-activity-log/reader"))["prepareDesktopSupportReport"]
@@ -13,16 +54,49 @@ vi.mock("@oscharko-dev/keiko-activity-log/reader", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-activity-log/reader")>();
   return { ...actual, prepareDesktopSupportReport: workers.prepare };
 });
-vi.mock("node:worker_threads", () => ({
-  Worker: class extends EventEmitter {
-    public constructor() {
-      super();
-      workers.instances.push(this);
-    }
-    public terminate = workers.terminate;
-  },
-}));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends EventEmitter {
+      public constructor() {
+        super();
+        workers.instances.push(this);
+      }
+      public terminate = workers.terminate;
+      public postMessage = workers.postMessage;
+    },
+  };
+});
+import {
+  expectRegisteredActivityLogLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 import { runSupportReportJob } from "./support-report-job.js";
+const reportDirectories: string[] = [];
+const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
+  "@oscharko-dev/keiko-security/fs-hardening",
+);
+
+const actualFilesystem = await vi.importActual<typeof filesystem>("node:fs");
+
+function failNextIncidentReadClose(): void {
+  let incidentDescriptor: number | undefined;
+  vi.mocked(artifactFiles.openSafeArtifactFile).mockImplementation((path, options) => {
+    const descriptor = actualArtifactFiles.openSafeArtifactFile(path, options);
+    if (options.mode === "read" && options.trustedRoot.endsWith(SUPPORT_INCIDENT_DIRECTORY_NAME))
+      incidentDescriptor = descriptor;
+    return descriptor;
+  });
+  vi.mocked(filesystem.closeSync).mockImplementation((descriptor) => {
+    actualFilesystem.closeSync(descriptor);
+    if (descriptor !== incidentDescriptor) return;
+    incidentDescriptor = undefined;
+    vi.mocked(filesystem.closeSync).mockImplementation(actualFilesystem.closeSync);
+    throw new TypeError("simulated incident descriptor close failure");
+  });
+}
 
 function activeWorker(): EventEmitter {
   const worker = workers.instances.at(-1);
@@ -30,14 +104,358 @@ function activeWorker(): EventEmitter {
   return worker;
 }
 
+function expectAbandonedPreparation(stateDir: string): void {
+  const lines = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "support.incident.dismissed",
+  );
+  expect(lines).toHaveLength(1);
+  expect(
+    expectRegisteredActivityLogLine("support.incident.dismissed", lines[0] ?? ""),
+  ).toMatchObject({
+    reason: "abandoned",
+    trigger: "user-report",
+    incidentState: "candidate",
+    pinRelease: "released",
+    openIncidentCount: 0,
+    correlationId: "fresh-manual-job",
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
+  vi.mocked(dismissSupportIncident).mockClear();
+  vi.mocked(reportServerLogFailure).mockClear();
   workers.instances.length = 0;
   workers.terminate.mockReset();
   workers.prepare.mockReset();
+  workers.postMessage.mockReset();
+  vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementation(
+    actualArtifactFiles.removeSafeArtifactFile,
+  );
+  vi.mocked(artifactFiles.openSafeArtifactFile).mockImplementation(
+    actualArtifactFiles.openSafeArtifactFile,
+  );
+  vi.mocked(filesystem.closeSync).mockImplementation(actualFilesystem.closeSync);
+  closeFileServerLogSinks();
+  for (const directory of reportDirectories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 
 describe("bounded desktop support-report worker", () => {
+  it.each(["manual", "registered"])(
+    "preserves an existing %s candidate when a report job is cancelled",
+    async (kind) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-existing-report-"));
+      reportDirectories.push(stateDir);
+      const correlationId = "existing-owned-diagnostic";
+      const candidate =
+        kind === "manual"
+          ? recordUserReportedIncident(stateDir, { correlationId })
+          : recordRegisteredFailureIncident(stateDir, {
+              op: "coding-runtime.readiness.failed",
+              errorKind: "unavailable",
+              correlationId,
+              frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:710:9"],
+            });
+      if (candidate?.status !== "created") throw new TypeError("Expected existing candidate");
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-activity-log/reader")
+      >("@oscharko-dev/keiko-activity-log/reader");
+      workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+      const controller = new AbortController();
+      const prepared = vi.fn();
+      const result = runSupportReportJob(
+        stateDir,
+        correlationId,
+        controller.signal,
+        "new-report-job",
+        prepared,
+      );
+      const rejection = expect(result).rejects.toMatchObject({ reason: "cancelled" });
+      activeWorker().emit("message", { kind: "prepare", correlationId });
+      controller.abort();
+      await rejection;
+      expect(prepared).not.toHaveBeenCalled();
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([candidate.record]);
+      expect(
+        readdirSync(join(stateDir, "logs")).filter(
+          (name) => parseActivityLogPinFileName(name) !== undefined,
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["cancelled", "timeout"] as const)(
+    "preserves the original %s when the abandonment owner throws",
+    async (reason) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-abandonment-throw-"));
+      reportDirectories.push(stateDir);
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-activity-log/reader")
+      >("@oscharko-dev/keiko-activity-log/reader");
+      workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+      if (reason === "timeout") vi.useFakeTimers();
+      const controller = new AbortController();
+      const job = runSupportReportJob(
+        stateDir,
+        undefined,
+        controller.signal,
+        "guarded-abandonment",
+      );
+      const rejected = job.catch((error: unknown) => error);
+      activeWorker().emit("message", { kind: "prepare" });
+      const retained = listSupportIncidents(stateDir, { readOnly: true });
+      expect(retained).toHaveLength(1);
+      const failure = new TypeError("private cleanup failure");
+      vi.mocked(dismissSupportIncident).mockImplementationOnce(() => {
+        throw failure;
+      });
+      if (reason === "cancelled") controller.abort();
+      else await vi.advanceTimersByTimeAsync(30_000);
+      expect(await rejected).toMatchObject({ reason });
+      expect(workers.terminate).toHaveBeenCalledOnce();
+      expect(reportServerLogFailure).toHaveBeenCalledWith(
+        failure,
+        expect.objectContaining({
+          correlationId: "guarded-abandonment",
+          loss: "event-dropped",
+        }),
+      );
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(retained);
+      const following = runSupportReportJob(stateDir);
+      activeWorker().emit("message", {
+        ok: true,
+        report: { fileName: "report.json", reportJson: "{}" },
+      });
+      await expect(following).resolves.toMatchObject({ fileName: "report.json" });
+    },
+  );
+
+  it("keeps cancellation and releases the worker when abandoned record inspection fails", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-failed-retirement-read-"));
+    reportDirectories.push(stateDir);
+    const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-activity-log/reader")>(
+      "@oscharko-dev/keiko-activity-log/reader",
+    );
+    workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+    const controller = new AbortController();
+    const result = runSupportReportJob(stateDir, undefined, controller.signal, "failed-inspection");
+    const rejection = result.catch((error: unknown) => error);
+    activeWorker().emit("message", { kind: "prepare" });
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const artifacts = readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME));
+    failNextIncidentReadClose();
+    controller.abort();
+    expect(await rejection).toMatchObject({ reason: "cancelled" });
+    expect(workers.terminate).toHaveBeenCalledOnce();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))).toEqual(artifacts);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.retirement-failed",
+    );
+    expect(lines).toHaveLength(1);
+    expect(
+      expectRegisteredActivityLogLine("support.incident.retirement-failed", lines[0] ?? ""),
+    ).toMatchObject({
+      correlationId: "failed-inspection",
+      failureStage: "read",
+      errorKind: "internal",
+      failureKind: "TypeError",
+      reason: "abandoned",
+      completeness: "partial",
+      loss: "none",
+    });
+    const next = runSupportReportJob(stateDir);
+    const nextRejected = expect(next).rejects.toMatchObject({ reason: "unavailable" });
+    activeWorker().emit("exit", 0);
+    await nextRejected;
+    expect(workers.terminate).toHaveBeenCalledTimes(2);
+  });
+
+  it("records a refused abandoned withdrawal while preserving cancellation and releasing its worker", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-refused-abandoned-report-"));
+    reportDirectories.push(stateDir);
+    const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-activity-log/reader")>(
+      "@oscharko-dev/keiko-activity-log/reader",
+    );
+    workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+    const controller = new AbortController();
+    const result = runSupportReportJob(
+      stateDir,
+      undefined,
+      controller.signal,
+      "refused-withdrawal",
+    );
+    const rejection = result.catch((error: unknown) => error);
+    activeWorker().emit("message", { kind: "prepare" });
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const artifacts = readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME));
+    const pins = readdirSync(join(stateDir, "logs")).filter(
+      (name) => parseActivityLogPinFileName(name) !== undefined,
+    );
+    expect(records).toHaveLength(1);
+    vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(() => {
+      throw new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+    });
+    controller.abort();
+    expect(await rejection).toMatchObject({ reason: "cancelled" });
+    expect(workers.terminate).toHaveBeenCalledOnce();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))).toEqual(artifacts);
+    expect(
+      readdirSync(join(stateDir, "logs")).filter(
+        (name) => parseActivityLogPinFileName(name) !== undefined,
+      ),
+    ).toEqual(pins);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      correlationId: "refused-withdrawal",
+      reason: "abandoned",
+      removalStatus: "failed",
+      pinRelease: "not-attempted",
+      completeness: "partial",
+    });
+  });
+
+  it.each(["cancelled", "timeout", "error", "termination"])(
+    "abandons only its fresh manual preparation after %s",
+    async (failure) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-abandoned-report-"));
+      reportDirectories.push(stateDir);
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-activity-log/reader")
+      >("@oscharko-dev/keiko-activity-log/reader");
+      workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+      if (failure === "timeout") vi.useFakeTimers();
+      const controller = new AbortController();
+      const result = runSupportReportJob(
+        stateDir,
+        undefined,
+        controller.signal,
+        "fresh-manual-job",
+      );
+      const rejection = result.catch((error: unknown) => error);
+      activeWorker().emit("message", { kind: "prepare" });
+      const pendingRecords = listSupportIncidents(stateDir, { readOnly: true });
+      if (failure === "cancelled") controller.abort();
+      else if (failure === "timeout") await vi.advanceTimersByTimeAsync(30_000);
+      else if (failure === "error")
+        activeWorker().emit("error", new Error("Synthetic worker failure"));
+      else {
+        workers.terminate.mockRejectedValueOnce(new Error("Synthetic termination failure"));
+        activeWorker().emit("message", {
+          ok: true,
+          report: { fileName: "report.json", reportJson: "{}" },
+        });
+      }
+      const rejected = await rejection;
+      expect(pendingRecords).toHaveLength(1);
+      expect(rejected).toMatchObject({
+        reason: failure === "error" || failure === "termination" ? "unavailable" : failure,
+      });
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+      expect(readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))).toEqual([]);
+      expectAbandonedPreparation(stateDir);
+      expect(
+        readdirSync(join(stateDir, "logs")).filter(
+          (name) => parseActivityLogPinFileName(name) !== undefined,
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("hands off only its fresh preparation and leaves withdrawal idempotent after worker success", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-handoff-report-"));
+    reportDirectories.push(stateDir);
+    const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-activity-log/reader")>(
+      "@oscharko-dev/keiko-activity-log/reader",
+    );
+    workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+    let abandon: (() => void) | undefined;
+    const prepared = vi.fn((cleanup: () => void): void => {
+      abandon = cleanup;
+    });
+    const result = runSupportReportJob(
+      stateDir,
+      undefined,
+      undefined,
+      "fresh-manual-job",
+      prepared,
+    );
+    activeWorker().emit("message", { kind: "prepare" });
+    activeWorker().emit("message", {
+      ok: true,
+      report: { fileName: "report.json", reportJson: "{}" },
+    });
+    await expect(result).resolves.toHaveProperty("fileName", "report.json");
+    expect(prepared).toHaveBeenCalledOnce();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
+    abandon?.();
+    vi.mocked(dismissSupportIncident).mockClear();
+    vi.mocked(reportServerLogFailure).mockClear();
+    abandon?.();
+    expect(dismissSupportIncident).not.toHaveBeenCalled();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+    expect(readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))).toEqual([]);
+    expectAbandonedPreparation(stateDir);
+  });
+
+  it.each([false, true])(
+    "reuses abandonment ownership after cancellation; first withdrawal refused: %s",
+    async (refused) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-owned-abandonment-"));
+      reportDirectories.push(stateDir);
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-activity-log/reader")
+      >("@oscharko-dev/keiko-activity-log/reader");
+      workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+      let abandon: (() => void) | undefined;
+      const controller = new AbortController();
+      const job = runSupportReportJob(
+        stateDir,
+        undefined,
+        controller.signal,
+        "fresh-manual-job",
+        (cleanup) => {
+          abandon = cleanup;
+        },
+      );
+      const rejected = expect(job).rejects.toMatchObject({ reason: "cancelled" });
+      activeWorker().emit("message", { kind: "prepare" });
+      if (refused) {
+        vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(() => {
+          throw new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+        });
+      }
+      controller.abort();
+      await rejected;
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(refused ? 1 : 0);
+      vi.mocked(dismissSupportIncident).mockClear();
+      vi.mocked(reportServerLogFailure).mockClear();
+      abandon?.();
+      if (refused) expect(dismissSupportIncident).toHaveBeenCalledOnce();
+      else expect(dismissSupportIncident).not.toHaveBeenCalled();
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+      const ended = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.dismissed",
+      );
+      expect(ended).toHaveLength(refused ? 2 : 1);
+      expect(JSON.parse(ended.at(-1) ?? "{}")).toMatchObject({
+        reason: "abandoned",
+        removalStatus: "removed",
+        claimsStatus: "released",
+        pinRelease: "released",
+      });
+    },
+  );
+
   it("does not queue concurrent scans and releases the worker after success", async () => {
     const result = runSupportReportJob("/private-report-state");
     await expect(runSupportReportJob("/private-report-state")).rejects.toMatchObject({
@@ -86,7 +504,8 @@ describe("bounded desktop support-report worker", () => {
     expect(workers.prepare).toHaveBeenCalledExactlyOnceWith(
       "/private-report-state",
       "requested-failure",
-      "report-http-request",
+      undefined,
+      expect.any(Function),
     );
     expect(workers.terminate).toHaveBeenCalledOnce();
   });

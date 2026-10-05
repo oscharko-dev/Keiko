@@ -38,12 +38,16 @@ import {
 } from "./widgets/cards/shared/syntaxHighlight";
 import { Icons } from "./Icons";
 import {
+  consumeRepositoryReferenceLineSuffix,
   parseExactRepositoryReference,
   RepositoryReferenceInline,
   repositoryReferenceTextParts,
+  repositoryReferencePathLabels,
   sanitizeRepositoryEvidenceText,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
+  type RepositoryReference,
+  type RepositoryReferenceTextPart,
 } from "./repositoryReferences";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -67,6 +71,7 @@ interface RenderOptions {
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly streaming: boolean;
+  readonly repositoryPathLabels: ReadonlyMap<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -277,13 +282,61 @@ const HEADING_CLASSES = {
 // Node renderer — split into sub-functions to stay within max-lines-per-function
 // ---------------------------------------------------------------------------
 
+function repositoryCodeLinePair(
+  code: SafeMarkdownNode | undefined,
+  following: SafeMarkdownNode | undefined,
+): readonly [SafeMarkdownNode, SafeMarkdownNode] | undefined {
+  if (code?.kind !== "inline-code" || following?.kind !== "text") return undefined;
+  const text = following.text ?? "";
+  const suffix = consumeRepositoryReferenceLineSuffix(code.text ?? "", text);
+  if (suffix === undefined) return undefined;
+  return [
+    { ...code, text: suffix.reference.label },
+    { ...following, text: text.slice(suffix.length) },
+  ];
+}
+
+function adjacentRepositoryCodeLocations(
+  children: readonly SafeMarkdownNode[],
+): readonly SafeMarkdownNode[] {
+  let adjusted: SafeMarkdownNode[] | undefined;
+  for (let index = 0; index < children.length - 1; index += 1) {
+    const pair = repositoryCodeLinePair(children[index], children[index + 1]);
+    if (pair === undefined) continue;
+    adjusted ??= [...children];
+    adjusted[index] = pair[0];
+    adjusted[index + 1] = pair[1];
+  }
+  return adjusted ?? children;
+}
+
+function tableRepositoryReference(text: string): RepositoryReference | null {
+  const reference = parseExactRepositoryReference(text.trim(), true);
+  if (reference?.lineStart === undefined || /\s/u.test(reference.path.split("/")[0] ?? ""))
+    return null;
+  return reference;
+}
+
+function tableRepositoryLocationChildren(node: SafeMarkdownNode): readonly SafeMarkdownNode[] {
+  const children = node.children ?? [];
+  if (node.kind !== "td" && node.kind !== "th") return children;
+  const text = children.length === 1 && children[0]?.kind === "text" ? children[0].text : undefined;
+  if (text === undefined) return children;
+  const reference = tableRepositoryReference(text);
+  if (reference === null) return children;
+  return [{ ...children[0], kind: "inline-code", text: reference.label }];
+}
+
 function renderChildren(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
   trailing?: ReactNode | undefined,
 ): ReactNode[] {
-  const children = node.children ?? [];
+  const children =
+    options.literalUserInput || options.openRepositoryReference === undefined
+      ? (node.children ?? [])
+      : adjacentRepositoryCodeLocations(tableRepositoryLocationChildren(node));
   if (children.length === 0) {
     return trailing === undefined ? [] : [<Fragment key={`${key}-trailing`}>{trailing}</Fragment>];
   }
@@ -591,16 +644,20 @@ function renderCitationText(
 }
 
 function renderRepositoryText(
-  text: string,
+  node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
   trailing?: ReactNode | undefined,
 ): ReactNode {
-  const sanitizedText = sanitizeRepositoryEvidenceText(text);
   if (options.openRepositoryReference === undefined) {
-    return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
+    return renderCitationText(
+      sanitizeRepositoryEvidenceText(node.text ?? ""),
+      key,
+      options.citationPreview,
+      trailing,
+    );
   }
-  const parts = repositoryReferenceTextParts(sanitizedText);
+  const { text: sanitizedText, parts } = parsedRepositoryText(node);
   if (parts.length === 1 && parts[0]?.kind === "text")
     return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
   return (
@@ -618,6 +675,7 @@ function renderRepositoryText(
             reference={reference}
             roots={options.repositoryRoots}
             openReference={options.openRepositoryReference}
+            displayPath={options.repositoryPathLabels.get(reference.path)}
           />
         );
       })}
@@ -634,7 +692,7 @@ function renderInlineCode(
 ): ReactNode {
   const text = node.text ?? "";
   const reference =
-    options.openRepositoryReference === undefined ? null : parseExactRepositoryReference(text);
+    options.openRepositoryReference === undefined ? null : inlineRepositoryReference(node);
   return (
     <code key={key} className="sm-inline-code">
       {reference === null ? (
@@ -644,6 +702,7 @@ function renderInlineCode(
           reference={reference}
           roots={options.repositoryRoots}
           openReference={options.openRepositoryReference}
+          displayPath={options.repositoryPathLabels.get(reference.path)}
           className="repo-ref-link repo-ref-link-inline-code"
         />
       )}
@@ -667,7 +726,7 @@ function renderInlineNode(
             {trailing}
           </span>
         );
-      return renderRepositoryText(node.text ?? "", key, options, trailing);
+      return renderRepositoryText(node, key, options, trailing);
 
     case "inline-code":
       return renderInlineCode(node, key, options, trailing);
@@ -778,6 +837,59 @@ function useMarkdownListEvidence(
   }, [tree, streaming, correlationId, messageId]);
 }
 
+interface ParsedRepositoryText {
+  readonly text: string;
+  readonly parts: readonly RepositoryReferenceTextPart[];
+}
+
+// AST nodes are immutable and disappear with their message; WeakMaps never retain old messages.
+const textReferences = new WeakMap<SafeMarkdownNode, ParsedRepositoryText>();
+const inlineReferences = new WeakMap<SafeMarkdownNode, RepositoryReference | null>();
+const EMPTY_PATH_LABELS: ReadonlyMap<string, string> = new Map();
+
+function parsedRepositoryText(node: SafeMarkdownNode): ParsedRepositoryText {
+  const cached = textReferences.get(node);
+  if (cached !== undefined) return cached;
+  const text = sanitizeRepositoryEvidenceText(node.text ?? "");
+  const parsed = { text, parts: repositoryReferenceTextParts(text) };
+  textReferences.set(node, parsed);
+  return parsed;
+}
+
+function inlineRepositoryReference(node: SafeMarkdownNode): RepositoryReference | null {
+  if (inlineReferences.has(node)) return inlineReferences.get(node) ?? null;
+  const reference = parseExactRepositoryReference(node.text ?? "", true);
+  // A line-less code span may be a command. An explicit location can own filename spaces.
+  const parsed =
+    reference?.lineStart === undefined && /\s/u.test(reference?.path ?? "") ? null : reference;
+  inlineReferences.set(node, parsed);
+  return parsed;
+}
+
+function referencePathsInNode(node: SafeMarkdownNode): readonly string[] {
+  if (node.kind === "inline-code") {
+    const reference = inlineRepositoryReference(node);
+    return reference === null ? [] : [reference.path];
+  }
+  if (node.kind !== "text") return [];
+  return parsedRepositoryText(node).parts.flatMap((part) =>
+    part.reference === undefined ? [] : [part.reference.path],
+  );
+}
+
+function referencePathsInTree(tree: readonly SafeMarkdownNode[]): readonly string[] {
+  const paths: string[] = [];
+  const visit = (nodes: readonly SafeMarkdownNode[]): void => {
+    for (const node of nodes) {
+      for (const path of referencePathsInNode(node)) paths.push(path);
+      if (node.children !== undefined)
+        visit(adjacentRepositoryCodeLocations(tableRepositoryLocationChildren(node)));
+    }
+  };
+  visit(tree);
+  return paths;
+}
+
 function SafeMarkdownImpl({
   source,
   literalUserInput = false,
@@ -794,6 +906,13 @@ function SafeMarkdownImpl({
     [source, literalUserInput],
   );
   useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
+  const repositoryPathLabels = useMemo(
+    () =>
+      literalUserInput || openRepositoryReference === undefined
+        ? EMPTY_PATH_LABELS
+        : repositoryReferencePathLabels(referencePathsInTree(tree)),
+    [tree, literalUserInput, openRepositoryReference],
+  );
   const options = useMemo<RenderOptions>(
     () => ({
       literalUserInput,
@@ -801,8 +920,16 @@ function SafeMarkdownImpl({
       streaming,
       repositoryRoots,
       openRepositoryReference,
+      repositoryPathLabels,
     }),
-    [literalUserInput, citationPreview, openRepositoryReference, repositoryRoots, streaming],
+    [
+      literalUserInput,
+      citationPreview,
+      openRepositoryReference,
+      repositoryRoots,
+      repositoryPathLabels,
+      streaming,
+    ],
   );
   return (
     <div className="sm-root" style={literalUserInput ? { whiteSpace: "pre-wrap" } : undefined}>

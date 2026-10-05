@@ -245,6 +245,7 @@ function windowIdFromEventTarget(target: EventTarget | null): string | undefined
 }
 
 interface ConnectAnnouncerProps {
+  readonly outcome: UseWorkspaceResult["connectionOutcome"];
   readonly wins: readonly AppWindow[] | null;
   readonly connecting: ConnectingState | null;
   readonly conns: readonly Connection[];
@@ -280,21 +281,47 @@ function describeConnectEnd(
     : t("workspace.connect.connected");
 }
 
+function describeConnectionOutcome(
+  wins: readonly AppWindow[] | null,
+  outcome: NonNullable<UseWorkspaceResult["connectionOutcome"]>,
+  t: I18nTranslate,
+): string {
+  if (outcome.kind === "pending") return t("scope.connect.connecting");
+  if (outcome.kind === "cancelled") return t("workspace.connect.cancelled");
+  if (outcome.kind === "not-connected") return t("workspace.connect.notConnected");
+  if (outcome.kind === "rejected") return t("scope.connect.error");
+  const a = wins?.find((win) => win.id === outcome.fromId);
+  const b = wins?.find((win) => win.id === outcome.toId);
+  return a !== undefined && b !== undefined
+    ? t("workspace.connect.connectedWith", { label: relLabel(a, b) })
+    : t("workspace.connect.connected");
+}
+
 // The click-to-connect state machine is otherwise purely visual (crosshair
 // cursor, rubber-band path, valid/invalid window rings). This visually-hidden
 // live region announces start, completion and cancellation of a connect flow
 // for screen-reader users (audit C298/C004).
-function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): ReactNode {
+function ConnectAnnouncer({ wins, connecting, conns, outcome }: ConnectAnnouncerProps): ReactNode {
   const t = useTranslate();
   const [message, setMessage] = useState("");
   const prevConnecting = useRef<ConnectingState | null>(null);
   const prevConnsLen = useRef(conns.length);
+  const prevOutcome = useRef<UseWorkspaceResult["connectionOutcome"]>(undefined);
 
   useEffect(() => {
     const was = prevConnecting.current;
     prevConnecting.current = connecting;
     const wasLen = prevConnsLen.current;
     prevConnsLen.current = conns.length;
+    if (
+      outcome !== undefined &&
+      prevOutcome.current !== outcome &&
+      (outcome.kind !== "pending" || connecting === null)
+    ) {
+      prevOutcome.current = outcome;
+      setMessage(describeConnectionOutcome(wins, outcome, t));
+      return;
+    }
     if (was === null && connecting !== null) {
       setMessage(describeConnectStart(wins, connecting, t));
       return;
@@ -302,7 +329,7 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
     if (was !== null && connecting === null) {
       setMessage(describeConnectEnd(wins, conns, wasLen, t));
     }
-  }, [connecting, conns, wins, t]);
+  }, [connecting, conns, wins, outcome, t]);
 
   return (
     <div className="sr-only" aria-live="polite">
@@ -462,6 +489,11 @@ function tryHandleWorkspaceEscapeShortcut(
   api: UseWorkspaceResult["api"],
 ): boolean {
   if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (api.cancelConnect()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
     if (selection.selectedWindowIds.length > 0) {
       api.clearSelection();
       event.preventDefault();
@@ -1490,7 +1522,12 @@ export function Workspace({
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
       <WorkspaceMarqueeOverlay marquee={marquee} />
-      <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
+      <ConnectAnnouncer
+        wins={visibleWins}
+        connecting={connecting}
+        conns={conns}
+        outcome={ws.connectionOutcome}
+      />
       <p
         className="sr-only"
         role="status"

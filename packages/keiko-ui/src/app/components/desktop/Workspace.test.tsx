@@ -924,6 +924,167 @@ describe("Workspace card connections", () => {
     expect(startConnect).toHaveBeenCalledWith("agents-2", expect.any(Object));
   });
 
+  it("announces async connection acknowledgement without calling success a cancellation", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const { container, rerender } = render(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connecting: { from: "files-1", x: 100, y: 100 } })}
+      />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connecting: null, connectionOutcome: { kind: "pending" } })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Connecting…");
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          connecting: null,
+          conns: [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+          connectionOutcome: { kind: "connected", fromId: "files-1", toId: "chat-1" },
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toMatch(/^Connected/);
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).not.toContain("cancelled");
+    rerender(
+      <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "rejected" } })} />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Unable to connect scope.",
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connectionOutcome: { kind: "not-connected" } })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Could not connect.");
+    rerender(
+      <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "cancelled" } })} />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Connection cancelled",
+    );
+  });
+
+  it("announces an earlier acknowledgement while a different connection gesture is active", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+      appWindow({ id: "files-2", type: "files" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const connecting = { from: "files-2", x: 100, y: 100 };
+    const { container, rerender } = render(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connecting, connectionOutcome: { kind: "pending" } })}
+      />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          connecting,
+          conns: [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+          connectionOutcome: { kind: "connected", fromId: "files-1", toId: "chat-1" },
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toMatch(/^Connected/);
+  });
+
+  it("retains an acknowledgement arriving in the same render as a newer gesture starts", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const { container, rerender } = render(
+      <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "pending" } })} />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          connecting: { from: "files-1", x: 0, y: 0 },
+          conns: [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+          connectionOutcome: { kind: "connected", fromId: "files-1", toId: "chat-1" },
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toMatch(/^Connected/);
+  });
+
+  it("announces a later gesture cancellation when its previous acknowledgement is unchanged", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const connectionOutcome = { kind: "connected", fromId: "files-1", toId: "chat-1" } as const;
+    const conns = [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }];
+    const { container, rerender } = render(
+      <Workspace {...props} ws={workspace({ wins, conns, connectionOutcome })} />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          conns,
+          connectionOutcome,
+          connecting: { from: "files-1", x: 100, y: 100 },
+        })}
+      />,
+    );
+    rerender(
+      <Workspace {...props} ws={workspace({ wins, conns, connectionOutcome, connecting: null })} />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Connection cancelled",
+    );
+  });
+
+  it("keeps the acknowledged endpoint announcement when another edge changes", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+      appWindow({ id: "agents-1", type: "agents" }),
+    ];
+    const connectionOutcome = { kind: "connected", fromId: "files-1", toId: "chat-1" } as const;
+    const conns = [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const { container, rerender } = render(
+      <Workspace {...props} ws={workspace({ wins, conns, connectionOutcome })} />,
+    );
+    const acknowledged = container.querySelector('[aria-live="polite"]')?.textContent;
+    expect(acknowledged).toMatch(/^Connected/);
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          conns: [...conns, { id: "agents-1~files-1", a: "agents-1", b: "files-1" }],
+          connectionOutcome,
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(acknowledged);
+  });
+
   it("announces the connect flow in a polite live region", () => {
     const wins = [
       appWindow({ id: "agents-1", type: "agents", z: 1 }),
@@ -1359,6 +1520,39 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
       expect(copySelectedWindows).toHaveBeenCalledOnce();
       expect(windowDispatcher).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("keydown", windowDispatcher);
+    }
+  });
+
+  it("cancels the current connection before clearing the selected Files window", () => {
+    const clearSelection = vi.fn();
+    const cancelConnect = vi.fn(() => true);
+    const windowDispatcher = vi.fn();
+    window.addEventListener("keydown", windowDispatcher);
+    try {
+      render(
+        <Workspace
+          ws={workspace({
+            wins: [appWindow({ id: "files-1", type: "files" })],
+            // The gesture can start before React publishes the connecting snapshot.
+            connecting: null,
+            selection: { focusedWindowId: "files-1", selectedWindowIds: ["files-1"] },
+            api: api({ clearSelection, cancelConnect }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      const escape = createEvent.keyDown(surface, { key: "Escape", bubbles: true });
+
+      fireEvent(surface, escape);
+
+      expect(cancelConnect).toHaveBeenCalledOnce();
+      expect(clearSelection).not.toHaveBeenCalled();
+      expect(windowDispatcher).not.toHaveBeenCalled();
+      expect(escape.defaultPrevented).toBe(true);
     } finally {
       window.removeEventListener("keydown", windowDispatcher);
     }

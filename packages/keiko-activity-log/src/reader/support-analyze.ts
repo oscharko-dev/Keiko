@@ -1504,14 +1504,28 @@ export function lineSequenceAnomalies(
   return anomalies;
 }
 
-function detectSequenceAnomalies(lines: readonly ParsedLine[]): readonly ProcessSequenceAnomaly[] {
+function detectSequenceAnomalies(
+  lines: readonly ParsedLine[],
+  kind: SourceKind,
+): readonly ProcessSequenceAnomaly[] {
   const states = new Map<string, SequenceState>();
   const anomalies: ProcessSequenceAnomaly[] = [];
   for (const line of lines) {
     const key = lifetimeKey(line);
     if (key === undefined) continue;
-    const state = states.get(key) ?? createSequenceState();
-    anomalies.push(...lineSequenceAnomalies(line, state));
+    const existing = states.get(key);
+    const state = existing ?? createSequenceState();
+    // Canonical reports select causal evidence, so their first process event need not be seq 1.
+    // Positive jumps can also omit retained unrelated events; identity violations remain observable.
+    if (existing === undefined && kind === "support-report") {
+      state.previous = orZero(line.view.seq) - 1;
+    }
+    const detected = lineSequenceAnomalies(line, state);
+    anomalies.push(
+      ...(kind === "support-report"
+        ? detected.filter((anomaly) => anomaly.kind !== "gap")
+        : detected),
+    );
     states.set(key, state);
   }
   return anomalies;
@@ -1695,7 +1709,7 @@ function analyzeParsedLines(
     buildTimeline(correlationId, group),
   );
   const processes = buildProcessSummaries(parsedLines);
-  const sequenceAnomalies = detectSequenceAnomalies(parsedLines);
+  const sequenceAnomalies = detectSequenceAnomalies(parsedLines, kind);
   const evidence = evidenceSummary(evidenceCounts, sequenceAnomalies);
   const legacyLineCount = evidence.legacyLineCount;
   const warnings = evidenceWarnings(evidence);

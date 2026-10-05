@@ -386,7 +386,7 @@ describe("CapsuleActions — connect source", () => {
 
   it("shows the local knowledge limits next to the connect form", () => {
     render(<CapsuleActions {...defaultProps()} />);
-    expect(screen.getByText(/Maximum single file size: 1 GB/i)).toBeInTheDocument();
+    expect(screen.getByText(/Maximum single file size: 1\.0 GB/i)).toBeInTheDocument();
   });
 
   it("surfaces a calm message when the native dialog fails and keeps manual entry usable", async () => {

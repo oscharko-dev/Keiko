@@ -118,7 +118,7 @@ export interface WorkspaceApi {
   readonly cascade: () => void;
   readonly startConnect: (fromId: string, e: ReactPointerEvent<Element>) => void;
   readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
-  readonly cancelConnect: () => void;
+  readonly cancelConnect: () => boolean;
   readonly removeConn: (connId: string, options?: { readonly unbind?: boolean }) => void;
   readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
   readonly updateConnGitChangeScope?:
@@ -155,7 +155,15 @@ export interface WorkspaceApi {
   readonly rect: () => DOMRect | null;
 }
 
+export type ConnectionOutcome =
+  | { readonly kind: "connected"; readonly fromId: string; readonly toId: string }
+  | { readonly kind: "pending" }
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "not-connected" }
+  | { readonly kind: "rejected" };
+
 export interface UseWorkspaceResult {
+  readonly connectionOutcome?: ConnectionOutcome | undefined;
   readonly layoutLocked: boolean;
   readonly wins: AppWindow[] | null;
   readonly winsById: ReadonlyMap<string, AppWindow>;

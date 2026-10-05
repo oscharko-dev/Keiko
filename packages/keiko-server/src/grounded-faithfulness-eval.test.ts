@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
   evaluateGroundedFaithfulnessBudget,
   isGroundedEmptyEvidenceAbstention,
   runGroundedFaithfulnessEval,
 } from "./grounded-faithfulness-eval.js";
-import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
+import { LEGACY_CONNECTED_SEARCH_ABSTENTION } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { buildEvalContextPack, evalUncertainty } from "./grounded-eval-support.js";
 
 describe("grounded faithfulness eval (RB-4, GEN-AI-EVAL-003)", () => {
@@ -16,6 +16,20 @@ describe("grounded faithfulness eval (RB-4, GEN-AI-EVAL-003)", () => {
     expect(scorecard.unsupportedDetectionRate).toBe(1);
     expect(scorecard.citationPrecision).toBe(1);
     expect(scorecard.abstentionOnEmptyRate).toBe(1);
+  });
+
+  it("scores current English and German abstentions produced by the shared builder", async () => {
+    vi.resetModules();
+    const owner = await import("@oscharko-dev/keiko-contracts/runtime/no-evidence-answer");
+    const builder = vi.spyOn(owner, "connectedSearchNoEvidenceAnswer");
+    try {
+      const { runGroundedFaithfulnessEval: run } = await import("./grounded-faithfulness-eval.js");
+      expect(run().abstentionOnEmptyRate).toBe(1);
+      expect(builder).toHaveBeenCalledWith("What evidence exists?");
+      expect(builder).toHaveBeenCalledWith("Welche Belege gibt es?");
+    } finally {
+      builder.mockRestore();
+    }
   });
 
   it("floors are the faithfulness correctness invariants (all = 1)", () => {
@@ -42,8 +56,26 @@ describe("grounded faithfulness eval (RB-4, GEN-AI-EVAL-003)", () => {
         "The system definitely rotates credentials every 24 hours.",
       ),
     ).toBe(false);
-    expect(isGroundedEmptyEvidenceAbstention(emptyPack, GROUNDED_NO_EVIDENCE_ANSWER)).toBe(true);
+    expect(
+      isGroundedEmptyEvidenceAbstention(
+        emptyPack,
+        "No matching evidence was found for this search.",
+      ),
+    ).toBe(true);
+    expect(
+      isGroundedEmptyEvidenceAbstention(
+        emptyPack,
+        "Keine passenden Belege für diese Suche gefunden.",
+      ),
+    ).toBe(true);
     expect(runGroundedFaithfulnessEval().failures).toEqual([]);
+  });
+
+  it("recognizes legacy stored abstentions separately from current eval producers", () => {
+    const emptyPack = buildEvalContextPack([], [evalUncertainty("no-evidence")]);
+    expect(isGroundedEmptyEvidenceAbstention(emptyPack, LEGACY_CONNECTED_SEARCH_ABSTENTION)).toBe(
+      true,
+    );
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(

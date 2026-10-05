@@ -1,0 +1,35 @@
+footer.cmpFooter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  height: auto;
+  min-block-size: 40px;
+  padding-block: var(--space-1);
+  padding-inline: calc(var(--space-5) + var(--shell-right-rail-reserve));
+}
+
+.cmpFooter .cmpBrand {
+  position: static;
+  left: auto;
+  transform: none;
+  grid-column: 2;
+  justify-self: center;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.cmpWindows {
+  grid-column: 3;
+  justify-self: end;
+}
+
+@media (max-width: 560px) {
+  .cmpFooter .cmpBrand {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .cmpWindows {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

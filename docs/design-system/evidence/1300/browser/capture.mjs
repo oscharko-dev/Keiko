@@ -17,6 +17,8 @@ import { readFile, readdir, stat, mkdir, realpath } from "node:fs/promises";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, extname, resolve, dirname, normalize, sep, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { codingAppSessionAcknowledgement } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   resolveHostExecutable,
   shellCommandForTrustedExecutable,
@@ -299,14 +301,14 @@ const WORKSPACE_WINDOWS = [
     max: false,
   },
   // Issue #1574 (EV3) — the same shell at a constrained window size. Above the governedGit tiny
-  // threshold (300x240) so the window renders the full shell rather than the too-small placeholder,
+  // threshold (360x260), including its 2px frame, so it renders the full shell rather than a placeholder,
   // proving the desktop IA stays coherent when the window is narrow.
   {
     id: "issue-1574-git-constrained",
     type: "governedGit",
     x: 40,
     y: 44,
-    w: 360,
+    w: 362,
     h: 460,
     z: 31,
     cfg: { projectPath: DEMO_ROOT },
@@ -492,6 +494,7 @@ const DEMO_CHAT = {
   createdAt: 1_750_000_000_000,
   updatedAt: 1_750_000_000_000,
 };
+const DEMO_CONTEXT_PROFILE = deriveContextProfileFromCapability(DEMO_MODELS[0]);
 
 // Exact-pathname API fixtures. Every route here returns a fixed body with no request-dependent
 // logic, so apiBody() can dispatch through a single lookup instead of a long if/else chain — same
@@ -521,6 +524,7 @@ const STATIC_API_BODIES = {
     effectiveGroundingLimits: { maxConnectedSources: 16 },
   },
   "/api/models": { models: DEMO_MODELS },
+  "/api/coding-workbench/app-session/local-session": codingAppSessionAcknowledgement(),
   "/api/native-file-dialog/capability": { supported: false },
   "/api/voice/capability": {
     voice: {
@@ -535,6 +539,15 @@ const STATIC_API_BODIES = {
   "/api/workflows": { workflows: [] },
   "/api/chats": { chats: [DEMO_CHAT] },
   "/api/chats/messages": { messages: [] },
+  "/api/chats/context": {
+    modelId: DEMO_MODELS[0].id,
+    contextWindowTokens: DEMO_CONTEXT_PROFILE.maxInputTokens,
+    inputBudgetTokens: DEMO_CONTEXT_PROFILE.effectiveInputBudget,
+    reservedOutputTokens: DEMO_CONTEXT_PROFILE.reservedOutputTokens,
+    safetyMarginTokens: DEMO_CONTEXT_PROFILE.safetyMarginTokens,
+    estimatedInputTokens: 0,
+    canCompact: false,
+  },
   "/api/desktop/chats": {
     project: {
       path: DEMO_ROOT,
@@ -943,6 +956,9 @@ function unexpectedApiLabel(route, url) {
 }
 
 const POST_API_PATHS = new Set([
+  "/api/diagnostics/client",
+  "/api/coding-workbench/app-session/local-session",
+  "/api/git-delivery/commit/preview",
   "/api/desktop/chats",
   "/api/editor/agent/snapshot",
   "/api/editor/language",
@@ -966,6 +982,10 @@ async function fulfillApiRoute(route, url, unexpectedApiRequests) {
   const method = route.request().method();
   if (method !== expectedApiMethod(url.pathname)) {
     await rejectUnexpectedApi(route, url, unexpectedApiRequests);
+    return;
+  }
+  if (url.pathname === "/api/diagnostics/client") {
+    await route.fulfill({ status: 204 });
     return;
   }
   if (Object.hasOwn(SSE_API_BODIES, url.pathname)) {

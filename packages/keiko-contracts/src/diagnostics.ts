@@ -31,11 +31,21 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import {
+  ACTIVITY_LOG_COMPLETENESS_STATES,
+  ACTIVITY_LOG_LOSS_STATES,
+  type ActivityLogCompletenessState,
+  type ActivityLogLossState,
   isActivityLogCorrelationId,
   isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "./observability.js";
+import {
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
+  type SupportReportAvailabilityReason,
+} from "./support-report-policy.js";
+import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
@@ -350,7 +360,7 @@ function isClientErrorClass(value: unknown): value is string {
   return typeof value === "string" && CLIENT_ERROR_CLASSES.has(value);
 }
 
-function isClientErrorEvidence(value: unknown): value is ClientErrorEvidence {
+export function isClientErrorEvidence(value: unknown): value is ClientErrorEvidence {
   if (!isRecord(value) || !isClientErrorClass(value.errorClass)) return false;
   if (
     !Array.isArray(value.frames) ||
@@ -397,6 +407,10 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-unlocked",
   "literal-input-preserved",
   "draft-resynchronized",
+  "scope-refusal-restored",
+  "scope-refusal-skipped-owner",
+  "scope-refusal-skipped-draft",
+  "scope-refusal-skipped-unproven",
   "equivalent-edit-ignored",
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
@@ -435,6 +449,25 @@ function hasValidComposerContext(value: Record<string, unknown>): boolean {
   );
 }
 
+export const HEALTH_DIAGNOSTICS_INVALID_REASONS = [
+  "null-shape",
+  "readiness-value",
+  "snapshot-shape",
+] as const;
+export type HealthDiagnosticsInvalidReason = (typeof HEALTH_DIAGNOSTICS_INVALID_REASONS)[number];
+const HEALTH_DIAGNOSTICS_INVALID_REASON_SET: ReadonlySet<unknown> = new Set(
+  HEALTH_DIAGNOSTICS_INVALID_REASONS,
+);
+
+export const CLIENT_MODULE_LOAD_FAILURES = [
+  "git-sync",
+  "git-history",
+  "git-read",
+  "widget-locale",
+] as const;
+export type ClientModuleLoadFailure = (typeof CLIENT_MODULE_LOAD_FAILURES)[number];
+const CLIENT_MODULE_LOAD_FAILURE_SET: ReadonlySet<unknown> = new Set(CLIENT_MODULE_LOAD_FAILURES);
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -449,7 +482,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly moduleLoadFailure?: ClientModuleLoadFailure | undefined;
+  readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
   readonly renderFailure?: "shell" | "window-body" | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
@@ -459,6 +493,10 @@ export interface ClientDiagnosticIngestRequest {
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
+  readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
+  readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
+  readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
+  readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -617,7 +655,7 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
 }
 
 function isClientModuleLoadFailure(value: unknown): boolean {
-  return value === "git-sync" || value === "git-history";
+  return CLIENT_MODULE_LOAD_FAILURE_SET.has(value);
 }
 
 function hasValidCodingContext(value: Record<string, unknown>): boolean {
@@ -648,13 +686,60 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
   );
 }
 
+const CLOSED_CLIENT_REPORT_KEYS = [
+  "selectDismissal",
+  "knowledgeCatalog",
+  "answerCopy",
+  "answerSpeech",
+  "citationActivation",
+  "supportReportDelivery",
+  "supportReportPreparation",
+  "filesScopeDecision",
+] as const;
+const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
+  "message",
+  "clientTs",
+  "correlationId",
+  "parentCorrelationId",
+  "loss",
+]);
+function allowsClosedReportFailureField(value: Record<string, unknown>, key: string): boolean {
+  return (
+    isRecord(value.answerCopy) &&
+    value.answerCopy.outcome === "failed" &&
+    (key === "errorKind" || key === "errorEvidence")
+  );
+}
+function allowsLegacySelectKind(value: Record<string, unknown>, key: string): boolean {
+  // Existing select-menu producers label routine dismissal as neutral `other`, never a failure.
+  return key === "kind" && value.kind === "other" && value.selectDismissal !== undefined;
+}
+function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolean {
+  const selected = CLOSED_CLIENT_REPORT_KEYS.filter((key) => value[key] !== undefined);
+  if (selected.length === 0) return true;
+  if (selected.length !== 1) return false;
+  return Object.keys(value).every(
+    (key) =>
+      value[key] === undefined ||
+      key === selected[0] ||
+      CLOSED_CLIENT_REPORT_ENVELOPE_KEYS.has(key) ||
+      allowsClosedReportFailureField(value, key) ||
+      allowsLegacySelectKind(value, key),
+  );
+}
+
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
-    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech)
+    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
+    hasExclusiveClosedReportContext(value) &&
+    hasValidCitationActivationContext(value) &&
+    isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
+    isOptional(value.supportReportPreparation, isClientSupportReportPreparation) &&
+    hasValidFilesScopeDecisionContext(value)
   );
 }
 
@@ -666,8 +751,22 @@ function hasValidRenderFailure(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidHealthDiagnostic(value: Record<string, unknown>): boolean {
+  if (value.healthDiagnosticsInvalidReason === undefined) return true;
+  return (
+    HEALTH_DIAGNOSTICS_INVALID_REASON_SET.has(value.healthDiagnosticsInvalidReason) &&
+    value.errorKind === "validation-failed" &&
+    value.kind === undefined &&
+    value.errorEvidence === undefined
+  );
+}
+
 function hasValidOperationalContext(value: Record<string, unknown>): boolean {
-  return hasValidVoiceCaptureContext(value) && hasValidGitContext(value);
+  return (
+    hasValidVoiceCaptureContext(value) &&
+    hasValidGitContext(value) &&
+    hasValidHealthDiagnostic(value)
+  );
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
@@ -729,6 +828,8 @@ export const CLIENT_STAGE_IDS = [
   "command palette",
   "chat history deletion",
   "files directory load",
+  "files source preview",
+  "files source reveal",
   "files directory navigation",
   "files project selection",
   "editor project selection",
@@ -761,7 +862,16 @@ export interface ClientStageStartedIngestRequest {
   readonly phase: "started";
   readonly ordinal: number;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+}
+
+export interface ClientSourcePreviewCounts {
+  readonly previewKind: "text" | "image" | "binary";
+  /** Raw bytes supplied to the decoder, excluding duplicate classification reads and lookahead. */
+  readonly sourceTextBytesRead: number;
+  readonly canEdit: boolean;
+  readonly binaryReason?: "too-large" | "unsupported" | undefined;
 }
 
 export interface ClientStageSettledIngestRequest {
@@ -771,8 +881,10 @@ export interface ClientStageSettledIngestRequest {
   readonly ordinal: number;
   readonly durationMs: number;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
   readonly navigationOutcome?: ClientNavigationOutcome | undefined;
+  readonly preview?: ClientSourcePreviewCounts | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -787,8 +899,10 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "ordinal",
   "durationMs",
   "correlationId",
+  "parentCorrelationId",
   "deletion",
   "navigationOutcome",
+  "preview",
 ]);
 
 export const CLIENT_NAVIGATION_OUTCOMES = [
@@ -805,6 +919,8 @@ const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCO
 const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
   "editor project selection",
   "files directory load",
+  "files source preview",
+  "files source reveal",
   "files directory navigation",
   "files project selection",
 ]);
@@ -838,8 +954,56 @@ function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   return counts.deletedCount + counts.failedCount === counts.requestedCount;
 }
 
+const SOURCE_PREVIEW_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "previewKind",
+  "sourceTextBytesRead",
+  "canEdit",
+  "binaryReason",
+]);
+
+function hasValidBinaryPreviewReason(value: Record<string, unknown>): boolean {
+  if (value.binaryReason === undefined) return true;
+  return (
+    value.previewKind === "binary" &&
+    (value.binaryReason === "too-large" || value.binaryReason === "unsupported")
+  );
+}
+
+function isSourcePreviewKind(value: unknown): value is ClientSourcePreviewCounts["previewKind"] {
+  return value === "text" || value === "image" || value === "binary";
+}
+
+function isSourcePreviewCounts(value: unknown): value is ClientSourcePreviewCounts {
+  if (!isRecord(value) || Object.keys(value).some((key) => !SOURCE_PREVIEW_COUNT_KEYS.has(key)))
+    return false;
+  if (!isSourcePreviewKind(value.previewKind)) return false;
+  if (
+    typeof value.canEdit !== "boolean" ||
+    !isBoundedNonNegativeInteger(value.sourceTextBytesRead, MAX_RECURSIVE_TEXT_FILE_BYTES)
+  )
+    return false;
+  return (
+    hasValidBinaryPreviewReason(value) &&
+    (value.previewKind === "text" || (value.sourceTextBytesRead === 0 && !value.canEdit))
+  );
+}
+
+function hasValidSourcePreview(value: Record<string, unknown>): boolean {
+  return (
+    value.preview === undefined ||
+    (value.stage === "files source preview" &&
+      value.phase === "settled" &&
+      isSourcePreviewCounts(value.preview))
+  );
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
-  return hasValidStageDeletion(value) && hasValidNavigationOutcome(value);
+  return (
+    hasValidStageDeletion(value) &&
+    hasValidNavigationOutcome(value) &&
+    hasValidSourcePreview(value) &&
+    isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
+  );
 }
 
 function isClientStageId(value: unknown): value is ClientStageId {
@@ -1350,7 +1514,12 @@ export function isClientGitRetryAttemptIngestRequest(
 export const CLIENT_SELECT_DISMISSAL_REASONS = ["escape"] as const;
 export type ClientSelectDismissalReason = (typeof CLIENT_SELECT_DISMISSAL_REASONS)[number];
 
-export const CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS = ["trigger", "search", "option"] as const;
+export const CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS = [
+  "trigger",
+  "search",
+  "option",
+  "menu",
+] as const;
 export type ClientSelectDismissalFocus = (typeof CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS)[number];
 
 export interface ClientDiagnosticSelectDismissal {
@@ -1532,6 +1701,10 @@ export interface ActivityLogReadinessSnapshot {
   readonly writer: ActivityLogWriterKind;
   // Events this process counted as lost since it started (bounded, see the loss ledger).
   readonly lostEvents: number;
+  /** @deprecated Accepted for wire compatibility only; current servers never produce this count. */
+  readonly retainedDiagnosticCount?: number | undefined;
+  /** @deprecated Accepted for wire compatibility only; readiness does not measure store capacity. */
+  readonly diagnosticCapacity?: number | undefined;
 }
 
 /** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
@@ -1563,6 +1736,20 @@ function hasCoherentReasons(
   return (readiness === "ready") === (reasons.length === 0);
 }
 
+function hasCoherentDiagnosticCapacity(value: Record<string, unknown>): boolean {
+  const count = value.retainedDiagnosticCount;
+  const capacity = value.diagnosticCapacity;
+  if (count === undefined && capacity === undefined) return true;
+  return (
+    typeof count === "number" &&
+    Number.isSafeInteger(count) &&
+    count >= 0 &&
+    typeof capacity === "number" &&
+    Number.isSafeInteger(capacity) &&
+    capacity > 0
+  );
+}
+
 export function isActivityLogReadinessSnapshot(
   value: unknown,
 ): value is ActivityLogReadinessSnapshot {
@@ -1574,6 +1761,325 @@ export function isActivityLogReadinessSnapshot(
     isSetMember(value.writer, WRITER_KIND_SET) &&
     typeof value.lostEvents === "number" &&
     Number.isSafeInteger(value.lostEvents) &&
-    value.lostEvents >= 0
+    value.lostEvents >= 0 &&
+    hasCoherentDiagnosticCapacity(value)
+  );
+}
+
+/** Classifies metadata already refused by isActivityLogReadinessSnapshot; never infers version skew. */
+export function classifyInvalidActivityLogReadiness(
+  value: unknown,
+): HealthDiagnosticsInvalidReason {
+  if (value === null) return "null-shape";
+  if (
+    isRecord(value) &&
+    typeof value.readiness === "string" &&
+    !READINESS_STATE_SET.has(value.readiness)
+  )
+    return "readiness-value";
+  return "snapshot-shape";
+}
+
+/** A browser initiation, never acknowledgement that the operating system saved a file. */
+export type ClientSupportReportDelivery =
+  | "automatic"
+  | "manual"
+  | {
+      readonly mode: "manual";
+      readonly source: "server" | "browser";
+      readonly evidenceScope: "server" | "client-only";
+      readonly reportDigest?: string | undefined;
+    };
+function isReportDigest(value: unknown): value is string {
+  return typeof value === "string" && SHA256_PATTERN.test(value);
+}
+const SUPPORT_REPORT_DELIVERY_SCOPES = new Set(["server", "client-only"]);
+const SUPPORT_REPORT_DELIVERY_KEYS = new Set(["mode", "source", "evidenceScope", "reportDigest"]);
+function hasCoherentSupportReportDeliverySource(value: Record<string, unknown>): boolean {
+  if (value.source === "browser") return value.evidenceScope === "client-only";
+  return (
+    value.source === "server" && isSetMember(value.evidenceScope, SUPPORT_REPORT_DELIVERY_SCOPES)
+  );
+}
+export function isClientSupportReportDelivery(
+  value: unknown,
+): value is ClientSupportReportDelivery {
+  // Legacy strings remain accepted from already-open tabs; current producers supply provenance.
+  if (value === "automatic" || value === "manual") return true;
+  if (!isRecord(value) || Object.keys(value).some((key) => !SUPPORT_REPORT_DELIVERY_KEYS.has(key)))
+    return false;
+  return (
+    value.mode === "manual" &&
+    hasCoherentSupportReportDeliverySource(value) &&
+    isOptional(value.reportDigest, isReportDigest)
+  );
+}
+
+/** Successful browser fallback preparation; no report content or claim of an OS save. */
+interface ClientSupportReportPrepared {
+  readonly reportBytes: number;
+  readonly evidenceScope: "server" | "client-only";
+  readonly completeness: ActivityLogCompletenessState;
+  readonly loss: ActivityLogLossState;
+  readonly availabilityReason?: SupportReportAvailabilityReason | undefined;
+}
+export type ClientSupportReportPreparation =
+  | ClientSupportReportPrepared
+  | {
+      readonly outcome: "failed";
+      readonly errorKind: ActivityLogErrorKind;
+      readonly durationMs: number;
+      readonly originalErrorKind?: ActivityLogErrorKind | undefined;
+      readonly errorEvidence?: ClientErrorEvidence | undefined;
+    };
+const SUPPORT_REPORT_PREPARATION_FAILURE_KEYS = new Set([
+  "outcome",
+  "errorKind",
+  "durationMs",
+  "originalErrorKind",
+  "errorEvidence",
+]);
+
+const SUPPORT_REPORT_PREPARATION_KEYS = new Set([
+  "reportBytes",
+  "evidenceScope",
+  "completeness",
+  "loss",
+  "availabilityReason",
+]);
+const REPORT_AVAILABILITY = new Set<string>(SUPPORT_REPORT_AVAILABILITY_REASONS);
+// Initialized after module evaluation to avoid the existing observability/report import cycle.
+let supportPreparationStates:
+  { completeness: ReadonlySet<string>; loss: ReadonlySet<string> } | undefined;
+function supportReportStateSets(): {
+  completeness: ReadonlySet<string>;
+  loss: ReadonlySet<string>;
+} {
+  supportPreparationStates ??= {
+    completeness: new Set(ACTIVITY_LOG_COMPLETENESS_STATES),
+    loss: new Set(ACTIVITY_LOG_LOSS_STATES),
+  };
+  return supportPreparationStates;
+}
+
+function isSupportReportPreparationBytes(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_SUPPORT_REPORT_BYTES
+  );
+}
+function isFailedSupportReportPreparation(value: Record<string, unknown>): boolean {
+  return (
+    Object.keys(value).every((key) => SUPPORT_REPORT_PREPARATION_FAILURE_KEYS.has(key)) &&
+    isActivityLogErrorKind(value.errorKind) &&
+    isOptional(value.originalErrorKind, isActivityLogErrorKind) &&
+    isOptional(value.errorEvidence, isClientErrorEvidence) &&
+    isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX)
+  );
+}
+export function isClientSupportReportPreparation(
+  value: unknown,
+): value is ClientSupportReportPreparation {
+  if (!isRecord(value)) return false;
+  if (value.outcome === "failed") return isFailedSupportReportPreparation(value);
+  if (Object.keys(value).some((key) => !SUPPORT_REPORT_PREPARATION_KEYS.has(key))) return false;
+  return (
+    isSupportReportPreparationBytes(value.reportBytes) &&
+    (value.evidenceScope === "server" || value.evidenceScope === "client-only") &&
+    isSetMember(value.completeness, supportReportStateSets().completeness) &&
+    isSetMember(value.loss, supportReportStateSets().loss) &&
+    coherentReportPreparationScope(value)
+  );
+}
+
+function coherentReportPreparationScope(value: Record<string, unknown>): boolean {
+  if (value.evidenceScope === "server") return !("availabilityReason" in value);
+  return (
+    value.completeness === "complete" &&
+    value.loss === "none" &&
+    isSetMember(value.availabilityReason, REPORT_AVAILABILITY)
+  );
+}
+
+/** Closed source ownership and shared grounding-queue decisions; no references or source content. */
+export const CLIENT_FILES_SCOPE_DECISIONS = [
+  "restored",
+  "owned-elsewhere",
+  "released",
+  "blocked-ambiguous",
+  "fingerprint-absent",
+  "conflict-retried",
+  "ack-missing",
+  "acknowledged",
+  "ack-invalidated",
+  "automatic-suppressed",
+  "timeout-blocked",
+  "timeout-recovered",
+  "timeout-rejected",
+  "request-superseded",
+] as const;
+export interface ClientFilesScopeDecision {
+  readonly decision: (typeof CLIENT_FILES_SCOPE_DECISIONS)[number];
+  readonly sourceCount?: number | undefined;
+  readonly candidateCount?: number | undefined;
+  readonly bindingFingerprint?: string | undefined;
+  readonly mutationSurface?: (typeof CLIENT_GROUNDING_MUTATION_SURFACES)[number] | undefined;
+  readonly rejectionCount?: number | undefined;
+}
+const FILES_SCOPE_DECISIONS: ReadonlySet<unknown> = new Set(CLIENT_FILES_SCOPE_DECISIONS);
+export const CLIENT_GROUNDING_MUTATION_SURFACES = [
+  "files",
+  "local-knowledge",
+  "git-change",
+] as const;
+const GROUNDING_MUTATION_SURFACES: ReadonlySet<unknown> = new Set(
+  CLIENT_GROUNDING_MUTATION_SURFACES,
+);
+const FILES_SCOPE_DECISION_KEYS = new Set([
+  "decision",
+  "sourceCount",
+  "candidateCount",
+  "bindingFingerprint",
+  "mutationSurface",
+  "rejectionCount",
+]);
+const SCOPE_OWNERSHIP_DECISIONS: ReadonlySet<unknown> = new Set([
+  "restored",
+  "released",
+  "blocked-ambiguous",
+  "fingerprint-absent",
+  "acknowledged",
+]);
+const SCOPE_MUTATION_DECISIONS: ReadonlySet<unknown> = new Set([
+  "conflict-retried",
+  "timeout-blocked",
+  "timeout-recovered",
+  "timeout-rejected",
+  "request-superseded",
+]);
+function isScopeDecisionCount(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+function hasCoherentScopeDecisionFields(value: Record<string, unknown>): boolean {
+  const ownership = SCOPE_OWNERSHIP_DECISIONS.has(value.decision);
+  const candidate = ownership || value.decision === "ack-invalidated";
+  return (
+    (value.sourceCount === undefined || ownership) &&
+    (value.candidateCount === undefined || candidate) &&
+    (value.bindingFingerprint === undefined || candidate) &&
+    (value.mutationSurface === undefined || SCOPE_MUTATION_DECISIONS.has(value.decision))
+  );
+}
+function hasValidScopeArrayCounts(value: Record<string, unknown>): boolean {
+  // These producers count JS arrays of connected scopes, whose length cannot exceed uint32.
+  // This is an evidence representation constraint, not a recursive-search file-count limit.
+  const arrayLengthMax = 4_294_967_295;
+  return (
+    (value.sourceCount === undefined ||
+      isBoundedNonNegativeInteger(value.sourceCount, arrayLengthMax)) &&
+    (value.candidateCount === undefined ||
+      isBoundedNonNegativeInteger(value.candidateCount, arrayLengthMax)) &&
+    (typeof value.sourceCount !== "number" ||
+      typeof value.candidateCount !== "number" ||
+      value.candidateCount <= value.sourceCount)
+  );
+}
+function isClientFilesScopeDecision(value: unknown): value is ClientFilesScopeDecision {
+  if (!isRecord(value) || Object.keys(value).some((key) => !FILES_SCOPE_DECISION_KEYS.has(key)))
+    return false;
+  return (
+    FILES_SCOPE_DECISIONS.has(value.decision) &&
+    (value.mutationSurface === undefined ||
+      GROUNDING_MUTATION_SURFACES.has(value.mutationSurface)) &&
+    hasValidScopeArrayCounts(value) &&
+    hasCoherentScopeDecisionFields(value) &&
+    hasValidScopeRejectionCount(value) &&
+    isOptional(value.bindingFingerprint, isScopeBindingFingerprint)
+  );
+}
+
+function isScopeBindingFingerprint(value: unknown): value is string {
+  return typeof value === "string" && CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(value);
+}
+
+function hasValidScopeRejectionCount(value: Record<string, unknown>): boolean {
+  return (
+    value.rejectionCount === undefined ||
+    (value.decision === "timeout-recovered" && isScopeDecisionCount(value.rejectionCount))
+  );
+}
+function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): boolean {
+  if (value.filesScopeDecision === undefined) return true;
+  return (
+    isClientFilesScopeDecision(value.filesScopeDecision) &&
+    isActivityLogCorrelationId(value.correlationId)
+  );
+}
+
+/** Citation attribution and the actual navigation decision, without paths or fingerprints. */
+export interface ClientDiagnosticCitationActivation {
+  readonly reason: "matched" | "unmatched" | "absent" | "malformed" | "ambiguous";
+  readonly outcome: "opened" | "open-refused" | "picker-opened" | "picker-dismissed" | "refused";
+  readonly rootCount: number;
+  readonly matchCount: number;
+}
+const CITATION_ACTIVATION_REASONS: ReadonlySet<unknown> = new Set([
+  "matched",
+  "unmatched",
+  "absent",
+  "malformed",
+  "ambiguous",
+]);
+const CITATION_ACTIVATION_OUTCOMES: ReadonlySet<unknown> = new Set([
+  "opened",
+  "open-refused",
+  "picker-opened",
+  "picker-dismissed",
+  "refused",
+]);
+const CITATION_ACTIVATION_KEYS = new Set(["reason", "outcome", "rootCount", "matchCount"]);
+
+function coherentCitationMatchCount(value: Record<string, unknown>): boolean {
+  if (value.reason === "matched") return value.matchCount === 1;
+  if (value.reason === "ambiguous")
+    return typeof value.matchCount === "number" && value.matchCount > 1;
+  return value.matchCount === 0;
+}
+
+function coherentCitationOutcome(value: Record<string, unknown>): boolean {
+  return (
+    value.outcome === "refused" || (typeof value.rootCount === "number" && value.rootCount > 0)
+  );
+}
+
+function isClientDiagnosticCitationActivation(
+  value: unknown,
+): value is ClientDiagnosticCitationActivation {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== CITATION_ACTIVATION_KEYS.size ||
+    keys.some((key) => !CITATION_ACTIVATION_KEYS.has(key))
+  )
+    return false;
+  return (
+    CITATION_ACTIVATION_REASONS.has(value.reason) &&
+    CITATION_ACTIVATION_OUTCOMES.has(value.outcome) &&
+    isBoundedNonNegativeInteger(value.rootCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.matchCount, value.rootCount) &&
+    coherentCitationMatchCount(value) &&
+    coherentCitationOutcome(value)
+  );
+}
+
+function hasValidCitationActivationContext(value: Record<string, unknown>): boolean {
+  if (value.citationActivation === undefined) return true;
+  return (
+    isActivityLogCorrelationId(value.correlationId) &&
+    isClientDiagnosticCitationActivation(value.citationActivation)
   );
 }

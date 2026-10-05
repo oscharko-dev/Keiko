@@ -2,7 +2,12 @@
 // Epic #189 Slice 3 M1 — plural connector-scope helpers + Connector↔Chat binding.
 // Epic #710 #718 — linkedConnectorCapsuleIds reader.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { reportConnectionUnbindFailure } from "./useWorkspace";
+import { ApiError } from "@/lib/api-shared-primitives";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
+
+afterEach(() => resetClientDiagnosticWriter());
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import {
   activeEditorPane,
@@ -36,14 +41,17 @@ import {
   appendConnectedScope,
   isRootConnected,
   isScopeConnected,
+  hasOtherFilesScopeOwner,
+  restoredConnectionScope,
   toggleWorkspaceSelection,
   totalSourceCap,
 } from "./workspaceActions";
+import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
-import type { ChatBindingTarget, ChatUnbindTarget } from "./useWorkspace.types";
+import type { ChatBindingTarget, ChatUnbindTarget, ConnectionOutcome } from "./useWorkspace.types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
@@ -556,6 +564,7 @@ function ref<T>(value: T): MutableRefObject<T> {
 }
 
 interface ConnectHarnessOverrides {
+  readonly onConnectionOutcome?: (outcome: ConnectionOutcome) => void;
   readonly connecting?: ConnectingState | null;
   readonly setConns?: Dispatch<SetStateAction<Connection[]>>;
   readonly onScopeBind?: (
@@ -632,6 +641,7 @@ function makeConnectHarness(
     focus: () => undefined,
     setConns,
     setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
+    onConnectionOutcome: overrides.onConnectionOutcome,
     onScopeBind: overrides.onScopeBind,
     onScopeUnbind: overrides.onScopeUnbind,
     onConnectorBind: overrides.onConnectorBind,
@@ -1078,6 +1088,71 @@ describe("scope normalization helpers", () => {
       }),
     ).toMatchObject({ kind: "files", root: "/repo", relativePaths: ["src/main.ts"] });
     expect(boundScopeOf({ boundRoot: "/repo", boundScopeKind: "files" })).toBeNull();
+  });
+
+  it("restores only an exact canonical scope from its timestamp-independent private digest", () => {
+    const canonical: ChatConnectedScope = {
+      kind: "files",
+      root: "C:/repo",
+      relativePaths: ["src/main.ts"],
+      connectedAtMs: 1,
+    };
+    const normalized: ChatConnectedScope = {
+      ...canonical,
+      root: "C:\\repo\\",
+      relativePaths: ["/src\\main.ts/"],
+      connectedAtMs: 999,
+    };
+    const digest = connectedScopeFingerprint(normalized);
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(connectedScopeFingerprint(canonical)).toBe(digest);
+    expect(restoredConnectionScope({ boundScopeFingerprint: digest }, [canonical])).toBe(canonical);
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: digest }, [
+        { ...canonical, kind: "directory" },
+      ]),
+    ).toBeNull();
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: digest?.toUpperCase() }, [canonical]),
+    ).toBeNull();
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: "0".repeat(64) }, [canonical]),
+    ).toBeNull();
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: digest }, [canonical, canonical]),
+    ).toBeNull();
+  });
+
+  it("preserves another restored scope owner even when its visible root is unavailable", () => {
+    const owned = scope("/manuals/Scale");
+    const edge: Connection = {
+      id: "other-edge",
+      a: "files-other",
+      b: "chat-owner",
+      boundScopeElided: true,
+      boundScopeFingerprint: connectedScopeFingerprint(owned),
+    };
+    const input = {
+      windows: [
+        win("files", {}, "files-other"),
+        win("chat", { chatId: "saved-chat" }, "chat-owner"),
+      ],
+      connections: [edge],
+      scope: owned,
+      conversationId: "saved-chat",
+      excludedConnectionId: "current-edge",
+      releasedConnections: new Set<string>(),
+      acknowledgedScopes: new Map<string, ChatConnectedScope>(),
+      conversationForWindow: (): string => "saved-chat",
+    };
+    expect(hasOtherFilesScopeOwner(input)).toBe(true);
+    expect(hasOtherFilesScopeOwner({ ...input, scope: scope("/manuals/Distinct") })).toBe(false);
+    expect(hasOtherFilesScopeOwner({ ...input, releasedConnections: new Set([edge.id]) })).toBe(
+      false,
+    );
+    expect(
+      hasOtherFilesScopeOwner({ ...input, conversationForWindow: (): string => "another-chat" }),
+    ).toBe(false);
   });
 });
 
@@ -2046,6 +2121,27 @@ describe("makeMutations.openEditorFile", () => {
     expect(typeof editors[0]?.cfg["revealRequestId"]).toBe("string");
   });
 
+  it("clears a previous citation jump on an ordinary file open", () => {
+    const h = harness([
+      win(
+        "editor",
+        {
+          root: "/repo",
+          file: "src/old.ts",
+          revealLineStart: 42,
+          revealLineEnd: 44,
+          revealRequestId: "old-reveal",
+        },
+        "editor-1",
+      ),
+    ]);
+    expect(h.openEditorFile({ root: "/repo", path: "src/next.ts" }).ok).toBe(true);
+    const cfg = h.wins().find((window) => window.id === "editor-1")?.cfg;
+    expect(cfg?.["revealLineStart"]).toBeUndefined();
+    expect(cfg?.["revealLineEnd"]).toBeUndefined();
+    expect(cfg?.["revealRequestId"]).toBeUndefined();
+  });
+
   it.each([false, true])("keeps managed task root binding when reuse=%s", (reuse) => {
     const root = "/repo/.keiko/dev/ui/task-workspaces/repo/ws-1";
     const h = harness(reuse ? [win("editor", { root, file: "old.ts" }, "task-editor")] : []);
@@ -2668,6 +2764,113 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     await Promise.resolve();
   }
 
+  it.each(["missing", "files-2"])(
+    "does not announce a scope failure for the unattempted target %s",
+    (toId) => {
+      const outcomes: ConnectionOutcome[] = [];
+      const onScopeBind = vi.fn();
+      const harness = makeConnectHarness(
+        [win("files", {}, "files-1"), win("files", {}, "files-2")],
+        [],
+        {
+          connecting: { from: "files-1", x: 0, y: 0 },
+          onScopeBind,
+          onConnectionOutcome: (outcome) => outcomes.push(outcome),
+        },
+      );
+      harness.confirmConnect(toId, evt);
+      expect(outcomes).toEqual([{ kind: "not-connected" }]);
+      expect(onScopeBind).not.toHaveBeenCalled();
+      expect(harness.cancelConnect()).toBe(false);
+    },
+  );
+
+  it("reports cancellation only while the current connection gesture is active", () => {
+    const outcomes: ConnectionOutcome[] = [];
+    const harness = makeConnectHarness([win("files", {}, "files-1")], [], {
+      connecting: { from: "files-1", x: 0, y: 0 },
+      onConnectionOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(harness.cancelConnect()).toBe(true);
+    expect(harness.cancelConnect()).toBe(false);
+    expect(outcomes).toEqual([{ kind: "cancelled" }]);
+  });
+
+  it("reports pending then connected only after the scope bind acknowledges", async () => {
+    const acceptance = deferredValue<boolean>();
+    const outcomes: ConnectionOutcome[] = [];
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        onScopeBind: () => acceptance.promise,
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(outcomes).toEqual([{ kind: "pending" }]);
+    expect(harness.cancelConnect()).toBe(false);
+    expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
+    acceptance.resolve(true);
+    await acceptance.promise;
+    await flushAsyncBind();
+    expect(outcomes).toEqual([
+      { kind: "pending" },
+      { kind: "connected", fromId: "files-1", toId: "chat-1" },
+    ]);
+    expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
+  });
+
+  it("announces a pending acknowledgement separately after a newer gesture is cancelled", async () => {
+    const acceptance = deferredValue<boolean>();
+    const outcomes: ConnectionOutcome[] = [];
+    const wins = [
+      win("files", { resolvedRoot: "/data/docs" }, "files-1"),
+      win("chat", {}, "chat-1"),
+    ];
+    const overrides: ConnectHarnessOverrides = {
+      connecting: { from: "files-1", x: 0, y: 0 },
+      onScopeBind: () => acceptance.promise,
+      onConnectionOutcome: (outcome) => outcomes.push(outcome),
+    };
+    makeConnectHarness(wins, [], overrides).confirmConnect("chat-1", evt);
+    expect(outcomes.at(-1)?.kind).toBe("pending");
+    makeConnectHarness(wins, [], {
+      ...overrides,
+      connecting: { from: "files-2", x: 0, y: 0 },
+    }).cancelConnect();
+    const cancelledCount = outcomes.length;
+    expect(outcomes.at(-1)?.kind).toBe("cancelled");
+    acceptance.resolve(true);
+    await acceptance.promise;
+    await flushAsyncBind();
+    expect(outcomes).toHaveLength(cancelledCount + 1);
+    expect(outcomes.at(-2)?.kind).toBe("cancelled");
+    expect(outcomes.at(-1)).toEqual({ kind: "connected", fromId: "files-1", toId: "chat-1" });
+  });
+
+  it("reports a rejected scope bind and preserves explicit cancellation", async () => {
+    const outcomes: ConnectionOutcome[] = [];
+    const overrides: ConnectHarnessOverrides = {
+      connecting: { from: "files-1", x: 0, y: 0 },
+      onScopeBind: () => false,
+      onConnectionOutcome: (outcome) => outcomes.push(outcome),
+    };
+    const wins = [
+      win("files", { resolvedRoot: "/data/docs" }, "files-1"),
+      win("chat", {}, "chat-1"),
+    ];
+    const rejected = makeConnectHarness(wins, [], overrides);
+    rejected.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(outcomes).toEqual([{ kind: "pending" }, { kind: "rejected" }]);
+    const cancelled = makeConnectHarness(wins, [], overrides);
+    cancelled.cancelConnect();
+    expect(outcomes.at(-1)?.kind).toBe("cancelled");
+  });
+
   it("does not draw the edge when onScopeBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
@@ -2731,6 +2934,9 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns).toHaveLength(1);
     expect(store.conns[0]?.boundRoot).toBe("/data/docs");
     expect(store.conns[0]?.boundScopeKind).toBe("workspace-root");
+    expect(store.conns[0]?.boundScopeFingerprint).toBe(
+      connectedScopeFingerprint(scope("/data/docs")),
+    );
     expect(store.conns[0]?.boundRelativePath).toBeUndefined();
   });
 
@@ -2994,6 +3200,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 
   it("does not draw a Git↔Chat edge when the Git comparison has no distinct base", async () => {
     const store = { conns: [] as Connection[] };
+    const outcomes: ConnectionOutcome[] = [];
     const onGitChangeBind = vi.fn();
     const harness = makeConnectHarness(
       [
@@ -3009,27 +3216,35 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
         connecting: { from: "git-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
         onGitChangeBind,
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
       },
     );
     harness.confirmConnect("chat-1", evt);
     await flushAsyncBind();
     expect(onGitChangeBind).not.toHaveBeenCalled();
     expect(store.conns).toHaveLength(0);
+    expect(outcomes).toEqual([{ kind: "not-connected" }]);
   });
 
   it("still draws non-binding edges when no callbacks are wired", async () => {
     const store = { conns: [] as Connection[] };
+    const outcomes: ConnectionOutcome[] = [];
     const harness = makeConnectHarness(
       [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("quality", {}, "quality")],
       [],
       {
         connecting: { from: "files-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
       },
     );
     harness.confirmConnect("quality", evt);
     await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
+    expect(outcomes).toEqual([
+      { kind: "pending" },
+      { kind: "connected", fromId: "files-1", toId: "quality" },
+    ]);
   });
 
   // #3506 review — rejecting a duplicate Git↔Chat bind at the source. Without this guard, a
@@ -3037,6 +3252,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
   // relationship, and the edge's `boundGitChangeRelationshipId` was overwritten — the original
   // relationship stayed active on the server but became unreachable through the UI.
   it("does not re-invoke onGitChangeBind when the Git↔Chat pair is already bound", async () => {
+    const outcomes: ConnectionOutcome[] = [];
     const store = {
       conns: [
         {
@@ -3061,11 +3277,13 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
         connecting: { from: "git-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
         onGitChangeBind,
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
       },
     );
     harness.confirmConnect("chat-1", evt);
     await flushAsyncBind();
     expect(onGitChangeBind).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([{ kind: "connected", fromId: "git-1", toId: "chat-1" }]);
     // The pre-existing edge (with its original relationship id) survives untouched — no new
     // relationship replaces it.
     expect(store.conns).toEqual([
@@ -3080,6 +3298,84 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     ]);
   });
+
+  it.each(["throw", "reject"] as const)(
+    "keeps the actual cause and request identity when late Git cleanup fails by %s",
+    async (outcome) => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      const failure = new ApiError("INTERNAL", "private body", 503);
+      failure.correlationId = "git-cleanup-request-123";
+      failure.cause = new TypeError("private endpoint");
+      const pending = deferredValue<ChatGitChangeScope>();
+      const cfg = { chatId: "old-private-chat", projectPath: "/private" };
+      const harness = makeConnectHarness(
+        [
+          win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "HEAD" }, "git-1"),
+          win("chat", cfg, "chat-1"),
+        ],
+        [],
+        {
+          connecting: { from: "git-1", x: 0, y: 0 },
+          onGitChangeBind: () => pending.promise,
+          onGitChangeUnbind: () => {
+            if (outcome === "throw") throw failure;
+            return Promise.reject(failure);
+          },
+          onConnectionUnbindFailure: reportConnectionUnbindFailure,
+        },
+      );
+      harness.confirmConnect("chat-1", evt);
+      cfg.chatId = "new-private-chat";
+      pending.resolve(gitScope("private-relationship"));
+      await vi.waitFor(() => expect(writer).toHaveBeenCalledOnce());
+      expect(writer).toHaveBeenCalledExactlyOnceWith(
+        "[keiko] workspace connection unbind callback failed",
+        expect.objectContaining({
+          correlationId: "git-cleanup-request-123",
+          errorKind: "unavailable",
+          errorEvidence: expect.objectContaining({
+            errorClass: "ApiError",
+            causeChain: ["TypeError"],
+          }),
+        }),
+      );
+      expect(JSON.stringify(writer.mock.calls)).not.toMatch(/private/);
+    },
+  );
+
+  it.each(["retargeted", "closed"] as const)(
+    "releases the original Git relationship if the endpoint is %s just before acceptance",
+    async (change) => {
+      const store = { conns: [] as Connection[] };
+      const pending = deferredValue<ChatGitChangeScope>();
+      const cfg = { chatId: "original-chat", projectPath: "/original" };
+      const onGitChangeUnbind = vi.fn(() => true);
+      const harness = makeConnectHarness(
+        [
+          win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+          win("chat", cfg, "chat-1"),
+        ],
+        [],
+        {
+          connecting: { from: "git-1", x: 0, y: 0 },
+          setConns: collectingSetConns(store),
+          onGitChangeBind: () => pending.promise,
+          onGitChangeUnbind,
+        },
+      );
+      harness.confirmConnect("chat-1", evt);
+      cfg.chatId = change === "retargeted" ? "new-chat" : "";
+      cfg.projectPath = "/new";
+      pending.resolve(gitScope("owned-relationship"));
+      await flushAsyncBind();
+      expect(onGitChangeUnbind).toHaveBeenCalledExactlyOnceWith("chat-1", "owned-relationship", {
+        conversationId: "original-chat",
+        projectPath: "/original",
+      });
+      expect(store.conns).toEqual([]);
+    },
+  );
 
   // #3506 review — a deferred bind whose optimistic edge is removed before it settles must
   // hand the just-minted server relationship back through `onGitChangeUnbind`. Without this,
@@ -3131,6 +3427,43 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 // Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
 // points at NOW (the user may have navigated the Files window / re-selected another capsule).
 describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it.each(["/manuals/Distinct", undefined])(
+    "routes an elided owned edge through teardown before removing it locally (%s)",
+    async (visibleRoot) => {
+      const edge: Connection = {
+        id: "owned-edge",
+        a: "files-1",
+        b: "chat-1",
+        boundScopeElided: true,
+        boundScopeFingerprint: connectedScopeFingerprint(scope("/manuals/Scale")),
+      };
+      const store = { conns: [edge] };
+      const onScopeUnbind = vi.fn(() => false);
+      const harness = makeConnectHarness(
+        [
+          win("files", { root: visibleRoot, rootBinding: "coding-repository" }, "files-1"),
+          win("chat", { chatId: "saved-chat" }, "chat-1"),
+        ],
+        [edge],
+        {
+          onScopeUnbind,
+          setConns: (action): void => {
+            store.conns = typeof action === "function" ? action(store.conns) : action;
+          },
+        },
+      );
+      harness.removeConn(edge.id);
+      await vi.waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+      expect(onScopeUnbind).toHaveBeenCalledWith(
+        "chat-1",
+        expect.objectContaining({ kind: "workspace-root" }),
+        expect.anything(),
+        edge.id,
+      );
+      expect(store.conns).toEqual([edge]);
+    },
+  );
+
   it("retains the edge when an asynchronous server unbind is rejected", async () => {
     const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
     const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
@@ -3242,6 +3575,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       "chat-1",
       expect.objectContaining({ root: "/data/docs" }),
       { conversationId: "chat-private", projectPath: "/private" },
+      edge.id,
     );
   });
 

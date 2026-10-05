@@ -11,7 +11,7 @@ import type {
   ManagedLspRuntimeConfiguration,
 } from "@oscharko-dev/keiko-contracts";
 import type { ManagedLspConfigurationSummary, ManagedLspSettingsAction } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 
 import styles from "./ManagedLanguageSettings.module.css";
 import { managedLanguageTranslate, type ManagedLanguageTranslate } from "./managed-language-i18n";
