@@ -560,6 +560,26 @@ describe("createExplorationPlan", () => {
     }
   });
 
+  it("preserves finite enrichment file ceilings and slices an explicit elapsed budget per ring", () => {
+    const p = createExplorationPlan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text: "Where is WindowFrame defined and used?" }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 10_000 },
+    });
+    expect(p.state).toBe("ready");
+    expect(
+      p.rings.map(({ kind, searchLimits: { maxFilesScanned, elapsedMsMax } }) => ({
+        kind,
+        maxFilesScanned,
+        elapsedMsMax,
+      })),
+    ).toEqual([
+      { kind: "lexical", maxFilesScanned: null, elapsedMsMax: 5500 },
+      { kind: "structural", maxFilesScanned: 614, elapsedMsMax: 3000 },
+      { kind: "git-history", maxFilesScanned: 307, elapsedMsMax: 1500 },
+    ]);
+  });
+
   it("decouples lexical scan breadth from the excerpt-byte budget so multi-file scopes are reachable", () => {
     // Epic #177 retrieval fix. Lexical/structural scanning is transient — each candidate file is
     // read to match lines, then discarded — and is bounded by elapsedMsMax, NOT by the excerpt-byte

@@ -339,14 +339,32 @@ describe("isWithinBudget", () => {
   );
 
   it.each(["elapsedMs", "filesRead"] as const)(
-    "enforces finite %s equality, overflow and missing-cap boundaries",
+    "enforces finite %s equality and overflow in both budget validators",
     (dimension) => {
       const budget = { ...DEFAULT_EXPLORATION_BUDGET, [`${dimension}Max`]: 13 };
-      expect(isWithinBudget({ ...happyUsage(), [dimension]: 13 }, budget)).toBe(true);
-      expect(isWithinBudget({ ...happyUsage(), [dimension]: 13.5 }, budget)).toBe(false);
-      const missing = { ...budget, [`${dimension}Max`]: undefined };
-      expect(isWithinBudget(happyUsage(), missing)).toBe(false);
-      expect(validateConnectedContextPack({ ...happyPack(), budget: missing }).ok).toBe(false);
+      for (const [used, accepted] of [
+        [13, true],
+        [13.5, false],
+        [14, false],
+      ] as const) {
+        const usage = { ...happyUsage(), [dimension]: used };
+        expect(isWithinBudget(usage, budget)).toBe(accepted);
+        expect(validateConnectedContextPack({ ...happyPack(), usage, budget }).ok).toBe(accepted);
+      }
+    },
+  );
+
+  it.each(["filesReadMax", "elapsedMsMax"] as const)(
+    "rejects missing and invalid nullable %s in both budget validators",
+    (field) => {
+      for (const cap of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY, 1.5]) {
+        const budget = { ...DEFAULT_EXPLORATION_BUDGET, [field]: cap };
+        expect(isWithinBudget(happyUsage(), budget)).toBe(false);
+        expectInvalidWithReason(
+          validateConnectedContextPack({ ...happyPack(), budget }),
+          `budget.${field}`,
+        );
+      }
     },
   );
 
@@ -1385,6 +1403,23 @@ describe("validateConnectedContextPack", () => {
     };
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
+
+  it.each(["maxFilesScanned", "elapsedMsMax"] as const)(
+    "rejects missing and invalid nullable coverage %s",
+    (field) => {
+      for (const cap of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY, 1.5]) {
+        const coverage = coverageDiagnostics();
+        const pack = {
+          ...happyPack(),
+          diagnostics: {
+            rankedCandidates: [],
+            coverage: { ...coverage, limits: { ...coverage.limits, [field]: cap } },
+          },
+        };
+        expectInvalidWithReason(validateConnectedContextPack(pack), `coverage.${field} invalid`);
+      }
+    },
+  );
 
   it("rejects incomplete coverage without a closed truncation reason", () => {
     const pack: ConnectedContextPack = {

@@ -127,10 +127,15 @@ describe("applyUsage", () => {
     expect(() => applyUsage(g, delta({ searchCalls: -1 }))).toThrow(RangeError);
   });
 
-  it("throws RangeError for a non-integer usage delta", () => {
-    const g = makeGovernor();
-    expect(() => applyUsage(g, delta({ filesRead: 1.5 }))).toThrow(RangeError);
-  });
+  it.each(["filesRead", "elapsedMs"] as const)(
+    "throws RangeError for a non-integer %s delta despite fractional contract usage being valid",
+    (dimension) => {
+      const g = makeGovernor();
+      expect(() => applyUsage(g, delta({ [dimension]: 1.5 }))).toThrow(RangeError);
+      expect(g.usage).toEqual(delta());
+      expect(g.status).toBe("running");
+    },
+  );
 
   it("throws RangeError for a non-finite usage delta", () => {
     const g = makeGovernor();
