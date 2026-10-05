@@ -310,6 +310,46 @@ describe("isValidLineRange", () => {
 
 // ─── isWithinBudget ───────────────────────────────────────────────────────────
 describe("isWithinBudget", () => {
+  it.each([
+    ["searchCallsMax", false],
+    ["filesReadMax", true],
+    ["excerptBytesMax", false],
+    ["modelInputTokensMax", false],
+    ["modelOutputTokensMax", false],
+    ["elapsedMsMax", true],
+    ["rerankCallsMax", false],
+  ] as const)("agrees with pack validation on null %s", (field, accepted) => {
+    const budget = { ...DEFAULT_EXPLORATION_BUDGET, [field]: null };
+    expect(isWithinBudget(happyUsage(), budget)).toBe(accepted);
+    expect(validateConnectedContextPack({ ...happyPack(), budget }).ok).toBe(accepted);
+  });
+
+  it.each(["elapsedMs", "filesRead"] as const)(
+    "accepts finite fractional %s consistently with pack validation",
+    (dimension) => {
+      const usage = { ...happyUsage(), [dimension]: 12.5 };
+      for (const cap of [null, 13]) {
+        const budget = { ...DEFAULT_EXPLORATION_BUDGET, [`${dimension}Max`]: cap };
+        expect(validateConnectedContextPack({ ...happyPack(), usage, budget })).toEqual({
+          ok: true,
+        });
+        expect(isWithinBudget(usage, budget)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["elapsedMs", "filesRead"] as const)(
+    "enforces finite %s equality, overflow and missing-cap boundaries",
+    (dimension) => {
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, [`${dimension}Max`]: 13 };
+      expect(isWithinBudget({ ...happyUsage(), [dimension]: 13 }, budget)).toBe(true);
+      expect(isWithinBudget({ ...happyUsage(), [dimension]: 13.5 }, budget)).toBe(false);
+      const missing = { ...budget, [`${dimension}Max`]: undefined };
+      expect(isWithinBudget(happyUsage(), missing)).toBe(false);
+      expect(validateConnectedContextPack({ ...happyPack(), budget: missing }).ok).toBe(false);
+    },
+  );
+
   it("allows default file counts while retaining explicit finite read budgets", () => {
     const usage = { ...happyUsage(), filesRead: 40 };
     expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);

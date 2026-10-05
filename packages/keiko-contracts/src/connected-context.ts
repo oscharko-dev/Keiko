@@ -612,43 +612,42 @@ export function isValidLineRange(range: unknown): boolean {
   return endLine >= startLine;
 }
 
-function isWithinOptionalBudget(used: number, cap: number | null): boolean {
-  if (!isFiniteNonNegativeInteger(used)) return false;
-  return cap === null || (isFiniteNonNegativeInteger(cap) && used <= cap);
+const EXPLORATION_USAGE_DIMENSIONS = [
+  "searchCalls",
+  "filesRead",
+  "excerptBytes",
+  "modelInputTokens",
+  "modelOutputTokens",
+  "elapsedMs",
+  "rerankCalls",
+] as const satisfies readonly (keyof ExplorationUsage)[];
+
+// These are the only nullable caps on the connected-context wire, including search coverage.
+const NULLABLE_CONTEXT_CAPS: ReadonlySet<string> = new Set([
+  "filesReadMax",
+  "elapsedMsMax",
+  "maxFilesScanned",
+]);
+
+function isValidContextCap(value: unknown, field: string): value is number | null {
+  return (value === null && NULLABLE_CONTEXT_CAPS.has(field)) || isFiniteNonNegativeInteger(value);
+}
+
+function isValidBudgetUsage(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
-  if (!isRecord(usage) || !isRecord(budget)) {
-    return false;
+  if (!isRecord(usage) || !isRecord(budget)) return false;
+  for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
+    const field = `${dimension}Max` as const;
+    const cap = budget[field];
+    const used = usage[dimension];
+    // Validate the cap before comparison: missing/NaN caps must never fail open.
+    if (!isValidContextCap(cap, field) || !isValidBudgetUsage(used)) return false;
+    if (cap !== null && used > cap) return false;
   }
-  const dims: readonly (readonly [number, number])[] = [
-    [usage.searchCalls, budget.searchCallsMax],
-    [usage.excerptBytes, budget.excerptBytesMax],
-    [usage.modelInputTokens, budget.modelInputTokensMax],
-    [usage.modelOutputTokens, budget.modelOutputTokensMax],
-    [usage.rerankCalls, budget.rerankCallsMax],
-  ];
-  for (const dim of dims) {
-    const used = dim[0];
-    const cap = dim[1];
-    // The cap side must be validated FIRST. `used > cap` is false whenever cap is undefined or NaN,
-    // so an unchecked cap made a partially-constructed budget report every usage as in-budget — the
-    // guard that stops a runaway exploration loop failing OPEN. checkBudgetDimension below already
-    // validates the cap before the usage; this is the same rule on the spend path.
-    if (!isFiniteNonNegativeInteger(cap)) {
-      return false;
-    }
-    if (!Number.isFinite(used) || used < 0) {
-      return false;
-    }
-    if (used > cap) {
-      return false;
-    }
-  }
-  return (
-    isWithinOptionalBudget(usage.elapsedMs, budget.elapsedMsMax) &&
-    isWithinOptionalBudget(usage.filesRead, budget.filesReadMax)
-  );
+  return true;
 }
 
 function pushIf(reasons: string[], condition: boolean, reason: string): void {
@@ -1297,17 +1296,14 @@ function validatePackUncertainty(
 function checkBudgetDimension(
   used: number,
   cap: number | null,
-  dimension: string,
+  dimension: keyof ExplorationUsage,
   reasons: string[],
 ): void {
-  if (
-    !((dimension === "elapsedMs" || dimension === "filesRead") && cap === null) &&
-    !isFiniteNonNegativeInteger(cap)
-  ) {
+  if (!isValidContextCap(cap, `${dimension}Max`)) {
     reasons.push(`budget.${dimension}Max not a finite non-negative integer`);
     return;
   }
-  if (!Number.isFinite(used) || used < 0) {
+  if (!isValidBudgetUsage(used)) {
     reasons.push(`pack.usage.${dimension} invalid`);
     return;
   }
@@ -1329,28 +1325,9 @@ function validatePackBudget(
     reasons.push("pack.budget invalid");
     return;
   }
-  checkBudgetDimension(pack.usage.searchCalls, pack.budget.searchCallsMax, "searchCalls", reasons);
-  checkBudgetDimension(pack.usage.filesRead, pack.budget.filesReadMax, "filesRead", reasons);
-  checkBudgetDimension(
-    pack.usage.excerptBytes,
-    pack.budget.excerptBytesMax,
-    "excerptBytes",
-    reasons,
-  );
-  checkBudgetDimension(
-    pack.usage.modelInputTokens,
-    pack.budget.modelInputTokensMax,
-    "modelInputTokens",
-    reasons,
-  );
-  checkBudgetDimension(
-    pack.usage.modelOutputTokens,
-    pack.budget.modelOutputTokensMax,
-    "modelOutputTokens",
-    reasons,
-  );
-  checkBudgetDimension(pack.usage.elapsedMs, pack.budget.elapsedMsMax, "elapsedMs", reasons);
-  checkBudgetDimension(pack.usage.rerankCalls, pack.budget.rerankCallsMax, "rerankCalls", reasons);
+  for (const dimension of EXPLORATION_USAGE_DIMENSIONS) {
+    checkBudgetDimension(pack.usage[dimension], pack.budget[`${dimension}Max`], dimension, reasons);
+  }
   if (actualExcerptBytes > pack.usage.excerptBytes) {
     reasons.push("pack.files excerpts exceed pack.usage.excerptBytes");
   }
@@ -1558,13 +1535,6 @@ function validateCoverageCounters(
     );
   }
   for (const field of COVERAGE_LIMIT_FIELDS) {
-    pushIf(
-      reasons,
-      !(
-        (field === "maxFilesScanned" || field === "elapsedMsMax") &&
-        coverage.limits[field] === null
-      ) && !isFiniteNonNegativeInteger(coverage.limits[field]),
-      `coverage.${field} invalid`,
-    );
+    pushIf(reasons, !isValidContextCap(coverage.limits[field], field), `coverage.${field} invalid`);
   }
 }
