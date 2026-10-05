@@ -185,10 +185,14 @@ vi.mock("@/lib/api", async (importOriginal) => ({
     id: string,
     scopes: readonly ChatConnectedScope[] | null,
     expectedIdentity?: string,
+    correlationId?: string,
   ): Promise<{ readonly chat: Chat }> => {
-    const response = (await (expectedIdentity === undefined
-      ? mocks.updateChatConnectedScopes(id, scopes)
-      : mocks.updateChatConnectedScopes(id, scopes, expectedIdentity))) as { readonly chat: Chat };
+    const response = (await mocks.updateChatConnectedScopes(
+      id,
+      scopes,
+      expectedIdentity,
+      correlationId,
+    )) as { readonly chat: Chat };
     mocks.state.canonicalChats.set(id, response.chat);
     return response;
   },
@@ -424,6 +428,24 @@ function chat(overrides: Partial<Chat> = {}): Chat {
     updatedAt: 2,
     ...overrides,
   };
+}
+
+function rejectScopeMutationConflict(
+  _id: string,
+  _scopes: readonly unknown[] | null,
+  _identity: string | undefined,
+  correlationId: string | undefined,
+): Promise<never> {
+  const error = new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409);
+  if (correlationId !== undefined) error.correlationId = correlationId;
+  return Promise.reject(error);
+}
+
+function expectSharedMutationCorrelation(calls: readonly (readonly unknown[])[]): unknown {
+  const correlationId = calls[0]?.[3];
+  expect(correlationId).toEqual(expect.any(String));
+  expect(calls.map((call) => call[3])).toEqual(calls.map(() => correlationId));
+  return correlationId;
 }
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
@@ -714,7 +736,7 @@ describe("AppShell grounding connections", () => {
       mocks.state.session = { ...mocks.state.session!, activeChat: initial, chats: [initial] };
       mocks.state.canonicalChats.set(initial.id, refreshed);
       mocks.updateChatLocalKnowledgeScopes
-        .mockRejectedValueOnce(new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409))
+        .mockImplementationOnce(rejectScopeMutationConflict)
         .mockResolvedValueOnce({ chat: accepted });
       await renderMounted();
       const handler =
@@ -727,14 +749,19 @@ describe("AppShell grounding connections", () => {
         initial.id,
         action === "bind" ? [source] : null,
         initial.groundingScopeIdentity,
+        expect.any(String),
       );
       expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(
         2,
         initial.id,
         next,
         refreshed.groundingScopeIdentity,
+        expect.any(String),
       );
-      expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", expect.any(String), initial.id);
+      const correlationId = expectSharedMutationCorrelation(
+        mocks.updateChatLocalKnowledgeScopes.mock.calls,
+      );
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", correlationId, initial.id);
       expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(accepted);
     },
   );
@@ -795,7 +822,11 @@ describe("AppShell grounding connections", () => {
       initial.id,
       null,
       accepted.groundingScopeIdentity,
+      expect.any(String),
     );
+    const correlationId = mocks.updateChatLocalKnowledgeScopes.mock.calls[0]?.[3];
+    expect(correlationId).toEqual(expect.any(String));
+    expect(mocks.updateChatLocalKnowledgeScopes.mock.calls[1]?.[3]).toBe(correlationId);
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 
@@ -819,7 +850,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.session = { ...mocks.state.session!, activeChat: initial, chats: [initial] };
     mocks.state.canonicalChats.set(initial.id, refreshed);
     mocks.updateChatGitChangeScopes
-      .mockRejectedValueOnce(new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409))
+      .mockImplementationOnce(rejectScopeMutationConflict)
       .mockResolvedValueOnce({ chat: accepted });
     await renderMounted();
     await expect(
@@ -830,13 +861,19 @@ describe("AppShell grounding connections", () => {
       initial.id,
       null,
       initial.groundingScopeIdentity,
+      expect.any(String),
     );
     expect(mocks.updateChatGitChangeScopes).toHaveBeenNthCalledWith(
       2,
       initial.id,
       [concurrent],
       refreshed.groundingScopeIdentity,
+      expect.any(String),
     );
+    const correlationId = expectSharedMutationCorrelation(
+      mocks.updateChatGitChangeScopes.mock.calls,
+    );
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", correlationId, initial.id);
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(accepted);
   });
 
@@ -997,6 +1034,8 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       "chat-1",
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+      undefined,
+      expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
     expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/repo");
@@ -1068,7 +1107,16 @@ describe("AppShell grounding connections", () => {
     persisted.resolve({ chat: updated });
 
     await waitFor((): void => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2));
-    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      null,
+      undefined,
+      expect.any(String),
+    );
+    expect(mocks.updateChatConnectedScopes.mock.calls[1]?.[3]).toBe(
+      mocks.updateChatConnectedScopes.mock.calls[0]?.[3],
+    );
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
     compensation.resolve({ chat: restored });
     await expect(binding).resolves.toBe(false);
@@ -1077,6 +1125,8 @@ describe("AppShell grounding connections", () => {
       3,
       "chat-1",
       expect.arrayContaining([expect.objectContaining({ root: "/other" })]),
+      undefined,
+      expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(concurrent);
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/repo");
@@ -1135,6 +1185,8 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       privateChat.id,
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+      undefined,
+      expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(grounded);
   });
@@ -1169,6 +1221,8 @@ describe("AppShell grounding connections", () => {
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
         expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+        undefined,
+        expect.any(String),
       );
     } finally {
       unregister();
@@ -1203,6 +1257,8 @@ describe("AppShell grounding connections", () => {
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
         expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+        undefined,
+        expect.any(String),
       );
     } finally {
       unregister();
@@ -1326,6 +1382,8 @@ describe("AppShell grounding connections", () => {
         expect.objectContaining({ root: "/first" }),
         expect.objectContaining({ root: "/second" }),
       ]),
+      undefined,
+      expect.any(String),
     );
   });
 
@@ -1396,7 +1454,13 @@ describe("AppShell grounding connections", () => {
       await persisted.promise;
     });
 
-    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      null,
+      undefined,
+      expect.any(String),
+    );
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(updated);
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
     expect(reportError).not.toHaveBeenCalled();
@@ -1558,7 +1622,13 @@ describe("AppShell grounding connections", () => {
       await Promise.resolve();
     });
 
-    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", [scope]);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      [scope],
+      undefined,
+      expect.any(String),
+    );
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(removed);
   });
 
@@ -1592,7 +1662,13 @@ describe("AppShell grounding connections", () => {
       await Promise.resolve();
     });
 
-    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(2, "chat-1", [scope]);
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      [scope],
+      undefined,
+      expect.any(String),
+    );
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(removed);
   });
 
@@ -1822,6 +1898,8 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledWith(
       "chat-1",
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
+      undefined,
+      expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
   });
@@ -1852,7 +1930,12 @@ describe("AppShell grounding connections", () => {
     });
 
     await waitFor((): void => {
-      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(privateChat.id, null);
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+        privateChat.id,
+        null,
+        undefined,
+        expect.any(String),
+      );
     });
     expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
@@ -1963,7 +2046,13 @@ describe("AppShell grounding connections", () => {
     persisted.resolve({ chat: updated });
 
     await expect(binding).resolves.toBe(false);
-    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(2, "chat-1", null);
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(
+      2,
+      "chat-1",
+      null,
+      undefined,
+      expect.any(String),
+    );
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 

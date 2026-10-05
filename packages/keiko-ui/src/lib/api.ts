@@ -1214,14 +1214,20 @@ export async function updateChatConnectedScopes(
   chatId: string,
   scopes: readonly ChatConnectedScope[] | null,
   expectedGroundingScopeIdentity?: string,
+  correlationId?: string,
 ): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      connectedScopes: scopes,
-      ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
-    }),
-  });
+  return fetchJson(
+    `/api/chats?id=${encodeURIComponent(chatId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        connectedScopes: scopes,
+        ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+      }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function updateChatLocalKnowledgeScope(
@@ -1241,14 +1247,20 @@ export async function updateChatLocalKnowledgeScopes(
   chatId: string,
   scopes: readonly ChatLocalKnowledgeScope[] | null,
   expectedGroundingScopeIdentity?: string,
+  correlationId?: string,
 ): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      localKnowledgeScopes: scopes,
-      ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
-    }),
-  });
+  return fetchJson(
+    `/api/chats?id=${encodeURIComponent(chatId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        localKnowledgeScopes: scopes,
+        ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+      }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 // Issue #3400 — disconnects a git-change scope by removing it from the chat's list (or clearing
@@ -1259,14 +1271,20 @@ export async function updateChatGitChangeScopes(
   chatId: string,
   scopes: readonly ChatGitChangeScope[] | null,
   expectedGroundingScopeIdentity?: string,
+  correlationId?: string,
 ): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      gitChangeScopes: scopes,
-      ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
-    }),
-  });
+  return fetchJson(
+    `/api/chats?id=${encodeURIComponent(chatId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        gitChangeScopes: scopes,
+        ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+      }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function deleteChat(

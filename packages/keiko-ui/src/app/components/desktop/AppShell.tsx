@@ -916,15 +916,15 @@ async function persistScopeSnapshot<T>(
     id: string,
     scopes: readonly T[] | null,
     expectedIdentity?: string,
+    correlationId?: string,
   ) => Promise<{ readonly chat: Chat }>,
   chatId: string,
   scopes: readonly T[],
   expectedIdentity: string | undefined,
+  correlationId: string,
 ): Promise<{ readonly chat: Chat }> {
   const next = scopes.length > 0 ? scopes : null;
-  return expectedIdentity === undefined
-    ? persist(chatId, next)
-    : persist(chatId, next, expectedIdentity);
+  return persist(chatId, next, expectedIdentity, correlationId);
 }
 
 function isGroundingScopeConflict(error: unknown): boolean {
@@ -957,6 +957,7 @@ async function persistCurrentChatScopes<T>(
     id: string,
     scopes: readonly T[] | null,
     expectedIdentity?: string,
+    correlationId?: string,
   ) => Promise<{ readonly chat: Chat }>,
   confirmation: {
     readonly remember: (chat: Chat) => void;
@@ -968,7 +969,7 @@ async function persistCurrentChatScopes<T>(
   const { remember, expectedIdentity } = confirmation;
   if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return undefined;
   const mutation = (): Promise<{ readonly chat: Chat }> =>
-    persistScopeSnapshot(persist, chatId, next, expectedIdentity);
+    persistScopeSnapshot(persist, chatId, next, expectedIdentity, attempt.correlationId);
   const refresh = (chat: Chat): void => {
     remember(chat);
     if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) confirmation.refreshed?.(chat);
@@ -985,6 +986,7 @@ async function persistCurrentChatScopes<T>(
       chatId,
       previous,
       expectedIdentity === undefined ? undefined : response.chat.groundingScopeIdentity,
+      attempt.correlationId,
     );
     remember(compensation.chat);
   } catch {

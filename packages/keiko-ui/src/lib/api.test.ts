@@ -141,6 +141,23 @@ const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
 
 describe("connected source update preconditions", () => {
   it.each([
+    ["connectedScopes", updateChatConnectedScopes],
+    ["localKnowledgeScopes", updateChatLocalKnowledgeScopes],
+    ["gitChangeScopes", updateChatGitChangeScopes],
+  ] as const)("joins the %s PATCH to the caller's mutation attempt", async (field, update) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ chat: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    const identity = "gsi-v1:" + "b".repeat(64);
+    await update("chat-source", null, identity, "scope-mutation-attempt");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      [field]: null,
+      expectedGroundingScopeIdentity: identity,
+    });
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe("scope-mutation-attempt");
+  });
+
+  it.each([
     ["localKnowledgeScopes", updateChatLocalKnowledgeScopes],
     ["gitChangeScopes", updateChatGitChangeScopes],
   ] as const)("guards %s against stale source replacement", async (field, update) => {

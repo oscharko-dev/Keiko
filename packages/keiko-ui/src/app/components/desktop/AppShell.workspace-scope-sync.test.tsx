@@ -497,6 +497,10 @@ describe("AppShell canonical workspace scope synchronization", () => {
       .mock.calls.find((call) => call[1].decision === "conflict-retried");
     expect(retry).toBeDefined();
     expect(mocks.fetchChats.mock.calls.filter((call) => call[1] === retry?.[0])).toHaveLength(2);
+    expect(mocks.updateChatConnectedScopes.mock.calls.map((call) => call[3])).toEqual([
+      retry?.[0],
+      retry?.[0],
+    ]);
     expect(JSON.stringify(vi.mocked(reportFilesScopeDecision).mock.calls)).not.toContain(
       "/manuals/",
     );
