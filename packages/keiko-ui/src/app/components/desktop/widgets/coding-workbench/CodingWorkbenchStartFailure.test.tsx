@@ -292,6 +292,7 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
       expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(
         CORRELATION_ID,
         expect.any(AbortSignal),
+        { context: [], errorKind: "unknown" },
       ),
     );
     expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
