@@ -176,22 +176,29 @@ async function releaseWorker(worker: Worker | undefined): Promise<void> {
   }
 }
 
+interface OwnedReportPreparation {
+  readonly record: SupportIncidentRecord;
+  retired: boolean;
+}
+
 function reportAbandonedPreparation(
   stateDir: string,
-  record: SupportIncidentRecord,
+  owned: OwnedReportPreparation,
   correlationId: string | undefined,
 ): void {
-  dismissSupportIncident(stateDir, record.incidentId, {
+  if (owned.retired) return;
+  const result = dismissSupportIncident(stateDir, owned.record.incidentId, {
     correlationId,
     retirementReason: "abandoned",
   });
+  owned.retired = result !== "failed";
 }
 
 async function releaseReportJob(
   worker: Worker | undefined,
   completed: boolean,
   stateDir: string,
-  owned: SupportIncidentRecord | undefined,
+  owned: OwnedReportPreparation | undefined,
   correlationId: string | undefined,
 ): Promise<void> {
   let released = false;
@@ -216,7 +223,7 @@ export async function runSupportReportJob(
   if (signal?.aborted === true) throw new SupportReportJobError("cancelled");
   running = true;
   let worker: Worker | undefined;
-  let owned: SupportIncidentRecord | undefined;
+  let owned: OwnedReportPreparation | undefined;
   let completed = false;
   try {
     worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
@@ -230,9 +237,10 @@ export async function runSupportReportJob(
       signal,
       requestCorrelationId,
       (record): void => {
-        owned = record;
+        const preparation = { record, retired: false };
+        owned = preparation;
         onPrepared?.((): void => {
-          reportAbandonedPreparation(stateDir, record, requestCorrelationId);
+          reportAbandonedPreparation(stateDir, preparation, requestCorrelationId);
         });
       },
     );

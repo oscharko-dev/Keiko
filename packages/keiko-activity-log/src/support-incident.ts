@@ -1901,6 +1901,8 @@ function inspectRetirement(
 ): RetirementInspection | "not-found" | "failed" {
   let stage: "read" | "sweep" = "read";
   try {
+    // Keep this cheap guard before the mutating sweep: an unknown or already withdrawn id must
+    // not expire unrelated candidates. A known target is re-read by the sweep before retirement.
     if (readSupportIncidentRecord(stateDir, incidentId) === undefined) return "not-found";
     stage = "sweep";
     const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), options.correlationId);
