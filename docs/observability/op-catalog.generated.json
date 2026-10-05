@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "77a80bd7934a17b1a6df4b474c155615befb6e9f33be0ce684aea1e5538f6878",
+    "catalogDigest": "f332b197681aafc9d23c15469170387ccaf5f05bac0ecf282ed07c995da44e9b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -29782,7 +29782,7 @@
         "proofIds": ["support.incident.retirement-failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-activity-log/src/support-incident.ts:300",
-        "emitterSites": ["packages/keiko-activity-log/src/support-incident.ts:1706"]
+        "emitterSites": ["packages/keiko-activity-log/src/support-incident.ts:1703"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -80677,19 +80677,19 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/support-incident.ts:1759",
+      "site": "packages/keiko-activity-log/src/support-incident.ts:1756",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/support-incident.ts:1914",
+      "site": "packages/keiko-activity-log/src/support-incident.ts:1911",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/support-incident.ts:1971",
+      "site": "packages/keiko-activity-log/src/support-incident.ts:1968",
       "package": "keiko-activity-log"
     },
     {
