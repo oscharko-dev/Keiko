@@ -191,6 +191,9 @@ async function createOutageHarness(): Promise<OutageHarness> {
     mode: 0o600,
   });
   const port = await freeLoopbackPort();
+  const env = { ...process.env };
+  // The fixture models a global install launched by Node, not its parent's npm exec command.
+  delete env.npm_command;
   return {
     port,
     origin: `http://127.0.0.1:${String(port)}`,
@@ -198,7 +201,7 @@ async function createOutageHarness(): Promise<OutageHarness> {
     stateDir,
     launcherCwd,
     env: {
-      ...process.env,
+      ...env,
       KEIKO_CLI_BIN_PATH: OUTAGE_WRAPPER,
       KEIKO_UI_STATIC_ROOT: PACKAGED_STATIC_ROOT,
       KEIKO_CONFIG_FILE: configPath,
