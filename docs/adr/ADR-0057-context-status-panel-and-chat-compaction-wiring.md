@@ -172,6 +172,30 @@ without requiring another sent message to update its grounding posture. Body-fre
 `chat.context.management` evidence includes `conversationInputBudgetTokens` and
 `sourceCapacityTokens` so its displayed lane and unused source capacity can be reconstructed.
 
+Grounding scope identity also guards the request that consumes this context. The server issues
+`gsi-v1:<digest>` from canonical connected-folder roots/relative paths, knowledge source kinds/IDs,
+and Git comparison relationship/repository/snapshot digests. Display labels, timestamps and counts
+are excluded. A supplied `expectedGroundingScopeIdentity` is validated syntactically (malformed
+values return 400 `BAD_REQUEST`) and checked against the current scope at serialized admission for
+sending or PATCH. A mismatch returns 409 `GROUNDING_SCOPE_CHANGED`; it does not silently apply a
+stale source mutation or run against newly connected sources. The grounded path also rechecks the
+scope before committing its answer. Legacy requests without a precondition still undergo the
+existing grounding-mode and access checks; absence is not a matching-identity claim.
+
+Git-change description authority is independent of source connectivity. Buffered and streaming
+turns require authority for the exact active comparison and return 409
+`GIT_CHANGE_DESCRIPTION_AUTHORITY_DENIED` when admission fails. Ordinary chat regeneration rejects
+both folder/knowledge grounding and an active Git-change scope with 409 `NOT_APPLIABLE`, before
+provider execution, and emits `chat.regeneration.rejected` with reason `grounding-scope`.
+
+`chat.scope.update` records a serialized source update as `applied` or `conflict` under the
+request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
+`resultScopeDigest`, and connected/local-knowledge/Git-change source counts. The result counts
+describe the post-update scope; a conflict
+retains the current scope and equal actual/result digests. These are body-free identifiers and
+counts, never raw roots, names or comparison content. A missing request correlation uses the
+existing `UNKNOWN_CORRELATION_ID` fallback.
+
 The panel is mounted inside `GroundedAnswerPanel` (ChatWindow.tsx:1147–1176), which already
 conditionally renders when a grounded answer is present. `ContextStatusPanel` receives only the
 optional `contextSummary?: GroundedAnswerContextSummary` prop; it renders `null` when the field

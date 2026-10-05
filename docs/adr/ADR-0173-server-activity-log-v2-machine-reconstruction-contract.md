@@ -586,6 +586,14 @@ reference, attached and dangling counts share the closed reconciliation outcome.
 `ambiguousMarkerCount` and `droppedImplicitCount`; optional weak-overlap/grouped counts describe
 only measurements actually made. Omitted metrics must not be interpreted as measured zeroes.
 
+`client.citation.activated` records a citation click and its source selection under the
+activation correlation. `reason` describes the source fingerprint: `matched` (one root),
+`unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
+`opened`, `open-refused`, `picker-opened`, `picker-dismissed`, or `refused`; an opened picker
+is not a successfully opened file. `rootCount` and `matchCount` explain the choice without
+recording the fingerprint, file path, source label or citation text. The registered server
+projection retains these closed fields on the existing Activity Log timeline.
+
 The `grounded-pack-validation` diagnostic carries closed `validationReasons`, `violationCount`,
 `validatorThrew`, sanitized `originalCode`, optional `sourceIndex`, and `diagnosticOutcome`.
 `source-skipped` is a warning preserving independent healthy sources; `request-failed` retains the

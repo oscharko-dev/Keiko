@@ -49,6 +49,22 @@ evaluates the complete registered inventory by composing `check:op-catalog`,
 `arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
 a narrower change set never narrows what it proves.
 
+`client.citation.activated` records a citation click and its source selection under the
+activation correlation. `reason` describes the source fingerprint: `matched` (one root),
+`unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records
+`opened`, `open-refused`, `picker-opened`, `picker-dismissed`, or `refused`; an opened picker
+is not a successfully opened file. `rootCount` and `matchCount` explain the choice without
+recording the fingerprint, file path, source label or citation text. The registered server
+projection retains these closed fields on the existing Activity Log timeline.
+
+`chat.scope.update` records a serialized source update as `applied` or `conflict` under the
+request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
+`resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH
+validate a supplied `expectedGroundingScopeIdentity` against the current server-issued identity;
+a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description authority is
+checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
+scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
