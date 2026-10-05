@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "820843645996db8b9fd6be114975bc31f9eaead6271fff960f7f3d7f1de99ec6" as const;
+  "ca57d15b19a69e01b1aaf7c506c88bbb4bb193f1e41d4fd3929e674a1731a293" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -2006,10 +2006,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "checkpointInputBudgetTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "contextWindowTokens",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "effectiveInputBudgetTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "foldedItems",
@@ -10827,6 +10839,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "excerptOmittedRangeCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptStopReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "excerptTruncatedWindowCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptUnreadFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "indexFallbackSearchCount",
               type: "integer",
               dataClass: "count",
@@ -10899,10 +10935,70 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "metadataDiscardedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "metadataObservedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "metadataOmittedDetailCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "metadataRetainedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "metadataRetentionLimit",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "queryIdentitySha256",
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "scopeContextCapacityBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "scopeContextChargedBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "scopeContextObservedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "scopeContextRetainedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "scopeContextState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "scopeIdentitySha256",
@@ -26183,9 +26279,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "ambiguousMarkerCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "attachedCount",
               type: "integer",
               dataClass: "count",
+              required: true,
+            },
+            {
+              name: "citationKind",
+              type: "string",
+              dataClass: "closed-enum",
               required: true,
             },
             {
@@ -26195,10 +26303,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "droppedImplicitCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "groupedMarkerCount",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
             {
               name: "outcome",
@@ -26216,7 +26330,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "weakOverlapCount",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -32397,7 +32511,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       productSurfaces: ["keiko-activity-log", "keiko-server"],
       lifecycleTransitions: ["end", "failure", "loss", "start", "state"],
       lifecycleOperations: {
-        start: ["support.incident.created"],
+        start: ["support.incident.created", "support.incident.retirement-started"],
         state: ["support.diagnostics.capacity", "support.incident.deduplicated"],
         end: ["support.incident.dismissed", "support.incident.expired"],
         failure: ["support.incident.retirement-failed"],
@@ -32432,6 +32546,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "support.incident.retirement-failed",
           mode: "correlation",
         },
+        {
+          op: "support.incident.retirement-started",
+          mode: "correlation",
+        },
       ],
       lossSignals: ["support.incident.rejected"],
       resourceSignals: [
@@ -32440,6 +32558,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "support.incident.deduplicated",
         "support.incident.dismissed",
         "support.incident.expired",
+        "support.incident.retirement-started",
       ],
       replayReferences: [],
       operations: [
@@ -32939,6 +33058,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["support.incident.retirement-failed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "support.incident.retirement-started",
+          owner: "keiko-activity-log",
+          category: "diagnostic",
+          lifecycle: "start",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "incidentId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "incidentState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "trigger",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["support.incident.retirement-started.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -38205,6 +38360,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.incident.expired": "lifecycle-crash",
     "support.incident.rejected": "lifecycle-crash",
     "support.incident.retirement-failed": "lifecycle-crash",
+    "support.incident.retirement-started": "lifecycle-crash",
     "support.manifest.rebuilt": "runtime-packages",
     "support.query.completed": "runtime-packages",
     "support.query.failed": "runtime-packages",

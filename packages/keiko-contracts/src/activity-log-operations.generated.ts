@@ -1198,6 +1198,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "none",
+          "read-failed",
           "restored",
           "revision-mismatch",
           "window-expanded",
@@ -1225,6 +1226,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      effectiveInputBudgetTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      checkpointInputBudgetTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -24669,6 +24680,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["cited", "cited-with-dangling", "dangling-only", "uncited", "refusal"],
       },
+      citationKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["numeric", "file"],
+      },
+      ambiguousMarkerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      droppedImplicitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       referenceCount: {
         type: "integer",
         dataClass: "count",
@@ -24682,12 +24709,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       weakOverlapCount: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       groupedMarkerCount: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       danglingMarkerCount: {
         type: "integer",
@@ -25066,6 +25093,79 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["complete", "unavailable"],
+      },
+      excerptOmittedRangeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      excerptTruncatedWindowCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      excerptUnreadFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      excerptStopReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 3,
+        values: ["file-grant", "byte-grant", "deadline"],
+      },
+      metadataObservedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      metadataRetainedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      metadataDiscardedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      metadataOmittedDetailCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      metadataRetentionLimit: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      scopeContextState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["applied", "empty", "overflow", "incomplete-traversal", "gate-refused"],
+      },
+      scopeContextObservedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      scopeContextRetainedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      scopeContextChargedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      scopeContextCapacityBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       structuralContextCount: {
         type: "integer",
@@ -28501,6 +28601,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["support-incident"],
     proofIds: ["support.incident.retirement-failed.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "support.incident.retirement-started",
+    category: "diagnostic",
+    owner: "keiko-activity-log",
+    emitter: "support-incident.retirementStartedEvidence",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      incidentId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 32,
+      },
+      trigger: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["registered-failure", "user-report"],
+      },
+      incidentState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["candidate", "reported"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-incident"],
+    proofIds: ["support.incident.retirement-started.emitted-line"],
     releaseImpact: "patch",
   },
   {
