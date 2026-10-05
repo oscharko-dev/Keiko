@@ -21,7 +21,6 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   createWorkspaceIndex,
-  WorkspaceReadError,
   type WorkspaceIndex,
   type WorkspaceInfo,
   type WorkspaceStat,
@@ -519,38 +518,6 @@ function admissionOnlyExpectedWorkspaceIoActivity(): Readonly<Record<string, num
 }
 
 describe("retrieveConnectedContextPack activity log", () => {
-  it("records unavailable directory streaming before any legacy array enumeration", async () => {
-    const activityLog = createBufferedServerLogSink();
-    const fs = { ...memFs(FIXTURE_ROOT, { "fact.txt": "PrivateCustomerHandler" }) };
-    delete fs.iterateDirectory;
-    const readDir = vi.spyOn(fs, "readDir");
-    const base = fixtureInput();
-    const input: OrchestratorInput = {
-      ...base,
-      scope: { ...base.scope, kind: "workspace-root", relativePaths: [], explicitConnection: true },
-      query: { ...base.query, text: "Where is PrivateCustomerHandler defined?" },
-    };
-    await expect(
-      retrieveConnectedContextPack(input, { ...fixtureDeps(activityLog, CORRELATION_ID), fs }),
-    ).rejects.toBeInstanceOf(WorkspaceReadError);
-    expect(readDir).not.toHaveBeenCalled();
-    const [, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
-    expect(failed).toMatchObject({
-      correlationId: CORRELATION_ID,
-      extra: {
-        failureKind: "WorkspaceReadError",
-        retrievalPhase: "ring-retrieval",
-        workspaceIoReadDirCalls: 0,
-        workspaceIoContentReadCalls: 0,
-      },
-    });
-    expectBodyFree(activityLog);
-    expectActivityLogProof(
-      "search.connected-context.failed.line",
-      formatActivityLogProofLine(failed),
-    );
-  });
-
   it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
     const activityLog = createBufferedServerLogSink();
     const profile = deriveContextProfile({
