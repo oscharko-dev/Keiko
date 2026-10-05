@@ -40,6 +40,8 @@ import {
 import {
   boundGitChangeRelationshipIdOf,
   boundConnectorScopeOf,
+  filesVisibleScope,
+  isScopeConnected,
   connectorChatBind,
   connectionTeardownScope,
   chatUnbindTarget,
@@ -1938,6 +1940,24 @@ function acknowledgedConnection(conn: Connection, scope: ChatConnectedScope): Co
   return next;
 }
 
+function canonicalFilesWindow(
+  window: AppWindow,
+  connection: Connection,
+  scope: ChatConnectedScope,
+  requested: ChatConnectedScope,
+): AppWindow {
+  if (window.type !== "files" || (window.id !== connection.a && window.id !== connection.b))
+    return window;
+  const current = filesVisibleScope(window, 0);
+  if (current === null || scope.root === undefined || !isScopeConnected([current], requested))
+    return window;
+  const cfg = { ...window.cfg };
+  for (const key of ["root", "resolvedRoot"]) {
+    if (cfg[key] === requested.root) cfg[key] = scope.root;
+  }
+  return { ...window, cfg };
+}
+
 function connectionOtherWindow(
   conn: Connection,
   closedWindowId: string,
@@ -2578,12 +2598,21 @@ export function useWorkspace(
   );
 
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
-    (connId, scope) => {
+    (connId, scope, requestedScope) => {
+      const connection = connsRef.current.find((conn) => conn.id === connId);
+      if (connection === undefined) return;
+      if (requestedScope !== undefined) {
+        setWins(
+          (ws) =>
+            ws?.map((window) => canonicalFilesWindow(window, connection, scope, requestedScope)) ??
+            null,
+        );
+      }
       setConns((cs) =>
         cs.map((conn) => (conn.id === connId ? acknowledgedConnection(conn, scope) : conn)),
       );
     },
-    [setConns],
+    [connsRef, setConns, setWins],
   );
 
   const updateConnGitChangeScope = useCallback<

@@ -120,7 +120,11 @@ export interface WorkspaceApi {
   readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
   readonly cancelConnect: () => boolean;
   readonly removeConn: (connId: string, options?: { readonly unbind?: boolean }) => void;
-  readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
+  readonly updateConnBoundScope: (
+    connId: string,
+    scope: ChatConnectedScope,
+    requestedScope?: ChatConnectedScope,
+  ) => void;
   readonly updateConnGitChangeScope?:
     ((connId: string, scope: ChatGitChangeScope) => void) | undefined;
   readonly connect: (a: string, b: string) => void;

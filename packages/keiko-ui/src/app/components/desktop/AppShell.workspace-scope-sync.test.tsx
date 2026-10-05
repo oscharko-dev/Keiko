@@ -241,6 +241,162 @@ afterEach((): void => {
 });
 
 describe("AppShell canonical workspace scope synchronization", () => {
+  it("adopts only the attributed canonical PATCH acknowledgement and persists its Files root", async () => {
+    const alias = "/var/folders/canonical-ack-proof";
+    const canonical = "/private/var/folders/canonical-ack-proof";
+    const initial = fixture([alias]);
+    mocks.initialChat = chat([scope(canonical)]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    mocks.updateChatConnectedScopes.mockImplementation(
+      async (_id: string, scopes: readonly ChatConnectedScope[]) => {
+        const next = scopes.at(-1);
+        if (next === undefined) throw new Error("Missing submitted scope");
+        mocks.serverChat = chat([{ ...next, root: canonical }], 2);
+        return { chat: mocks.serverChat };
+      },
+    );
+    const mounted = render(<AppShell />);
+    await waitFor(() =>
+      expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+        connectedScopeFingerprint(scope(canonical)),
+      ),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(1);
+    expect(mocks.workspace?.wins?.find((w) => w.id === "files-0")?.cfg).toMatchObject({
+      root: canonical,
+      resolvedRoot: canonical,
+    });
+    expect(reportFilesScopeDecision).not.toHaveBeenCalledWith(expect.any(String), {
+      decision: "ack-missing",
+    });
+    const persistedWins = mocks.workspace?.wins ?? [];
+    const persistedConnections = mocks.workspace?.conns ?? [];
+    mounted.unmount();
+    mocks.initialChat = mocks.serverChat;
+    persist(persistedWins, persistedConnections);
+    render(<AppShell />);
+    await waitFor(() =>
+      expect(mocks.workspace?.wins?.find((w) => w.id === "files-0")?.cfg["root"]).toBe(canonical),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(1);
+  });
+
+  it("attributes a canonical alias ACK while preserving an unchanged rootless legacy scope", async () => {
+    const alias = "/var/folders/mixed-canonical-ack";
+    const canonical = "/private/var/folders/mixed-canonical-ack";
+    const legacy: ChatConnectedScope = {
+      kind: "files",
+      relativePaths: ["docs/legacy.md"],
+      connectedAtMs: 17,
+    };
+    const initial = fixture([alias]);
+    mocks.initialChat = chat([scope(canonical), legacy]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    mocks.updateChatConnectedScopes.mockImplementation(
+      async (_id: string, scopes: readonly ChatConnectedScope[]) => {
+        const submitted = scopes.at(-1);
+        if (submitted === undefined) throw new Error("Missing submitted scope");
+        mocks.serverChat = chat([{ ...submitted, root: canonical }, { ...legacy }], 2);
+        return { chat: mocks.serverChat };
+      },
+    );
+    render(<AppShell />);
+    await waitFor(() =>
+      expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+        connectedScopeFingerprint(scope(canonical)),
+      ),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(1);
+    expect(mocks.serverChat?.connectedScopes).toHaveLength(2);
+    expect(mocks.serverChat?.connectedScopes?.[1]).toEqual(legacy);
+    expect(mocks.workspace?.wins?.find((w) => w.id === "files-0")?.cfg["root"]).toBe(canonical);
+  });
+
+  it("does not overwrite a Files selection changed while its canonical PATCH acknowledgement is pending", async () => {
+    const alias = "/var/folders/pending-canonical-ack";
+    const canonical = "/private/var/folders/pending-canonical-ack";
+    const changed = "/manuals/NewSelection";
+    const initial = fixture([alias]);
+    mocks.initialChat = chat([scope(canonical)]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    let settle: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    mocks.updateChatConnectedScopes.mockImplementationOnce(
+      async (_id: string, scopes: readonly ChatConnectedScope[]) => {
+        const submitted = scopes.at(-1);
+        if (submitted === undefined) throw new Error("Missing submitted scope");
+        await pending;
+        mocks.serverChat = chat([{ ...submitted, root: canonical }], 2);
+        return { chat: mocks.serverChat };
+      },
+    );
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    await act(async () => {
+      mocks.workspace?.api.update("files-0", { cfg: { root: changed, resolvedRoot: changed } });
+    });
+    await act(async () => {
+      settle?.();
+      await pending;
+    });
+    await waitFor(() =>
+      expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+        connectedScopeFingerprint(scope(changed)),
+      ),
+    );
+    expect(mocks.workspace?.wins?.find((w) => w.id === "files-0")?.cfg).toMatchObject({
+      root: changed,
+      resolvedRoot: changed,
+    });
+    expect(mocks.serverChat?.connectedScopes).toHaveLength(1);
+    expect(mocks.serverChat?.connectedScopes?.[0]?.root).toBe(changed);
+  });
+
+  it.each(["ambiguous canonical candidate", "changed unrelated scope"] as const)(
+    "rejects an alias ACK with %s without changing the Files selection",
+    async (failure) => {
+      const alias = "/var/folders/rejected-ack";
+      const canonical = "/private/var/folders/rejected-ack";
+      const unrelated = scope("/manuals/Unrelated");
+      const initial = fixture([alias]);
+      mocks.initialChat = chat([scope(canonical), unrelated]);
+      mocks.serverChat = mocks.initialChat;
+      persist(initial.wins, initial.conns);
+      mocks.updateChatConnectedScopes.mockImplementationOnce(
+        async (_id: string, scopes: readonly ChatConnectedScope[]) => {
+          const submitted = scopes.at(-1);
+          if (submitted === undefined) throw new Error("Missing submitted scope");
+          const accepted = { ...submitted, root: canonical };
+          const other =
+            failure === "ambiguous canonical candidate"
+              ? { ...submitted, root: "/manuals/Other" }
+              : { ...unrelated, root: "/manuals/Changed" };
+          mocks.serverChat = chat([accepted, other], 2);
+          return { chat: mocks.serverChat };
+        },
+      );
+      const mounted = render(<AppShell />);
+      await waitFor(() =>
+        expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+          decision: "ack-missing",
+        }),
+      );
+      expect(mocks.workspace?.wins?.find((w) => w.id === "files-0")?.cfg["root"]).toBe(alias);
+      expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+        connectedScopeFingerprint(scope(alias)),
+      );
+      mounted.unmount();
+    },
+  );
+
   it("shows diagnostic readiness even when the lazy footer renders nothing", async (): Promise<void> => {
     mocks.fetchHealth.mockResolvedValue({
       status: "ok",

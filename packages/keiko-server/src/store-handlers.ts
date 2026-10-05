@@ -16,6 +16,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   ChatContextStatusWire,
   ProjectWithAvailability,
@@ -1160,6 +1161,21 @@ function scopesRequiringAccessValidation(patch: UpdateChatPatch): readonly ChatC
   return [];
 }
 
+function canonicalConnectedScopes(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  scopes: readonly ChatConnectedScope[],
+): readonly ChatConnectedScope[] {
+  const distinct = new Map<string | symbol, ChatConnectedScope>();
+  for (const scope of scopes) {
+    const canonical = validateConnectedScopeAccess(deps, chat, scope);
+    // Rootless legacy entries have no comparison identity; retain each without inferring a root.
+    const identity = chatConnectedScopeIdentity(canonical);
+    distinct.set(identity ?? Symbol(), canonical);
+  }
+  return [...distinct.values()];
+}
+
 function canonicalizeConnectedScopePatch(
   deps: UiHandlerDeps,
   chat: Chat,
@@ -1171,7 +1187,7 @@ function canonicalizeConnectedScopePatch(
       connectedScopes:
         patch.connectedScopes === null
           ? null
-          : patch.connectedScopes.map((scope) => validateConnectedScopeAccess(deps, chat, scope)),
+          : canonicalConnectedScopes(deps, chat, patch.connectedScopes),
     };
   }
   if (patch.connectedScope !== undefined && patch.connectedScope !== null) {

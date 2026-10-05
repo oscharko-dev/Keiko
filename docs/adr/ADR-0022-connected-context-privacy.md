@@ -143,6 +143,14 @@ record.
 
 ### D3.3 — Explicit connections support recursive orientation and search
 
+The existing chat-store projection removes repeated explicit scope identities while preserving
+distinct roots, scope kinds, selected paths and legacy rootless entries. It performs no filesystem
+alias inference. Scope updates still validate the real root and selected paths before canonical
+deduplication. A Files connection accepts canonicalization only from its attributable completed
+PATCH response, with unrelated submitted scopes preserved; ambiguous acknowledgements fail closed.
+The workspace adopts that canonical root only while the visible Files selection still belongs to
+the submitted scope. Navigation or conversation replacement cannot inherit a stale acknowledgement.
+
 #### Orientation and evidence admission
 
 An explicitly connected repository or ordinary folder is sufficient scope for a meaningful

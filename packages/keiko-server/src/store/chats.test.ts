@@ -461,6 +461,61 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
 // Epic #532 — multi-source connectedScopes list round-trip through SQLite. A chat may bind N
 // connected folders/files at once; the list is encoded as a JSON ARRAY in connected_scope_paths.
 describe("updateChat — connectedScopes list round-trip (#532)", () => {
+  it("projects a seeded sixteen-entry duplicate cohort once and rewrites it on a normal update", () => {
+    const dbPath = join(tmp, "duplicate-cohort.db");
+    const diskStore = createNodeUiStore(dbPath);
+    diskStore.createProject(proj);
+    const created = diskStore.createChat(proj, "cohort", "m");
+    diskStore.close();
+    const repeated = Array.from({ length: 16 }, (_, i) => ({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: proj,
+      connectedAtMs: i + 1,
+    }));
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(
+        "UPDATE chats SET connected_scope_paths = ?, connected_scope_at = ? WHERE id = ?",
+      ).run(JSON.stringify(repeated), 16, created.id);
+    } finally {
+      db.close();
+    }
+    const reopened = createNodeUiStore(dbPath);
+    try {
+      const fetched = reopened.findChatById(created.id);
+      expect(fetched?.connectedScopes).toEqual([repeated[15]]);
+      reopened.updateChat(created.id, { connectedScopes: fetched?.connectedScopes ?? [] });
+    } finally {
+      reopened.close();
+    }
+    const verification = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const row = verification
+        .prepare("SELECT connected_scope_paths FROM chats WHERE id = ?")
+        .get(created.id);
+      expect(row?.connected_scope_paths).toBeTypeOf("string");
+      const stored: unknown = JSON.parse(String(row?.connected_scope_paths));
+      expect(Array.isArray(stored)).toBe(false);
+    } finally {
+      verification.close();
+    }
+  });
+
+  it("preserves distinct roots, selected paths, kinds and rootless legacy scopes during projection", () => {
+    const created = store.createChat(proj, "distinct", "m");
+    const scopes: ChatConnectedScope[] = [
+      { kind: "workspace-root", root: proj, relativePaths: [], connectedAtMs: 1 },
+      { kind: "workspace-root", root: join(tmp, "other"), relativePaths: [], connectedAtMs: 2 },
+      { kind: "directory", root: proj, relativePaths: ["docs"], connectedAtMs: 3 },
+      { kind: "files", root: proj, relativePaths: ["docs/a.md"], connectedAtMs: 4 },
+      { kind: "files", relativePaths: ["docs/a.md"], connectedAtMs: 5 },
+      { kind: "files", relativePaths: ["docs/a.md"], connectedAtMs: 6 },
+    ];
+    store.updateChat(created.id, { connectedScopes: scopes });
+    expect(store.findChatById(created.id)?.connectedScopes).toEqual(scopes);
+  });
+
   it("sets two sources with distinct roots and round-trips both (list + back-compat single)", () => {
     const c = store.createChat(proj, "t", "m");
     const scopes = [

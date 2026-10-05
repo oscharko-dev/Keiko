@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2d9fefecab484418a7ad227670f67603ee98d8453aa267ec5bf356784f1f30a7",
+    "catalogDigest": "ab681d44dc29183491d2f9f75567517b108264dd9b17f718748093d864fde259",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -25782,8 +25782,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:95",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:538"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:96",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:539"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -84756,7 +84756,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1260",
+      "site": "packages/keiko-server/src/store-handlers.ts:1276",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -87226,21 +87226,21 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:411",
+      "site": "packages/keiko-server/src/store-handlers.ts:412",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:554",
+      "site": "packages/keiko-server/src/store-handlers.ts:555",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:98",
+      "site": "packages/keiko-server/src/store-handlers.ts:99",
       "package": "keiko-server"
     },
     {

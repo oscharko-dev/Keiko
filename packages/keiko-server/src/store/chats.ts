@@ -8,6 +8,7 @@ import {
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  chatConnectedScopeIdentity,
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DEFAULT_GROUNDING_LIMITS,
   GROUNDING_LIMIT_CEILINGS,
@@ -221,6 +222,23 @@ function decodeConnectedScopePayloads(parsed: unknown): readonly DecodedScopePay
   return single === undefined ? undefined : [single];
 }
 
+function distinctConnectedScopes(
+  scopes: readonly ChatConnectedScope[],
+): readonly ChatConnectedScope[] {
+  const result: ChatConnectedScope[] = [];
+  const indices = new Map<string, number>();
+  for (const scope of scopes) {
+    const identity = chatConnectedScopeIdentity(scope);
+    const existing = identity === null ? undefined : indices.get(identity);
+    if (existing !== undefined) result[existing] = scope;
+    else {
+      if (identity !== null) indices.set(identity, result.length);
+      result.push(scope);
+    }
+  }
+  return result;
+}
+
 function decodeConnectedScopes(
   paths: string | null,
   connectedAt: number | null,
@@ -235,15 +253,17 @@ function decodeConnectedScopes(
   }
   const payloads = decodeConnectedScopePayloads(parsed);
   if (payloads === undefined) return undefined;
-  return payloads.map((payload) => ({
-    kind: payload.kind,
-    relativePaths: payload.relativePaths,
-    // The newest connectedAtMs lives in the column; per-scope connectedAtMs is carried inside the
-    // array (decoded below). Legacy single-object/string-array rows have no per-scope value, so the
-    // column timestamp is the authoritative one for every entry in that 1-element list.
-    connectedAtMs: payload.connectedAtMs ?? connectedAt,
-    ...(payload.root !== undefined ? { root: payload.root } : {}),
-  }));
+  return distinctConnectedScopes(
+    payloads.map((payload) => ({
+      kind: payload.kind,
+      relativePaths: payload.relativePaths,
+      // The newest connectedAtMs lives in the column; per-scope connectedAtMs is carried inside the
+      // array (decoded below). Legacy single-object/string-array rows have no per-scope value, so the
+      // column timestamp is the authoritative one for every entry in that 1-element list.
+      connectedAtMs: payload.connectedAtMs ?? connectedAt,
+      ...(payload.root !== undefined ? { root: payload.root } : {}),
+    })),
+  );
 }
 
 function decodeLocalKnowledgeScopeObject(raw: unknown): ChatLocalKnowledgeScope | undefined {
