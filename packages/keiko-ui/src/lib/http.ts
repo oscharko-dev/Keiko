@@ -247,7 +247,22 @@ const HTTP_STATUS_ERROR_KINDS: Readonly<Record<number, ActivityLogErrorKind>> = 
   500: "internal",
 };
 
+// Serialized/streamed notices lack an HTTP status. Classify only explicit stable codes; keep
+// previously accepted generic aliases readable in stored errors. This map never parses prose.
 const BFF_CODE_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map([
+  ["GATEWAY_TIMEOUT", "timeout"],
+  ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
+  ["REQUEST_CANCELLED", "cancelled"],
+  ["GROUNDING_SCOPE_CHANGED", "conflict"],
+  ["PAYLOAD_TOO_LARGE", "invalid-request"],
+  ["INVALID_REQUEST", "invalid-request"],
+  ["VALIDATION_FAILED", "invalid-request"],
+  ["STATE_UNAVAILABLE", "unavailable"],
+  // The model budget must change before retrying these requests; neither is a transport outage.
+  ["GATEWAY_CONTEXT_OVERFLOW", "invalid-request"],
+  ["GATEWAY_OUTPUT_EXHAUSTED", "invalid-request"],
+  ["CONVERSATION_OVERSIZED_CONTEXT", "invalid-request"],
+  ["NO_MODEL", "unavailable"],
   ["BAD_REQUEST", "invalid-request"],
   ["CLARIFICATION_NEEDED", "invalid-request"],
   ["NOT_FOUND", "invalid-request"],

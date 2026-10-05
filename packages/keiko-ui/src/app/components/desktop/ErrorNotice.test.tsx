@@ -21,6 +21,7 @@ import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixtu
 import * as reportApi from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 import { ErrorNoticeFromError } from "./ErrorNotice";
+import { formatUserError } from "./format-error";
 import styles from "./ErrorNotice.module.css";
 
 afterEach(() => {
@@ -335,6 +336,18 @@ it("collects stack and cause evidence only when the user requests a report", asy
 });
 
 it.each([
+  ["GATEWAY_TIMEOUT", "timeout"],
+  ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
+  ["REQUEST_CANCELLED", "cancelled"],
+  ["GROUNDING_SCOPE_CHANGED", "conflict"],
+  ["PAYLOAD_TOO_LARGE", "invalid-request"],
+  ["INVALID_REQUEST", "invalid-request"],
+  ["VALIDATION_FAILED", "invalid-request"],
+  ["STATE_UNAVAILABLE", "unavailable"],
+  ["GATEWAY_CONTEXT_OVERFLOW", "invalid-request"],
+  ["GATEWAY_OUTPUT_EXHAUSTED", "invalid-request"],
+  ["CONVERSATION_OVERSIZED_CONTEXT", "invalid-request"],
+  ["NO_MODEL", "unavailable"],
   ["RATE_LIMITED", "rate-limited"],
   ["UNAVAILABLE", "unavailable"],
   ["GATEWAY_UNAVAILABLE", "unavailable"],
@@ -352,13 +365,42 @@ it.each([
       href: "blob:serialized-failure",
       dispose: vi.fn(),
     });
-    renderInLocale(`Request failed (${code}) [correlationId:serialized-failure-123]`, "en");
+    const original = new ApiError(code, "Request failed", 0);
+    original.correlationId = "serialized-failure-123";
+    renderInLocale(formatUserError(original, "Request failed"), "en");
     fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
     await screen.findByRole("link", { name: "Download report" });
     expect(create).toHaveBeenCalledWith(
       "serialized-failure-123",
       expect.any(AbortSignal),
       expect.objectContaining({ errorKind: kind }),
+    );
+  },
+);
+
+it.each([
+  ["GATEWAY_TIMEOUT", "timeout"],
+  ["DESKTOP_CHAT_STREAM_STALLED", "timeout"],
+  ["GROUNDING_SCOPE_CHANGED", "conflict"],
+])(
+  "keeps a plain Error carrying the serialized %s failure attributable in the report",
+  async (code, errorKind) => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:stream-error",
+      dispose: vi.fn(),
+    });
+    const original = new ApiError(code, "Stream failed", 0);
+    original.correlationId = "actual-stream-failure";
+    const error = new Error(formatUserError(original, "Stream failed"));
+    renderInLocale(error, "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      "actual-stream-failure",
+      expect.any(AbortSignal),
+      expect.objectContaining({ errorKind }),
     );
   },
 );
