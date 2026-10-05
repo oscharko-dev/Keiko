@@ -16,6 +16,7 @@ import { supportIncidentFileName } from "@oscharko-dev/keiko-contracts/runtime/o
 import {
   countSupportIncidentEntries,
   ensureSupportIncidentDirectory,
+  isSupportIncidentRecordAbsent,
   supportIncidentDirectory,
 } from "./support-incident-store.js";
 import {
@@ -81,6 +82,37 @@ describe("incident count directory projection", () => {
   it("preserves actual directory errors instead of reporting an empty store", () => {
     writeFileSync(supportIncidentDirectory(stateDir), "occupied");
     expect(() => countSupportIncidentEntries(stateDir)).toThrow(
+      expect.objectContaining({ code: "ENOTDIR" }),
+    );
+  });
+});
+
+describe("withdrawn incident metadata", () => {
+  it("requires actual absence, keeping empty, torn and planted entries occupied without reading bodies", () => {
+    const directory = ensureSupportIncidentDirectory(stateDir);
+    writeFileSync(join(directory, supportIncidentFileName("a".repeat(32))), "");
+    writeFileSync(join(directory, supportIncidentFileName("b".repeat(32))), "{torn");
+    mkdirSync(join(directory, supportIncidentFileName("c".repeat(32))));
+    symlinkSync(
+      join(directory, "absent"),
+      join(directory, supportIncidentFileName("d".repeat(32))),
+    );
+    vi.clearAllMocks();
+
+    for (const prefix of ["a", "b", "c", "d"])
+      expect(isSupportIncidentRecordAbsent(stateDir, prefix.repeat(32))).toBe(false);
+    expect(isSupportIncidentRecordAbsent(stateDir, "e".repeat(32))).toBe(true);
+    expect(openSync).not.toHaveBeenCalled();
+    expect(readSync).not.toHaveBeenCalled();
+    expect(readdirSync).not.toHaveBeenCalled();
+    expect(lstatSync).toHaveBeenCalledTimes(5);
+    expect(isSupportIncidentRecordAbsent(stateDir, "../foreign")).toBe(false);
+    expect(lstatSync).toHaveBeenCalledTimes(5);
+  });
+
+  it("preserves metadata access errors instead of authorizing a retry", () => {
+    writeFileSync(supportIncidentDirectory(stateDir), "occupied");
+    expect(() => isSupportIncidentRecordAbsent(stateDir, "a".repeat(32))).toThrow(
       expect.objectContaining({ code: "ENOTDIR" }),
     );
   });

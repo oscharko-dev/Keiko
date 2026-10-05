@@ -162,6 +162,34 @@ function occupyPublicationReserve(): readonly SupportIncidentRecord[] {
   return retained;
 }
 
+function expectPeerRecoveryEvidence(result: ReturnType<typeof recordUserReportedIncident>): void {
+  const text = readPersistedActivityLog(stateDir);
+  if (result.status === "created") {
+    expect(
+      expectActivityLogProof(
+        "support.incident.created.emitted-line",
+        persistedActivityLogLines(text, "support.incident.created").at(-1) ?? "",
+      ),
+    ).toMatchObject({
+      correlationId: "fresh-slot-retry",
+      incidentId: result.incidentId,
+      trigger: "user-report",
+    });
+  } else {
+    expect(
+      expectActivityLogProof(
+        "support.incident.rejected.emitted-line",
+        persistedActivityLogLines(text, "support.incident.rejected").at(-1) ?? "",
+      ),
+    ).toMatchObject({
+      correlationId: "fresh-slot-retry",
+      rejectionReason: "quota-exhausted",
+      trigger: "user-report",
+      errorKind: "rate-limited",
+    });
+  }
+}
+
 /** Fill unrelated pin stock without repeatedly creating and scanning unrelated incidents. */
 function occupyDiagnosticPinReserve(): void {
   const owner = recordUserReportedIncident(stateDir, { correlationId: "pin-release-owner" });
@@ -1053,6 +1081,82 @@ describe("rolling diagnostic candidate retention", () => {
         .pins.map((pin) => pin.pinId)
         .sort(),
     ).toEqual(retained.map((record) => record.pin.pinId).sort());
+  });
+
+  it.each(["available", "reclaimed"] as const)(
+    "rechecks a peer-freed slot that is %s before the exclusive recovery claim",
+    (state) => {
+      const retained = occupyPublicationReserve();
+      const oldest = retained[0];
+      if (oldest === undefined) throw new TypeError("Expected retained peer owner");
+      const peerId = "e".repeat(32);
+      const readNames = incidentStore.listSupportIncidentSlotIndexes;
+      const claims = vi.spyOn(incidentStore, "claimSupportIncidentSlot");
+      const listing = vi
+        .spyOn(incidentStore, "listSupportIncidentSlotIndexes")
+        .mockImplementationOnce((dir) => {
+          const stale = readNames(dir);
+          expect(
+            dismissSupportIncident(dir, oldest.incidentId, { correlationId: "peer-slot-release" }),
+          ).toBe("dismissed");
+          return stale;
+        })
+        .mockImplementationOnce((dir) => {
+          const refreshed = readNames(dir);
+          if (state === "reclaimed")
+            expect(claimSupportIncidentSlot(dir, oldest.slotIndex, peerId)).toBe(true);
+          return refreshed;
+        });
+      const result = recordUserReportedIncident(stateDir, { correlationId: "fresh-slot-retry" });
+      expect(result.status).toBe(state === "available" ? "created" : "rejected");
+      expect(listing).toHaveBeenCalledTimes(state === "available" ? 3 : 2);
+      if (result.status === "created") {
+        expect(
+          incidentStore.readSupportIncidentSlotClaim(stateDir, result.record.slotIndex),
+        ).toMatchObject({
+          incidentId: result.incidentId,
+        });
+        expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(
+          retained.length - 1,
+        );
+      } else {
+        expect(result.reason).toBe("quota-exhausted");
+        expect(
+          incidentStore.readSupportIncidentSlotClaim(stateDir, oldest.slotIndex),
+        ).toMatchObject({
+          incidentId: peerId,
+        });
+        expect(claims).toHaveNthReturnedWith(1, true);
+        expect(claims).toHaveNthReturnedWith(2, false);
+        expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(retained.slice(1));
+      }
+      expectPeerRecoveryEvidence(result);
+    },
+  );
+
+  it("does not treat an unreadable retained record as a peer withdrawal after its claim vanishes", () => {
+    const retained = occupyPublicationReserve();
+    const oldest = retained[0];
+    if (oldest === undefined) throw new TypeError("Expected retained peer owner");
+    const target = join(
+      incidentStore.supportIncidentDirectory(stateDir),
+      supportIncidentFileName(oldest.incidentId),
+    );
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+    const readNames = incidentStore.listSupportIncidentSlotIndexes;
+    vi.spyOn(incidentStore, "listSupportIncidentSlotIndexes").mockImplementationOnce((dir) => {
+      const stale = readNames(dir);
+      incidentStore.releaseSupportIncidentSlot(dir, oldest.slotIndex, oldest.incidentId);
+      writeFileSync(target, "");
+      return stale;
+    });
+    expect(recordUserReportedIncident(stateDir)).toEqual({
+      status: "rejected",
+      reason: "quota-exhausted",
+    });
+    expect(lstatSync(target).size).toBe(0);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(retained.slice(1));
   });
 
   it.each(["unpublished", "torn", "mismatched"] as const)(

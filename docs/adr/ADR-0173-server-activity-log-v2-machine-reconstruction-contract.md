@@ -1859,10 +1859,15 @@ claims and pin and preserves prior candidates. Concurrent publishers cannot stea
 a fully occupied pool can restore its publication reserve by retiring one eligible older candidate
 only when every occupied pool slot has a matching durable record and owning claim, and the eligible
 class stock exceeds its governing share. Protected classes occupying overlapping indexes do not
-count as that surplus. Admission then retries exclusive claiming once. Recovery reuses that admission's slot-occupancy
-snapshot, checks missing durable owners before opening claim contents, and reads only the occupied
-slot owners; it does not rescan fingerprint claims. A confirmed peer unlink between inspection and
-open declines recovery without inventing a store outage. Retention evidence counts the full open
+count as that surplus. After recovery removes a record, admission refreshes the names-only occupancy
+snapshot and retries exclusive claiming once, even if that record's pin cleanup was rejected. A peer
+that actually withdraws a prior record and its claim after the initial snapshot also permits this
+fresh retry. A missing claim alone does not: an unreadable, unsafe or still-present record preserves
+the refusal. Any peer that reclaims a free slot before the retry keeps its exclusive ownership.
+Recovery checks missing durable owners before opening claim contents and reads only the occupied
+slot owners; it does not rescan fingerprint claims or add a listing to ordinary admission. A
+confirmed claim unlink without a withdrawn record declines recovery without inventing a store
+outage. Retention evidence counts the full open
 store even when only one priority class is eligible for eviction. Each retention expiry records the
 closed `retentionCause` (`slot-pressure` or `pin-ceiling`), the actual `evictingCorrelationId` and the
 replacement's assigned `evictingIncidentId`. These are references to the displacing action, not a new

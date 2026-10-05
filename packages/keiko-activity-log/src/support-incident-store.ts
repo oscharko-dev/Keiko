@@ -187,6 +187,18 @@ export function readSupportIncidentRecord(
   return regularFileSize(path) === undefined ? undefined : readRecord(path, directory, incidentId);
 }
 
+/** Distinguishes an actually withdrawn record from an unreadable or unsafe retained entry. */
+export function isSupportIncidentRecordAbsent(stateDir: string, incidentId: string): boolean {
+  if (!isSupportIncidentId(incidentId)) return false;
+  try {
+    lstatSync(join(supportIncidentDirectory(stateDir), supportIncidentFileName(incidentId)));
+    return false;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+    throw error;
+  }
+}
+
 function writeAllBytes(descriptor: number, payload: Buffer): void {
   let offset = 0;
   while (offset < payload.length) {

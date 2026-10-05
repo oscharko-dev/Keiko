@@ -93,6 +93,7 @@ import {
   claimSupportIncidentSlot,
   countSupportIncidentEntries,
   ensureSupportIncidentDirectory,
+  isSupportIncidentRecordAbsent,
   listSupportIncidentClaims,
   listSupportIncidentSlotIndexes,
   listSupportIncidentEntries,
@@ -1083,33 +1084,32 @@ function recoverPublicationReserve(
   capacity: number,
   incidentId: string,
   occupied: ReadonlySet<number>,
-): number | undefined {
+): boolean {
   const classSlots = occupiedClassSlots(occupied, capacity);
-  if (classSlots.size <= capacity) return undefined;
+  if (classSlots.size <= capacity) return false;
   const durable = entries.filter(
     ({ record }) => record !== undefined && classSlots.has(record.slotIndex),
   );
   // Unpublished peers are recognized by names alone, before any claim contents are opened.
   if (new Set(durable.map((entry) => entry.record?.slotIndex)).size !== classSlots.size)
-    return undefined;
+    return false;
   for (const { record } of durable) {
-    if (!ownsRecoveryClaim(context.stateDir, record)) return undefined;
+    if (!ownsRecoveryClaim(context.stateDir, record)) {
+      // A withdrawn owner permits a fresh exclusive attempt. A missing claim alone does not
+      // authorize reusing a slot while its prior durable record still exists.
+      return (
+        record !== undefined && isSupportIncidentRecordAbsent(context.stateDir, record.incidentId)
+      );
+    }
   }
   const eligible = durable.filter(
     ({ record }) => record !== undefined && mayEvictCandidate(draft, record),
   );
-  if (eligible.length <= capacity) return undefined;
-  const removed = evictOldestCandidate(
-    context,
-    draft,
-    durable,
-    capacity,
-    incidentId,
-    entries.length,
+  if (eligible.length <= capacity) return false;
+  return (
+    evictOldestCandidate(context, draft, durable, capacity, incidentId, entries.length) !==
+    undefined
   );
-  return removed === undefined
-    ? undefined
-    : durable.find((entry) => entry.incidentId === removed)?.record?.slotIndex;
 }
 
 function claimQuotaSlot(
@@ -1127,17 +1127,17 @@ function claimQuotaSlot(
     return undefined;
   let slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
   if (slotIndex === undefined) {
-    const released = recoverPublicationReserve(
+    if (!recoverPublicationReserve(context, draft, entries, capacity, incidentId, occupied))
+      return undefined;
+    // Recovery or a peer may have released a claim since the first snapshot. Names only guide
+    // this one retry; the exclusive claim still refuses a slot reclaimed after the fresh read.
+    slotIndex = claimAvailableSlot(
       context,
       draft,
-      entries,
-      capacity,
       incidentId,
-      occupied,
+      capacity + 1,
+      new Set(occupiedSlots(context.stateDir)),
     );
-    if (released === undefined) return undefined;
-    occupied.delete(released);
-    slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
   }
   return slotIndex;
 }

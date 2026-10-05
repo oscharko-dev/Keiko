@@ -102,6 +102,12 @@ function occupyProtectedClassReserve(kind: AutomaticClass): number {
 }
 
 describe("durable class publication reserve recovery", () => {
+  it("keeps ordinary admission to its preclaim and postpublication names-only reads", () => {
+    const indexes = vi.spyOn(store, "listSupportIncidentSlotIndexes");
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    expect(indexes).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["server", "browser"] as const)(
     "recovers only the oldest %s owners with truthful full-store counts",
     (kind) => {
@@ -111,7 +117,8 @@ describe("durable class publication reserve recovery", () => {
       const indexes = vi.spyOn(store, "listSupportIncidentSlotIndexes");
       const newest = register(kind, fixture.capacity + 1);
       expect.soft(claims).toHaveBeenCalledTimes(1);
-      expect.soft(indexes.mock.calls.length).toBeLessThanOrEqual(2);
+      // Recovery additionally refreshes slot names once before its exclusive retry.
+      expect.soft(indexes).toHaveBeenCalledTimes(3);
       const removed = fixture.candidates.slice(0, 2);
       const retained = listSupportIncidents(stateDir, { readOnly: true });
       expect(retained.map((record) => record.incidentId).sort()).toEqual(
