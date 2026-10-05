@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { describe, expect, it } from "vitest";
 
@@ -1460,6 +1461,7 @@ describe("closed diagnostic navigation and render context", () => {
       expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files source preview" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files source reveal" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory navigation" })).toBe(
         true,
       );
@@ -1969,3 +1971,42 @@ describe("citation activation diagnostic contract", () => {
     },
   );
 });
+
+it("keeps source reveal outcome separate from source byte-read counts", () => {
+  const base = {
+    kind: "stage",
+    phase: "settled",
+    stage: "files source reveal",
+    ordinal: 1,
+    durationMs: 2,
+    navigationOutcome: "applied",
+  };
+  expect(isClientStageIngestRequest(base)).toBe(true);
+  expect(
+    isClientStageIngestRequest({
+      ...base,
+      preview: {
+        previewKind: "text",
+        sourceTextBytesRead: 32,
+        canEdit: false,
+      },
+    }),
+  ).toBe(false);
+  expect(isClientStageIngestRequest({ ...base, phase: "started" })).toBe(false);
+});
+
+it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
+  "validates preview counts against the shared source ceiling (%s)",
+  (sourceTextBytesRead) => {
+    expect(
+      isClientStageIngestRequest({
+        kind: "stage",
+        stage: "files source preview",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        preview: { previewKind: "text", sourceTextBytesRead, canEdit: false },
+      }),
+    ).toBe(sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES);
+  },
+);

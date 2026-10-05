@@ -801,6 +801,9 @@ export const DE_MESSAGES = {
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
   "filePreview.showSource": "Quellenvorschau anzeigen",
   "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
+  "filePreview.revealedLine": "Quellenzeile {line}.",
+  "filePreview.revealedPartialRange":
+    "Quellenzeilen {start}–{end} angezeigt. Weitere referenzierte Zeilen liegen außerhalb dieses Ausschnitts.",
   "filePreview.revealedRange": "Quellenzeilen {start}–{end}.",
   "filePreview.revealOutsideContent":
     "Die referenzierte Zeile {line} liegt außerhalb dieser Datei ({count} Zeilen).",

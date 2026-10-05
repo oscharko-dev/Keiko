@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { correlationIdOf } from "./client-error-summary";
 import {
@@ -86,7 +87,8 @@ describe("body-free source preview evidence", () => {
     startFilesNavigationEvidence("files source preview")(
       {
         kind: "text",
-        sizeBytes: 2048,
+        sizeBytes: 4096,
+        sourceTextBytesRead: 2048,
         canEdit: false,
         root: "/private/customer",
         path: "private.html",
@@ -144,3 +146,29 @@ it("admits preview starts and settles within the shared read-stage allowance", (
     });
   }
 });
+
+it("does not substitute file size when an older preview lacks observed source bytes", () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  startFilesNavigationEvidence("files source preview")(
+    { kind: "text", sizeBytes: 2048, canEdit: false },
+    "applied",
+  );
+  expect(writer.mock.calls.at(-1)?.[1]?.stageReport.preview).toBeUndefined();
+});
+
+it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
+  "uses the shared source byte ceiling for observed preview bytes (%s)",
+  (sourceTextBytesRead) => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    startFilesNavigationEvidence("files source preview")(
+      { kind: "text", sourceTextBytesRead, canEdit: false },
+      "applied",
+    );
+    const preview = writer.mock.calls.at(-1)?.[1]?.stageReport.preview;
+    if (sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES)
+      expect(preview).toEqual({ previewKind: "text", sourceTextBytesRead, canEdit: false });
+    else expect(preview).toBeUndefined();
+  },
+);

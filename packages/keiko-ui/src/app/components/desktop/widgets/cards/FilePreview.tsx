@@ -235,7 +235,7 @@ function refreshStatusLabel(status: PreviewRefreshStatus, t: I18nTranslate): str
   }
 }
 
-function previewTokenLines(
+export function previewTokenLines(
   content: string | null,
   name: string,
   shouldHighlight: boolean,
@@ -271,6 +271,8 @@ function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
 }
 
 interface TextFilePreviewProps {
+  readonly revealRequestId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly revealLineStart?: number | undefined;
   readonly revealLineEnd?: number | undefined;
   readonly preview: Extract<FilesPreviewResponse, { readonly kind: "text" }>;
@@ -309,27 +311,75 @@ function TextPreviewBanners(
   );
 }
 
-function PreviewRevealNotice({
-  lines,
-  revealLineStart,
-  revealLineEnd,
-  t,
-}: Pick<TextFilePreviewProps, "lines" | "revealLineStart" | "revealLineEnd" | "t">): ReactNode {
-  if (
-    revealLineStart === undefined ||
-    !Number.isSafeInteger(revealLineStart) ||
-    revealLineStart < 1
-  )
-    return null;
-  const end = Math.max(revealLineStart, revealLineEnd ?? revealLineStart);
-  const outside = end > lines.length;
-  return (
-    <output className="fpv-banner">
-      {outside
-        ? t("filePreview.revealOutsideContent", { line: end, count: lines.length })
-        : t("filePreview.revealedRange", { start: revealLineStart, end })}
-    </output>
+function previewRangeLabel(start: number, end: number, partial: boolean, t: I18nTranslate): string {
+  if (partial) return t("filePreview.revealedPartialRange", { start, end });
+  if (start === end) return t("filePreview.revealedLine", { line: start });
+  return t("filePreview.revealedRange", { start, end });
+}
+
+function PreviewRevealNotice(props: TextFilePreviewProps): ReactNode {
+  const start = props.revealLineStart;
+  if (start === undefined) return null;
+  const end = props.revealLineEnd ?? start;
+  const shownStart = Math.max(start, props.precedingLineCount + 1);
+  const shownEnd = Math.min(end, props.lines.length - props.hiddenLineCount);
+  const messages: string[] = [];
+  if (shownStart <= shownEnd) {
+    const partial = end <= props.lines.length && (shownStart > start || shownEnd < end);
+    messages.push(previewRangeLabel(shownStart, shownEnd, partial, props.t));
+  }
+  if (end > props.lines.length)
+    messages.push(
+      props.t("filePreview.revealOutsideContent", { line: end, count: props.lines.length }),
+    );
+  return <output className="fpv-banner">{messages.join(" ")}</output>;
+}
+
+function revealSourceRow(section: HTMLElement | null, parentCorrelationId?: string): void {
+  const correlationId = newClientCorrelationId();
+  const settle = startFilesNavigationEvidence(
+    "files source reveal",
+    correlationId,
+    parentCorrelationId,
   );
+  const target = section?.querySelector<HTMLElement>('[aria-current="location"]');
+  if (target === undefined || target === null) {
+    settle(undefined, "unavailable");
+    return;
+  }
+  try {
+    target.scrollIntoView({ block: "center" });
+    settle(undefined, "applied");
+  } catch (error: unknown) {
+    reportClientDiagnostic("[keiko] source reveal failed", {
+      correlationId,
+      parentCorrelationId,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    settle(undefined, "failed");
+  }
+}
+
+function usePreviewSourceReveal(
+  props: TextFilePreviewProps,
+  sectionRef: RefObject<HTMLElement | null>,
+): void {
+  const key = JSON.stringify([
+    props.preview.root,
+    props.preview.path,
+    props.revealRequestId,
+    props.revealLineStart,
+    props.revealLineEnd,
+    props.lines.length,
+  ]);
+  const attempted = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (props.revealLineStart === undefined || attempted.current === key) return;
+    if (sectionRef.current === null) return;
+    attempted.current = key;
+    revealSourceRow(sectionRef.current, props.parentCorrelationId);
+  }, [key, props.revealLineStart, props.parentCorrelationId, sectionRef]);
 }
 
 function usePreviewLineNavigation(props: TextFilePreviewProps): {
@@ -391,6 +441,7 @@ function PreviewSourceRow({
 
 function TextFilePreview(props: TextFilePreviewProps): ReactNode {
   const navigation = usePreviewLineNavigation(props);
+  usePreviewSourceReveal(props, navigation.sectionRef);
   return (
     <>
       <TextPreviewBanners {...props} />
@@ -500,6 +551,8 @@ function BinaryFilePreview({
 }
 
 interface PreviewKindContentProps {
+  readonly revealRequestId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly revealLineStart?: number | undefined;
   readonly revealLineEnd?: number | undefined;
   readonly preview: FilesPreviewResponse | null;
@@ -533,10 +586,20 @@ interface PreviewLineWindow {
   readonly end: number;
 }
 
+function normalizedPreviewReveal(
+  start?: number,
+  end?: number,
+): { start: number; end: number } | undefined {
+  if (start === undefined || !Number.isSafeInteger(start) || start < 1) return undefined;
+  const validEnd = end !== undefined && Number.isSafeInteger(end) && end >= start;
+  return { start, end: validEnd ? end : start };
+}
+
 function initialPreviewLineWindow(lineCount: number, revealLineStart?: number): PreviewLineWindow {
-  const validLine =
-    revealLineStart !== undefined && Number.isSafeInteger(revealLineStart) && revealLineStart > 0;
-  const start = validLine ? Math.max(0, Math.min(lineCount - 1, revealLineStart - 1) - 5) : 0;
+  const start =
+    revealLineStart === undefined
+      ? 0
+      : Math.max(0, Math.min(lineCount - 1, revealLineStart - 1) - 5);
   return { start, end: Math.min(lineCount, start + PREVIEW_LINE_BATCH) };
 }
 
@@ -715,8 +778,9 @@ export function FilePreview({
     [previewText, headerName, shouldHighlight],
   );
 
+  const reveal = normalizedPreviewReveal(revealLineStart, revealLineEnd);
   // A response object is not a navigation: refreshing the current file preserves expansion.
-  const lineWindowKey = JSON.stringify([root, path, revealLineStart, revealRequestId]);
+  const lineWindowKey = JSON.stringify([root, path, reveal?.start, revealRequestId]);
   const [expandedWindow, setExpandedWindow] = useState<{
     readonly key: string;
     readonly window: PreviewLineWindow;
@@ -724,7 +788,7 @@ export function FilePreview({
   const requestedWindow =
     expandedWindow?.key === lineWindowKey
       ? expandedWindow.window
-      : initialPreviewLineWindow(lines.length, revealLineStart);
+      : initialPreviewLineWindow(lines.length, reveal?.start);
   const lineWindow = clampPreviewLineWindow(requestedWindow, lines.length);
   const visibleLines = useMemo(
     () => lines.slice(lineWindow.start, lineWindow.end),
@@ -843,8 +907,10 @@ export function FilePreview({
       <PreviewKindContent
         preview={activePreview}
         shouldHighlight={shouldHighlight}
-        revealLineStart={revealLineStart}
-        revealLineEnd={revealLineEnd}
+        revealLineStart={reveal?.start}
+        revealLineEnd={reveal?.end}
+        revealRequestId={revealRequestId}
+        parentCorrelationId={parentCorrelationId}
         lines={lines}
         visibleLineRows={visibleLineRows}
         hiddenLineCount={hiddenLineCount}

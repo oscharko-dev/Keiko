@@ -782,6 +782,9 @@ export const EN_MESSAGES = {
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
   "filePreview.showSource": "Show source preview",
   "filePreview.linesAdded": "{count} lines added.",
+  "filePreview.revealedLine": "Source line {line}.",
+  "filePreview.revealedPartialRange":
+    "Source lines {start}–{end} shown. More referenced lines are outside this view.",
   "filePreview.revealedRange": "Source lines {start}–{end}.",
   "filePreview.revealOutsideContent":
     "The referenced line {line} is outside this file ({count} lines).",

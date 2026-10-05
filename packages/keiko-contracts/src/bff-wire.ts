@@ -2001,6 +2001,8 @@ export type FilesPreviewResponse =
   | (FilesPreviewBase & {
       readonly kind: "text";
       readonly content: string;
+      /** Raw bytes supplied to the preview decoder, before text redaction; absent on older servers. */
+      readonly sourceTextBytesRead?: number;
       readonly truncated: boolean;
       /** Editing remains independently admitted through the UTF-8 editor route. */
       readonly canEdit?: boolean;

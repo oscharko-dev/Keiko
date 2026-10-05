@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Read-only filesystem browser for the desktop Files widget. The browser receives
 // preview or editor content; every request is contained inside a selected root after
 // realpath resolution.
@@ -81,8 +82,6 @@ const MAX_FILE_SEARCH_LIMIT = 50;
 const MAX_FILE_SEARCH_QUERY_CHARS = 120;
 const MAX_FILE_SEARCH_SCAN = 20_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
-// Files owns this complete-preview limit independently of repository-search tuning.
-export const FILES_COMPLETE_PREVIEW_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
 const STABLE_CONTENT_READ_ATTEMPTS = 3;
 const TREE_CLASSIFY_CONCURRENCY = 32;
@@ -1719,9 +1718,9 @@ async function textPreview(
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
   const maxBytes =
-    target.stats.size > FILES_COMPLETE_PREVIEW_BYTES
+    target.stats.size > MAX_RECURSIVE_TEXT_FILE_BYTES
       ? MAX_TEXT_PREVIEW_BYTES
-      : FILES_COMPLETE_PREVIEW_BYTES;
+      : MAX_RECURSIVE_TEXT_FILE_BYTES;
   const preview = await readTextPreview(target, maxBytes);
   if (preview === undefined) return { ...base, kind: "binary", reason: "unsupported" };
   const { decoded, buffer, truncated } = preview;
@@ -1730,6 +1729,7 @@ async function textPreview(
     ...base,
     kind: "text",
     content: typeof redacted === "string" ? redacted : decoded.text,
+    sourceTextBytesRead: buffer.length,
     truncated,
     maxBytes,
     canEdit:

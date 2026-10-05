@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
   link,
   mkdtemp,
@@ -51,7 +52,6 @@ import {
 } from "./index.js";
 import {
   handleFilesPreviewImage,
-  FILES_COMPLETE_PREVIEW_BYTES,
   normalizeRelativePath,
   resolveRoot,
   classifyInLockRefreshFailure,
@@ -1928,21 +1928,37 @@ describe("desktop files browser", () => {
     await writeFile(join(root, name), bytes);
     const preview = await readFilesPreview(store, root, name, buildRedactor({}));
     expect(preview).toMatchObject({ kind: "text", canEdit: false, truncated: false });
-    if (preview.kind === "text") expect(preview.content).toContain("Ölwechsel");
+    if (preview.kind === "text") {
+      expect(preview.content).toContain("Ölwechsel");
+      expect(preview).toHaveProperty("sourceTextBytesRead", bytes.length);
+    }
     await expect(readFilesContent(store, root, name, buildRedactor({}))).rejects.toMatchObject({
       code: "UNSUPPORTED_FILE",
     });
   });
 
+  it("reports source bytes before preview redaction changes the displayed length", async () => {
+    const content = "Private source content to redact";
+    await writeFile(join(root, "redacted.txt"), content);
+    const preview = await readFilesPreview(store, root, "redacted.txt", (value) =>
+      value === content ? "removed" : value,
+    );
+    expect(preview).toMatchObject({
+      kind: "text",
+      content: "removed",
+      sourceTextBytesRead: Buffer.byteLength(content),
+    });
+  });
+
   it("previews the complete eligible source up to 2 MiB without widening editing", async () => {
-    const content = `${"a".repeat(FILES_COMPLETE_PREVIEW_BYTES - 9)}ENDSOURCE`;
+    const content = `${"a".repeat(MAX_RECURSIVE_TEXT_FILE_BYTES - 9)}ENDSOURCE`;
     await writeFile(join(root, "eligible.txt"), content);
     const preview = await readFilesPreview(store, root, "eligible.txt", buildRedactor({}));
     expect(preview).toMatchObject({
       kind: "text",
       canEdit: false,
       truncated: false,
-      maxBytes: FILES_COMPLETE_PREVIEW_BYTES,
+      maxBytes: MAX_RECURSIVE_TEXT_FILE_BYTES,
     });
     if (preview.kind === "text") expect(preview.content).toBe(content);
     await expect(
@@ -1966,7 +1982,7 @@ describe("desktop files browser", () => {
       const prefix = "a".repeat(MAX_TEXT_PREVIEW_BYTES - 1);
       await writeFile(
         join(root, "large.txt"),
-        `${prefix}${tail}${"z".repeat(FILES_COMPLETE_PREVIEW_BYTES)}`,
+        `${prefix}${tail}${"z".repeat(MAX_RECURSIVE_TEXT_FILE_BYTES)}`,
       );
       const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
       expect(preview).toMatchObject({
@@ -1975,6 +1991,7 @@ describe("desktop files browser", () => {
         canEdit: false,
         maxBytes: MAX_TEXT_PREVIEW_BYTES,
         content: prefix,
+        sourceTextBytesRead: MAX_TEXT_PREVIEW_BYTES,
       });
     },
   );

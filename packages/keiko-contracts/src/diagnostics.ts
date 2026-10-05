@@ -31,6 +31,7 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import {
   ACTIVITY_LOG_COMPLETENESS_STATES,
   ACTIVITY_LOG_LOSS_STATES,
@@ -805,6 +806,7 @@ export const CLIENT_STAGE_IDS = [
   "chat history deletion",
   "files directory load",
   "files source preview",
+  "files source reveal",
   "files directory navigation",
   "files project selection",
   "editor project selection",
@@ -843,6 +845,7 @@ export interface ClientStageStartedIngestRequest {
 
 export interface ClientSourcePreviewCounts {
   readonly previewKind: "text" | "image" | "binary";
+  /** Raw bytes supplied to the decoder, excluding duplicate classification reads and lookahead. */
   readonly sourceTextBytesRead: number;
   readonly canEdit: boolean;
   readonly binaryReason?: "too-large" | "unsupported" | undefined;
@@ -894,6 +897,7 @@ const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
   "editor project selection",
   "files directory load",
   "files source preview",
+  "files source reveal",
   "files directory navigation",
   "files project selection",
 ]);
@@ -952,7 +956,7 @@ function isSourcePreviewCounts(value: unknown): value is ClientSourcePreviewCoun
   if (!isSourcePreviewKind(value.previewKind)) return false;
   if (
     typeof value.canEdit !== "boolean" ||
-    !isBoundedNonNegativeInteger(value.sourceTextBytesRead, 2_097_152)
+    !isBoundedNonNegativeInteger(value.sourceTextBytesRead, MAX_RECURSIVE_TEXT_FILE_BYTES)
   )
     return false;
   return (

@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type {
   ClientStageId,
   ClientNavigationOutcome,
@@ -38,7 +39,10 @@ export interface FilesNavigationRead {
 
 function validSourceByteCount(value: unknown): value is number {
   return (
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 2_097_152
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_RECURSIVE_TEXT_FILE_BYTES
   );
 }
 
@@ -65,13 +69,13 @@ function sourcePreviewCounts(
   if (response.kind === "image")
     return { previewKind: "image", sourceTextBytesRead: 0, canEdit: false };
   if (response.kind === "binary") return binaryPreviewCounts(response);
-  if (response.kind !== "text" || !("sizeBytes" in response) || !("canEdit" in response))
+  if (response.kind !== "text" || !("sourceTextBytesRead" in response) || !("canEdit" in response))
     return undefined;
-  if (!validSourceByteCount(response.sizeBytes) || typeof response.canEdit !== "boolean")
+  if (!validSourceByteCount(response.sourceTextBytesRead) || typeof response.canEdit !== "boolean")
     return undefined;
   return {
     previewKind: "text",
-    sourceTextBytesRead: response.sizeBytes,
+    sourceTextBytesRead: response.sourceTextBytesRead,
     canEdit: response.canEdit,
   };
 }

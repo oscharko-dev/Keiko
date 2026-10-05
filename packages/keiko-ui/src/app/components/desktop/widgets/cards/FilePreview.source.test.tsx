@@ -6,7 +6,7 @@ import { ApiError, fetchFilesPreview } from "@/lib/api";
 import type { FilesPreviewResponse } from "@/lib/types";
 import { resetFilesNavigationEvidenceForTests } from "@/lib/files-navigation-evidence";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
-import { FilePreview } from "./FilePreview";
+import { FilePreview, previewTokenLines } from "./FilePreview";
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
@@ -22,13 +22,14 @@ function textPreview(
     root,
     path,
     name: path,
-    sizeBytes: content.length,
+    sizeBytes: new TextEncoder().encode(content).byteLength,
     modifiedAt: 1,
     extension: "html",
     mime: "text/html",
     symlink: false,
     kind: "text",
     content,
+    sourceTextBytesRead: new TextEncoder().encode(content).byteLength,
     truncated: false,
     maxBytes: 2_097_152,
     canEdit: false,
@@ -41,6 +42,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   resetClientDiagnosticWriter();
 });
 
@@ -142,7 +144,7 @@ describe("read-only cited source preview", () => {
           navigationOutcome: "applied",
           preview: {
             previewKind: kind,
-            sourceTextBytesRead: kind === "text" ? base.sizeBytes : 0,
+            sourceTextBytesRead: kind === "text" ? base.sourceTextBytesRead : 0,
             canEdit: false,
           },
         },
@@ -202,6 +204,9 @@ describe("read-only cited source preview", () => {
     vi.mocked(fetchFilesPreview).mockResolvedValueOnce(
       textPreview("/repo", "manual.html", content),
     );
+    const lines = previewTokenLines(content, "manual.html", false);
+    expect(lines).toHaveLength(1_048_577);
+    expect(lines.every((line) => typeof line === "string")).toBe(true);
     const mapped = vi.spyOn(Array.prototype, "map");
     try {
       render(<FilePreview root="/repo" path="manual.html" onClose={() => undefined} />);
@@ -393,4 +398,191 @@ describe("read-only cited source preview", () => {
     expect(document.body).not.toHaveTextContent("old source");
     view.unmount();
   });
+});
+
+describe("source reveal viewport truth", () => {
+  const source = Array.from({ length: 1_800 }, (_, index) => `row ${index + 1}`).join("\n");
+
+  it("scrolls a second same-file request to its actual row and joins its reveal evidence", async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", source));
+    const props = {
+      root: "/repo",
+      path: "manual.html",
+      onClose: (): void => undefined,
+      parentCorrelationId: "citation-parent-action",
+      revealLineStart: 100,
+      revealRequestId: "first",
+    };
+    const view = render(<FilePreview {...props} />);
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    region.scrollTop = 2_800;
+    scroll.mockClear();
+    view.rerender(<FilePreview {...props} revealLineStart={1_100} revealRequestId="second" />);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toBe(region.querySelector('[aria-current="location"]'));
+    expect(scroll.mock.contexts[0]).toHaveTextContent("row 1100");
+    expect(scroll).toHaveBeenCalledWith({ block: "center" });
+    const revealEvents = writer.mock.calls.filter(
+      (call) => call[1]?.stageReport?.stage === "files source reveal",
+    );
+    expect(revealEvents).toHaveLength(4);
+    expect(revealEvents[3]?.[1]).toMatchObject({
+      parentCorrelationId: "citation-parent-action",
+      correlationId: revealEvents[2]?.[1]?.correlationId,
+      stageReport: { phase: "settled", navigationOutcome: "applied" },
+    });
+    expect(revealEvents[3]?.[1]?.stageReport.preview).toBeUndefined();
+    expect(JSON.stringify(revealEvents)).not.toMatch(/manual.html|row 1100|\/repo/u);
+    expect(fetchFilesPreview).toHaveBeenCalledTimes(1);
+    scroll.mockRestore();
+  });
+
+  it("announces only the displayed part of a citation wider than the initial window", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", source));
+    render(
+      <FilePreview
+        root="/repo"
+        path="manual.html"
+        revealLineStart={100}
+        revealLineEnd={900}
+        onClose={() => undefined}
+      />,
+    );
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    expect(region.querySelectorAll('[data-source-reference="true"]')).toHaveLength(495);
+    expect(
+      screen.getByText("Source lines 100–594 shown. More referenced lines are outside this view."),
+    ).toBeVisible();
+    expect(screen.queryByText("Source lines 100–900.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show 500 more lines" }));
+    expect(screen.getByText("Source lines 100–900.")).toBeVisible();
+  });
+
+  it.each([undefined, 3, 7.5])(
+    "normalizes a single or invalid end consistently (%s)",
+    async (end) => {
+      vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", source));
+      render(
+        <FilePreview
+          root="/repo"
+          path="manual.html"
+          revealLineStart={7}
+          revealLineEnd={end}
+          onClose={() => undefined}
+        />,
+      );
+      const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+      expect(region.querySelectorAll('[data-source-reference="true"]')).toHaveLength(1);
+      expect(region.querySelector('[aria-current="location"]')).toHaveTextContent("row 7");
+      expect(screen.getByText("Source line 7.")).toBeVisible();
+    },
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "does not reveal an invalid start (%s)",
+    async (start) => {
+      vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", source));
+      render(
+        <FilePreview
+          root="/repo"
+          path="manual.html"
+          revealLineStart={start}
+          revealLineEnd={10}
+          onClose={() => undefined}
+        />,
+      );
+      const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+      expect(region.querySelectorAll('[data-source-reference="true"]')).toHaveLength(0);
+      expect(region.querySelector('[aria-current="location"]')).toBeNull();
+      expect(screen.queryByText(/^Source lines? /u)).toBeNull();
+    },
+  );
+
+  it("clamps an expanded deep window when refreshed content becomes shorter", async () => {
+    vi.mocked(fetchFilesPreview)
+      .mockResolvedValueOnce(textPreview("/repo", "manual.html", source))
+      .mockResolvedValueOnce(textPreview("/repo", "manual.html", "row 1\nrow 2\nrow 3"));
+    render(
+      <FilePreview
+        root="/repo"
+        path="manual.html"
+        revealLineStart={1_100}
+        onClose={() => undefined}
+      />,
+    );
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    fireEvent.click(screen.getByRole("button", { name: "Show 500 previous lines" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }));
+    await screen.findByText("Reloaded");
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(1);
+    expect(region).toHaveTextContent("row 3");
+    expect(region.querySelector('[aria-current="location"]')).toBeNull();
+    expect(
+      screen.getByText("The referenced line 1100 is outside this file (3 lines)."),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 previous lines" }));
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(3);
+  });
+});
+
+it("keeps source content usable after preview evidence admission is throttled", async () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  vi.mocked(fetchFilesPreview).mockResolvedValue(
+    textPreview("/repo", "manual.html", "retained source"),
+  );
+  render(<FilePreview root="/repo" path="manual.html" onClose={() => undefined} />);
+  await screen.findByRole("region", { name: "File preview: manual.html" });
+  for (let count = 2; count <= 9; count += 1) {
+    fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }));
+    await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledTimes(count));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Refresh preview" })).toBeEnabled(),
+    );
+  }
+  expect(screen.getByRole("region", { name: "File preview: manual.html" })).toHaveTextContent(
+    "retained source",
+  );
+  expect(
+    writer.mock.calls.filter((call) => call[1]?.stageReport?.stage === "files source preview"),
+  ).toHaveLength(16);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("records a failed actual reveal with its cause and never claims success", async () => {
+  vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {
+    throw new TypeError("private viewport failure");
+  });
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", "one\ntwo"));
+  render(
+    <FilePreview
+      root="/repo"
+      path="manual.html"
+      revealLineStart={2}
+      parentCorrelationId="failed-reveal-parent"
+      onClose={() => undefined}
+    />,
+  );
+  await screen.findByRole("region", { name: "File preview: manual.html" });
+  const failure = writer.mock.calls.find((call) => call[0] === "[keiko] source reveal failed")?.[1];
+  expect(failure).toMatchObject({
+    correlationId: expect.any(String),
+    parentCorrelationId: "failed-reveal-parent",
+    errorEvidence: { errorClass: "TypeError" },
+  });
+  const settled = writer.mock.calls.find(
+    (call) =>
+      call[1]?.stageReport?.stage === "files source reveal" &&
+      call[1]?.stageReport?.phase === "settled",
+  )?.[1];
+  expect(settled).toMatchObject({
+    correlationId: failure?.correlationId,
+    stageReport: { navigationOutcome: "failed" },
+  });
+  expect(JSON.stringify(writer.mock.calls)).not.toContain("private viewport failure");
 });

@@ -3013,3 +3013,44 @@ describe("citation activation ingestion", () => {
     },
   );
 });
+
+describe("actual source reveal lifecycle", () => {
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
+  it.each(["applied", "unavailable", "failed"])(
+    "persists a %s reveal without claiming another read",
+    async (navigationOutcome) => {
+      const sink = captureServerLog();
+      const base = {
+        kind: "stage",
+        stage: "files source reveal",
+        ordinal: 1,
+        correlationId: "source-reveal-attempt",
+        parentCorrelationId: "source-citation-action",
+      };
+      for (const phase of ["started", "settled"]) {
+        const body = {
+          ...base,
+          phase,
+          ...(phase === "settled" ? { durationMs: 2, navigationOutcome } : {}),
+        };
+        expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(
+          204,
+        );
+      }
+      const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+      expect(events).toHaveLength(2);
+      expect(events[1]).toMatchObject({
+        correlationId: base.correlationId,
+        parentCorrelationId: base.parentCorrelationId,
+        extra: { stage: "files-source-reveal", navigationOutcome },
+      });
+      expect(events[1]?.extra).not.toHaveProperty("sourceTextBytesRead");
+      const text = sink.lines().join("");
+      expect(text).toContain('"stage":"files-source-reveal"');
+      expect(text).toContain(`"navigationOutcome":"${navigationOutcome}"`);
+      expect(analyzeLogText(text).sufficiency.status).toBe("complete");
+    },
+  );
+});
