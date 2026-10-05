@@ -36,6 +36,7 @@ function scriptedFs(
 ): {
   readonly fs: WorkspaceFs;
   readonly starts: string[];
+  readonly prefixReads: string[];
   readonly completions: string[];
   readonly releaseAll: () => Promise<void>;
 } {
@@ -44,12 +45,18 @@ function scriptedFs(
   if (read === undefined) throw new TypeError("A byte reader is required.");
   const queue: PendingRead[] = [];
   const starts: string[] = [];
+  const prefixReads: string[] = [];
   const completions: string[] = [];
   let wake: (() => void) | undefined;
   const fs: WorkspaceFs = {
     ...base,
     readFileBytes: async (...args): Promise<Uint8Array> => {
       const path = args[0];
+      // Schedule complete file reads; binary probes must not consume a file's release slot.
+      if (args[1] < base.stat(path).size) {
+        prefixReads.push(path);
+        return read(...args);
+      }
       starts.push(path);
       let markCompleted!: () => void;
       const completed = new Promise<void>((resolve) => {
@@ -80,7 +87,7 @@ function scriptedFs(
       await pending.completed;
     }
   };
-  return { fs, starts, completions, releaseAll };
+  return { fs, starts, prefixReads, completions, releaseAll };
 }
 
 describe("shared streamed search review regressions", () => {
@@ -182,6 +189,9 @@ describe("shared streamed search review regressions", () => {
       });
       await schedule.releaseAll();
       await pending;
+      expect(schedule.prefixReads).toHaveLength(40);
+      expect(schedule.starts).toHaveLength(40);
+      expect(new Set(schedule.prefixReads)).toEqual(new Set(schedule.starts));
       expect(schedule.completions).toHaveLength(40);
       expect(schedule.completions[0]).toBe(schedule.starts[reverse ? 7 : 0]);
       expect(schedule.completions.at(-1)).toBe(
