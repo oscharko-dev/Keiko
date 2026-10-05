@@ -1036,6 +1036,12 @@ async function measureRetrievalTraversal(
   expect(classifierCalls).toBeGreaterThan(0);
   expect(counted.listingGuards().readCalls).toBeGreaterThan(0);
   expect(counted.listingGuards().readCalls).toBeLessThanOrEqual(classifierCalls);
+  // This phase is subtracted below, so it needs its own pin: the live classification checks
+  // admission and the pre/post-read snapshot. Repeated containment walks must not disappear.
+  expect(counted.listingGuards().stat).toBeGreaterThan(0);
+  expect(counted.listingGuards().realPath).toBeGreaterThan(0);
+  expect(counted.listingGuards().stat).toBeLessThanOrEqual(3 * classifierCalls);
+  expect(counted.listingGuards().realPath).toBeLessThanOrEqual(3 * classifierCalls);
   expect(classifierCalls).toBeLessThanOrEqual(countFixtureFiles(fixtureRoot));
   const completedDetails = activityLog.events.find(
     (event) => event.op === "search.connected-context.completion-details",
