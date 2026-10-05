@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5baca5d6f15c11af434a845769c8dc8729263288cd388574917d550b305e28e8" as const;
+  "863f072bc7ddeadb4e5f5da8bce65794d6b252a2eebb7efc2e18a8d54b3c1df2" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -3457,6 +3457,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "mutationSurface",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "rejectionCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {

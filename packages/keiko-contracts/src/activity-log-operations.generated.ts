@@ -3387,6 +3387,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      rejectionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       mutationSurface: {
         type: "string",
         dataClass: "closed-enum",
