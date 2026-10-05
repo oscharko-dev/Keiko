@@ -28194,7 +28194,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["released", "not-pinned", "rejected"],
+        values: ["released", "not-pinned", "rejected", "not-attempted"],
+      },
+      removalStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["removed", "failed"],
       },
       openIncidentCount: {
         type: "integer",

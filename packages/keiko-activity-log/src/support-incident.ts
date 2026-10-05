@@ -270,7 +270,13 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["released", "not-pinned", "rejected"],
+      values: ["released", "not-pinned", "rejected", "not-attempted"],
+    },
+    removalStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["removed", "failed"],
     },
     openIncidentCount: OPEN_COUNT_FIELD,
     reason: {
@@ -454,13 +460,25 @@ function rejectionErrorKind(
 
 export type SupportIncidentPinRelease = "released" | "not-pinned" | "rejected";
 
-interface DismissalFacts {
+interface DismissalContext {
   readonly correlationId: string;
   readonly openIncidentCount: number;
-  readonly pinRelease: SupportIncidentPinRelease;
-  readonly claimsReleased: boolean;
   readonly reason?: "abandoned" | undefined;
 }
+
+type DismissalFacts = DismissalContext &
+  (
+    | {
+        readonly removalStatus: "failed";
+        readonly pinRelease: "not-attempted";
+        readonly claimsReleased: false;
+      }
+    | {
+        readonly removalStatus?: "removed";
+        readonly pinRelease: SupportIncidentPinRelease;
+        readonly claimsReleased: boolean;
+      }
+  );
 
 function dismissedEvidence(
   stateDir: string,
@@ -481,6 +499,7 @@ function dismissedEvidence(
         pinRelease: facts.pinRelease,
         openIncidentCount: facts.openIncidentCount,
         ...(facts.reason === undefined ? {} : { reason: facts.reason }),
+        ...(facts.removalStatus === undefined ? {} : { removalStatus: facts.removalStatus }),
         ...(facts.pinRelease === "rejected" || !facts.claimsReleased
           ? { completeness: "partial" as const }
           : {}),
@@ -1602,6 +1621,25 @@ function releaseIncidentPin(
   return releaseWindowPin(stateDir, record.pin.pinId, context);
 }
 
+function failedWithdrawal(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  context: DismissalContext,
+  error: unknown,
+): SupportIncidentDismissal {
+  reportServerLogFailure(error, {
+    op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+    correlationId: context.correlationId,
+  });
+  dismissedEvidence(stateDir, record, {
+    ...context,
+    removalStatus: "failed",
+    pinRelease: "not-attempted",
+    claimsReleased: false,
+  });
+  return "failed";
+}
+
 /**
  * Withdraws the owned record and releases its Activity Log pin, so the window
  * returns to ordinary retention. A pin that cannot be released still lapses at its bounded expiry.
@@ -1620,8 +1658,16 @@ function retireSupportIncident(
   try {
     removeSupportIncidentRecord(stateDir, incidentId);
   } catch (error) {
-    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
-    return "failed";
+    return failedWithdrawal(
+      stateDir,
+      record,
+      {
+        correlationId,
+        openIncidentCount: open.length,
+        reason: options.retirementReason,
+      },
+      error,
+    );
   }
   const claimsReleased = releaseEntryClaims(
     stateDir,

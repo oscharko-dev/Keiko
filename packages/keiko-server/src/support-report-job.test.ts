@@ -13,6 +13,12 @@ import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
+
+vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
+  const actual = await importOriginal<typeof artifactFiles>();
+  return { ...actual, removeSafeArtifactFile: vi.fn(actual.removeSafeArtifactFile) };
+});
 
 const workers = vi.hoisted(() => ({
   instances: [] as EventEmitter[],
@@ -48,6 +54,9 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { runSupportReportJob } from "./support-report-job.js";
 const reportDirectories: string[] = [];
+const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
+  "@oscharko-dev/keiko-security/fs-hardening",
+);
 
 function activeWorker(): EventEmitter {
   const worker = workers.instances.at(-1);
@@ -79,6 +88,9 @@ afterEach(() => {
   workers.terminate.mockReset();
   workers.prepare.mockReset();
   workers.postMessage.mockReset();
+  vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementation(
+    actualArtifactFiles.removeSafeArtifactFile,
+  );
   closeFileServerLogSinks();
   for (const directory of reportDirectories.splice(0))
     rmSync(directory, { recursive: true, force: true });
@@ -127,6 +139,55 @@ describe("bounded desktop support-report worker", () => {
       ).toHaveLength(1);
     },
   );
+
+  it("records a refused abandoned withdrawal while preserving cancellation and releasing its worker", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-refused-abandoned-report-"));
+    reportDirectories.push(stateDir);
+    const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-activity-log/reader")>(
+      "@oscharko-dev/keiko-activity-log/reader",
+    );
+    workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+    const controller = new AbortController();
+    const result = runSupportReportJob(
+      stateDir,
+      undefined,
+      controller.signal,
+      "refused-withdrawal",
+    );
+    const rejection = result.catch((error: unknown) => error);
+    activeWorker().emit("message", { kind: "prepare" });
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const artifacts = readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME));
+    const pins = readdirSync(join(stateDir, "logs")).filter(
+      (name) => parseActivityLogPinFileName(name) !== undefined,
+    );
+    expect(records).toHaveLength(1);
+    vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(() => {
+      throw new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+    });
+    controller.abort();
+    expect(await rejection).toMatchObject({ reason: "cancelled" });
+    expect(workers.terminate).toHaveBeenCalledOnce();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))).toEqual(artifacts);
+    expect(
+      readdirSync(join(stateDir, "logs")).filter(
+        (name) => parseActivityLogPinFileName(name) !== undefined,
+      ),
+    ).toEqual(pins);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      correlationId: "refused-withdrawal",
+      reason: "abandoned",
+      removalStatus: "failed",
+      pinRelease: "not-attempted",
+      completeness: "partial",
+    });
+  });
 
   it.each(["cancelled", "timeout", "error", "termination"])(
     "abandons only its fresh manual preparation after %s",

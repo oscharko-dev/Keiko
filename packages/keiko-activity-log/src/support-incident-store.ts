@@ -210,6 +210,17 @@ export function writeSupportIncidentRecord(
   }
 }
 
+function publicationAndCleanupError(
+  publicationError: unknown,
+  cleanupError: unknown,
+): AggregateError {
+  return new AggregateError(
+    [publicationError, cleanupError],
+    "Support incident publication and owned cleanup failed",
+    { cause: publicationError },
+  );
+}
+
 function removeFailedPublication(
   path: string,
   directory: string,
@@ -227,11 +238,7 @@ function removeFailedPublication(
       },
     );
   } catch (cleanupError) {
-    throw new AggregateError(
-      [publicationError, cleanupError],
-      "Support incident publication and owned cleanup failed",
-      { cause: cleanupError },
-    );
+    throw publicationAndCleanupError(publicationError, cleanupError);
   }
 }
 

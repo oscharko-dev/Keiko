@@ -52,6 +52,7 @@ import * as incidentStore from "./support-incident-store.js";
 import * as serverLog from "./server-log.js";
 import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
 import * as filesystem from "node:fs";
+import { causeChain } from "./stack-frames.js";
 
 import {
   attachActivityLogEventRegistration,
@@ -71,6 +72,7 @@ import {
 import { parseSupportReport, analyzeSupportReport } from "./reader/support-report.js";
 
 import {
+  expectActivityLogProof,
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
@@ -427,7 +429,10 @@ describe("rolling diagnostic candidate retention", () => {
         );
       }).toThrow(
         cleanup === "refused"
-          ? expect.objectContaining({ errors: [publicationError, cleanupError] })
+          ? expect.objectContaining({
+              errors: [publicationError, cleanupError],
+              cause: publicationError,
+            })
           : publicationError,
       );
       const path = join(
@@ -441,6 +446,37 @@ describe("rolling diagnostic candidate retention", () => {
       );
     },
   );
+
+  it("keeps the durability failure in the real candidate's reduced cause chain after cleanup also fails", () => {
+    const source = recordUserReportedIncident(stateDir);
+    if (source.status !== "created") throw new Error("Expected retained producer fixture");
+    const publicationError = new RangeError("private durability detail");
+    const cleanupError = new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+    const actualWrite = incidentStore.writeSupportIncidentRecord;
+    vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce((...args) => {
+      vi.mocked(filesystem.fsyncSync).mockImplementationOnce(() => {
+        throw publicationError;
+      });
+      vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(() => {
+        throw cleanupError;
+      });
+      actualWrite(...args);
+    });
+    const notice = vi.spyOn(serverLog, "reportServerLogFailure");
+    expect(
+      recordUserReportedIncident(stateDir, { correlationId: "failed-durable-candidate" }),
+    ).toEqual({ status: "rejected", reason: "store-unavailable" });
+    const failure = notice.mock.calls[0]?.[0];
+    expect(failure).toMatchObject({
+      errors: [publicationError, cleanupError],
+      cause: publicationError,
+    });
+    expect(causeChain(failure)).toEqual(["RangeError"]);
+    expect(incidentStore.readSupportIncidentRecord(stateDir, source.incidentId)).toEqual(
+      source.record,
+    );
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private durability detail");
+  });
 
   it("preserves prior durable candidates and removes only its own new record after fsync fails", () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
@@ -953,6 +989,41 @@ describe("rolling diagnostic candidate retention", () => {
         completeness: "complete",
       }),
     );
+  });
+
+  it("records failed abandoned withdrawal without claiming removal or touching the owned pin", () => {
+    const created = recordUserReportedIncident(stateDir, {
+      correlationId: "abandoned-owned-cause",
+    });
+    if (created.status !== "created") throw new Error("Expected real manual candidate");
+    const claims = listSupportIncidentClaims(stateDir);
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+    vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(() => {
+      throw new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+    });
+    expect(
+      dismissSupportIncident(stateDir, created.incidentId, {
+        correlationId: "cancelled-report-withdrawal",
+        retirementReason: "abandoned",
+      }),
+    ).toBe("failed");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([created.record]);
+    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    expect(lines).toHaveLength(1);
+    expect(
+      expectActivityLogProof("support.incident.dismissed.emitted-line", lines[0] ?? ""),
+    ).toMatchObject({
+      correlationId: "cancelled-report-withdrawal",
+      reason: "abandoned",
+      removalStatus: "failed",
+      pinRelease: "not-attempted",
+      completeness: "partial",
+    });
   });
 
   it("releases its owned pin and records partial expiry after a genuine claim-release failure", () => {
