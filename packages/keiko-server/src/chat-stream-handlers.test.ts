@@ -4128,6 +4128,62 @@ describe("git-change description-authority admission on the streaming send path 
     );
   });
 
+  it("refuses a stale source identity before starting a Git description stream", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const original = store.findChatById(chatId);
+    if (original === undefined) throw new TypeError("Missing fixture chat");
+    const expectedGroundingScopeIdentity = canonicalChatTurnGroundingScopeIdentity(original);
+    const description = await initializeGitChangeDescriptionFixture(projectDir);
+    store.updateChat(chatId, { gitChangeScopes: [description.scope] });
+    const { model, calls } = streamingModel("must not run");
+    const captured = captureRes();
+    const mintDescriptionAuthority =
+      vi.fn<NonNullable<UiHandlerDeps["mintDescriptionAuthority"]>>();
+    const result = await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "refine description",
+            expectedGroundingScopeIdentity,
+            memory: { enabled: false, budgetTokens: 0, mode: "supervised-coding", context: {} },
+          }),
+          captured.res,
+        ),
+        correlationId: "stale-stream-git-description",
+      },
+      {
+        ...deps(model),
+        ...description.deps,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        mintDescriptionAuthority,
+        gitChangeDescriptionAuthorityPort: {
+          current: (scope) => ({
+            scope,
+            effectiveMode: "supervised-coding",
+            expiresAt: "9999-12-31T23:59:59.999Z",
+          }),
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+    });
+    expect(captured.status).toBeUndefined();
+    expect(captured.writes).toEqual([]);
+    expect(calls.count).toBe(0);
+    expect(mintDescriptionAuthority).not.toHaveBeenCalled();
+    expect(store.listMessages(chatId)).toEqual([]);
+    const rejection = sink.events.find((event) => event.op === "chat.send.rejected");
+    expect(rejection?.correlationId).toBe("stale-stream-git-description");
+    expect(rejection?.extra?.reason).toBe("grounding-scope");
+  });
+
   it("admits the streamed turn once a live description authority record exists for the exact scope", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));

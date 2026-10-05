@@ -2794,12 +2794,33 @@ function rejectUnavailableGitChangeGeneration(
   return gitChangeGenerationFailure(reason);
 }
 
+function gitDescriptionScopeFailure(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const failure = expectedGroundingScopeFailure(prepared.request, prepared.chat);
+  if (failure !== undefined) {
+    logChatRejection(
+      "chat.send.rejected",
+      correlationId,
+      prepared.modelId,
+      deps,
+      failure.status,
+      "grounding-scope",
+    );
+  }
+  return failure;
+}
+
 export async function persistGitChangeDescriptionTurn(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
 ): Promise<RouteResult> {
+  const scopeFailure = gitDescriptionScopeFailure(deps, prepared, ctx.correlationId);
+  if (scopeFailure !== undefined) return scopeFailure;
   const scope = activeGitChangeScope(prepared.chat);
   if (scope === undefined)
     return { status: 409, body: errorBody("GIT_CHANGE_SCOPE_NOT_FOUND", "Scope not found.") };
@@ -3065,24 +3086,32 @@ export function validateDesktopChatSend(
   };
 }
 
+function expectedGroundingScopeFailure(
+  request: SendDesktopChatRequest,
+  chat: Chat,
+): RouteResult | undefined {
+  if (
+    request.expectedGroundingScopeIdentity === undefined ||
+    request.expectedGroundingScopeIdentity === deriveChatGroundingScopeIdentity(chat)
+  )
+    return undefined;
+  return {
+    status: 409,
+    body: errorBody(
+      "GROUNDING_SCOPE_CHANGED",
+      "The grounded source scope changed before the turn could run.",
+    ),
+  };
+}
+
 export function validateDesktopChatExecution(
   request: SendDesktopChatRequest,
   chat: Chat,
   modelId: string,
   deps: UiHandlerDeps,
 ): RouteResult | undefined {
-  if (
-    request.expectedGroundingScopeIdentity !== undefined &&
-    request.expectedGroundingScopeIdentity !== deriveChatGroundingScopeIdentity(chat)
-  ) {
-    return {
-      status: 409,
-      body: errorBody(
-        "GROUNDING_SCOPE_CHANGED",
-        "The grounded source scope changed before the turn could run.",
-      ),
-    };
-  }
+  const scopeFailure = expectedGroundingScopeFailure(request, chat);
+  if (scopeFailure !== undefined) return scopeFailure;
   if (hasGroundingScope(chat)) {
     return {
       status: 409,
@@ -3294,6 +3323,23 @@ export function admitGitChangeScopedTurn(
       "The description authority for this connected Git change is missing or has expired.",
     ),
   };
+}
+
+export function admitPreparedGitChangeTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (activeGitChangeScope(prepared.chat) === undefined) return undefined;
+  return (
+    gitDescriptionScopeFailure(deps, prepared, correlationId) ??
+    admitGitChangeScopedTurn(
+      deps,
+      prepared.chat,
+      acceptedGitChangeChatMode(deps, prepared.request),
+      correlationId,
+    )
+  );
 }
 
 export function acceptedGitChangeChatMode(
@@ -3651,12 +3697,7 @@ async function admitPreparedDesktopChatSend(
   if (activeGitChangeScope(prepared.chat) === undefined) {
     await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
   }
-  return admitGitChangeScopedTurn(
-    deps,
-    prepared.chat,
-    acceptedGitChangeChatMode(deps, prepared.request),
-    ctx.correlationId,
-  );
+  return admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
 }
 
 export async function handleSendDesktopChat(
@@ -3685,12 +3726,7 @@ export async function handleSendDesktopChat(
         if (isRouteResult(current)) return current;
         // Re-derived immediately before dispatch (not only at the earlier fast-fail check above):
         // a queued turn may wait long enough for the authority to expire in between.
-        const gitChangeDenial = admitGitChangeScopedTurn(
-          deps,
-          current.chat,
-          acceptedGitChangeChatMode(deps, current.request),
-          ctx.correlationId,
-        );
+        const gitChangeDenial = admitPreparedGitChangeTurn(deps, current, ctx.correlationId);
         if (gitChangeDenial !== undefined) return gitChangeDenial;
         return activeGitChangeScope(current.chat) === undefined
           ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId, ctx.req)
@@ -3991,6 +4027,24 @@ async function parseDesktopChatRegenerate(
   return { request, chat };
 }
 
+function regenerationScopeFailure(
+  chat: Chat,
+  modelId: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (!hasGroundingScope(chat) && activeGitChangeScope(chat) === undefined) return undefined;
+  logChatRejection(
+    "chat.regeneration.rejected",
+    correlationId,
+    modelId,
+    deps,
+    409,
+    "grounding-scope",
+  );
+  return groundedRegenerateResult();
+}
+
 function prepareDesktopChatRegenerateRequest(
   request: RegenerateDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -4002,8 +4056,9 @@ function prepareDesktopChatRegenerateRequest(
   if (chat === undefined) return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
   const closed = chatClosedResult(chat);
   if (closed !== undefined) return closed;
-  if (hasGroundingScope(chat)) return groundedRegenerateResult();
   const modelId = request.modelId ?? chat.selectedModel;
+  const scopeFailure = regenerationScopeFailure(chat, modelId, deps, correlationId);
+  if (scopeFailure !== undefined) return scopeFailure;
   const invalidModel = invalidRegenerationModelResult(modelId, deps, correlationId);
   if (invalidModel !== undefined) return invalidModel;
   const executionAdmission = captureGatewayGeneration(deps);

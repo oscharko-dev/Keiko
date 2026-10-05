@@ -52,6 +52,7 @@ import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { canonicalChatTurnGroundingScopeIdentity } from "./chat-turn-identity.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
@@ -1096,6 +1097,106 @@ describe("git-change description-authority admission (#3400)", () => {
       ],
     });
   }
+
+  it("refuses a stale source identity before persisting a Git description turn", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const original = fixture.deps.store.findChatById(fixture.chatId);
+      if (original === undefined) throw new TypeError("Missing fixture chat");
+      const expectedGroundingScopeIdentity = canonicalChatTurnGroundingScopeIdentity(original);
+      const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
+      fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
+      const result = await handleSendDesktopChat(
+        requestContext(
+          {
+            chatId: fixture.chatId,
+            projectPath: fixture.projectPath,
+            content: "refine description",
+            expectedGroundingScopeIdentity,
+            memory: { enabled: false, budgetTokens: 0, mode: "supervised-coding", context: {} },
+          },
+          "stale-git-description",
+        ),
+        {
+          ...fixture.deps,
+          ...description.deps,
+          codingRuntimeDeploymentCeiling: "autonomous-delivery",
+          mintDescriptionAuthority: vi.fn(),
+          gitChangeDescriptionAuthorityPort: {
+            current: (scope) => ({
+              scope,
+              effectiveMode: "supervised-coding",
+              expiresAt: "9999-12-31T23:59:59.999Z",
+            }),
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+      });
+      expect(fixture.deps.store.listMessages(fixture.chatId)).toEqual([]);
+      const rejection = sink.events.find((event) => event.op === "chat.send.rejected");
+      expect(rejection?.correlationId).toBe("stale-git-description");
+      expect(rejection?.extra?.reason).toBe("grounding-scope");
+    } finally {
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("refuses plain regeneration on a Git-scoped chat before any model call", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const call = vi.fn<ModelPort["call"]>().mockResolvedValue({
+      modelId: "breaker-chat",
+      content: "would bypass authority",
+      toolCalls: [],
+      structuredOutput: null,
+      finishReason: "stop",
+      usage: {
+        requestId: "unexpected-git-regeneration",
+        promptTokens: 1,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "low",
+      },
+    });
+    try {
+      attachGitChangeScope(fixture.deps, fixture.chatId);
+      const user = fixture.deps.store.createMessage({
+        chatId: fixture.chatId,
+        role: "user",
+        content: "question",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const assistant = fixture.deps.store.createMessage({
+        ...user,
+        role: "assistant",
+        content: "answer",
+        timestamp: 2,
+      });
+      const result = await handleRegenerateDesktopChat(
+        requestContext({
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          assistantMessageId: assistant.id,
+        }),
+        { ...fixture.deps, modelPortFactory: () => ({ call }) },
+      );
+      expect(result).toMatchObject({ status: 409, body: { error: { code: "NOT_APPLIABLE" } } });
+      expect(call).not.toHaveBeenCalled();
+      expect(fixture.deps.store.listMessages(fixture.chatId)).toHaveLength(2);
+    } finally {
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
 
   it("denies the turn before any network call when no description authority port is wired", async () => {
     const fixture = await createGatewayBreakerFixture();

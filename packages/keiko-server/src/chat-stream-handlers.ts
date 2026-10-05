@@ -58,8 +58,7 @@ import {
   type AdmittedTurnHandle,
   gatewayHistoryPrefix,
   admitDesktopChatTurn,
-  admitGitChangeScopedTurn,
-  acceptedGitChangeChatMode,
+  admitPreparedGitChangeTurn,
   inspectDesktopChatTurn,
   parseDesktopChatSend,
   persistGitChangeDescriptionTurn,
@@ -596,12 +595,7 @@ async function prepareDesktopChatStream(
   // Same fast-fail gate as the buffered /api/desktop/chat path (handleSendDesktopChat): a
   // git-change-connected chat must re-derive its description authority before ANY diff content
   // reaches the Model Gateway, streaming transport included.
-  const gitChangeDenial = admitGitChangeScopedTurn(
-    deps,
-    prepared.chat,
-    acceptedGitChangeChatMode(deps, prepared.request),
-    ctx.correlationId,
-  );
+  const gitChangeDenial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
   if (gitChangeDenial !== undefined) return { kind: "outcome", outcome: gitChangeDenial };
   const inspection = inspectDesktopChatTurn(deps, prepared);
   const inspected = inspectedStreamPreparation(inspection);
@@ -791,12 +785,7 @@ function resolveStreamedChatPreflight(
 ): StreamedChatPreflight | RouteResult {
   const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
   if ("status" in prepared) return prepared;
-  const gitChangeDenial = admitGitChangeScopedTurn(
-    deps,
-    prepared.chat,
-    acceptedGitChangeChatMode(deps, prepared.request),
-    ctx.correlationId,
-  );
+  const gitChangeDenial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
   if (gitChangeDenial !== undefined) return gitChangeDenial;
   const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
   if ("status" in preflight) return preflight;
@@ -901,12 +890,7 @@ async function runGitChangeDescriptionStream(
     async () => {
       const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
       if ("status" in prepared) return prepared;
-      const denial = admitGitChangeScopedTurn(
-        deps,
-        prepared.chat,
-        acceptedGitChangeChatMode(deps, prepared.request),
-        ctx.correlationId,
-      );
+      const denial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);
       return denial ?? persistGitChangeDescriptionTurn(ctx, deps, prepared, controller.signal);
     },
   );
