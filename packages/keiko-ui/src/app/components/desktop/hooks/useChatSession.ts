@@ -2307,8 +2307,10 @@ function handleStreamUngroundedTransportFailure(
       correlationId: caught.correlationId,
     });
   }
-  setError(errorMessage(caught));
-  resolve({ status: "failed" });
+  const failure = canonicalTurnInProgressFailure(caught);
+  if (caught instanceof ApiError) retainStreamFailure(caught);
+  if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
+  resolve(failure);
 }
 
 function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
@@ -3743,9 +3745,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         sendDesktopChatStream(requestBody, signal, handlers).catch((error_: unknown): void => {
           removeTempMessage(tempAssistantId);
           if (error_ instanceof StreamingUnavailableError) {
-            // Pre-stream failure (e.g. STREAMING_UNSUPPORTED, or a JSON error before any SSE
-            // header). Reject so sendUngrounded falls back to the buffered path instead of
-            // surfacing a hard failure to the user.
+            // Only an explicit unsupported-stream capability permits buffered replay.
+            // Preserve other server refusals for canonical classification below.
             reject(error_);
           } else if (error_ instanceof DOMException && error_.name === "AbortError") {
             resolve({ status: "cancelled" });
@@ -4120,7 +4121,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const recoverUnsentTypedDraft = useCallback(
     async (input: TypedDraftRecovery): Promise<void> => {
-      if (!isScopeChangeRefusal(input.terminal)) return;
+      if (input.draftRevision === undefined || !isScopeChangeRefusal(input.terminal)) return;
       const correlationId = input.terminal.correlationId ?? newClientCorrelationId();
       const report = (
         composerActivity:
@@ -4133,7 +4134,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           correlationId,
           composerActivity,
         });
-      if (input.draftRevision === undefined || !ownsRefusedDraft(input)) {
+      if (!ownsRefusedDraft(input)) {
         report("scope-refusal-skipped-owner");
         return;
       }

@@ -3190,6 +3190,7 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     [409, "CHAT_TURN_IDEMPOTENCY_CONFLICT"],
     [409, "CHAT_CLOSED"],
     [422, "BAD_REQUEST"],
+    [429, "TOO_MANY_STREAMS"],
     [503, "GATEWAY_UNAVAILABLE"],
   ] as const)("does not replay pre-stream %s %s as a capability fallback", async (status, code) => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -3212,6 +3213,61 @@ describe("sendDesktopChatStream — correlation id threading", () => {
       code,
       status,
       correlationId: "stream-refusal-correlation",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([200, 404, 405, 501, 502])(
+    "does not replay an ambiguous non-envelope HTTP %s stream response",
+    async (status) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response("<html>Gateway response</html>", {
+          status,
+          headers: {
+            "Content-Type": "text/html",
+            [CORRELATION_HEADER]: "ambiguous-stream-request",
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        sendDesktopChatStream(
+          { chatId: "c6", projectPath: "/repo", content: "hello" },
+          new AbortController().signal,
+          makeStreamHandlers(),
+        ),
+      ).rejects.toMatchObject({
+        name: "ApiError",
+        code: "INTERNAL",
+        status,
+        correlationId: "ambiguous-stream-request",
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not treat a missing SSE body as proof streaming is unsupported", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          [CORRELATION_HEADER]: "missing-stream-body",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      sendDesktopChatStream(
+        { chatId: "c6", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        makeStreamHandlers(),
+      ),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "INTERNAL",
+      status: 200,
+      correlationId: "missing-stream-body",
     });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
@@ -3244,7 +3300,7 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     }
   });
 
-  it("falls back to the client-generated correlation id when the pre-stream response carries none", async () => {
+  it("keeps the exact request correlation id on a non-envelope pre-stream ApiError", async () => {
     // #3241 review — a well-formed-ID match also passes if the thrown error carries a SECOND,
     // unrelated generated id instead of the id the request actually sent. Read the id off the
     // mocked fetch call and assert the thrown error's id is exactly that one.

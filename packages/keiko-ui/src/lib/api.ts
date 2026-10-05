@@ -1666,7 +1666,7 @@ async function consumeSseStream(
 // RB-6 / ADR-0173 D5 — rebuilt on the same buildBffHeaders/newClientCorrelationId path
 // bffFetchJson (./http) uses, instead of a hand-built header object, so a streamed chat request
 // carries X-Keiko-Correlation-Id exactly like every other BFF call and a pre-stream failure is
-// traceable by the same id (attached to the thrown StreamingUnavailableError below).
+// traceable by the same id on the thrown ApiError or explicit capability fallback.
 export async function sendDesktopChatStream(
   input: SendDesktopChatInput,
   signal: AbortSignal,
@@ -1697,10 +1697,7 @@ export async function sendDesktopChatStream(
   }
 
   if (res.body === null) {
-    const streamingError = new StreamingUnavailableError(
-      "STREAMING_UNSUPPORTED",
-      "Response body was null.",
-    );
+    const streamingError = new ApiError("INTERNAL", "Response body was null.", res.status);
     streamingError.correlationId = responseCorrelationId;
     throw streamingError;
   }
