@@ -18,6 +18,7 @@
 // bounded; its Activity Log pin still lapses at the pin's own expiry.
 
 import {
+  type BigIntStats,
   closeSync,
   fstatSync,
   fsyncSync,
@@ -30,6 +31,7 @@ import {
 import { join } from "node:path";
 import {
   SafeArtifactFileError,
+  assertSafeArtifactAncestors,
   openSafeArtifactFile,
   removeSafeArtifactFile,
 } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -233,12 +235,30 @@ function removeFailedPublication(
   }
 }
 
-function artifactLeafIsAbsent(path: string, directory: string): boolean {
-  const root = lstatSync(directory);
+function artifactLeafIsAbsent(
+  path: string,
+  directory: string,
+  originalDirectory: BigIntStats,
+): boolean {
+  assertSafeArtifactAncestors(path, ARTIFACT_CLASS);
+  const root = lstatSync(directory, { bigint: true });
   return (
     root.isDirectory() &&
     !root.isSymbolicLink() &&
+    root.dev === originalDirectory.dev &&
+    root.ino === originalDirectory.ino &&
+    root.uid === originalDirectory.uid &&
+    root.mode === originalDirectory.mode &&
     lstatSync(path, { throwIfNoEntry: false }) === undefined
+  );
+}
+
+function peerRemovalFailure(error: unknown): boolean {
+  return (
+    error instanceof SafeArtifactFileError &&
+    (error.kind === "open-failed" ||
+      error.kind === "unsafe-target" ||
+      error.kind === "target-mutated")
   );
 }
 
@@ -247,6 +267,8 @@ function removeIncidentArtifact(
   directory: string,
   shouldRemove?: (descriptor: number) => boolean,
 ): void {
+  assertSafeArtifactAncestors(path, ARTIFACT_CLASS);
+  const originalDirectory = lstatSync(directory, { bigint: true });
   try {
     removeSafeArtifactFile(
       path,
@@ -254,13 +276,9 @@ function removeIncidentArtifact(
       shouldRemove,
     );
   } catch (error) {
-    // Only a guarded leaf open followed by confirmed absence is an idempotent peer cleanup.
-    // Unsafe ancestors, permissions, mutation conflicts and storage errors still fail closed.
-    if (
-      error instanceof SafeArtifactFileError &&
-      error.kind === "open-failed" &&
-      artifactLeafIsAbsent(path, directory)
-    )
+    // A peer can unlink before open or while the descriptor is held. Only confirmed leaf
+    // absence beneath the same safe directory completes that idempotent cleanup.
+    if (peerRemovalFailure(error) && artifactLeafIsAbsent(path, directory, originalDirectory))
       return;
     throw error;
   }

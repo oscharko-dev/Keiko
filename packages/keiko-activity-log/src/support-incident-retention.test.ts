@@ -5,12 +5,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import * as childProcesses from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +56,7 @@ import {
   ACTIVITY_LOG_ERROR_KINDS,
   supportIncidentFileName,
   supportIncidentSlotClaimFileName,
+  supportIncidentFingerprintClaimFileName,
   ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -77,9 +80,19 @@ vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof filesystem>();
-  return { ...actual, fsyncSync: vi.fn(actual.fsyncSync) };
+  return {
+    ...actual,
+    fsyncSync: vi.fn(actual.fsyncSync),
+    openSync: vi.fn(actual.openSync),
+  };
 });
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof childProcesses>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
+
+const actualChildProcesses = await vi.importActual<typeof childProcesses>("node:child_process");
 const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
   "@oscharko-dev/keiko-security/fs-hardening",
 );
@@ -87,6 +100,8 @@ const actualFilesystem = await vi.importActual<typeof filesystem>("node:fs");
 let stateDir: string;
 beforeEach(() => {
   vi.mocked(filesystem.fsyncSync).mockImplementation(actualFilesystem.fsyncSync);
+  vi.mocked(filesystem.openSync).mockImplementation(actualFilesystem.openSync);
+  vi.mocked(childProcesses.spawnSync).mockImplementation(actualChildProcesses.spawnSync);
   vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementation(
     actualArtifactFiles.removeSafeArtifactFile,
   );
@@ -789,6 +804,82 @@ describe("rolling diagnostic candidate retention", () => {
     },
   );
 
+  it.each(["record", "slot", "fingerprint"] as const)(
+    "finishes expiry when a peer unlinks the %s leaf after the guarded descriptor opens",
+    (kind) => {
+      const created = recordRegisteredFailureIncident(stateDir, {
+        op: "coding-runtime.readiness.failed",
+        errorKind: "unavailable",
+        correlationId: "opened-peer-expiry",
+      });
+      if (created?.status !== "created") throw new Error("Expected candidate");
+      const names = {
+        record: supportIncidentFileName(created.incidentId),
+        slot: supportIncidentSlotClaimFileName(created.record.slotIndex),
+        fingerprint: supportIncidentFingerprintClaimFileName(
+          created.record.fingerprint.defectFingerprint,
+        ),
+      };
+      const target = join(incidentStore.supportIncidentDirectory(stateDir), names[kind]);
+      const expectedOpens = kind === "record" ? 2 : 1;
+      let targetOpens = 0;
+      vi.mocked(filesystem.openSync).mockImplementation((path, flags, mode) => {
+        const descriptor = actualFilesystem.openSync(path, flags, mode);
+        if (path === target && ++targetOpens === expectedOpens) rmSync(target);
+        return descriptor;
+      });
+      expect(listSupportIncidents(stateDir, { nowMs: created.record.expiresAtMs + 1 })).toEqual([]);
+      expect(targetOpens).toBe(expectedOpens);
+      expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+      const ended = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.expired",
+      );
+      expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({
+          correlationId: "opened-peer-expiry",
+          removalStatus: "removed",
+          pinRelease: "released",
+          completeness: "complete",
+        }),
+      );
+    },
+  );
+
+  it("finishes expiry when a peer unlinks the record before the guarded helper mutation", () => {
+    const created = recordUserReportedIncident(stateDir, { correlationId: "helper-peer-expiry" });
+    if (created.status !== "created") throw new Error("Expected candidate");
+    const target = join(
+      incidentStore.supportIncidentDirectory(stateDir),
+      supportIncidentFileName(created.incidentId),
+    );
+    let peerRemoved = false;
+    vi.mocked(childProcesses.spawnSync).mockImplementation((command, args, options) => {
+      if (args?.[0]?.endsWith("safe-artifact-directory-mutation.js") && !peerRemoved) {
+        rmSync(target);
+        peerRemoved = true;
+      }
+      return actualChildProcesses.spawnSync(command, args, options);
+    });
+    expect(listSupportIncidents(stateDir, { nowMs: created.record.expiresAtMs + 1 })).toEqual([]);
+    expect(peerRemoved).toBe(true);
+    expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+    const ended = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.expired",
+    );
+    expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        correlationId: "helper-peer-expiry",
+        removalStatus: "removed",
+        pinRelease: "released",
+        completeness: "complete",
+      }),
+    );
+  });
+
   it("releases its owned pin and records partial expiry after a genuine claim-release failure", () => {
     const created = recordUserReportedIncident(stateDir, {
       correlationId: "claim-release-failure",
@@ -826,6 +917,51 @@ describe("rolling diagnostic candidate retention", () => {
         incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
       }).toThrow(failure);
       expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
+      expect(listSupportIncidentClaims(stateDir)).not.toEqual([]);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
+    },
+  );
+
+  it.each(["replacement", "symlink"] as const)(
+    "refuses peer absence beneath a %s trusted directory",
+    (kind) => {
+      const created = recordUserReportedIncident(stateDir);
+      if (created.status !== "created") throw new Error("Expected candidate");
+      const directory = incidentStore.supportIncidentDirectory(stateDir);
+      const originalDirectory = join(stateDir, "original-incident-directory");
+      vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce((path, ...args) => {
+        renameSync(directory, originalDirectory);
+        if (kind === "replacement") mkdirSync(directory, { mode: 0o700 });
+        else symlinkSync(originalDirectory, directory);
+        actualArtifactFiles.removeSafeArtifactFile(path, ...args);
+      });
+      expect(() => {
+        incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
+      }).toThrow();
+      expect(existsSync(join(originalDirectory, supportIncidentFileName(created.incidentId)))).toBe(
+        true,
+      );
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
+    },
+  );
+
+  it.each(["permission-unsafe", "read-failed"] as const)(
+    "preserves a genuine %s error even when its record leaf subsequently disappears",
+    (kind) => {
+      const created = recordUserReportedIncident(stateDir);
+      if (created.status !== "created") throw new Error("Expected candidate");
+      const target = join(
+        incidentStore.supportIncidentDirectory(stateDir),
+        supportIncidentFileName(created.incidentId),
+      );
+      const failure = new artifactFiles.SafeArtifactFileError("manifest", kind);
+      vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(() => {
+        rmSync(target);
+        throw failure;
+      });
+      expect(() => {
+        incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
+      }).toThrow(failure);
       expect(listSupportIncidentClaims(stateDir)).not.toEqual([]);
       expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
     },
