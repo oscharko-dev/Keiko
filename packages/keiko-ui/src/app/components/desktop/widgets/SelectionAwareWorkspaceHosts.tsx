@@ -49,6 +49,7 @@ import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
 import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
+import { normalizeEditorFile } from "./cards/editorPaneGeometry";
 import { gitObjectId } from "./gitObjectId";
 import { isManagedTaskWorkspaceRoot, managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
@@ -1633,7 +1634,11 @@ function updateEditorCfg(
   patch: EditorWidgetWorkspacePatch,
 ): void {
   const rootChanged = patch.root !== undefined && patch.root !== configuredRoot;
-  const fileChanged = patch.file !== undefined && patch.file !== configuredFile;
+  const fileChanged =
+    patch.file !== undefined &&
+    configuredFile !== undefined &&
+    normalizeEditorFile(patch.root ?? configuredRoot ?? "", patch.file) !==
+      normalizeEditorFile(configuredRoot ?? "", configuredFile);
   ctx.updateCfg({
     root: patch.root,
     ...(patch.rootBinding === undefined ? {} : { rootBinding: patch.rootBinding }),

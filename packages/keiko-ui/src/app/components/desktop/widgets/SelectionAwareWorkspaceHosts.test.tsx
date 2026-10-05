@@ -29,6 +29,7 @@ import { filesChatBindScope } from "../hooks/workspaceActions";
 import { parsePersistedWindows, sanitizePersistedWindows } from "../hooks/workspace-persistence";
 import type { AppWindow } from "../windows/types";
 import { chatReferenceFingerprint } from "./chatReferenceFingerprint";
+import { createInitialLayout } from "./cards/editorPaneGeometry";
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
@@ -842,23 +843,43 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     expect(patch).toHaveProperty("revealLineEnd", undefined);
   });
 
-  it("keeps an in-flight reveal across a layout commit that does not change the root", async () => {
-    const ctx = context();
-    manifestRef.current = singleRootManifest("/repo-a");
-    render(
-      editorHost(
-        { root: "/repo-a", revealLineStart: 7, revealLineEnd: 10, revealRequestId: "reveal-1" },
-        ctx,
-      ),
-    );
-    await screen.findByTestId("editor-/repo-a");
-
-    editorHandlers.at(-1)?.({ root: "/repo-a", layoutJson: '{"version":2}' });
-
-    const patch = lastCfgPatch(ctx);
-    // The addressee did not change, so the request is still this editor's to act on.
-    expect(Object.keys(patch)).not.toContain("revealRequestId");
-  });
+  it.each([undefined, "src/a.ts", "./src/a.ts"])(
+    "keeps an in-flight reveal through the production same-file layout patch (%s)",
+    async (file) => {
+      const { buildEditorWorkspacePatch } =
+        await vi.importActual<typeof import("./cards/EditorWidget")>("./cards/EditorWidget");
+      const actualPatch = buildEditorWorkspacePatch(
+        "/repo-a",
+        createInitialLayout({
+          root: "/repo-a",
+          file: "src/a.ts",
+          openFiles: ["src/a.ts"],
+          layoutJson: undefined,
+        }),
+      );
+      expect(actualPatch).toHaveProperty("file", "src/a.ts");
+      expect(actualPatch.openFiles).toEqual(["src/a.ts"]);
+      const ctx = context();
+      manifestRef.current = singleRootManifest("/repo-a");
+      render(
+        editorHost(
+          {
+            root: "/repo-a",
+            file,
+            revealLineStart: 7,
+            revealLineEnd: 10,
+            revealRequestId: "reveal-1",
+          },
+          ctx,
+        ),
+      );
+      await screen.findByTestId("editor-/repo-a");
+      editorHandlers.at(-1)?.(actualPatch);
+      expect(lastCfgPatch(ctx)).not.toHaveProperty("revealRequestId");
+      expect(lastCfgPatch(ctx)).not.toHaveProperty("revealLineStart");
+      expect(lastCfgPatch(ctx)).not.toHaveProperty("revealLineEnd");
+    },
+  );
 
   it("withholds a reveal whose target root is not a member of the workspace", async () => {
     // `selectedRoot()` falls back to the focused root when cfg names an unknown root. The fallback

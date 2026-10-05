@@ -592,10 +592,26 @@ function useAddressedRevealFile(
   }
   const key = JSON.stringify([workspaceRoot, revealRequestId, revealLineStart, revealLineEnd]);
   const cached = decisionRef.current;
-  if (cached !== null && cached.key === key) return cached.file;
+  if (cached !== null && cached.key === key) {
+    if (cached.file === undefined && direct.length > 0) decisionRef.current = { key, file: direct };
+    return decisionRef.current?.file;
+  }
   const resolved = direct || (layoutJustEstablished ? activeFile || undefined : undefined);
   decisionRef.current = { key, file: resolved };
   return resolved;
+}
+
+export function buildEditorWorkspacePatch(
+  nextRoot: string,
+  nextLayout: EditorLayoutStateV2,
+): EditorWidgetWorkspacePatch {
+  const nextActivePane = activeEditorPane(nextLayout);
+  return {
+    root: nextRoot,
+    file: nextActivePane.activeFile.length > 0 ? nextActivePane.activeFile : undefined,
+    openFiles: openFilesPatchValue(editorLayoutOpenFiles(nextLayout)),
+    layoutJson: serializeEditorLayoutStateV2(nextLayout),
+  };
 }
 
 export function EditorWidget({
@@ -726,19 +742,6 @@ export function EditorWidget({
     setTabInsertTargetState(target);
   }, []);
 
-  const buildPatch = useCallback(
-    (nextRoot: string, nextLayout: EditorLayoutStateV2): EditorWidgetWorkspacePatch => {
-      const nextActivePane = activeEditorPane(nextLayout);
-      return {
-        root: nextRoot,
-        file: nextActivePane.activeFile.length > 0 ? nextActivePane.activeFile : undefined,
-        openFiles: openFilesPatchValue(editorLayoutOpenFiles(nextLayout)),
-        layoutJson: serializeEditorLayoutStateV2(nextLayout),
-      };
-    },
-    [],
-  );
-
   const commitLayout = useCallback(
     (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot, selectedRoot = false): void => {
       const normalized = normalizeEditorLayoutStructure(nextRoot, nextLayout);
@@ -749,11 +752,11 @@ export function EditorWidget({
       setDirtyByPane((current) => reconcileEditorDirtyByPane(current, normalized));
       if (nextRoot.length > 0)
         onWorkspaceChange?.({
-          ...buildPatch(nextRoot, normalized),
+          ...buildEditorWorkspacePatch(nextRoot, normalized),
           ...(selectedRoot ? { rootBinding: "coding-repository" as const } : {}),
         });
     },
-    [buildPatch, onWorkspaceChange, workspaceRoot],
+    [onWorkspaceChange, workspaceRoot],
   );
 
   useEffect(() => {
@@ -792,9 +795,9 @@ export function EditorWidget({
     const openFilesChanged = !sameStringList(configuredOpenFiles, nextAllOpenFiles);
     const layoutChanged = layoutJson !== serializeEditorLayoutStateV2(nextLayout);
     if (normalizedFileChanged || openFilesChanged || layoutChanged) {
-      onWorkspaceChange(buildPatch(nextRoot, nextLayout));
+      onWorkspaceChange(buildEditorWorkspacePatch(nextRoot, nextLayout));
     }
-  }, [buildPatch, configuredOpenFiles, file, layoutJson, onWorkspaceChange, root]);
+  }, [configuredOpenFiles, file, layoutJson, onWorkspaceChange, root]);
 
   const dirtyFileList = useMemo(() => allDirtyFiles(dirtyByPane), [dirtyByPane]);
   const currentPane = activeEditorPane(layout);

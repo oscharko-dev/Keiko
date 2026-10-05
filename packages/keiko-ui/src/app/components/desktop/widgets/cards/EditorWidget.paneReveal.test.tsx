@@ -152,6 +152,22 @@ describe("EditorWidget line-reveal addressing across panes (#2747)", (): void =>
     expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
   });
 
+  it("addresses a pending reveal when its explicit file arrives after the settled layout", async () => {
+    const layoutJson = splitLayoutJsonWithSiblingActive();
+    const view = render(<EditorWidget root={ROOT} layoutJson={layoutJson} />);
+    await screen.findByText(SIBLING);
+    const request = { revealLineStart: 7, revealLineEnd: 10, revealRequestId: "late-file" };
+    view.rerender(<EditorWidget root={ROOT} layoutJson={layoutJson} {...request} />);
+    expect(revealsByFile().get(ADDRESSED)).not.toContain("7:10:late-file");
+    panes.length = 0;
+    view.rerender(
+      <EditorWidget root={ROOT} file={ADDRESSED} layoutJson={layoutJson} {...request} />,
+    );
+    await screen.findByText(ADDRESSED);
+    expect(revealsByFile().get(ADDRESSED)).toContain("7:10:late-file");
+    expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
+  });
+
   it("still delivers when only the layout names the file (#2748 review)", async (): Promise<void> => {
     // A multi-root root that already holds a session is handed `layoutJson` and no `file` prop,
     // while the reveal still arrives through the shared props. Reading the addressee from the prop
