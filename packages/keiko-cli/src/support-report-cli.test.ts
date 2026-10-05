@@ -136,7 +136,7 @@ function seed(): void {
     fixtureLine(process, now, { op: "client.diagnostic", correlationId: CORRELATION }),
   ]);
 }
-function seedGatewayFailure(ageMs = 0): void {
+function seedGatewayFailure(ageMs = 0, level: "warn" | "info" = "warn"): void {
   rmSync(join(stateDir, "logs"), { recursive: true });
   const process = fixtureProcess(4242, "aabbccdd");
   const now = Date.now() - ageMs;
@@ -156,6 +156,7 @@ function seedGatewayFailure(ageMs = 0): void {
     }),
     fixtureLine(process, now + 1, {
       op: "gateway.chat.failed",
+      level, // Production gateway.logCallFailed uses warn; info is a negative attribution control.
       correlationId: CORRELATION,
       errorKind: "timeout",
       fields: {
@@ -465,6 +466,27 @@ describe("support report CLI and private publication", () => {
     expect(report.incident.trigger).toBe("registered-failure");
     expect(report.incident.op).toBe("gateway.chat.failed");
     expect(report.evidence.recordCount).toBeGreaterThan(0);
+  });
+
+  it("does not attribute an info-only gateway record as a failure when candidate storage is unavailable", async () => {
+    seedGatewayFailure(0, "info");
+    writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+    const destination = join(root, "unavailable-store-info-control");
+    expect((await runExport(destination)).code).toBe(0);
+    const file = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (file === undefined) throw new TypeError("Missing exported info-control report");
+    const text = readSupportReportFile(join(destination, file));
+    expect(parseSupportReport(text).incident).toMatchObject({
+      trigger: "user-report",
+      op: "unattributed",
+      errorKind: "unknown",
+      frameCount: 0,
+    });
+    expect(
+      analyzeSupportReport(text).analysis.timelines.flatMap((timeline) => timeline.lines),
+    ).toContainEqual(
+      expect.objectContaining({ op: "gateway.chat.failed", level: "info", errorKind: "timeout" }),
+    );
   });
 
   it.each(["--correlation-id", "--incident", "--defect-fingerprint"] as const)(
