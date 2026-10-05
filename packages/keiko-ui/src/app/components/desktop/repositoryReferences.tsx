@@ -161,13 +161,13 @@ const KNOWN_REPOSITORY_EXTENSIONS = new Set([
 function boundaryBefore(value: string, index: number): boolean {
   if (index <= 0) return true;
   const previous = value.slice(Math.max(0, index - 2), index);
-  return !/[\p{L}\p{N}\p{M}_./:@-]$/u.test(previous);
+  return !/[\p{L}\p{N}\p{M}\p{Sc}_./:@+^~\x60-]$/u.test(previous);
 }
 
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
   const next = value.slice(index, index + 2);
-  return !/^[\p{L}\p{N}\p{M}_/:+\u2010-\u2014\u2212-]/u.test(next);
+  return !/^[\p{L}\p{N}\p{M}\p{Sc}_/:+$^~\x60\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -335,14 +335,6 @@ function containsUnsafeBracketPath(contents: string): boolean {
   );
 }
 
-function unambiguousBracketReference(
-  reference: RepositoryReference | null,
-  inlineCount: number,
-): reference is RepositoryReference {
-  if (reference === null || inlineCount > 1) return false;
-  return !/\s/u.test(reference.path.split("/")[0] ?? "");
-}
-
 function bracketReferenceParts(contents: string): readonly RepositoryReferenceTextPart[] {
   if (containsUnsafeBracketPath(contents)) return [];
   const members = contents.split(",");
@@ -352,12 +344,12 @@ function bracketReferenceParts(contents: string): readonly RepositoryReferenceTe
   }
   // Only separators may contain line breaks; never invent a path by normalizing its controls.
   if (/\p{Cc}/u.test(contents)) return [];
+  const reference = parseExactRepositoryReference(contents.trim(), true);
+  // An explicit, valid whole path owns its spaces. Prose-shaped filenames are still filenames;
+  // selecting a guessed suffix would silently change the navigation target.
+  if (reference !== null) return referenceParts([reference]);
   const inline = repositoryReferenceTextParts(contents);
   const inlineCount = inline.filter((part) => part.kind === "reference").length;
-  const reference = parseExactRepositoryReference(contents.trim(), true);
-  if (unambiguousBracketReference(reference, inlineCount)) {
-    return referenceParts([reference]);
-  }
   if (inlineCount === 0) return [];
   // Preserve prose around individually validated paths instead of treating it as a filename.
   return [{ kind: "text", text: "[" }, ...inline, { kind: "text", text: "]" }];
@@ -657,7 +649,12 @@ const OPENED_CONFIRMATION_MS = 1800;
 // timer was a latent race: a test file finishing inside the delay let it fire after jsdom was torn
 // down, React threw "window is not defined", and the required keiko-ui coverage job went red on a
 // pull request that had not touched this file (#3573).
-function useClearedTimeout(callback: () => void): (delayMs: number) => void {
+interface ClearedTimeout {
+  readonly schedule: (delayMs: number) => void;
+  readonly clear: () => void;
+}
+
+function useClearedTimeout(callback: () => void): ClearedTimeout {
   const timerRef = useRef<number | undefined>(undefined);
   const clear = useCallback((): void => {
     if (timerRef.current === undefined) return;
@@ -665,7 +662,7 @@ function useClearedTimeout(callback: () => void): (delayMs: number) => void {
     timerRef.current = undefined;
   }, []);
   useEffect(() => clear, [clear]);
-  return useCallback(
+  const schedule = useCallback(
     (delayMs: number): void => {
       clear();
       timerRef.current = window.setTimeout(() => {
@@ -675,6 +672,7 @@ function useClearedTimeout(callback: () => void): (delayMs: number) => void {
     },
     [callback, clear],
   );
+  return { schedule, clear };
 }
 
 function referenceAccessiblePath(
@@ -706,6 +704,7 @@ export function RepositoryReferenceInline({
   const t = useTranslate();
   const pickerId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const pickerRef = useRef<HTMLSpanElement>(null);
   const activationCorrelation = useRef<string | undefined>(undefined);
   const recordActivation = useCallback(
     (outcome: ClientDiagnosticCitationActivation["outcome"]): void => {
@@ -726,7 +725,7 @@ export function RepositoryReferenceInline({
     setStatus("idle");
     setMessage("");
   }, []);
-  const scheduleIdleReset = useClearedTimeout(resetToIdle);
+  const { schedule: scheduleIdleReset, clear: clearIdleReset } = useClearedTimeout(resetToIdle);
   const rootOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: RepositoryReferenceRoot[] = [];
@@ -758,6 +757,8 @@ export function RepositoryReferenceInline({
   const openForRoot = useCallback(
     (root: RankedRepositoryRoot): void => {
       if (openReference === undefined) return;
+      clearIdleReset();
+      if (pickerRef.current?.contains(document.activeElement)) triggerRef.current?.focus();
       const path = root.openPath;
       setStatus("opening");
       setMessage(t("chat.repository.opening", { path: repositoryReferenceDisplayPath(path) }));
@@ -778,10 +779,11 @@ export function RepositoryReferenceInline({
       setStatus("failed");
       setMessage(result.message);
     },
-    [openReference, recordActivation, reference, scheduleIdleReset, t],
+    [clearIdleReset, openReference, recordActivation, reference, scheduleIdleReset, t],
   );
 
   const activate = useCallback((): void => {
+    clearIdleReset();
     if (status !== "choosing") activationCorrelation.current = undefined;
     if (openReference === undefined || rootOptions.length === 0) {
       setStatus("failed");
@@ -805,6 +807,7 @@ export function RepositoryReferenceInline({
     setMessage(t("chat.repository.chooseSource"));
   }, [
     bestRootOptions,
+    clearIdleReset,
     openForRoot,
     openReference,
     rankedRootOptions.length,
@@ -815,31 +818,28 @@ export function RepositoryReferenceInline({
     t,
   ]);
 
+  const dismissOnEscape = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>): void => {
+      if (event.key !== "Escape" || status === "idle") return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearIdleReset();
+      if (status === "choosing") recordActivation("picker-dismissed");
+      resetToIdle();
+      triggerRef.current?.focus();
+    },
+    [clearIdleReset, recordActivation, resetToIdle, status],
+  );
+
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
-      if (event.key === "Escape") {
-        if (status === "choosing") recordActivation("picker-dismissed");
-        setStatus("idle");
-        setMessage("");
-        return;
-      }
+      if (event.key === "Escape") return dismissOnEscape(event);
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         activate();
       }
     },
-    [activate, recordActivation, status],
-  );
-
-  const onPickerKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>): void => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      recordActivation("picker-dismissed");
-      resetToIdle();
-      triggerRef.current?.focus();
-    },
-    [recordActivation, resetToIdle],
+    [activate, dismissOnEscape],
   );
 
   if (openReference === undefined) {
@@ -876,7 +876,7 @@ export function RepositoryReferenceInline({
         <span>{referenceVisibleLabel(reference, displayPath)}</span>
       </button>
       {status === "choosing" ? (
-        <span id={pickerId} className="repo-ref-picker">
+        <span ref={pickerRef} id={pickerId} className="repo-ref-picker">
           {bestRootOptions.map((root) => (
             <button
               key={root.root}
@@ -886,7 +886,7 @@ export function RepositoryReferenceInline({
                 label: sourceChoiceLabel(root, bestRootOptions),
               })}
               onClick={() => openForRoot(root)}
-              onKeyDown={onPickerKeyDown}
+              onKeyDown={dismissOnEscape}
             >
               <span>{root.label}</span>
               {repositoryRootSuffix(root.root) === root.label ? null : (

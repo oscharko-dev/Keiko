@@ -15,10 +15,10 @@ describe("bracketed reference prose and lists", () => {
     });
   });
   it.each([
-    ["see [defined in src/app.ts:12]", ["src/app.ts"], "defined in "],
-    ["[see src/a.ts]", ["src/a.ts"], "see "],
+    ["see [defined in src/app.ts:12]", ["defined in src/app.ts"], "see "],
+    ["[see src/a.ts]", ["see src/a.ts"], ""],
     ["[a.ts, b.ts]", ["a.ts", "b.ts"], ""],
-    ["[src/a.ts and src/b.ts]", ["src/a.ts", "src/b.ts"], " and "],
+    ["[src/a.ts and src/b.ts]", ["src/a.ts and src/b.ts"], ""],
     ["[Source: src/a.ts:10-20]", ["src/a.ts"], "Source: "],
     ["[src/a.ts:1-4, src/b.ts]", ["src/a.ts", "src/b.ts"], ""],
     ["[[src/a.ts:1-4]]", ["src/a.ts"], ""],
