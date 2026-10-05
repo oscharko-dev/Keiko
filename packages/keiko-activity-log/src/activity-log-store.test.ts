@@ -26,6 +26,7 @@ import {
   writeActivityLogPolicyRecord,
   type ActivityLogFileEntry,
   type ActivityLogPolicyValues,
+  type ActivityLogPinRecord,
   type ActivityLogWriterIdentity,
 } from "./activity-log-store.js";
 
@@ -439,4 +440,71 @@ describe("applyActivityLogRetention active reservations (#3557)", () => {
       admitsAnotherSegment([active("0a0b0c0d", 1, segmentBytes - 512), active("0e0e0e0e", 1, 0)]),
     ).toBe(false);
   });
+});
+
+describe("retention of quota-unprotected pin evidence", () => {
+  const atMs = Date.UTC(2026, 8, 18);
+  const config = resolveActivityLogStorageConfig({ KEIKO_LOG_PIN_QUOTA_BYTES: "100" });
+
+  function sealed(index: number, sizeBytes: number, startMs = atMs): ActivityLogFileEntry {
+    const name = activityLogSegmentFileName(
+      { startMs, pid: 4242, instanceId: "0a0b0c0d", index },
+      "sealed",
+    );
+    const file = parseActivityLogFileName(name);
+    if (file === undefined) throw new TypeError("Expected a sealed segment name");
+    return { file, path: name, sizeBytes, mtimeMs: startMs };
+  }
+
+  function pin(pinId: string): ActivityLogPinRecord {
+    return {
+      schemaVersion: 1,
+      pinId,
+      reason: "incident",
+      createdAtMs: atMs,
+      expiresAtMs: atMs + 60 * 86_400_000,
+      scope: { kind: "window", fromMs: atMs - 1, toMs: atMs + 1 },
+    };
+  }
+
+  it.each([true, false])(
+    "counts only successfully removed pinned evidence: removal=%s",
+    (removed) => {
+      const protectedEntry = sealed(1, 100);
+      const lostEntry = sealed(2, 200);
+      const failedEntry = sealed(3, 300);
+      const ordinaryEntry = sealed(4, 400, atMs + 2000);
+      const attempted: string[] = [];
+      const outcome = applyActivityLogRetention(
+        {
+          files: [protectedEntry, lostEntry, failedEntry, ordinaryEntry],
+          pins: [pin("0123456789abcdef01234567"), pin("abcdef012345678901234567")],
+          pinRecordBytes: 0,
+          config,
+          nowMs: atMs + 30 * 86_400_000,
+          reserveBytes: 0,
+          skipNames: new Set(),
+        },
+        (entry) => {
+          attempted.push(entry.file.name);
+          return entry === ordinaryEntry || (entry === lostEntry && removed);
+        },
+      );
+      expect(attempted).toEqual([
+        lostEntry.file.name,
+        failedEntry.file.name,
+        ordinaryEntry.file.name,
+      ]);
+      expect(outcome.protection.protectedNames).toEqual(new Set([protectedEntry.file.name]));
+      expect(outcome).toMatchObject({
+        prunedSegmentCount: removed ? 2 : 1,
+        prunedBytes: removed ? 600 : 400,
+        prunedUnprotectedPinnedSegmentCount: removed ? 1 : 0,
+        prunedUnprotectedPinnedBytes: removed ? 200 : 0,
+        failedNames: removed
+          ? [failedEntry.file.name]
+          : [lostEntry.file.name, failedEntry.file.name],
+      });
+    },
+  );
 });

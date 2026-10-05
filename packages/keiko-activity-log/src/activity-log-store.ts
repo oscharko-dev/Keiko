@@ -811,6 +811,8 @@ export interface ActivityLogRetentionOutcome {
   readonly prunedSegmentCount: number;
   readonly prunedLegacyFileCount: number;
   readonly prunedBytes: number;
+  readonly prunedUnprotectedPinnedSegmentCount: number;
+  readonly prunedUnprotectedPinnedBytes: number;
   readonly prunedByAgeCount: number;
   readonly prunedByBudgetCount: number;
   readonly failedNames: readonly string[];
@@ -963,11 +965,16 @@ function retentionOutcome(
   usage: number,
 ): ActivityLogRetentionOutcome {
   const retained = input.files.filter((entry) => !tally.prunedNames.has(entry.file.name));
+  const prunedPinned = protection.unprotected.filter((entry) =>
+    tally.prunedNames.has(entry.file.name),
+  );
   return {
     protection,
     prunedSegmentCount: tally.prunedSegmentCount,
     prunedLegacyFileCount: tally.prunedLegacyFileCount,
     prunedBytes: tally.prunedBytes,
+    prunedUnprotectedPinnedSegmentCount: prunedPinned.length,
+    prunedUnprotectedPinnedBytes: prunedPinned.reduce((total, entry) => total + entry.sizeBytes, 0),
     prunedByAgeCount: tally.prunedByAgeCount,
     prunedByBudgetCount: tally.prunedByBudgetCount,
     failedNames: tally.failedNames,

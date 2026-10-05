@@ -1268,6 +1268,8 @@ const ACTIVITY_LOG_RETENTION_PRUNED_OPERATION = defineActivityLogOperation({
     prunedSegmentCount: { type: "integer", dataClass: "count", required: true },
     prunedLegacyFileCount: { type: "integer", dataClass: "count", required: true },
     prunedBytes: { type: "integer", dataClass: "count", required: true },
+    prunedUnprotectedPinnedSegmentCount: { type: "integer", dataClass: "count", required: false },
+    prunedUnprotectedPinnedBytes: { type: "integer", dataClass: "count", required: false },
     prunedByAgeCount: { type: "integer", dataClass: "count", required: true },
     prunedByBudgetCount: { type: "integer", dataClass: "count", required: true },
     failedDeletionCount: { type: "integer", dataClass: "count", required: true },
@@ -2073,10 +2075,11 @@ function retentionPrunedEvidence(
   correlationId: string | undefined,
 ): ServerLogEvent {
   const status = retentionStatus(outcome);
+  const pinnedEvidenceLost = outcome.prunedUnprotectedPinnedSegmentCount > 0;
   return activityLogEvent(
     ACTIVITY_LOG_RETENTION_PRUNED_OPERATION,
     {
-      level: status === "pruned" ? "info" : "warn",
+      level: status === "pruned" && !pinnedEvidenceLost ? "info" : "warn",
       correlationId: correlationIdOrUnknown(correlationId),
       ...(status === "pruned" ? {} : { errorKind: "durability-failed" as const }),
     },
@@ -2085,6 +2088,8 @@ function retentionPrunedEvidence(
       prunedSegmentCount: outcome.prunedSegmentCount,
       prunedLegacyFileCount: outcome.prunedLegacyFileCount,
       prunedBytes: outcome.prunedBytes,
+      prunedUnprotectedPinnedSegmentCount: outcome.prunedUnprotectedPinnedSegmentCount,
+      prunedUnprotectedPinnedBytes: outcome.prunedUnprotectedPinnedBytes,
       prunedByAgeCount: outcome.prunedByAgeCount,
       prunedByBudgetCount: outcome.prunedByBudgetCount,
       failedDeletionCount: outcome.failedNames.length,
@@ -2093,8 +2098,8 @@ function retentionPrunedEvidence(
       protectedPinnedBytes: outcome.protection.protectedBytes,
       retentionBudgetBytes: config.retentionBytes,
       retentionDays: config.retentionDays,
-      completeness: status === "pruned" ? "complete" : "partial",
-      loss: "none",
+      completeness: status === "pruned" && !pinnedEvidenceLost ? "complete" : "partial",
+      loss: pinnedEvidenceLost ? "event-dropped" : "none",
     },
   );
 }

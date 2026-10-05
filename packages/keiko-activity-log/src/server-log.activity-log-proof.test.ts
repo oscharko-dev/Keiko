@@ -12,6 +12,7 @@
 // sink a VALID, production-computed, registered event without constructing one here.
 
 import {
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -37,7 +38,16 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { logGitChangeApply } from "../../keiko-server/src/chat-activity.js";
-import { writeActivityLogPolicyRecord } from "./activity-log-store.js";
+import {
+  activeActivityLogPins,
+  listActivityLogDirectory,
+  planActivityLogPinProtection,
+  readActivityLogPins,
+  writeActivityLogPolicyRecord,
+} from "./activity-log-store.js";
+import { executeLocalSupportQuery } from "./reader/support-local-query.js";
+import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQueryResult } from "./reader/support-query.js";
+import { reportsProcessEvidenceLoss } from "./reader/support-analyze-sufficiency.js";
 import {
   DEFAULT_ACTIVITY_LOG_PIN_QUOTA_BYTES,
   DEFAULT_ACTIVITY_LOG_RETENTION_DAYS,
@@ -189,6 +199,10 @@ describe("Activity Log storage evidence proofs (#3532)", () => {
       retentionStatus: "pruned",
       prunedByAgeCount: 1,
       failedDeletionCount: 0,
+      prunedUnprotectedPinnedSegmentCount: 0,
+      prunedUnprotectedPinnedBytes: 0,
+      completeness: "complete",
+      loss: "none",
     });
   });
 
@@ -317,6 +331,101 @@ describe("Activity Log storage evidence proofs (#3532)", () => {
         expiredLine ?? "",
       );
       expect(expired).toMatchObject({ expiryReason: "expired", removalStatus: "removed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  function selectedEvidence(correlationId: string): SupportQueryResult {
+    return executeLocalSupportQuery(
+      stateDir,
+      {
+        kind: "closure",
+        queryClass: "correlation",
+        roots: [correlationId],
+        windows: [],
+        requiredClasses: { kind: "observed" },
+        unresolved: false,
+      },
+      DEFAULT_SUPPORT_QUERY_LIMITS,
+      { trigger: "query", persist: false },
+    ).result;
+  }
+
+  function unprotectedRetentionFixture(
+    now: number,
+  ): ReturnType<typeof planActivityLogPinProtection> {
+    const env = { KEIKO_LOG_PIN_QUOTA_BYTES: "1" };
+    const sink = createFileServerLogSink(stateDir, { env });
+    logGitChangeApply(sink, "lost-pinned-request", "preview");
+    sink.close?.();
+    logGitChangeApply(
+      createFileServerLogSink(stateDir, { env }),
+      "refused-pinned-removal",
+      "preview",
+    );
+    closeFileServerLogSinks();
+    const refused = listActivityLogFiles(stateDir)
+      .filter((file) => file.kind === "sealed")
+      .at(-1);
+    if (refused === undefined) throw new TypeError("Expected a sealed refusal fixture");
+    expect(
+      pinActivityLogWindow(
+        stateDir,
+        {
+          scope: { kind: "window", fromMs: now - 1000, toMs: now + 1000 },
+          expiresAtMs: now + 60 * 86_400_000,
+          correlationId: "original-pin-owner",
+        },
+        env,
+      ),
+    ).toMatchObject({ status: "pinned", quotaStatus: "exceeded" });
+    closeFileServerLogSinks();
+    linkSync(refused.path, join(stateDir, "held-evidence.jsonl"));
+    const listing = listActivityLogDirectory(logsDirOf(stateDir));
+    const pins = activeActivityLogPins(readActivityLogPins(listing, logsDirOf(stateDir)), now);
+    return planActivityLogPinProtection(listing.files, pins, 1);
+  }
+
+  it("reports only actually pruned pin evidence and keeps a refused deletion out of the loss count", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const now = Date.now();
+      const before = unprotectedRetentionFixture(now).unprotected;
+      expect(selectedEvidence("lost-pinned-request").events.length).toBeGreaterThan(0);
+      const risk = lines("activity-log.pin.quota-exhausted");
+      expect(risk.length).toBeGreaterThan(0);
+      expect(
+        expectActivityLogProof("activity-log.pin.quota-exhausted.emitted-line", risk[0] ?? ""),
+      ).toMatchObject({ completeness: "partial", loss: "none" });
+      vi.setSystemTime(now + 30 * 86_400_000);
+      logGitChangeApply(
+        createFileServerLogSink(stateDir, { env: { KEIKO_LOG_PIN_QUOTA_BYTES: "1" } }),
+        "maintenance-retention",
+        "preview",
+      );
+      const removed = before.filter((entry) => !existsSync(entry.path));
+      expect(removed.length).toBeGreaterThan(0);
+      expect(before.filter((entry) => existsSync(entry.path))).toHaveLength(1);
+      expect(selectedEvidence("lost-pinned-request").diagnosticSufficiency).toMatchObject({
+        status: "insufficient",
+        reasons: ["evidence-not-retained", "segment-unreadable"],
+      });
+      const record = expectActivityLogProof(
+        "activity-log.retention.pruned.emitted-line",
+        lines("activity-log.retention.pruned").at(-1) ?? "",
+      );
+      expect(record).toMatchObject({
+        retentionStatus: "partial",
+        failedDeletionCount: 1,
+        prunedUnprotectedPinnedSegmentCount: removed.length,
+        prunedUnprotectedPinnedBytes: removed.reduce((total, entry) => total + entry.sizeBytes, 0),
+        completeness: "partial",
+        loss: "event-dropped",
+      });
+      expect(
+        reportsProcessEvidenceLoss({ op: "activity-log.retention.pruned", fields: record }),
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }

@@ -1590,7 +1590,15 @@ the segment about to open.
 - **Budget exceeded.** When the budget cannot be met, the event is dropped and counted, and
   `activity-log.pressure` reports `budget-exceeded`.
 - **Evidence.** Each pass that deletes or fails to delete is `activity-log.retention.pruned`
-  evidence.
+  evidence. `prunedUnprotectedPinnedSegmentCount` and `prunedUnprotectedPinnedBytes` count only
+  successfully removed segments requested by a still-active pin but outside its protection quota.
+  Failed removals, protected segments and ordinary unpinned retention do not enter these counts;
+  overlapping pins count each removed segment once. Actual pinned-evidence removal declares
+  `completeness: "partial"` and `loss: "event-dropped"`. The operation remains a shared-store state
+  observation: it can remove a peer's segments and must not mark the maintenance writer's own
+  retained records as dropped. Queries for missing selected evidence remain insufficient with
+  `evidence-not-retained`; unrelated complete request traces retain their own sufficiency. These
+  count fields are optional on historical records and always emitted by the current writer.
 
 Total disk use is therefore at most the byte budget plus the pin quota.
 

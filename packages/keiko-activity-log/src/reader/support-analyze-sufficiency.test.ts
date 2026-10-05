@@ -235,6 +235,30 @@ describe("projectActivityLogSufficiency", () => {
     },
   );
 
+  it("keeps removed shared-store pin evidence distinct from the maintenance writer's own records", () => {
+    const retention = line("activity-log.retention.pruned", "maintenance-0001", {
+      retentionStatus: "pruned",
+      prunedUnprotectedPinnedSegmentCount: 1,
+      prunedUnprotectedPinnedBytes: 4096,
+      completeness: "partial",
+      loss: "event-dropped",
+    });
+    expect(reportsProcessEvidenceLoss(retention)).toBe(false);
+    const records = [
+      line("gateway.chat.started", "retained-request"),
+      line("gateway.chat.completed", "retained-request"),
+      retention,
+    ];
+    expect(classEntry(records, "gateway-chat-call")).toMatchObject({
+      status: "complete",
+      reasons: [],
+    });
+    expect(classEntry(records, "activity-log-retention")).toMatchObject({
+      status: "degraded",
+      reasons: ["evidence-partial"],
+    });
+  });
+
   it("keeps an actual pin expiry without its causal start insufficient", () => {
     const expiry = line("activity-log.pin.expired", "pin-protection-failure", {
       loss: "none",
