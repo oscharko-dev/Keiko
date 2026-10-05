@@ -1,4 +1,8 @@
-import { resetServerLogger } from "../support/activity-log-test-support.js";
+import {
+  drainSupportIncidentCandidates,
+  resetServerLogger,
+  setSupportIncidentTriggerForTests,
+} from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the client-diagnostics ingest route and the UI
 // launcher/process-lifecycle surfaces.
 //
@@ -99,6 +103,7 @@ describe("Activity Log scenario: client-diagnostics", () => {
   });
 
   afterEach(() => {
+    setSupportIncidentTriggerForTests(undefined);
     resetServerLogger();
     resetClientDiagnosticsIngestStateForTests();
     vi.unstubAllEnvs();
@@ -189,6 +194,7 @@ describe("Activity Log scenario: client-diagnostics", () => {
   });
 
   it("rejects an incoherent client-only preparation without losing the valid retry", async () => {
+    setSupportIncidentTriggerForTests(true);
     const startedAtMs = Date.now();
     const report = createClientOnlySupportReport(CORRELATION_ID, "service-unavailable");
     const preparation = {
@@ -244,7 +250,14 @@ describe("Activity Log scenario: client-diagnostics", () => {
         )
       ).status,
     ).toBe(204);
+    drainSupportIncidentCandidates();
     expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+    const failures = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "client.support-report.preparation-failed",
+    );
+    expect(failures).toHaveLength(1);
+    expect(parsedLine(failures[0])).toMatchObject({ level: "info" });
     const trace = await expectActivityLogScenario("client-diagnostics.rejection", {
       stateDir,
       startedAtMs,
