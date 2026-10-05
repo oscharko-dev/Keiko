@@ -177,10 +177,9 @@ function directoryReadFailure(relativeDir: string, error: unknown): Error {
     error instanceof WorkspaceReadError
   )
     return error;
-  return new WorkspaceReadError(
-    `cannot read directory: ${relativeDir || "."} (${describe(error)})`,
-    relativeDir,
-  );
+  const failure = new WorkspaceReadError("Cannot read the selected directory.", relativeDir);
+  failure.cause = error;
+  return failure;
 }
 
 function failedDirectoryRead(
@@ -681,32 +680,40 @@ async function visitStreamingEntry(
   }
 }
 
+async function* admittedStreamingDirectoryEntries(
+  walk: Walk,
+  absolute: string,
+  relativeDir: string,
+): AsyncIterable<WorkspaceDirEntry> {
+  try {
+    if (walk.executionControl !== undefined) assertStructuralExecutionActive(walk.executionControl);
+    const current = currentContainedDirectory(walk, absolute, relativeDir);
+    if (current === undefined) return;
+    yield* streamingDirectoryEntries(walk.fs, current);
+    currentContainedDirectory(walk, current, relativeDir);
+  } catch (error) {
+    if (
+      error instanceof WorkspaceDescriptorReadError &&
+      error.reason === "directory-membership-changed"
+    ) {
+      walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+      return;
+    }
+    throw directoryReadFailure(relativeDir, error);
+  }
+}
+
 async function collectStreamingDirectory(
   state: StreamingWalk,
   absolute: string,
   relativeDir: string,
   directories: PendingStreamingDirectory[],
 ): Promise<void> {
-  try {
+  for await (const entry of admittedStreamingDirectoryEntries(state.walk, absolute, relativeDir)) {
     if (state.walk.executionControl !== undefined)
       assertStructuralExecutionActive(state.walk.executionControl);
-    const current = currentContainedDirectory(state.walk, absolute, relativeDir);
-    if (current === undefined) return;
-    for await (const entry of streamingDirectoryEntries(state.walk.fs, current)) {
-      if (state.walk.executionControl !== undefined)
-        assertStructuralExecutionActive(state.walk.executionControl);
-      await visitStreamingEntry(state, relativeDir, entry, directories);
-    }
-    currentContainedDirectory(state.walk, current, relativeDir);
-  } catch (error) {
-    if (
-      error instanceof WorkspaceDescriptorReadError &&
-      error.reason === "directory-membership-changed"
-    ) {
-      state.walk.ioErrors = (state.walk.ioErrors ?? 0) + 1;
-      return;
-    }
-    throw directoryReadFailure(relativeDir, error);
+    // Collector and path-policy failures belong to the file operation, not the directory reader.
+    await visitStreamingEntry(state, relativeDir, entry, directories);
   }
 }
 

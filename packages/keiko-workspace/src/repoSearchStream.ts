@@ -1,6 +1,7 @@
 import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { visitWorkspaceFiles } from "./discovery.js";
+import { WorkspaceError } from "./errors.js";
 import { RetainedAtomHeap } from "./repoSearchRetention.js";
 import {
   extraIgnoreLinesForSearch,
@@ -104,6 +105,27 @@ function compareRanked(left: RankedStreamAtom, right: RankedStreamAtom): number 
   );
 }
 
+function attributedCollectorFailure(error: unknown, file: DiscoveredFile): Error {
+  if (error instanceof StructuralExecutionStoppedError) return error;
+  return Object.assign(new Error("Repository search file processing failed.", { cause: error }), {
+    requestedPath: file.relativePath,
+    ...(error instanceof WorkspaceError ? { code: error.code } : {}),
+  });
+}
+
+function combinedCollectorFailure(failures: readonly Error[]): Error {
+  const primary =
+    failures.find((error) => !(error instanceof StructuralExecutionStoppedError)) ?? failures[0];
+  if (primary === undefined) throw new TypeError("A collector failure is required.");
+  if (primary instanceof StructuralExecutionStoppedError) return primary;
+  const combined = new AggregateError(failures, "Repository search processing failed.", {
+    cause: primary,
+  });
+  if ("code" in primary && typeof primary.code === "string")
+    Object.assign(combined, { code: primary.code });
+  return combined;
+}
+
 class StreamingSearchCollector {
   public readonly state: RunState = {
     filesScanned: 0,
@@ -120,7 +142,8 @@ class StreamingSearchCollector {
   private readonly omissions: RetainedAtomHeap<CandidateFile>;
   private matchesFound = 0;
   private readonly pending = new Set<Promise<void>>();
-  private failure: Error | undefined;
+  private readonly failures: Error[] = [];
+  private emittedFailure: Error | undefined;
   private readonly bucketCounts: Record<CandidateBucket, number> = {
     "canonical-metadata": 0,
     "overview-doc": 0,
@@ -155,20 +178,34 @@ class StreamingSearchCollector {
   public async enqueue(file: DiscoveredFile): Promise<void> {
     const pending = this.visit(file)
       .catch((error: unknown): void => {
-        this.failure ??=
-          error instanceof Error ? error : new Error("unknown error", { cause: error });
+        this.failures.push(attributedCollectorFailure(error, file));
       })
       .finally((): void => {
         this.pending.delete(pending);
       });
     this.pending.add(pending);
     if (this.pending.size >= 8) await Promise.race(this.pending);
-    if (this.failure !== undefined) throw this.failure;
+    if (this.failures.length > 0) throw this.failureFor();
   }
 
   public async settle(): Promise<void> {
     await Promise.all(this.pending);
-    if (this.failure !== undefined) throw this.failure;
+    if (this.failures.length > 0) throw this.failureFor();
+  }
+
+  public async settleFailure(error: unknown): Promise<Error> {
+    await Promise.all(this.pending);
+    const original =
+      error instanceof Error ? error : new Error("Repository search failed.", { cause: error });
+    if (this.failures.length === 0) return original;
+    return this.failureFor(original === this.emittedFailure ? undefined : original);
+  }
+
+  private failureFor(other?: Error): Error {
+    this.emittedFailure = combinedCollectorFailure(
+      other === undefined ? this.failures : [...this.failures, other],
+    );
+    return this.emittedFailure;
   }
 
   private admit(file: DiscoveredFile): boolean {
@@ -369,10 +406,10 @@ async function collectPrimaryStream(
     ignored = discovered.ignored;
     denied = discovered.denied;
   } catch (error) {
-    await collector.settle().catch(() => undefined);
-    if (!(error instanceof StructuralExecutionStoppedError)) throw error;
+    const failure = await collector.settleFailure(error);
+    if (!(failure instanceof StructuralExecutionStoppedError)) throw failure;
     collector.state.truncated = true;
-    collector.state.truncationReasons?.add(error.reason);
+    collector.state.truncationReasons?.add(failure.reason);
   }
   return collectionResult(collector, ignored + collector.ignoredByPolicy, denied);
 }
@@ -412,10 +449,10 @@ async function collectRescueStream(
     );
     await rescue.settle();
   } catch (error) {
-    await rescue.settle().catch(() => undefined);
-    if (!(error instanceof StructuralExecutionStoppedError)) throw error;
+    const failure = await rescue.settleFailure(error);
+    if (!(failure instanceof StructuralExecutionStoppedError)) throw failure;
     rescue.state.truncated = true;
-    rescue.state.truncationReasons?.add(error.reason);
+    rescue.state.truncationReasons?.add(failure.reason);
   }
   return rescue;
 }

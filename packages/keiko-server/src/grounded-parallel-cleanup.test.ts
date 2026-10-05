@@ -331,3 +331,80 @@ it.each(["buffered", "persisted"])(
     }
   },
 );
+
+it.each(["buffered", "persisted"])(
+  "records competing collector failures without logging paths or messages (%s)",
+  async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-collector-failure-"));
+    roots.push(root);
+    const logRoot = mkdtempSync(join(tmpdir(), "keiko-collector-failure-log-"));
+    roots.push(logRoot);
+    const activityLog = createBufferedServerLogSink();
+    const persisted =
+      mode === "persisted" ? createFileServerLogSink(logRoot, { level: "debug" }) : undefined;
+    const primary = Object.assign(
+      new Error("File processing failed.", { cause: new TypeError("PRIVATE_SCORING_DETAIL") }),
+      { requestedPath: "private/customer/a.ts" },
+    );
+    const secondary = Object.assign(
+      new Error("File processing failed.", { cause: new RangeError("PRIVATE_SECONDARY_DETAIL") }),
+      { requestedPath: "private/customer/b.ts" },
+    );
+    const directory = new WorkspaceReadError("PRIVATE_DIRECTORY_DETAIL", "private/customer");
+    const failure = new AggregateError(
+      [primary, secondary, directory],
+      "Search processing failed.",
+      { cause: primary },
+    );
+    try {
+      await expect(
+        retrieveConnectedContextPack(request(root), {
+          correlationId: "collector-failure-regression",
+          activityLog: {
+            write: (event): void => {
+              activityLog.write(event);
+              persisted?.write(event);
+            },
+          },
+          detectWorkspace: () => {
+            throw failure;
+          },
+          answerer: { answer: () => Promise.reject(new Error("No model may be called.")) },
+        }),
+      ).rejects.toBe(failure);
+      assertCollectorFailureEvent(activityLog);
+      if (persisted !== undefined) {
+        persisted.close?.();
+        const raw = readPersistedActivityLog(logRoot);
+        const line = raw
+          .split("\n")
+          .find((value) => value.includes('"op":"search.connected-context.failed"'));
+        const proof = expectActivityLogProof("search.connected-context.failed.line", line ?? "");
+        expect(proof).toMatchObject({
+          secondaryFailureCount: 2,
+          secondaryFailureKinds: ["RangeError", "WorkspaceReadError"],
+          causeChain: ["Error", "TypeError"],
+        });
+        expect(raw).not.toMatch(/PRIVATE_|private\/customer/u);
+      }
+    } finally {
+      persisted?.close?.();
+    }
+  },
+);
+
+function assertCollectorFailureEvent(
+  activityLog: ReturnType<typeof createBufferedServerLogSink>,
+): void {
+  const event = activityLog.events.find((entry) => entry.op === "search.connected-context.failed");
+  expect(event?.extra).toMatchObject({
+    secondaryFailureCount: 2,
+    secondaryFailureKinds: ["RangeError", "WorkspaceReadError"],
+    causeChain: ["Error", "TypeError"],
+  });
+  expect(event?.extra?.primaryFailureScopeDigest).toMatch(/^[a-f0-9]{64}$/u);
+  expect(event?.extra?.frames).toEqual(
+    expect.arrayContaining([expect.stringContaining("grounded-parallel-cleanup.test.ts:")]),
+  );
+  expect(JSON.stringify(activityLog.events)).not.toMatch(/PRIVATE_|private\/customer/u);
+}

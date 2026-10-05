@@ -106,6 +106,10 @@ describe("trusted grouped filename listings", () => {
     const controller = new AbortController();
     let opened = 0;
     let closed = 0;
+    let signalClosed!: () => void;
+    const physicallyClosed = new Promise<void>((resolve) => {
+      signalClosed = resolve;
+    });
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
       iterateDirectory: async function* (path) {
@@ -117,6 +121,7 @@ describe("trusted grouped filename listings", () => {
           }
         } finally {
           closed += 1;
+          if (closed === opened) signalClosed();
         }
       },
     };
@@ -129,6 +134,8 @@ describe("trusted grouped filename listings", () => {
     expect(result.coverage.incomplete).toBe(true);
     expect(result.atoms).toHaveLength(0);
     expect(opened).toBeGreaterThan(0);
+    // User cancellation can precede a queued native return; prove actual eventual closure.
+    await physicallyClosed;
     expect(closed).toBe(opened);
   });
 
@@ -179,8 +186,12 @@ describe("trusted grouped filename listings", () => {
           }),
         ).rejects.toSatisfy(
           (error: unknown): boolean =>
-            error instanceof Error &&
-            error.name === "WorkspaceReadError" &&
+            error instanceof AggregateError &&
+            error.errors.length === 1 &&
+            error.cause instanceof Error &&
+            "requestedPath" in error.cause &&
+            error.cause.requestedPath === "zzzz/FairBetaProbe.ts" &&
+            error.cause.cause === unexpected &&
             !error.message.includes("REJECTED_CALLBACK_CONTENT_MUST_STAY_PRIVATE"),
         );
       } finally {

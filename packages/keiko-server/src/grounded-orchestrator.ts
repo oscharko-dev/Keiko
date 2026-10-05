@@ -195,7 +195,11 @@ import {
   type ServerLogger,
   type ServerLogSink,
 } from "./observability/index.js";
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import {
+  causeChain,
+  contentFreeErrorClass,
+  keikoStackFrames,
+} from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import {
@@ -611,6 +615,20 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
     workspaceIoExistsCalls: { type: "integer", dataClass: "count", required: true },
     workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: true },
     workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: true },
+    secondaryFailureCount: { type: "integer", dataClass: "count", required: false },
+    secondaryFailureKinds: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 16,
+    },
+    primaryFailureScopeDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
     frames: {
       type: "string-array",
       dataClass: "safe-platform-class",
@@ -7089,13 +7107,47 @@ function completionDetailsActivityExtra(
   };
 }
 
+function originalSearchFailure(error: unknown): unknown {
+  if (!(error instanceof AggregateError)) return error;
+  const primary: unknown = error.cause;
+  return isRecord(primary) ? (activityProperty(primary, "cause") ?? primary) : primary;
+}
+
+function aggregateSearchFailureDetails(
+  error: unknown,
+): Pick<
+  ConnectedContextFailedActivityFields,
+  "secondaryFailureCount" | "secondaryFailureKinds" | "primaryFailureScopeDigest"
+> {
+  if (!(error instanceof AggregateError)) return {};
+  const failures: unknown[] = error.errors;
+  const primary: unknown = error.cause;
+  const path = isRecord(primary) ? activityProperty(primary, "requestedPath") : undefined;
+  const kinds = failures
+    .slice(0, 16)
+    .filter((failure) => failure !== primary)
+    .map((failure) => {
+      const cause = isRecord(failure) ? activityProperty(failure, "cause") : undefined;
+      return contentFreeErrorClass(cause ?? failure);
+    });
+  return {
+    secondaryFailureCount: failures.length - Number(failures.includes(primary)),
+    secondaryFailureKinds: [...new Set(kinds)].sort(compareStrings),
+    ...(typeof path !== "string"
+      ? {}
+      : {
+          primaryFailureScopeDigest: createHash("sha256").update(path).digest("hex"),
+        }),
+  };
+}
+
 function failureActivityExtra(
   identity: ConnectedContextActivityIdentity,
   error: unknown,
   progress: ConnectedContextProgress,
   cancelled: boolean,
 ): ConnectedContextFailedActivityFields {
-  const frames = keikoStackFrames(error);
+  const frames = keikoStackFrames(originalSearchFailure(error));
   const chain = causeChain(error);
   const structural = progress.structuralContexts?.diagnostics() ?? EMPTY_STRUCTURAL_DIAGNOSTICS;
   const index =
@@ -7112,6 +7164,7 @@ function failureActivityExtra(
     ...structuralActivityExtra(structural),
     ...workspaceIndexActivityExtra(index),
     ...workspaceIoActivityExtra(io),
+    ...aggregateSearchFailureDetails(error),
     ...(frames.length === 0 ? {} : { frames }),
     ...(chain.length === 0 ? {} : { causeChain: chain }),
     completeness: "complete",
