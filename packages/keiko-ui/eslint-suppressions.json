@@ -47,11 +47,6 @@
       "count": 2
     }
   },
-  "src/app/components/desktop/ConnectorScopePill.tsx": {
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/EditorMenu.tsx": {
     "max-lines-per-function": {
       "count": 1

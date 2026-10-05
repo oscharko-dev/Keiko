@@ -17,6 +17,7 @@ import { updateChatConnectedScopes } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import type { Chat, ChatConnectedScope, GroundedAnswerContextPackSummary } from "@/lib/types";
+import { useScopePillError, ScopePillError, emptyScopePill } from "./hooks/useScopePillError";
 import { effectiveScopes } from "./hooks/workspaceActions";
 
 export interface ConnectedScopePillProps {
@@ -152,10 +153,14 @@ function formatErrorMessage(error: unknown, t: I18nTranslate): string {
 // last pill is gone, on any other control left in the header (e.g. the grounding control).
 // The header element must be captured BEFORE the pill unmounts. Shared with
 // ConnectorScopePill (same pattern, same header).
-export function restoreScopeHeaderFocus(header: Element | null | undefined): void {
+export function restoreScopeHeaderFocus(
+  header: Element | null | undefined,
+  previous?: HTMLElement | null,
+): void {
   if (header === null || header === undefined) return;
   // Defer until React has committed the unmount that follows onDisconnect.
   window.setTimeout(() => {
+    if (previous?.isConnected === true) return;
     const next =
       header.querySelector<HTMLElement>(".scope-pill-disconnect") ??
       header.querySelector<HTMLElement>("button, select, input, [href], [tabindex]");
@@ -170,6 +175,7 @@ interface ScopePillItemProps {
   readonly onDisconnect?: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatConnectedScopes;
   readonly t: I18nTranslate;
+  readonly setError: (message: string | null) => void;
 }
 
 function ScopePillItem({
@@ -178,10 +184,10 @@ function ScopePillItem({
   allScopes,
   onDisconnect,
   updateScopes,
+  setError,
   t,
 }: ScopePillItemProps): ReactNode {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
   const label = pillLabel(scope, t);
   // uiux-fix F010 (C174): the basename label collides for same-named folders
@@ -196,7 +202,8 @@ function ScopePillItem({
     setError(null);
     setBusy(true);
     // Capture the stable header ancestor before this pill unmounts (C169).
-    const header = disconnectRef.current?.closest(".chat-scope-header");
+    const button = disconnectRef.current;
+    const header = button?.closest(".chat-scope-header");
     try {
       // The selected object belongs to this versioned snapshot; display reordering cannot retarget it.
       const remaining = allScopes.filter((candidate) => candidate !== scope);
@@ -207,11 +214,11 @@ function ScopePillItem({
         onDisconnect,
       );
       onDisconnect?.(response.chat);
-      restoreScopeHeaderFocus(header);
     } catch (error_) {
       setError(formatErrorMessage(error_, t));
     } finally {
       setBusy(false);
+      restoreScopeHeaderFocus(header, button);
     }
   }
 
@@ -250,11 +257,6 @@ function ScopePillItem({
         </button>
       </span>
       <span className="scope-pill-detail">{scopeBoundaryText(scope, t)}</span>
-      {error !== null ? (
-        <span role="alert" className="scope-connect-error">
-          {error}
-        </span>
-      ) : null}
     </span>
   );
 }
@@ -286,6 +288,7 @@ export function ConnectedScopePill({
   updateScopes = updateChatConnectedScopes,
 }: ConnectedScopePillProps): ReactNode {
   const t = useTranslate();
+  const { error, setError } = useScopePillError(chat);
   const scopes = effectiveScopes(chat);
   const signature = scopesSignature(scopes, t);
 
@@ -322,11 +325,12 @@ export function ConnectedScopePill({
   // last source is disconnected the effect populates `announcement`, so the polite region re-mounts
   // with content and the removal is still announced.
   if (scopes.length === 0) {
-    return announcement === "" ? null : announcer;
+    return emptyScopePill(announcement, announcer, error);
   }
   return (
     <span className="scope-pill-group">
       {announcer}
+      <ScopePillError error={error} />
       {scopes.map((scope, index) => (
         <ScopePillItem
           key={`${scope.root ?? scope.kind}-${String(scope.connectedAtMs)}-${String(index)}`}
@@ -335,6 +339,7 @@ export function ConnectedScopePill({
           allScopes={scopes}
           onDisconnect={onDisconnect}
           updateScopes={updateScopes}
+          setError={setError}
           t={t}
         />
       ))}

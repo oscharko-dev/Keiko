@@ -35,11 +35,14 @@ export async function withGroundingScopeRefresh(
       error.status === 409 &&
       error.code === "GROUNDING_SCOPE_CHANGED"
     ) {
-      await refreshConflictedChat(
-        chat,
-        error.correlationId ?? newClientCorrelationId(),
-        onChatChanged,
-      );
+      const correlationId = error.correlationId ?? newClientCorrelationId();
+      reportClientDiagnostic("Grounding scope mutation refused.", {
+        kind: "other",
+        correlationId,
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      });
+      await refreshConflictedChat(chat, correlationId, onChatChanged);
     }
     throw error;
   }

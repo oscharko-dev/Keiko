@@ -40,6 +40,7 @@ import {
 
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useScopePillError, ScopePillError, emptyScopePill } from "./hooks/useScopePillError";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
 import type { WorkspaceLinkedGitChangeComparison } from "./hooks/useWorkspace.types";
@@ -654,6 +655,7 @@ interface GitChangePillItemProps {
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly reviewDescription: ReviewGitChangeDescriptionFn;
   readonly t: I18nTranslate;
+  readonly setDisconnectError: (message: string | null) => void;
 }
 
 // Owner audit b1-6 — mirrors `value` on every render (not only at effect time), so an async
@@ -722,19 +724,25 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
   const latestChatRef = useLatestRef(chat);
 
   async function runDisconnect(): Promise<void> {
-    await runGuardedPillAction(setBusy, setError, formatDisconnectErrorMessage, t, async () => {
-      // Capture the stable header ancestor before this pill unmounts (mirrors ConnectedScopePill).
-      const header = disconnectRef.current?.closest(".chat-scope-header");
-      const remaining = otherScopes(allScopes, scope.relationshipId);
-      const response = await replaceGroundingScopeList(
-        chat,
-        remaining.length > 0 ? remaining : null,
-        updateScopes,
-        onDisconnect,
-      );
-      onDisconnect?.(response.chat);
-      restoreScopeHeaderFocus(header);
-    });
+    const button = disconnectRef.current;
+    const header = button?.closest(".chat-scope-header");
+    await runGuardedPillAction(
+      setBusy,
+      props.setDisconnectError,
+      formatDisconnectErrorMessage,
+      t,
+      async () => {
+        const remaining = otherScopes(allScopes, scope.relationshipId);
+        const response = await replaceGroundingScopeList(
+          chat,
+          remaining.length > 0 ? remaining : null,
+          updateScopes,
+          onDisconnect,
+        );
+        onDisconnect?.(response.chat);
+      },
+    );
+    restoreScopeHeaderFocus(header, button);
   }
 
   async function runRefresh(): Promise<void> {
@@ -1001,10 +1009,14 @@ interface GitChangeScopePillContentProps {
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly reviewDescription: ReviewGitChangeDescriptionFn;
   readonly t: I18nTranslate;
+  readonly error: string | null;
+  readonly setDisconnectError: (message: string | null) => void;
 }
 
 function GitChangeScopePillContent({
   announcer,
+  error,
+  setDisconnectError,
   chat,
   pending,
   scopes,
@@ -1021,6 +1033,7 @@ function GitChangeScopePillContent({
   return (
     <span className="scope-pill-group">
       {announcer}
+      <ScopePillError error={error} />
       {pending.map((comparison) => (
         <PendingGitChangePillItem
           key={`pending:${comparison.connectionId}`}
@@ -1035,6 +1048,7 @@ function GitChangeScopePillContent({
           scope={scope}
           allScopes={scopes}
           onDisconnect={onDisconnect}
+          setDisconnectError={setDisconnectError}
           onRefreshed={onRefreshed}
           updateScopes={updateScopes}
           refreshScope={refreshScope}
@@ -1047,10 +1061,6 @@ function GitChangeScopePillContent({
       ))}
     </span>
   );
-}
-
-function emptyGitChangeScopePill(announcement: string, announcer: ReactNode): ReactNode {
-  return announcement === "" ? null : announcer;
 }
 
 export function GitChangeScopePill({
@@ -1066,6 +1076,7 @@ export function GitChangeScopePill({
   reviewDescription = defaultReviewDescription,
 }: GitChangeScopePillProps): ReactNode {
   const t = useTranslate();
+  const { error, setError } = useScopePillError(chat);
   const scopes = chat.gitChangeScopes ?? [];
   const pending = pendingComparisonsWithoutConfirmed(pendingComparisons, scopes);
   const signature = `${scopesSignature(scopes)}|${pendingComparisonsSignature(pending)}`;
@@ -1077,11 +1088,13 @@ export function GitChangeScopePill({
   const announcer = <GitChangeScopeAnnouncer text={announcement} />;
 
   if (isEmpty) {
-    return emptyGitChangeScopePill(announcement, announcer);
+    return emptyScopePill(announcement, announcer, error);
   }
   return (
     <GitChangeScopePillContent
       announcer={announcer}
+      error={error}
+      setDisconnectError={setError}
       chat={chat}
       pending={pending}
       scopes={scopes}

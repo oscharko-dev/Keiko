@@ -17,12 +17,13 @@ import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 //  - minimum 24×24 target (WCAG 2.5.8)
 //  - stable keys derived from kind+id, not array indices
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { updateChatLocalKnowledgeScopes } from "@/lib/api";
 import {
   useLocalKnowledgeTranslate,
   type I18nTranslate,
 } from "@/app/local-knowledge/local-knowledge-i18n";
+import { useScopePillError, ScopePillError, emptyScopePill } from "./hooks/useScopePillError";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
 import { effectiveLocalKnowledgeScopes } from "./hooks/workspaceActions";
@@ -76,29 +77,33 @@ interface ConnectorPillItemProps {
   readonly updateScopes: typeof updateChatLocalKnowledgeScopes;
   readonly label: string;
   readonly t: I18nTranslate;
+  readonly setError: (message: string | null) => void;
 }
 
-function ConnectorPillItem({
+function useConnectorDisconnect({
   chat,
   scope,
   allScopes,
   onDisconnect,
   updateScopes,
-  label,
+  setError,
   t,
-}: ConnectorPillItemProps): ReactNode {
+}: ConnectorPillItemProps): {
+  readonly busy: boolean;
+  readonly disconnectRef: RefObject<HTMLButtonElement | null>;
+  readonly handleDisconnect: () => Promise<void>;
+} {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
   const key = scopeKey(scope);
-  const disconnectLabel = t("localKnowledge.scopePill.disconnect", { label });
 
   async function handleDisconnect(): Promise<void> {
     if (busy) return;
     setError(null);
     setBusy(true);
     // uiux-fix F010 (C169): capture the stable header ancestor before this pill unmounts.
-    const header = disconnectRef.current?.closest(".chat-scope-header");
+    const button = disconnectRef.current;
+    const header = button?.closest(".chat-scope-header");
     try {
       const remaining = allScopes.filter((s) => scopeKey(s) !== key);
       const response = await replaceGroundingScopeList(
@@ -108,13 +113,21 @@ function ConnectorPillItem({
         onDisconnect,
       );
       onDisconnect?.(response.chat);
-      restoreScopeHeaderFocus(header);
     } catch (error_) {
       setError(formatErrorMessage(error_, t));
     } finally {
       setBusy(false);
+      restoreScopeHeaderFocus(header, button);
     }
   }
+
+  return { busy, disconnectRef, handleDisconnect };
+}
+
+function ConnectorPillItem(props: ConnectorPillItemProps): ReactNode {
+  const { label, t } = props;
+  const { busy, disconnectRef, handleDisconnect } = useConnectorDisconnect(props);
+  const disconnectLabel = t("localKnowledge.scopePill.disconnect", { label });
 
   return (
     <span className="scope-pill-wrap">
@@ -141,11 +154,6 @@ function ConnectorPillItem({
           <span aria-hidden="true">×</span>
         </button>
       </span>
-      {error !== null ? (
-        <span role="alert" className="scope-connect-error">
-          {error}
-        </span>
-      ) : null}
     </span>
   );
 }
@@ -165,6 +173,19 @@ function connectorScopesAnnouncement(count: number, t: I18nTranslate): string {
   return t("localKnowledge.scopePill.updated.other", { count });
 }
 
+function ConnectorScopeAnnouncer({ announcement }: { readonly announcement: string }): ReactNode {
+  return (
+    <span
+      className="sr-only"
+      role="status"
+      aria-live="polite"
+      data-testid="connector-scope-announcer"
+    >
+      {announcement}
+    </span>
+  );
+}
+
 export function ConnectorScopePill({
   chat,
   onDisconnect,
@@ -173,6 +194,7 @@ export function ConnectorScopePill({
   labelsSettled = true,
 }: ConnectorScopePillProps): ReactNode {
   const t = useLocalKnowledgeTranslate();
+  const { error, setError } = useScopePillError(chat);
   const scopes = effectiveLocalKnowledgeScopes(chat);
   const signature = connectorScopesSignature(scopes);
 
@@ -189,26 +211,18 @@ export function ConnectorScopePill({
     }
   }, [signature, scopes.length, t]);
 
-  const announcer = (
-    <span
-      className="sr-only"
-      role="status"
-      aria-live="polite"
-      data-testid="connector-scope-announcer"
-    >
-      {announcement}
-    </span>
-  );
+  const announcer = <ConnectorScopeAnnouncer announcement={announcement} />;
 
   // Keep the header clean when the chat never had a connector binding: with no scopes AND no pending
   // announcement, render nothing. After the last connector is disconnected the effect populates
   // `announcement`, so the polite region re-mounts with content and the removal is still announced.
   if (scopes.length === 0) {
-    return announcement === "" ? null : announcer;
+    return emptyScopePill(announcement, announcer, error);
   }
   return (
     <span className="scope-pill-group scope-pill-group--connector">
       {announcer}
+      <ScopePillError error={error} />
       {scopes.map((scope) => (
         <ConnectorPillItem
           key={scopeKey(scope)}
@@ -217,6 +231,7 @@ export function ConnectorScopePill({
           allScopes={scopes}
           onDisconnect={onDisconnect}
           updateScopes={updateScopes}
+          setError={setError}
           label={scopeLabel(scope, labels, labelsSettled, t)}
           t={t}
         />
