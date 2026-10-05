@@ -5031,12 +5031,6 @@
     },
     {
       "path": "packages/keiko-server/src/grounded-qa.ts",
-      "owner": "isValidGroundedPack",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/grounded-qa.ts",
       "owner": "parseJsonObject",
       "kind": "unregistered-catch",
       "count": 1
