@@ -418,6 +418,8 @@ describe("source reveal viewport truth", () => {
     };
     const view = render(<FilePreview {...props} />);
     const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+    expect(scroll.mock.contexts[0]).toHaveTextContent("row 100");
     region.scrollTop = 2_800;
     scroll.mockClear();
     view.rerender(<FilePreview {...props} revealLineStart={1_100} revealRequestId="second" />);
