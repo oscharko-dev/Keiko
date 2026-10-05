@@ -647,19 +647,7 @@ function automaticFilesAmbiguityIdentity(
   ]);
 }
 
-function automaticFilesAmbiguityIsCurrent(
-  remembered: ReadonlyMap<string, string>,
-  connection: Connection | undefined,
-  chat: Chat,
-  nextScope: ChatConnectedScope,
-): boolean {
-  return (
-    connection !== undefined &&
-    remembered.get(connection.id) === automaticFilesAmbiguityIdentity(connection, chat, nextScope)
-  );
-}
-
-function shouldReportAutomaticFilesAmbiguity(
+function rememberAutomaticFilesAmbiguity(
   warnings: Map<string, string>,
   connection: Connection | undefined,
   chat: Chat,
@@ -1599,12 +1587,12 @@ function AppShellInner(): ReactNode {
       },
     ): false => {
       if (
-        automatic &&
-        automaticFilesAmbiguityIsCurrent(
+        !rememberAutomaticFilesAmbiguity(
           automaticFilesAmbiguitiesRef.current,
           connection,
           chat,
           nextScope,
+          automatic,
         )
       ) {
         reportFilesScopeDecision(evidence.attempt.correlationId, {
@@ -1616,22 +1604,13 @@ function AppShellInner(): ReactNode {
         decision: "blocked-ambiguous",
         ...filesScopeOwnershipEvidence(connection, evidence.scopes),
       });
-      if (
-        shouldReportAutomaticFilesAmbiguity(
-          automaticFilesAmbiguitiesRef.current,
-          connection,
-          chat,
-          nextScope,
-          automatic,
-        )
-      ) {
-        reportGroundingMutationFailure(
-          "Files scope ownership unavailable",
-          new Error("Scope ownership is not proven"),
-        );
-        rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
-        setUnownedFilesConnectionId(connection?.id ?? null);
-      }
+      reportGroundingMutationFailure(
+        "Files scope ownership unavailable",
+        new Error("Scope ownership is not proven"),
+        evidence.attempt.correlationId,
+      );
+      rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+      setUnownedFilesConnectionId(connection?.id ?? null);
       return false;
     },
     [rejectForConnectionFailure, t],

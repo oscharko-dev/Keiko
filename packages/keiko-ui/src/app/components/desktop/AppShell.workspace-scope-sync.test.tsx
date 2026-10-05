@@ -306,6 +306,69 @@ describe("AppShell canonical workspace scope synchronization", () => {
     },
   );
 
+  it("reannounces a digest-only change that still has multiple ownership candidates", async () => {
+    const initial = fixture(["/manuals/New"]);
+    const first = scope("/manuals/First");
+    const second = scope("/manuals/Second");
+    const firstDigest = connectedScopeFingerprint(first);
+    const secondDigest = connectedScopeFingerprint(second);
+    const conns: Connection[] = [
+      {
+        id: "edge-0",
+        a: "files-0",
+        b: "chat-window",
+        boundScopeElided: true,
+        boundScopeFingerprint: firstDigest,
+      },
+    ];
+    mocks.initialChat = chat([
+      first,
+      { ...first, connectedAtMs: 2 },
+      second,
+      { ...second, connectedAtMs: 2 },
+    ]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, conns);
+    const stringify = vi.spyOn(JSON, "stringify");
+    render(<AppShell />);
+    await screen.findByText(/cannot be restored uniquely/u);
+    expect(vi.mocked(reportFilesScopeDecision)).toHaveBeenCalledWith(expect.any(String), {
+      decision: "blocked-ambiguous",
+      sourceCount: 4,
+      candidateCount: 2,
+      bindingFingerprint: firstDigest,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
+    const currentWindows = mocks.workspace!.wins;
+    expect(currentWindows).not.toBeNull();
+    vi.mocked(reportClientDiagnostic).mockClear();
+    vi.mocked(reportFilesScopeDecision).mockClear();
+    stringify.mockClear();
+    await storageReplay(currentWindows!, [{ ...conns[0]!, boundScopeFingerprint: secondDigest }]);
+    await screen.findByText(/cannot be restored uniquely/u);
+    expect(vi.mocked(reportFilesScopeDecision)).toHaveBeenCalledWith(expect.any(String), {
+      decision: "blocked-ambiguous",
+      sourceCount: 4,
+      candidateCount: 2,
+      bindingFingerprint: secondDigest,
+    });
+    expect(reportClientDiagnostic).toHaveBeenCalledOnce();
+    const rejected = vi
+      .mocked(reportFilesScopeDecision)
+      .mock.calls.find(([, details]) => details.decision === "blocked-ambiguous");
+    expect(rejected).toBeDefined();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ correlationId: rejected![0] }),
+    );
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+    const ambiguitySerializations = stringify.mock.calls.filter(
+      ([value]) => Array.isArray(value) && value.includes(secondDigest) && value.includes("chat-1"),
+    );
+    expect(ambiguitySerializations).toHaveLength(1);
+  });
+
   it("refreshes an unchanged local ambiguity before adopting another client's resolved source", async () => {
     await mountAmbiguousFiles();
     mocks.fetchChats.mockClear();
