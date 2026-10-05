@@ -27,6 +27,16 @@ describe("context capacity visual encoding", () => {
       const conversation = segmentStyles(kind, "free");
       expect(source["background-image"]).toBeDefined();
       expect(source["background-image"]).not.toBe(conversation["background-image"]);
+      for (const segment of [
+        "compaction-buffer",
+        "output-reserve",
+        "input-capacity-unavailable",
+        "safety-margin",
+      ]) {
+        expect(source["background-image"]).not.toBe(
+          segmentStyles(kind, segment)["background-image"],
+        );
+      }
     },
   );
 });

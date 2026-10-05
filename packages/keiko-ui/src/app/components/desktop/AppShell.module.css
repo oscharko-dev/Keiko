@@ -34,10 +34,13 @@
   max-width: min(520px, calc(100% - 28px));
   max-height: calc(100% - 28px);
   overflow-y: auto;
-  pointer-events: auto;
+  pointer-events: none;
+  padding: 6px;
+  box-sizing: border-box;
 }
 
 .cmpSourceAlertStack > * {
+  pointer-events: auto;
   position: static;
   flex-shrink: 0;
   box-sizing: border-box;

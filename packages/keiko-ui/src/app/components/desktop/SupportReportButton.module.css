@@ -25,6 +25,7 @@
   white-space: normal;
   overflow-wrap: anywhere;
   min-height: 28px;
+  height: auto;
   padding: 4px 8px;
   font-size: var(--text-label);
   font-weight: 400;
