@@ -876,6 +876,11 @@ selected error. Structured delivery facts preserve the source (`server` or `brow
 (`server` or `client-only`), and canonical report digest when available, including when a server report
 is served again through a local Blob. Legacy string `automatic` and `manual` values are accepted only
 for older clients. The line carries no report body, destination, filename or saved claim.
+Browser-produced reports can claim only `client-only` evidence; a server-produced report may contain
+`server` or `client-only` evidence. The ingest boundary rejects `browser` paired with `server` before
+writing a download line. These client-reported provenance fields, including `reportDigest`, are
+browser assertions, not server attestation; canonical validation of the received artifact and its
+matching server preparation/delivery evidence remain authoritative.
 
 `client.files-scope.decision` records closed source-ownership and grounding-queue state, with
 optional source/candidate counts and a binding fingerprint; it contains no source references or

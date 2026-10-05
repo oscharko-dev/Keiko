@@ -369,11 +369,14 @@ describe("client diagnostics loss evidence", () => {
     },
   );
 
-  it.each(["server", "browser"] as const)(
-    "persists the %s report identity on the download click",
-    async (source) => {
+  it.each([
+    ["server", "server"],
+    ["server", "client-only"],
+    ["browser", "client-only"],
+  ] as const)(
+    "persists the %s/%s report identity on the download click",
+    async (source, evidenceScope) => {
       const reportDigest = "ab".repeat(32);
-      const evidenceScope = source === "server" ? "server" : "client-only";
       const body = {
         message: "download",
         clientTs: CLIENT_TS,
@@ -396,6 +399,28 @@ describe("client diagnostics loss evidence", () => {
       expect(lines("client.diagnostic")).toEqual([]);
     },
   );
+
+  it("refuses browser provenance that claims server evidence before writing a download line", async () => {
+    const body = {
+      message: "private refused provenance",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_download-invalid-0001",
+      supportReportDelivery: {
+        mode: "manual",
+        source: "browser",
+        evidenceScope: "server",
+        reportDigest: "ab".repeat(32),
+      },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(400);
+    expect(lines("client.support-report.download-started")).toEqual([]);
+    const rejected = expectActivityLogProof(
+      "client.diagnostic.rejected.line",
+      lines("client.diagnostic.rejected")[0] ?? "",
+    );
+    expect(rejected).toMatchObject({ rejection: "invalid-shape", errorKind: "invalid-request" });
+    expect(JSON.stringify(rejected)).not.toMatch(/private refused|reportDigest|evidenceScope/);
+  });
 
   it("persists a started stage report as client.stage.started", async () => {
     const body = JSON.stringify({

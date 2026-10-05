@@ -111,6 +111,14 @@ that the operating system saved the file. Preparation reports the artifact's qua
 as `reportCompleteness` and `reportLoss`; the preparation event's own completeness/loss describe
 whether that event was recorded intact. Availability reasons apply only to client-only scope.
 
+The browser's separate `client.support-report.download-started` line records a manual click with
+`source`, `evidenceScope` and an optional `reportDigest`. A browser-produced report has `client-only`
+evidence; a server-produced report may have `server` or `client-only` evidence, including when its
+bytes are offered again through a browser Blob. Incoherent pairs are refused at ingest. These fields
+are browser assertions, not server attestation or proof that the file was saved. Validate the
+received artifact and use matching server preparation/delivery evidence for authoritative checks.
+Legacy string `manual` and `automatic` values remain readable for older clients.
+
 ### Local cleanup after preparing a report
 
 Preparing a report retires its temporary incident candidate; it does not prove a download was

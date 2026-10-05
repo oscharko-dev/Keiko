@@ -107,7 +107,7 @@ export function replaceGroundingScopeList<T>(
   );
 }
 
-export interface CommittedGitChat {
+interface CommittedGitChat {
   readonly chat: Chat | undefined;
   readonly confirmed: boolean;
   readonly unavailable?: boolean;
@@ -134,7 +134,7 @@ function confirmsGitScope(chat: Chat, scope: ChatGitChangeScope): boolean {
   );
 }
 
-export function projectedGitChat(
+function projectedGitChat(
   latest: Chat,
   original: Chat,
   scope: ChatGitChangeScope,

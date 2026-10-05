@@ -1745,9 +1745,14 @@ export type ClientSupportReportDelivery =
 function isReportDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
 }
-const SUPPORT_REPORT_DELIVERY_SOURCES = new Set(["server", "browser"]);
 const SUPPORT_REPORT_DELIVERY_SCOPES = new Set(["server", "client-only"]);
 const SUPPORT_REPORT_DELIVERY_KEYS = new Set(["mode", "source", "evidenceScope", "reportDigest"]);
+function hasCoherentSupportReportDeliverySource(value: Record<string, unknown>): boolean {
+  if (value.source === "browser") return value.evidenceScope === "client-only";
+  return (
+    value.source === "server" && isSetMember(value.evidenceScope, SUPPORT_REPORT_DELIVERY_SCOPES)
+  );
+}
 export function isClientSupportReportDelivery(
   value: unknown,
 ): value is ClientSupportReportDelivery {
@@ -1757,8 +1762,7 @@ export function isClientSupportReportDelivery(
     return false;
   return (
     value.mode === "manual" &&
-    isSetMember(value.source, SUPPORT_REPORT_DELIVERY_SOURCES) &&
-    isSetMember(value.evidenceScope, SUPPORT_REPORT_DELIVERY_SCOPES) &&
+    hasCoherentSupportReportDeliverySource(value) &&
     isOptional(value.reportDigest, isReportDigest)
   );
 }

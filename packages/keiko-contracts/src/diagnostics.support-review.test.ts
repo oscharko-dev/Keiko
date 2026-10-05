@@ -121,6 +121,30 @@ describe("closed support diagnostics review regressions", () => {
         expect(isClientStageIngestRequest({ ...request, parentCorrelationId })).toBe(false);
     }
   });
+  it.each([
+    ["server", "server", true],
+    ["server", "client-only", true],
+    ["browser", "client-only", true],
+    ["browser", "server", false],
+  ] as const)(
+    "validates the download source/scope pair %s/%s",
+    (source, evidenceScope, accepted) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...base,
+          supportReportDelivery: {
+            mode: "manual",
+            source,
+            evidenceScope,
+            reportDigest: "ab".repeat(32),
+          },
+        }),
+      ).toBe(accepted);
+    },
+  );
+  it.each(["manual", "automatic"])("retains older-tab delivery compatibility for %s", (mode) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, supportReportDelivery: mode })).toBe(true);
+  });
   it("accepts structured download provenance and rejects extra or malformed evidence", () => {
     const delivery = {
       mode: "manual",
