@@ -158,8 +158,14 @@ const TRIGGER_FIELD = {
 } as const;
 const OPEN_COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
 
+const FAILURE_KIND_FIELD = {
+  type: "string",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 64,
+} as const;
 const TERMINAL_FAILURE_FIELDS = {
-  failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+  failureKind: FAILURE_KIND_FIELD,
   frames: {
     type: "string-array",
     dataClass: "safe-platform-class",
@@ -359,7 +365,7 @@ const SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION = defineActivityLogOperation(
   fields: {
     ...TERMINAL_FAILURE_FIELDS,
     incidentId: INCIDENT_ID_FIELD,
-    failureKind: { ...TERMINAL_FAILURE_FIELDS.failureKind, required: true },
+    failureKind: { ...FAILURE_KIND_FIELD, required: true },
     failureStage: {
       type: "string",
       dataClass: "closed-enum",
@@ -602,7 +608,7 @@ function retirementFailure(error: unknown): RetirementFailure {
   return {
     errorKind: activityLogErrorKindOr(failureKind, "internal"),
     failureKind:
-      failureKind.length <= TERMINAL_FAILURE_FIELDS.failureKind.maxLength
+      failureKind.length <= FAILURE_KIND_FIELD.maxLength
         ? failureKind
         : contentFreeErrorClass(error),
     ...(frames.length === 0 ? {} : { frames }),
