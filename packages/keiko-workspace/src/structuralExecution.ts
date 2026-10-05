@@ -1,5 +1,6 @@
 import type {
   WorkspaceDescriptorUtf8Read,
+  WorkspaceDirEntry,
   WorkspaceDescriptorReadCompleteness,
   WorkspaceFileReader,
   WorkspaceFs,
@@ -328,26 +329,69 @@ function optionalWorkspaceOperations(
   };
 }
 
+async function closeDirectoryIterator(
+  iterator: AsyncIterator<WorkspaceDirEntry>,
+  nextPending: boolean,
+  primaryFailed: boolean,
+): Promise<void> {
+  if (iterator.return === undefined) return;
+  const closing = Promise.resolve().then(() => iterator.return?.());
+  if (!nextPending) {
+    try {
+      await closing;
+    } catch (error) {
+      if (!primaryFailed) throw error;
+    }
+    return;
+  }
+  // An async generator queues return() behind its pending next(). Cancellation must not wait
+  // for that OS read. The owning IO adapter observes cleanup failure; this handler observes
+  // rejection without replacing the stop error or claiming that the descriptor is closed.
+  void closing.catch(() => undefined);
+}
+
+async function* controlledDirectoryEntries(
+  fs: WorkspaceFs,
+  path: string,
+  control: StructuralExecutionControl,
+): AsyncIterable<WorkspaceDirEntry> {
+  const iterate = fs.iterateDirectory;
+  if (iterate === undefined) throw new TypeError("Directory iteration is unavailable.");
+  assertStructuralExecutionActive(control);
+  const iterator = iterate.call(fs, path)[Symbol.asyncIterator]();
+  let nextPending = false;
+  let finished = false;
+  let primaryFailed = false;
+  try {
+    for (;;) {
+      assertStructuralExecutionActive(control);
+      nextPending = true;
+      const next = Promise.resolve()
+        .then(() => iterator.next())
+        .finally(() => {
+          nextPending = false;
+        });
+      const entry = await raceStructuralExecution(next, control);
+      if (entry.done === true) {
+        finished = true;
+        return;
+      }
+      yield entry.value;
+    }
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
+  } finally {
+    if (!finished) await closeDirectoryIterator(iterator, nextPending, primaryFailed);
+  }
+}
+
 /**
  * Exposes the read-only workspace surface while checking the shared request control immediately
  * before every physical operation. Write capabilities are deliberately not forwarded into
  * structural retrieval. Resource cleanup is exempt so an expired request can still close a
  * descriptor that it opened while active.
  */
-async function* controlledDirectoryEntries(
-  fs: WorkspaceFs,
-  path: string,
-  control: StructuralExecutionControl,
-): AsyncIterable<import("./fs.js").WorkspaceDirEntry> {
-  const iterate = fs.iterateDirectory;
-  if (iterate === undefined) return;
-  assertStructuralExecutionActive(control);
-  for await (const entry of iterate.call(fs, path)) {
-    assertStructuralExecutionActive(control);
-    yield entry;
-  }
-}
-
 export function executionControlledWorkspaceFs(
   fs: WorkspaceFs,
   control: StructuralExecutionControl,
@@ -376,7 +420,7 @@ export function executionControlledWorkspaceFs(
     ...(fs.iterateDirectory === undefined
       ? {}
       : {
-          iterateDirectory: (path: string): AsyncIterable<import("./fs.js").WorkspaceDirEntry> =>
+          iterateDirectory: (path: string): AsyncIterable<WorkspaceDirEntry> =>
             controlledDirectoryEntries(fs, path, control),
         }),
     ...optionalSynchronousReadOperations(fs, control),

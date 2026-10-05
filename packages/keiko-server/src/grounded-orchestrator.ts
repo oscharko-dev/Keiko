@@ -9,6 +9,10 @@
 // package's already-bounded WorkspaceFs port. Path validation is enforced by every composed
 // layer at its own boundary, so this file does not re-validate scope paths.
 
+import {
+  directoryCleanupTracker,
+  observeDirectoryIteration,
+} from "./grounded-directory-iteration.js";
 import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -544,6 +548,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
         "ring-retrieval",
         "pack-assembly",
         "empty-pack-assembly",
+        "directory-cleanup",
       ],
     },
     plannedRingCount: { type: "integer", dataClass: "count", required: true },
@@ -875,6 +880,7 @@ type MutableWorkspaceIoActivityCounters = {
 interface WorkspaceIoActivity {
   readonly fs: WorkspaceFs;
   readonly diagnostics: () => WorkspaceIoActivityDiagnostics;
+  readonly settleCleanup: () => Promise<void>;
 }
 
 function searchLimitsKey(limits: SearchLimits): string {
@@ -6501,7 +6507,8 @@ type ConnectedContextPhase =
   | "workspace-detection"
   | "ring-retrieval"
   | "pack-assembly"
-  | "empty-pack-assembly";
+  | "empty-pack-assembly"
+  | "directory-cleanup";
 
 interface ConnectedContextProgress {
   scopeContextObservation?: ScopeContextObservation | undefined;
@@ -7635,23 +7642,33 @@ function observedCanonicalWorkspaceRoot(
 function observedDirectoryIteration(
   fs: WorkspaceFs,
   counters: MutableWorkspaceIoActivityCounters,
+  onCleanupFailure: (error: unknown) => void,
+  onCleanup: (cleanup: Promise<unknown>) => void,
 ): Pick<WorkspaceFs, "iterateDirectory"> {
   const iterate = workspaceFsProperty(fs, "iterateDirectory");
   if (iterate === undefined) return {};
   return {
-    iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+    iterateDirectory: (path): AsyncIterable<WorkspaceDirEntry> => {
       counters.readDirCalls += 1;
-      for await (const entry of iterate.call(fs, path)) {
-        addWorkspaceIoPayloadCount(counters, "readDirEntries", 1);
-        yield entry;
-      }
+      return observeDirectoryIteration(
+        iterate.call(fs, path),
+        (): void => {
+          addWorkspaceIoPayloadCount(counters, "readDirEntries", 1);
+        },
+        onCleanupFailure,
+        onCleanup,
+      );
     },
   };
 }
 
-function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
+function requestScopedWorkspaceFs(
+  fs: WorkspaceFs,
+  onCleanupFailure: (error: unknown) => void,
+): WorkspaceIoActivity {
   const counters: MutableWorkspaceIoActivityCounters = emptyWorkspaceIoActivityDiagnostics();
   const canonicalRoots = new Map<string, string>();
+  const cleanup = directoryCleanupTracker();
   const observedRealPath = (absolutePath: string): string => {
     counters.realPathCalls += 1;
     return fs.realPath(absolutePath);
@@ -7680,7 +7697,7 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
       counters.existsCalls += 1;
       return fs.exists(absolutePath);
     },
-    ...observedDirectoryIteration(fs, counters),
+    ...observedDirectoryIteration(fs, counters, onCleanupFailure, cleanup.observe),
     ...observedSynchronousContentReads(fs, counters),
     ...observedAsyncContentReads(fs, counters),
     canonicalWorkspaceRoot: (absoluteRoot): string =>
@@ -7689,6 +7706,7 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
   return {
     fs: observedFs,
     diagnostics: (): WorkspaceIoActivityDiagnostics => ({ ...counters }),
+    settleCleanup: cleanup.settle,
   };
 }
 
@@ -8110,6 +8128,9 @@ export async function retrieveConnectedContextPack(
   try {
     const workspaceIoActivity = requestScopedWorkspaceFs(
       input.workspaceFs ?? deps.fs ?? nodeWorkspaceFs,
+      (error): void => {
+        activity.failed(error, { ...progress, phase: "directory-cleanup" });
+      },
     );
     progress.workspaceIoActivity = workspaceIoActivity;
     const execution = await executeConnectedContextRetrieval(input, deps, {
@@ -8125,6 +8146,8 @@ export async function retrieveConnectedContextPack(
     activity.completed(execution);
     return execution.output;
   } catch (error) {
+    if (!isConnectedContextCancellation(error, safeConnectedContextErrorKind(error)))
+      await progress.workspaceIoActivity?.settleCleanup();
     activity.failed(error, progress);
     throw error;
   }

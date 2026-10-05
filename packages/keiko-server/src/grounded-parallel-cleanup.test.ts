@@ -2,6 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { createFileServerLogSink } from "./observability/index.js";
+import {
+  readPersistedActivityLog,
+  expectActivityLogProof,
+} from "../../../tests/support/activity-log-proof.js";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { join } from "node:path";
 import {
   WorkspaceReadError,
@@ -173,3 +180,154 @@ describe("parallel retrieval failure cleanup", () => {
     },
   );
 });
+
+function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((yes) => {
+    resolve = yes;
+  });
+  return { promise, resolve };
+}
+
+function stalledDirectoryFs(): {
+  fs: WorkspaceFs;
+  entered: Promise<void>;
+  released: Promise<void>;
+  release: () => void;
+  failure: Error;
+  state: { closed: boolean };
+} {
+  const entered = deferredVoid();
+  const read = deferredVoid();
+  const released = deferredVoid();
+  const failure = new TypeError("PRIVATE_DIRECTORY_CLEANUP_DETAIL");
+  const state = { closed: false };
+  const iterate = nodeWorkspaceFs.iterateDirectory;
+  if (iterate === undefined) throw new TypeError("Physical directory iteration is required.");
+  let walks = 0;
+  const fs: WorkspaceFs = {
+    ...nodeWorkspaceFs,
+    iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+      walks += 1;
+      if (walks !== 2) {
+        yield* iterate.call(nodeWorkspaceFs, path);
+        return;
+      }
+      try {
+        entered.resolve();
+        await read.promise;
+        yield { name: "late.txt", isFile: true, isDirectory: false, isSymbolicLink: false };
+      } finally {
+        state.closed = true;
+        released.resolve();
+        await Promise.reject(failure);
+      }
+    },
+  };
+  return {
+    fs,
+    entered: entered.promise,
+    released: released.promise,
+    release: read.resolve,
+    failure,
+    state,
+  };
+}
+
+it.each(["buffered", "persisted"])(
+  "returns user cancellation promptly and records a later physical cleanup failure (%s)",
+  async (mode) => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-stalled-cleanup-"));
+    roots.push(root);
+    writeFileSync(
+      join(root, "ParallelCleanupProbe.ts"),
+      "export const ParallelCleanupProbe = 73;\n",
+    );
+    writeFileSync(join(root, "ADR-123456.md"), "Recorded interval 730 hours.\n");
+    const controlled = stalledDirectoryFs();
+    const logRoot = mkdtempSync(join(tmpdir(), "keiko-stalled-cleanup-log-"));
+    roots.push(logRoot);
+    const persisted =
+      mode === "persisted" ? createFileServerLogSink(logRoot, { level: "debug" }) : undefined;
+    const caller = new AbortController();
+    const activityLog = createBufferedServerLogSink();
+    let outcome: unknown;
+    const pending = retrieveConnectedContextPack(request(root), {
+      correlationId: "stalled-cleanup-regression",
+      activityLog: {
+        write: (event): void => {
+          activityLog.write(event);
+          persisted?.write(event);
+        },
+      },
+      fs: controlled.fs,
+      signal: caller.signal,
+      nowMs: () => 0,
+      detectWorkspace: () => ({
+        root,
+        selectedRoot: root,
+        name: "cleanup fixture",
+        version: "0",
+        testFramework: "vitest",
+        sourceDirs: [],
+        testDirs: [],
+        languages: ["typescript"],
+        ignoreLines: [],
+      }),
+      answerer: { answer: () => Promise.reject(new Error("No model may be called.")) },
+    }).catch((error: unknown) => {
+      outcome = error;
+    });
+    try {
+      await controlled.entered;
+      caller.abort();
+      await nextTurn();
+      expect(outcome).toBeInstanceOf(CancelledError);
+      expect(controlled.state.closed).toBe(false);
+      expect(
+        activityLog.events.filter((event) => event.extra?.retrievalPhase === "directory-cleanup"),
+      ).toEqual([]);
+      const cancellation = outcome;
+      controlled.release();
+      await controlled.released;
+      await nextTurn();
+      expect(outcome).toBe(cancellation);
+      expect(
+        activityLog.events.filter((event) => event.extra?.retrievalPhase === "directory-cleanup"),
+      ).toMatchObject([
+        {
+          op: "search.connected-context.failed",
+          correlationId: "stalled-cleanup-regression",
+          errorKind: "internal",
+          extra: { outcome: "failed", completeness: "complete", loss: "none" },
+        },
+      ]);
+      expect(JSON.stringify(activityLog.events)).not.toContain("PRIVATE_DIRECTORY_CLEANUP_DETAIL");
+      expect(JSON.stringify(activityLog.events)).not.toContain(root);
+      if (persisted !== undefined) {
+        persisted.close?.();
+        const raw = readPersistedActivityLog(logRoot);
+        const cleanupLine = raw
+          .split("\n")
+          .find((line) => line.includes('"retrievalPhase":"directory-cleanup"'));
+        expect(cleanupLine).toBeDefined();
+        const proof = expectActivityLogProof(
+          "search.connected-context.failed.line",
+          cleanupLine ?? "",
+        );
+        expect(proof).toMatchObject({
+          correlationId: "stalled-cleanup-regression",
+          retrievalPhase: "directory-cleanup",
+          outcome: "failed",
+          errorKind: "internal",
+        });
+        expect(raw).not.toContain("PRIVATE_DIRECTORY_CLEANUP_DETAIL");
+        expect(raw).not.toContain(root);
+      }
+    } finally {
+      controlled.release();
+      await pending;
+      persisted?.close?.();
+    }
+  },
+);
