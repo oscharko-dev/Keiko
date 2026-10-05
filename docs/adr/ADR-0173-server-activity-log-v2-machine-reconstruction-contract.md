@@ -1831,8 +1831,11 @@ segment index and prove no beginning. The result accounts for each selected life
 selects diagnostic correlations in its pinned window as roots. Independently correlated, registered
 HTTP transport with no causal parent, an explicit successful numeric status (200–399), no warning, error, error kind
 or aborted flag is optional context under the existing 256-event cap; unknown or failed transport
-remains mandatory. Transport ancestors and descendants of a selected diagnostic root remain part
-of its complete causal closure. The incident header evaluates the evidence actually exported,
+remains mandatory. Other independently correlated, registered non-diagnostic activity is also
+optional only when it is informational or debug, explicitly complete and loss-free, has no failure
+lifecycle, failure facts or uncertain status, and names no causal parent. Diagnostic, warning,
+error, partial and loss evidence remains mandatory. Successful ancestors and descendants of a
+selected diagnostic root remain part of its complete causal closure. The incident header evaluates the evidence actually exported,
 including declared selection loss and budget reasons, rather than a separate unexported window.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is

@@ -18,7 +18,7 @@
 //             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
 //             lifetime without a start is complete only while its segments still run unbroken and
 //             intact from its first one. A user-reported incident also selects its pinned window's
-//             diagnostic roots; independent successful HTTP transport is bounded optional context.
+//             diagnostic roots; independent successful activity is bounded optional context.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
@@ -469,6 +469,36 @@ function routineHttpSuccess(accepted: AcceptedLine): boolean {
   );
 }
 
+/** Only positively complete, independent activity may become optional manual-report context. */
+function routineWindowActivity(accepted: AcceptedLine): boolean {
+  const view = accepted.parsed.view;
+  const schema = activityLogOperationSchema(view.op);
+  if (schema === undefined || schema.category === "diagnostic") return false;
+  if (schema.category === "http") return routineHttpSuccess(accepted);
+  if (knownCorrelation(view.parentCorrelationId)) return false;
+  return (
+    schema.lifecycle !== "failure" &&
+    schema.lifecycle !== "loss" &&
+    (view.level === "info" || view.level === "debug") &&
+    !hasFailureFacts(accepted)
+  );
+}
+
+function hasFailureFacts({ parsed: { view } }: AcceptedLine): boolean {
+  const fields = view.extra;
+  if (fields === undefined) return true;
+  return (
+    view.errorKind !== undefined ||
+    view.status !== undefined ||
+    view.frames !== undefined ||
+    view.causeChain !== undefined ||
+    fields.failureKind !== undefined ||
+    fields.errorClass !== undefined ||
+    fields.completeness !== "complete" ||
+    fields.loss !== "none"
+  );
+}
+
 /** Every diagnostic correlation inside the windows, in first-seen order (bounded). */
 function windowRoots(
   state: EngineState,
@@ -481,7 +511,7 @@ function windowRoots(
     const id = accepted.parsed.correlationId;
     if (
       !knownCorrelation(id) ||
-      routineHttpSuccess(accepted) ||
+      routineWindowActivity(accepted) ||
       !windows.some((window) => lineInWindow(window, accepted))
     )
       continue;
@@ -514,7 +544,7 @@ function closureRole(
 ): SupportQueryEventRole | undefined {
   const id = accepted.parsed.correlationId;
   if (knownCorrelation(id) && members.has(id)) return "closure";
-  if (routineHttpSuccess(accepted)) return undefined;
+  if (routineWindowActivity(accepted)) return undefined;
   return windows.some((window) => lineInWindow(window, accepted)) ? "window" : undefined;
 }
 
@@ -804,7 +834,7 @@ function isContextLine(
 ): boolean {
   if (
     knownCorrelation(accepted.parsed.correlationId) &&
-    !(routineHttpSuccess(accepted) && windows.some((window) => lineInWindow(window, accepted)))
+    !(routineWindowActivity(accepted) && windows.some((window) => lineInWindow(window, accepted)))
   )
     return false;
   const key = lifetimeKey(accepted.parsed);

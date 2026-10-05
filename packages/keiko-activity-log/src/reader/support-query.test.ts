@@ -744,6 +744,48 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
   });
 
+  it("keeps a manual diagnostic despite 4097 independent successful non-HTTP correlations", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const noise = Array.from({ length: 4097 }, (_, index) =>
+      fixtureLine(process, T0 + 100, {
+        op: "chat.response.message",
+        correlationId: `chat-success-${String(index)}`,
+      }),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      ...noise,
+      diagnostic(process, T0 + 101, IDS.root),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.truncation.state).toBe("context-truncated");
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.some((event) => event.parsed.correlationId === IDS.root)).toBe(true);
+    expect(result.events.length).toBeLessThanOrEqual(258);
+    expect(result.truncation.omittedContextEventCount).toBeGreaterThan(3800);
+    expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+  });
+
+  it.each([
+    { level: "warn" as const },
+    { level: "error" as const },
+    { errorKind: "internal" as const },
+    { fields: { completeness: "partial" } },
+    { fields: { loss: "event-dropped" } },
+  ])("keeps non-HTTP diagnostic facts mandatory: %j", (overrides) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0 + 100, {
+        op: "chat.response.message",
+        correlationId: IDS.root,
+        ...overrides,
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.role).toBe("closure");
+  });
+
   it("still rejects an explicit causal closure exceeding 4096 request children", () => {
     const process = fixtureProcess(4101, "aaaaaaa1");
     writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
