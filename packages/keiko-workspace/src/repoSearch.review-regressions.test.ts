@@ -25,21 +25,62 @@ function scope(): SearchScope {
 function query(text: string): RetrievalQuery {
   return { kind: "natural-language", text, caseSensitive: false, maxResults: 50, emittedAtMs: 0 };
 }
-function delayedFs(files: Record<string, string>, reverse: boolean): WorkspaceFs {
-  const fs = memFs("/ws", files);
-  const read = fs.readFileBytes;
+interface PendingRead {
+  readonly release: () => void;
+  readonly completed: Promise<void>;
+}
+
+function scriptedFs(
+  files: Record<string, string>,
+  reverse: boolean,
+): {
+  readonly fs: WorkspaceFs;
+  readonly starts: string[];
+  readonly completions: string[];
+  readonly releaseAll: () => Promise<void>;
+} {
+  const base = memFs("/ws", files);
+  const read = base.readFileBytes;
   if (read === undefined) throw new TypeError("A byte reader is required.");
-  return {
-    ...fs,
+  const queue: PendingRead[] = [];
+  const starts: string[] = [];
+  const completions: string[] = [];
+  let wake: (() => void) | undefined;
+  const fs: WorkspaceFs = {
+    ...base,
     readFileBytes: async (...args): Promise<Uint8Array> => {
       const path = args[0];
-      const index = Number(/file-(\d+)/u.exec(path)?.[1] ?? 0);
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, reverse ? Math.max(0, 8 - index) : index),
-      );
-      return read(...args);
+      starts.push(path);
+      let markCompleted!: () => void;
+      const completed = new Promise<void>((resolve) => {
+        markCompleted = resolve;
+      });
+      await new Promise<void>((release) => {
+        queue.push({ release, completed });
+        wake?.();
+      });
+      const bytes = await read(...args);
+      completions.push(path);
+      markCompleted();
+      return bytes;
     },
   };
+  const releaseAll = async (): Promise<void> => {
+    for (let remaining = Object.keys(files).length; remaining > 0; remaining -= 1) {
+      // Hold the first seven reads behind every later arrival in the reverse schedule. Merely
+      // reversing fixed eight-file waves would keep the same first 32 completions and miss bias.
+      const held = reverse ? Math.min(7, remaining - 1) : 0;
+      while (queue.length <= held)
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      const pending = reverse ? queue.pop() : queue.shift();
+      if (pending === undefined) throw new Error("Missing scripted read");
+      pending.release();
+      await pending.completed;
+    }
+  };
+  return { fs, starts, completions, releaseAll };
 }
 
 describe("shared streamed search review regressions", () => {
@@ -117,15 +158,17 @@ describe("shared streamed search review regressions", () => {
       { startLine: 1001, endLine: 1001 },
     );
   });
-  it("supplies deterministic ranked semantic documents under opposite read completion order", async () => {
+  it("supplies deterministic ranked semantic documents under opposing scripted read schedules", async () => {
     const files: Record<string, string> = {};
     for (let index = 0; index < 40; index += 1)
       files[`file-${String(index)}.txt`] = "session renewal available\n".repeat(300);
     const supplies: string[][] = [];
     const suppliedBytes: number[] = [];
+    const completions: string[][] = [];
     for (const reverse of [true, false]) {
-      await searchText(scope(), query("session renewal"), undefined, {
-        fs: delayedFs(files, reverse),
+      const schedule = scriptedFs(files, reverse);
+      const pending = searchText(scope(), query("session renewal"), undefined, {
+        fs: schedule.fs,
         semanticSearchProvider: {
           name: "deterministic-review",
           search: ({ documents }) => {
@@ -137,7 +180,16 @@ describe("shared streamed search review regressions", () => {
           },
         },
       });
+      await schedule.releaseAll();
+      await pending;
+      expect(schedule.completions).toHaveLength(40);
+      expect(schedule.completions[0]).toBe(schedule.starts[reverse ? 7 : 0]);
+      expect(schedule.completions.at(-1)).toBe(
+        reverse ? schedule.starts[0] : schedule.starts.at(-1),
+      );
+      completions.push(schedule.completions);
     }
+    expect(completions[0]?.slice(0, 32)).not.toEqual(completions[1]?.slice(0, 32));
     expect(supplies[0]).toHaveLength(DEFAULT_STREAMED_SEMANTIC_BOUNDS.maxDocuments);
     expect(supplies[1]).toEqual(supplies[0]);
     expect(suppliedBytes).toHaveLength(2);
@@ -152,12 +204,15 @@ describe("shared streamed search review regressions", () => {
     for (let index = 0; index < 8; index += 1)
       files[`file-${String(index)}.txt`] = "header\u0000binary";
     const limits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 3 };
-    const first = await searchText(scope(), query("missing"), limits, {
-      fs: delayedFs(files, false),
-    });
-    const second = await searchText(scope(), query("missing"), limits, {
-      fs: delayedFs(files, true),
-    });
+    const forward = scriptedFs(files, false);
+    const firstPending = searchText(scope(), query("missing"), limits, { fs: forward.fs });
+    await forward.releaseAll();
+    const first = await firstPending;
+    const reverse = scriptedFs(files, true);
+    const secondPending = searchText(scope(), query("missing"), limits, { fs: reverse.fs });
+    await reverse.releaseAll();
+    const second = await secondPending;
+    expect(reverse.completions).toEqual([...forward.completions].reverse());
     expect(first.candidates.map((candidate) => candidate.scopePath)).toEqual([
       "file-0.txt",
       "file-1.txt",

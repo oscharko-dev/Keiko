@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { memFs } from "./_memfs.js";
 import { searchText, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceDirEntry } from "./fs.js";
@@ -39,10 +39,6 @@ function reversedEntries(count: number): AsyncIterable<WorkspaceDirEntry> {
       yield { name: ".env", isFile: true, isDirectory: false, isSymbolicLink: false };
     },
   };
-}
-
-function isRetainedEntry(value: unknown): boolean {
-  return typeof value === "object" && value !== null && "atom" in value;
 }
 
 describe("streamed retained results", () => {
@@ -100,8 +96,9 @@ describe("streamed retained results", () => {
     expect(result.coverage.reasons).toContain("match-cap");
   });
 
-  it("bounds retained storage and insertion movement while keeping a late high-rank target", async (): Promise<void> => {
-    const count = 100_000;
+  it("keeps the result cap and a late high-rank target after adversarial arrival", async (): Promise<void> => {
+    // The 100k-arrival storage and comparison bound is pinned directly in repoSearchRetention.test.ts.
+    const count = 4096;
     const files: Record<string, string> = {
       "StreamProbe.ts": "export const StreamProbe = 2;\n",
       ".env": "StreamProbe=denied\n",
@@ -112,44 +109,27 @@ describe("streamed retained results", () => {
       ...memFs(ROOT, files),
       iterateDirectory: (): AsyncIterable<WorkspaceDirEntry> => reversedEntries(count),
     };
-    const original = Array.prototype.splice;
-    let shiftedEntries = 0;
-    const spy = vi.spyOn(Array.prototype, "splice").mockImplementation(function (
-      this: unknown[],
-      start: number,
-      deleteCount: number,
-      ...items: unknown[]
-    ): unknown[] {
-      if (isRetainedEntry(this[0]) && items.some(isRetainedEntry))
-        shiftedEntries += Math.max(0, this.length - start);
-      return Reflect.apply(original, this, [start, deleteCount, ...items]) as unknown[];
-    });
-    try {
-      const result = await searchText(
-        scope(),
-        {
-          kind: "exact-symbol",
-          text: "StreamProbe",
-          caseSensitive: true,
-          maxResults: 1024,
-          emittedAtMs: 1,
-        },
-        {
-          maxFilesScanned: null,
-          maxMatchesReturned: 1024,
-          maxBytesPerFileScanned: 2_097_152,
-          elapsedMsMax: null,
-        },
-        { fs, nowMs: () => 1 },
-      );
-      expect(result.filesScanned).toBe(count + 1);
-      expect(result.atoms).toHaveLength(1024);
-      expect(result.atoms[0]?.scopePath).toBe("StreamProbe.ts");
-      expect(result.atoms.some((atom) => atom.scopePath === ".env")).toBe(false);
-      expect(result.coverage.reasons).toContain("match-cap");
-      expect(shiftedEntries).toBeLessThanOrEqual((count + 1) * Math.ceil(Math.log2(1024)));
-    } finally {
-      spy.mockRestore();
-    }
-  }, 60_000);
+    const result = await searchText(
+      scope(),
+      {
+        kind: "exact-symbol",
+        text: "StreamProbe",
+        caseSensitive: true,
+        maxResults: 1024,
+        emittedAtMs: 1,
+      },
+      {
+        maxFilesScanned: null,
+        maxMatchesReturned: 1024,
+        maxBytesPerFileScanned: 2_097_152,
+        elapsedMsMax: null,
+      },
+      { fs, nowMs: () => 1 },
+    );
+    expect(result.filesScanned).toBe(count + 1);
+    expect(result.atoms).toHaveLength(1024);
+    expect(result.atoms[0]?.scopePath).toBe("StreamProbe.ts");
+    expect(result.atoms.some((atom) => atom.scopePath === ".env")).toBe(false);
+    expect(result.coverage.reasons).toContain("match-cap");
+  });
 });
