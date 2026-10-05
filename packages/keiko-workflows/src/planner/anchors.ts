@@ -160,7 +160,9 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 // Module-scope patterns are scanned only inside the bounded input envelope. Identifier and
 // path runs also have bounded backtracking per possible start position.
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
-const QUOTED_SINGLE_RE = /(?<![\p{Script=Latin}\p{N}_])'([^'\n]+)'(?![\p{Script=Latin}\p{N}_])/gu;
+// Apostrophes stay inside alphabetic words; only unspaced CJK scripts may border a quote.
+const QUOTED_SINGLE_RE =
+  /(?<!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])'([^'\n]+)'(?!(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{M}\p{N}_])/gu;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
@@ -188,7 +190,8 @@ const DEFINITION_TARGET_AFTER_NOUN_RE =
 const CAMEL_IDENTIFIER_RE =
   /\b([A-Za-z_$][A-Za-z0-9_$]{0,127}[a-z0-9][A-Z][A-Za-z0-9_$]{0,127})\b/g;
 const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]{0,127}_[A-Za-z0-9_$]{1,127})\b/g;
-const FILENAME_RE = /\b([A-Za-z0-9$-]{0,127}_[A-Za-z0-9_$-]{1,127}\.[A-Za-z0-9]{1,16})(?![\w.])/g;
+const FILENAME_RE =
+  /(?<![\p{L}\p{M}\p{N}_$.-])([\p{L}\p{N}_$-][\p{L}\p{M}\p{N}_$-]{0,254}(?:\.[A-Za-z0-9]{1,16}){1,4})(?![\p{L}\p{M}\p{N}_$-]|\.[\p{L}\p{M}\p{N}_$-])/gu;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
@@ -453,7 +456,11 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
     collected,
     isDefinitionTarget,
   );
-  remaining = collectMatches(remaining, FILENAME_RE, "identifier", 0.8, collected);
+  // Consume compound filenames before their snake/kebab fragments. Simple dotted technical
+  // aliases still reach the canonical technical-term pass below.
+  remaining = collectMatches(remaining, FILENAME_RE, "identifier", 0.8, collected, (value) =>
+    /[_-]/u.test(value),
+  );
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);

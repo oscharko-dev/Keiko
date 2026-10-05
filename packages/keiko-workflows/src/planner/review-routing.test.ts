@@ -70,16 +70,38 @@ describe("planner reviewed query routing", () => {
       });
     },
   );
-  it.each(["'UserService'の定義はどこ", "'UserService'是什麼"])(
-    "retains quoted targets adjacent to CJK text: %s",
-    (text) => {
-      expect(extractAnchors({ text, maxAnchors: 8 }).anchors).toContainEqual({
-        term: "userservice",
-        kind: "quoted",
-        weight: 1,
-      });
-    },
-  );
+  it.each([
+    ["Read lab_manual.html.", "lab_manual.html"],
+    ["Open user_service.py.", "user_service.py"],
+    ["Read user_service.test.ts", "user_service.test.ts"],
+    ["Read my_file.tar.gz", "my_file.tar.gz"],
+    ["Read foo_bar.d.ts", "foo_bar.d.ts"],
+    ["Read my-app_config.v2.json", "my-app_config.v2.json"],
+    ["Read über_service.ts.", "über_service.ts"],
+    ["Read my-app-config.ts.", "my-app-config.ts"],
+  ])("preserves a complete filename without fragment anchors: %s", (text, filename) => {
+    const anchors = extractAnchors({ text, maxAnchors: 8 }).anchors;
+    expect(anchors.filter((anchor) => anchor.kind !== "literal")).toEqual([
+      { term: filename, kind: "identifier", weight: 0.8 },
+    ]);
+    expect(anchors.filter((anchor) => anchor.kind === "literal")).toEqual([
+      { term: text.startsWith("Open") ? "open" : "read", kind: "literal", weight: 0.5 },
+    ]);
+  });
+  it.each([
+    "'UserService'の定義はどこ",
+    "'UserService'是什麼",
+    "查找'UserService'定义",
+    "'UserService'の",
+    "'UserService'は",
+    "'UserService'가",
+  ])("retains quoted targets adjacent to CJK text: %s", (text) => {
+    expect(extractAnchors({ text, maxAnchors: 8 }).anchors).toContainEqual({
+      term: "userservice",
+      kind: "quoted",
+      weight: 1,
+    });
+  });
   it("uses the same locale-independent ordering for anchor intake and plan identity", () => {
     const text = '"ö" "å" "ä" "z"';
     const before = plan(text);

@@ -53,6 +53,11 @@ describe("extractAnchors", () => {
     "What's the format of the user's profile page?",
     "Describe the user's profile and the team's account page.",
     "L'utilisateur consulte l'application.",
+    "Як працює з'єднання з базою? Де об'єкт створюється?",
+    "Де п'ять і м'яч лежать?",
+    "Τι σημαίνει απ' το και σ' αυτό;",
+    "איפה ג'ירפה ודג' נמצאים?",
+    "L'équipe compare l'application.",
   ])("does not interpret apostrophes inside words as quoted targets: %s", (text) => {
     expect(run(text).anchors.some((anchor) => anchor.kind === "quoted")).toBe(false);
   });
