@@ -189,11 +189,25 @@ function deferredVoid(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+async function* settledFixtureEntries(
+  entries: AsyncIterable<WorkspaceDirEntry>,
+  settlements: Promise<void>[],
+): AsyncIterable<WorkspaceDirEntry> {
+  const settled = deferredVoid();
+  settlements.push(settled.promise);
+  try {
+    yield* entries;
+  } finally {
+    settled.resolve();
+  }
+}
+
 function stalledDirectoryFs(): {
   fs: WorkspaceFs;
   entered: Promise<void>;
   released: Promise<void>;
   release: () => void;
+  settle: () => Promise<void>;
   failure: Error;
   state: { closed: boolean };
 } {
@@ -202,33 +216,38 @@ function stalledDirectoryFs(): {
   const released = deferredVoid();
   const failure = new TypeError("PRIVATE_DIRECTORY_CLEANUP_DETAIL");
   const state = { closed: false };
+  const settlements: Promise<void>[] = [];
   const iterate = nodeWorkspaceFs.iterateDirectory;
   if (iterate === undefined) throw new TypeError("Physical directory iteration is required.");
   let walks = 0;
-  const fs: WorkspaceFs = {
-    ...nodeWorkspaceFs,
-    iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
-      walks += 1;
-      if (walks !== 2) {
-        yield* iterate.call(nodeWorkspaceFs, path);
-        return;
-      }
-      try {
-        entered.resolve();
-        await read.promise;
-        yield { name: "late.txt", isFile: true, isDirectory: false, isSymbolicLink: false };
-      } finally {
-        state.closed = true;
-        released.resolve();
-        await Promise.reject(failure);
-      }
-    },
+  const controlledEntries = async function* (path: string): AsyncIterable<WorkspaceDirEntry> {
+    walks += 1;
+    if (walks !== 2) {
+      yield* iterate.call(nodeWorkspaceFs, path);
+      return;
+    }
+    try {
+      entered.resolve();
+      await read.promise;
+      yield { name: "late.txt", isFile: true, isDirectory: false, isSymbolicLink: false };
+    } finally {
+      state.closed = true;
+      released.resolve();
+      await Promise.reject(failure);
+    }
   };
   return {
-    fs,
+    fs: {
+      ...nodeWorkspaceFs,
+      iterateDirectory: (path): AsyncIterable<WorkspaceDirEntry> =>
+        settledFixtureEntries(controlledEntries(path), settlements),
+    },
     entered: entered.promise,
     released: released.promise,
     release: read.resolve,
+    settle: async (): Promise<void> => {
+      for (const settled of settlements) await settled;
+    },
     failure,
     state,
   };
@@ -251,6 +270,7 @@ it.each(["buffered", "persisted"])(
       mode === "persisted" ? createFileServerLogSink(logRoot, { level: "debug" }) : undefined;
     const caller = new AbortController();
     const activityLog = createBufferedServerLogSink();
+    const cleanupEmitted = deferredVoid();
     let outcome: unknown;
     const pending = retrieveConnectedContextPack(request(root), {
       correlationId: "stalled-cleanup-regression",
@@ -258,6 +278,7 @@ it.each(["buffered", "persisted"])(
         write: (event): void => {
           activityLog.write(event);
           persisted?.write(event);
+          if (event.extra?.retrievalPhase === "directory-cleanup") cleanupEmitted.resolve();
         },
       },
       fs: controlled.fs,
@@ -290,7 +311,8 @@ it.each(["buffered", "persisted"])(
       const cancellation = outcome;
       controlled.release();
       await controlled.released;
-      await nextTurn();
+      await controlled.settle();
+      await cleanupEmitted.promise;
       expect(outcome).toBe(cancellation);
       expect(
         activityLog.events.filter((event) => event.extra?.retrievalPhase === "directory-cleanup"),
@@ -327,6 +349,8 @@ it.each(["buffered", "persisted"])(
     } finally {
       controlled.release();
       await pending;
+      await controlled.settle();
+      await cleanupEmitted.promise;
       persisted?.close?.();
     }
   },
