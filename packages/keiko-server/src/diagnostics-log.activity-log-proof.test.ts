@@ -81,8 +81,13 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
         expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
         expect(supportIncidentReservationsForTests(stateDir)).toEqual([]);
       } else {
-        expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
-        expect(supportIncidentReservationsForTests(stateDir)).toHaveLength(1);
+        const incidents = listSupportIncidents(stateDir, { readOnly: true });
+        expect(incidents).toHaveLength(1);
+        const reservations = supportIncidentReservationsForTests(stateDir);
+        // A registered failure owns its capacity slot and its fingerprint claim.
+        expect(reservations).toHaveLength(2);
+        for (const reservation of reservations)
+          expect(reservation).toContain(`:${incidents[0]?.incidentId ?? "missing"}`);
       }
     },
   );
