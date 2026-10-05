@@ -240,7 +240,15 @@ The general-purpose redactor's default output remains unchanged. Persisted lexic
 before this coordinate policy are invalidated by the existing index version fence.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
 policy. Each requested filename pattern retains a bounded independent result bucket within one
-shared traversal per batch. Actual source-line inspection and final candidate ordering preserve
+shared traversal for the symbol and document batches together. Each logical query keeps its own
+fingerprint, coverage, independent retention limit, and search-call charge. The owning workspace
+request context admits only a common scope, policy, byte ceiling, signal, and elapsed control;
+it does not cache a complete corpus inventory. If declaration discovery precedes graph rings,
+requested document references join that traversal and their evidence is reused during assembly.
+Every admitted collector settles before a failure propagates; the shared iterator retains the
+existing cancellation and physical-cleanup ownership. The existing request Activity Log reports
+logical search counts separately from observed physical directory I/O.
+Actual source-line inspection and final candidate ordering preserve
 distinct requested targets before the accepted read and context budgets select answer evidence;
 a popular first target must not displace every result for another explicitly requested target.
 Definition-line lookup inspects every retained symbol candidate sequentially with the existing

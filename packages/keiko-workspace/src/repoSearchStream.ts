@@ -373,11 +373,23 @@ function collectionResult(
   };
 }
 
+async function settleCollectorFailures(
+  collectors: readonly StreamingSearchCollector[],
+  error: unknown,
+): Promise<Error> {
+  const failures = [
+    ...new Set(await Promise.all(collectors.map((collector) => collector.settleFailure(error)))),
+  ];
+  const first = failures[0];
+  if (first === undefined) throw new TypeError("A failed collector is required.");
+  return failures.length === 1 ? first : combinedCollectorFailure(failures);
+}
+
 async function collectPrimaryStream(
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
-  collector: StreamingSearchCollector,
-): Promise<StreamedSearchCollection> {
+  collectors: readonly StreamingSearchCollector[],
+): Promise<readonly StreamedSearchCollection[]> {
   const ignoreLines = extraIgnoreLinesForSearch(runner.policy);
   const workspace = {
     ...runner.scope.workspace,
@@ -392,26 +404,34 @@ async function collectPrimaryStream(
       runner.policy.applyGitignore,
       runner.fs,
       control,
-      (file) => collector.enqueue(file),
+      async (file): Promise<void> => {
+        for (const collector of collectors) await collector.enqueue(file);
+      },
       (stats): void => {
         ignored = stats.ignored;
         denied = stats.denied;
         if (stats.ioErrors > 0) {
-          collector.state.truncated = true;
-          collector.state.truncationReasons?.add("io-error");
+          for (const collector of collectors) {
+            collector.state.truncated = true;
+            collector.state.truncationReasons?.add("io-error");
+          }
         }
       },
     );
-    await collector.settle();
+    await Promise.all(collectors.map((collector) => collector.settle()));
     ignored = discovered.ignored;
     denied = discovered.denied;
   } catch (error) {
-    const failure = await collector.settleFailure(error);
+    const failure = await settleCollectorFailures(collectors, error);
     if (!(failure instanceof StructuralExecutionStoppedError)) throw failure;
-    collector.state.truncated = true;
-    collector.state.truncationReasons?.add(failure.reason);
+    for (const collector of collectors) {
+      collector.state.truncated = true;
+      collector.state.truncationReasons?.add(failure.reason);
+    }
   }
-  return collectionResult(collector, ignored + collector.ignoredByPolicy, denied);
+  return collectors.map((collector) =>
+    collectionResult(collector, ignored + collector.ignoredByPolicy, denied),
+  );
 }
 
 async function collectRescueStream(
@@ -509,7 +529,18 @@ export async function collectStreamedSearchText(
   filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamedSearchCollection> {
   const collector = new StreamingSearchCollector(runner, pathPattern, filePatternGroups);
-  const primary = await collectPrimaryStream(runner, control, collector);
+  const [primary] = await collectPrimaryStream(runner, control, [collector]);
+  if (primary === undefined) throw new TypeError("Missing primary search collection.");
+  return rescueStreamedSearch(primary, runner, control, pathPattern, filePatternGroups);
+}
+
+async function rescueStreamedSearch(
+  primary: StreamedSearchCollection,
+  runner: SearchTextRunner,
+  control: StructuralExecutionControl,
+  pathPattern?: RegExp,
+  filePatternGroups?: StreamedFilePatternGroups,
+): Promise<StreamedSearchCollection> {
   if (
     primary.atoms.length > 0 ||
     !runner.policy.omitLowValueWorkspaceFiles ||
@@ -524,4 +555,39 @@ export async function collectStreamedSearchText(
     await collectRescueStream(runner, control, pathPattern, filePatternGroups),
     runner,
   );
+}
+
+export interface StreamedFilenameSearch {
+  readonly runner: SearchTextRunner;
+  readonly pathPattern: RegExp;
+  readonly filePatternGroups: StreamedFilePatternGroups | undefined;
+}
+
+/** One admitted traversal, independent bounded collectors; no path inventory is cached. */
+export async function collectStreamedFilenameSearches(
+  searches: readonly StreamedFilenameSearch[],
+  control: StructuralExecutionControl,
+): Promise<readonly StreamedSearchCollection[]> {
+  const first = searches[0];
+  if (first === undefined) return [];
+  const collectors = searches.map(
+    (search) =>
+      new StreamingSearchCollector(search.runner, search.pathPattern, search.filePatternGroups),
+  );
+  const primary = await collectPrimaryStream(first.runner, control, collectors);
+  const results: StreamedSearchCollection[] = [];
+  for (const [index, search] of searches.entries()) {
+    const result = primary[index];
+    if (result === undefined) throw new TypeError("Missing batched search collection.");
+    results.push(
+      await rescueStreamedSearch(
+        result,
+        search.runner,
+        control,
+        search.pathPattern,
+        search.filePatternGroups,
+      ),
+    );
+  }
+  return results;
 }

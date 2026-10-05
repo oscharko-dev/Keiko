@@ -1540,3 +1540,272 @@ describe("StructuralAdapterRequestContext", () => {
     expect(context.diagnostics().candidateInventoryBuildCount).toBe(2);
   });
 });
+
+describe("shared streaming filename searches", () => {
+  function requests(): Parameters<StructuralAdapterRequestContext["findFilesBatch"]>[0] {
+    return [
+      {
+        query: filePattern("**/*.ts"),
+        limits: { ...PUBLIC_SEARCH_LIMITS, maxMatchesReturned: 2 },
+        filePatternGroups: { patterns: ["**/math.*", "**/client.*"], maxMatchesPerPattern: 1 },
+      },
+      {
+        query: filePattern("**/*"),
+        limits: { ...PUBLIC_SEARCH_LIMITS, maxMatchesReturned: 1 },
+        filePatternGroups: { patterns: ["**/*test*"], maxMatchesPerPattern: 1 },
+      },
+    ];
+  }
+
+  it("retains independent per-query results and coverage with one physical discovery", async () => {
+    const individual = countingFs();
+    const isolated = createStructuralAdapterRequestContext(
+      scope(),
+      PUBLIC_SEARCH_LIMITS,
+      individual.fs,
+      { nowMs: FIXED_NOW },
+    );
+    const expected = [];
+    for (const request of requests())
+      expected.push(
+        await isolated.findFiles(request.query, request.limits, {
+          filePatternGroups: request.filePatternGroups,
+        }),
+      );
+    const shared = countingFs();
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      PUBLIC_SEARCH_LIMITS,
+      shared.fs,
+      { nowMs: FIXED_NOW },
+    );
+    const actual = await context.findFilesBatch(requests());
+    expect(actual).toEqual(expected);
+    expect(actual.map((result) => result.atoms.length)).toEqual([2, 1]);
+    expect(shared.readDirCount()).toBeGreaterThan(0);
+    expect(individual.readDirCount()).toBe(shared.readDirCount() * 2);
+    expect(context.diagnostics().fileSearchCount).toBe(2);
+    expect(context.diagnostics().candidateInventoryBuildCount).toBe(0);
+  });
+
+  it("rejects incompatible elapsed controls before opening a directory", async () => {
+    const shared = countingFs();
+    const context = createStructuralAdapterRequestContext(
+      scope(),
+      PUBLIC_SEARCH_LIMITS,
+      shared.fs,
+      { nowMs: FIXED_NOW },
+    );
+    const inputs = requests().map((request, index) => ({
+      ...request,
+      limits: { ...request.limits, elapsedMsMax: index === 0 ? null : 1 },
+    }));
+    await expect(context.findFilesBatch(inputs)).rejects.toThrow(
+      "shared filename searches require identical traversal controls",
+    );
+    expect(shared.readDirCount()).toBe(0);
+  });
+
+  it("stops every query at the same cancellation without marking either result complete", async () => {
+    const base = memFs(ROOT, FILES);
+    const controller = new AbortController();
+    let directories = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      readDir: (path) => {
+        const entries = base.readDir(path);
+        directories += 1;
+        controller.abort(new Error("stop"));
+        return entries;
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), PUBLIC_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const results = await context.findFilesBatch(requests(), { signal: controller.signal });
+    expect(directories).toBe(1);
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result.coverage.incomplete).toBe(true);
+      expect(result.coverage.reasons).toContain("aborted");
+      expect(result.atoms).toEqual([]);
+    }
+  });
+
+  it("settles competing query collectors before returning their original failures", async () => {
+    const base = memFs(ROOT, { "src/math.ts": "export const math = 17;" });
+    const releases: (() => void)[] = [];
+    let bothEntered = (): void => undefined;
+    const entered = new Promise<void>((resolve) => {
+      bothEntered = resolve;
+    });
+    const failures = [
+      new TypeError("first collector failure"),
+      new RangeError("second collector failure"),
+    ];
+    const fs: WorkspaceFs = {
+      ...base,
+      readFileBytes: async () => {
+        const failure = failures[releases.length];
+        const release = new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        if (releases.length === 2) bothEntered();
+        await release;
+        if (failure === undefined) throw new TypeError("Unexpected additional read.");
+        throw failure;
+      },
+    };
+    const context = createStructuralAdapterRequestContext(scope(), PUBLIC_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const inputs = requests().map((request) => ({
+      ...request,
+      query: filePattern("**/*.ts"),
+      filePatternGroups: undefined,
+    }));
+    let settled = false;
+    const pending = context.findFilesBatch(inputs).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await entered;
+      releases[0]?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      releases[1]?.();
+      const result = await pending;
+      expect(result).toBeInstanceOf(AggregateError);
+      const causes = collectCauses(result);
+      expect(causes).toContain(failures[0]);
+      expect(causes).toContain(failures[1]);
+    } finally {
+      for (const release of releases) release();
+      await pending;
+    }
+  });
+
+  function collectCauses(error: unknown): readonly unknown[] {
+    if (!(error instanceof Error)) return [error];
+    return [
+      error,
+      ...collectCauses(error.cause),
+      ...(error instanceof AggregateError ? error.errors.flatMap(collectCauses) : []),
+    ];
+  }
+
+  it("preserves each query's exclusions and low-value rescue independently", async () => {
+    const files = {
+      ".git/HEAD": "ref: refs/heads/main\n",
+      "src/value.ts": "export const value = 1;",
+      "dist/ADR-1001.txt": "Archived details.",
+      "src/binary.ts": "\0binary",
+    };
+    const base = memFs(ROOT, files);
+    const fs: WorkspaceFs = {
+      ...base,
+      exists: (path) => path === `${ROOT}/.git` || base.exists(path),
+    };
+    const inputs = [
+      { query: filePattern("**/*.ts"), limits: PUBLIC_SEARCH_LIMITS },
+      { query: filePattern("**/ADR-1001.txt"), limits: PUBLIC_SEARCH_LIMITS },
+    ];
+    const individual = createStructuralAdapterRequestContext(scope(), PUBLIC_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const expected = [];
+    for (const item of inputs)
+      expected.push(
+        await individual.findFiles(item.query, item.limits, {
+          searchHints: { hasGitMetadata: true },
+        }),
+      );
+    const context = createStructuralAdapterRequestContext(scope(), PUBLIC_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const actual = await context.findFilesBatch(inputs, { searchHints: { hasGitMetadata: true } });
+    expect(actual).toEqual(expected);
+    expect(actual[0]?.diagnostics?.fileExclusionCounts?.binary).toBe(1);
+    expect(actual[1]?.atoms.map((atom) => atom.scopePath)).toEqual(["dist/ADR-1001.txt"]);
+    expect(actual[1]?.diagnostics?.lowValueRescueFilesScanned).toBeGreaterThan(0);
+  });
+
+  it("closes the shared iterator before propagating a filename collector failure", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 16 }, (_, index) => [
+        `entry-${String(index)}.ts`,
+        "export const value = 1;",
+      ]),
+    );
+    const base = memFs(ROOT, files);
+    const failure = new TypeError("collector failure");
+    let closing = (): void => undefined;
+    let release = (): void => undefined;
+    const enteredClose = new Promise<void>((resolve) => {
+      closing = resolve;
+    });
+    const closePermission = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entries = 0;
+    let closed = false;
+    const fs: WorkspaceFs = {
+      ...base,
+      readFileBytes: () => Promise.reject(failure),
+      iterateDirectory: async function* () {
+        try {
+          for (const name of Object.keys(files)) {
+            entries += 1;
+            yield { name, isFile: true, isDirectory: false, isSymbolicLink: false };
+          }
+        } finally {
+          closing();
+          await closePermission;
+          closed = true;
+        }
+      },
+    };
+    const caller = new AbortController();
+    const context = createStructuralAdapterRequestContext(scope(), PUBLIC_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    const inputs = requests().map((request) => ({
+      ...request,
+      query: filePattern("**/*.ts"),
+      filePatternGroups: undefined,
+    }));
+    let settled = false;
+    const pending = context
+      .findFilesBatch(inputs, { signal: caller.signal })
+      .catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
+    try {
+      await Promise.race([
+        enteredClose,
+        pending.then(() => {
+          throw new Error("Failure propagated before iterator closure.");
+        }),
+      ]);
+      expect(settled).toBe(false);
+      expect(closed).toBe(false);
+      release();
+      expect(collectCauses(await pending)).toContain(failure);
+      expect(closed).toBe(true);
+      expect(entries).toBeGreaterThan(0);
+      expect(entries).toBeLessThanOrEqual(8);
+      expect(caller.signal.aborted).toBe(false);
+    } finally {
+      release();
+      await pending;
+    }
+  });
+});

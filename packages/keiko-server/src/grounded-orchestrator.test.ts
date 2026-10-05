@@ -923,7 +923,7 @@ type TraversalQueryShape = "single-anchor" | "multi-anchor";
 
 function traversalQueryText(shape: TraversalQueryShape): string {
   if (shape === "single-anchor") {
-    return "Trace TraversalAlpha ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations";
+    return "Trace TraversalAlpha implementations";
   }
   return `Trace ${TRAVERSAL_SYMBOLS.join(" ")} ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations`;
 }
@@ -4000,7 +4000,7 @@ describe("runGroundedExploration", () => {
       expect.arrayContaining(["TraversalAlpha", "TraversalBeta"]),
     );
     expect(multi.foundTraversalSymbols.length).toBeGreaterThanOrEqual(6);
-    expect(single.fileSearchCount).toBe(2);
+    expect(single.fileSearchCount).toBe(1);
     expect(multi.fileSearchCount).toBe(2);
     expect(multi.searchCalls).toBeGreaterThan(single.searchCalls);
     expectBoundedRetrievalProducts(single);
@@ -6505,10 +6505,8 @@ describe("ring-retrieval directory snapshot (#3347 P1)", () => {
     ]);
   });
 
-  // A root whose fan-out reaches the smallest per-directory cap ring retrieval requests. Every
-  // existing performance fixture spreads its entries across many low-fan-out directories, where
-  // each ring's read completes BELOW its own cap — the one case the previous cache retained — so
-  // none of them can observe the repeated walk this pins.
+  // Measure every entry on the complete streaming port as well as the bounded snapshot read.
+  // The separate sentinel+2 tests above pin cache overflow; streaming has no corpus cutoff.
   const WIDE_ROOT_ENTRY_COUNT = 12_000;
 
   it("enumerates a high-fan-out workspace root once, not once per ring consumer", async () => {
@@ -6520,9 +6518,22 @@ describe("ring-retrieval directory snapshot (#3347 P1)", () => {
     for (let index = 0; index < WIDE_ROOT_ENTRY_COUNT; index += 1) {
       writeFileSync(join(fixtureRoot, `wide-${index.toString()}.txt`), "x");
     }
+    const actualRootEntryCount = nodeWorkspaceFs.readDir(fixtureRoot).length;
+    expect(actualRootEntryCount).toBeGreaterThan(WIDE_ROOT_ENTRY_COUNT);
     const rootReads: (number | undefined)[] = [];
+    const rootStreams: { entries: number }[] = [];
+    const iterate = nodeWorkspaceFs.iterateDirectory;
+    if (iterate === undefined) throw new TypeError("Physical directory iteration is required.");
     const countingFs: WorkspaceFs = {
       ...nodeWorkspaceFs,
+      iterateDirectory: async function* (path) {
+        const observation = { entries: 0 };
+        if (path === fixtureRoot) rootStreams.push(observation);
+        for await (const entry of iterate(path)) {
+          observation.entries += 1;
+          yield entry;
+        }
+      },
       readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
         if (absolutePath === fixtureRoot) rootReads.push(maxEntries);
         return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
@@ -6543,7 +6554,15 @@ describe("ring-retrieval directory snapshot (#3347 P1)", () => {
       { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs: countingFs },
     );
 
-    expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery ?? 0).toBe(0);
+    expect(rootStreams).toHaveLength(2);
+    for (const stream of rootStreams) {
+      expect(stream.entries).toBe(actualRootEntryCount);
+      expect(stream.entries).toBeGreaterThan(WIDE_ROOT_ENTRY_COUNT);
+    }
+    expect(out.pack.diagnostics?.coverage?.filesScanned).toBeGreaterThanOrEqual(
+      WIDE_ROOT_ENTRY_COUNT,
+    );
+    expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery).toBe(0);
     expect(rootReads).toEqual([SENTINEL + 1]);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   }, 20_000);

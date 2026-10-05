@@ -11,6 +11,8 @@ import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpa
 import {
   createRequestLocalSearchTextSessionPool,
   findFiles,
+  findFilesBatch,
+  type FilenameSearchRequest,
   type RequestLocalSearchTextSessionPool,
   type SearchLimits,
   type SearchResult,
@@ -67,6 +69,10 @@ export interface StructuralAdapterRequestContext {
     limits: SearchLimits,
     deps?: StructuralRequestSearchDeps,
   ) => Promise<SearchResult>;
+  readonly findFilesBatch: (
+    requests: readonly FilenameSearchRequest[],
+    deps?: Pick<StructuralRequestSearchDeps, "signal" | "searchHints">,
+  ) => Promise<readonly SearchResult[]>;
   readonly searchText: (
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -563,6 +569,24 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
             prescoreContent,
           ),
       });
+    });
+  }
+
+  public async findFilesBatch(
+    requests: readonly FilenameSearchRequest[],
+    deps: Pick<StructuralRequestSearchDeps, "signal" | "searchHints"> = {},
+  ): Promise<readonly SearchResult[]> {
+    for (const request of requests) this.assertInventoryCovers(request.limits);
+    const first = requests[0];
+    if (first === undefined) return [];
+    const control = this.searchControl(first.limits, deps);
+    this.fileSearchCount += requests.length;
+    return findFilesBatch(this.scope, requests, {
+      fs: this.executionFs,
+      nowMs: this.executionControl.nowMs,
+      deadlineAtMs: control.deadlineAtMs,
+      searchHints: this.searchHints(deps.searchHints),
+      ...(control.signal === undefined ? {} : { signal: control.signal }),
     });
   }
 

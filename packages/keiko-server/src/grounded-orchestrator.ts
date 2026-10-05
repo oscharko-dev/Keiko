@@ -1246,6 +1246,7 @@ function observedStructuralContext(
     importGraph: context.importGraph.bind(context),
     endpointContractGraph: context.endpointContractGraph.bind(context),
     findFiles: context.findFiles.bind(context),
+    findFilesBatch: context.findFilesBatch.bind(context),
     searchText: async (
       query,
       limits,
@@ -3846,31 +3847,55 @@ function reserveAugmentationSearchTerms(
   return terms.length > 0 && budget.tryReserveSearchCall() ? terms : [];
 }
 
-async function documentReferenceAtoms(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  requestContext: StructuralAdapterRequestContext,
-  budget: AugmentationBudgetMeter,
-): Promise<DeterministicContextEvidence> {
-  const terms = reserveAugmentationSearchTerms(documentReferenceAnchorTerms(plan), signal, budget);
-  if (terms.length === 0) return { atoms: [], uncertainty: [] };
-  const maxMatches = DOCUMENT_REFERENCE_MATCHES_MAX * terms.length;
-  const result = await requestContext.findFiles(
-    { ...symbolFileQuery(input, "**/*"), maxResults: maxMatches },
-    { ...DOCUMENT_REFERENCE_SEARCH_LIMITS, maxMatchesReturned: maxMatches },
-    {
-      ...(signal === undefined ? {} : { signal }),
-      searchHints: { retrievalIntent: plan.retrievalIntent },
-      filePatternGroups: {
-        patterns: terms.map((term) => `**${term}*`),
-        maxMatchesPerPattern: DOCUMENT_REFERENCE_MATCHES_MAX,
-      },
-    },
+type FilenameSearchRequest = Parameters<
+  StructuralAdapterRequestContext["findFilesBatch"]
+>[0][number];
+interface FilenameSearchTarget {
+  readonly kind: "symbol" | "document";
+  readonly terms: readonly string[];
+  readonly request: FilenameSearchRequest;
+}
+
+function filenameSearchTargets(
+  inputs: DeterministicContextInputs,
+): readonly FilenameSearchTarget[] {
+  const { input, plan, signal, budget } = inputs;
+  const symbols = reserveAugmentationSearchTerms(symbolFileAnchorTerms(plan), signal, budget);
+  const documents = reserveAugmentationSearchTerms(
+    documentReferenceAnchorTerms(plan),
+    signal,
+    budget,
   );
-  const marker = documentReferenceCoverageMarker(terms.join(", "), result.coverage, nowMs);
-  return { atoms: result.atoms, uncertainty: marker === undefined ? [] : [marker] };
+  const targets: FilenameSearchTarget[] = [];
+  if (symbols.length > 0)
+    targets.push({
+      kind: "symbol",
+      terms: symbols,
+      request: {
+        query: symbolFileQuery(input, "**/*"),
+        limits: SYMBOL_FILE_SEARCH_LIMITS,
+        filePatternGroups: {
+          patterns: symbols.map((term) => `**/${term}.*`),
+          maxMatchesPerPattern: SYMBOL_FILE_MATCHES_MAX,
+        },
+      },
+    });
+  if (documents.length > 0) {
+    const maxMatches = DOCUMENT_REFERENCE_MATCHES_MAX * documents.length;
+    targets.push({
+      kind: "document",
+      terms: documents,
+      request: {
+        query: { ...symbolFileQuery(input, "**/*"), maxResults: maxMatches },
+        limits: { ...DOCUMENT_REFERENCE_SEARCH_LIMITS, maxMatchesReturned: maxMatches },
+        filePatternGroups: {
+          patterns: documents.map((term) => `**${term}*`),
+          maxMatchesPerPattern: DOCUMENT_REFERENCE_MATCHES_MAX,
+        },
+      },
+    });
+  }
+  return targets;
 }
 
 // eslint-disable-next-line complexity -- Guard chain keeps symbol-anchor filtering explicit.
@@ -4128,45 +4153,61 @@ function symbolLineDeadlineMarker(
   };
 }
 
-// One admitted traversal discovers all requested symbol filenames. Independent bounded pattern
-// buckets preserve each target before the fair emitted result selection.
-async function collectSymbolDefinitionMatches(
-  terms: readonly string[],
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  requestContext: StructuralAdapterRequestContext,
-  budget: AugmentationBudgetMeter,
-): Promise<{
+interface SymbolFilenameMatches {
   readonly terms: readonly string[];
   readonly matches: readonly SymbolDefinitionMatch[];
   readonly uncertainty: readonly UncertaintyMarker[];
-}> {
-  const reservedTerms = reserveAugmentationSearchTerms(terms, signal, budget);
-  if (reservedTerms.length === 0) return { terms: [], matches: [], uncertainty: [] };
-  const result = await requestContext.findFiles(
-    symbolFileQuery(input, "**/*"),
-    SYMBOL_FILE_SEARCH_LIMITS,
-    {
-      ...(signal === undefined ? {} : { signal }),
-      searchHints: { retrievalIntent: plan.retrievalIntent },
-      filePatternGroups: {
-        patterns: reservedTerms.map((term) => `**/${term}.*`),
-        maxMatchesPerPattern: SYMBOL_FILE_MATCHES_MAX,
-      },
-    },
-  );
+}
+
+function symbolFilenameMatches(
+  terms: readonly string[],
+  result: SearchResult,
+  nowMs: () => number,
+): SymbolFilenameMatches {
   const matches: SymbolDefinitionMatch[] = [];
   for (const atom of result.atoms) {
-    for (const term of reservedTerms) {
+    for (const term of terms) {
       if (isSymbolDefinitionPath(atom.scopePath, term)) {
         matches.push({ atom, term, priority: symbolDefinitionPriority(atom.scopePath, term) });
       }
     }
   }
-  const marker = symbolCoverageIncomplete(reservedTerms.join(", "), result.coverage, nowMs);
-  return { terms: reservedTerms, matches, uncertainty: marker === undefined ? [] : [marker] };
+  const marker = symbolCoverageIncomplete(terms.join(", "), result.coverage, nowMs);
+  return { terms, matches, uncertainty: marker === undefined ? [] : [marker] };
+}
+
+async function collectFilenameMatches(
+  inputs: DeterministicContextInputs,
+  requestContext: StructuralAdapterRequestContext,
+): Promise<{
+  readonly symbols: SymbolFilenameMatches;
+  readonly documents: DeterministicContextEvidence;
+}> {
+  const targets = filenameSearchTargets(inputs);
+  const results = await requestContext.findFilesBatch(
+    targets.map((target) => target.request),
+    {
+      signal: inputs.signal,
+      searchHints: { retrievalIntent: inputs.plan.retrievalIntent },
+    },
+  );
+  let symbols: SymbolFilenameMatches = { terms: [], matches: [], uncertainty: [] };
+  let documents: DeterministicContextEvidence = { atoms: [], uncertainty: [] };
+  for (const [index, target] of targets.entries()) {
+    const result = results[index];
+    if (result === undefined) throw new TypeError("Missing filename search result.");
+    if (target.kind === "symbol")
+      symbols = symbolFilenameMatches(target.terms, result, inputs.nowMs);
+    else {
+      const marker = documentReferenceCoverageMarker(
+        target.terms.join(", "),
+        result.coverage,
+        inputs.nowMs,
+      );
+      documents = { atoms: result.atoms, uncertainty: marker === undefined ? [] : [marker] };
+    }
+  }
+  return { symbols, documents };
 }
 
 function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: EvidenceAtom): void {
@@ -4323,36 +4364,19 @@ async function symbolFileAtoms(
   inputs: DeterministicContextInputs,
   requestContext: StructuralAdapterRequestContext,
 ): Promise<SymbolDiscoveryResult> {
-  const { input, plan, searchScope, fs, nowMs, signal, deadlineAtMs, budget } = inputs;
-  const terms = symbolFileAnchorTerms(plan);
-  if (terms.length === 0) {
-    return { atoms: [], uncertainty: [] };
-  }
-  const collected = await collectSymbolDefinitionMatches(
-    terms,
-    input,
-    plan,
-    nowMs,
-    signal,
-    requestContext,
-    budget,
-  );
-  if (collected.terms.length === 0) return { atoms: [], uncertainty: [] };
+  const { input, searchScope, fs, nowMs, signal, deadlineAtMs } = inputs;
+  // Both requested filename families share discovery, including the early declaration phase.
+  // Each remains a separately charged query with its own retention and coverage.
+  const { symbols, documents } = await collectFilenameMatches(inputs, requestContext);
   const prioritized = collectPrioritizedSymbolAtoms(
-    {
-      input,
-      searchScope,
-      fs,
-      nowMs,
-      signal,
-      deadlineAtMs,
-    },
-    withLexicalSymbolCandidates(collected.matches, collected.terms, inputs.lexicalAtoms ?? []),
-    collected.terms,
+    { input, searchScope, fs, nowMs, signal, deadlineAtMs },
+    withLexicalSymbolCandidates(symbols.matches, symbols.terms, inputs.lexicalAtoms ?? []),
+    symbols.terms,
   );
   return {
     ...prioritized,
-    uncertainty: [...collected.uncertainty, ...prioritized.uncertainty],
+    atoms: [...prioritized.atoms, ...documents.atoms],
+    uncertainty: [...symbols.uncertainty, ...prioritized.uncertainty, ...documents.uncertainty],
   };
 }
 
@@ -4951,7 +4975,6 @@ function metadataRetentionUncertainty(
 type ParallelDeterministicEvidence = readonly [
   DeterministicContextEvidence,
   DeterministicContextEvidence,
-  DeterministicContextEvidence,
 ];
 
 // The one request-scoped input set every deterministic-evidence step reads, kept as a single value
@@ -5004,7 +5027,6 @@ async function collectParallelDeterministicEvidence(
     inputs.symbolDiscovery === undefined
       ? symbolFileAtoms({ ...inputs, signal }, fileSearchContext)
       : Promise.resolve({ atoms: [], uncertainty: [] }),
-    documentReferenceAtoms(input, plan, nowMs, signal, fileSearchContext, budget),
   ] as const;
   return settleParallelStage(Promise.all(pending), pending, controller);
 }
@@ -5024,15 +5046,13 @@ async function deterministicContextEvidence(
 ): Promise<DeterministicContextEvidence> {
   const fileSearchContext = inputs.structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS);
   const traceContext = inputs.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
-  const [traceEvidence, symbolDiscovery, referencedDocuments] =
-    await collectParallelDeterministicEvidence(inputs, fileSearchContext, traceContext);
+  const [traceEvidence, filenameDiscovery] = await collectParallelDeterministicEvidence(
+    inputs,
+    fileSearchContext,
+    traceContext,
+  );
   const metadata = await deterministicMetadataAtoms(inputs);
-  return mergeDeterministicEvidence([
-    symbolDiscovery,
-    traceEvidence,
-    referencedDocuments,
-    metadata,
-  ]);
+  return mergeDeterministicEvidence([filenameDiscovery, traceEvidence, metadata]);
 }
 
 async function withDeterministicContextAtoms(

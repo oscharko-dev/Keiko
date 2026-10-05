@@ -48,69 +48,54 @@ function request(root: string): OrchestratorInput {
 
 function interruptedWalkFs(
   root: string,
-  failedWalk: number,
+  failAfterEntry: boolean,
 ): {
   fs: WorkspaceFs;
   failure: WorkspaceReadError;
   closing: Promise<void>;
   releaseClose: () => void;
-  state: { rootWalks: number; siblingClosed: boolean; siblingEntries: number };
+  state: { rootWalks: number; sharedClosed: boolean; sharedEntries: number };
 } {
   const canonicalRoot = nodeWorkspaceFs.realPath(root);
   const iterate = nodeWorkspaceFs.iterateDirectory;
   if (iterate === undefined) throw new TypeError("Physical directory iteration is required.");
-  const state = { rootWalks: 0, siblingClosed: false, siblingEntries: 0 };
+  const state = { rootWalks: 0, sharedClosed: false, sharedEntries: 0 };
   const failure = new WorkspaceReadError("controlled directory read failure", ".");
-  let started = (): void => undefined;
-  let closing = (): void => undefined;
-  let releaseClose = (): void => undefined;
-  const siblingStarted = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const siblingClosing = new Promise<void>((resolve) => {
-    closing = resolve;
-  });
-  const closePermission = new Promise<void>((resolve) => {
-    releaseClose = resolve;
-  });
-  const siblingWalk = failedWalk === 2 ? 3 : 2;
+  const closing = deferredVoid();
+  const closePermission = deferredVoid();
   const fs: WorkspaceFs = {
     ...nodeWorkspaceFs,
     iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
       const walk = path === canonicalRoot ? ++state.rootWalks : 0;
-      if (walk === failedWalk) {
-        await siblingStarted;
-        throw failure;
+      if (walk !== 2) {
+        yield* iterate(path);
+        return;
       }
       try {
-        for await (const entry of iterate(path)) {
-          if (walk === siblingWalk) {
-            state.siblingEntries += 1;
-            if (state.siblingEntries === 1) {
-              started();
-              // Let the rejected sibling propagate through promise continuations before the
-              // admitted directory read returns; no duration or machine-speed assumption.
-              await new Promise<void>((resolve) => setImmediate(resolve));
-            }
-          }
-          yield entry;
+        if (failAfterEntry) {
+          state.sharedEntries += 1;
+          yield {
+            name: "ParallelCleanupProbe.ts",
+            isFile: true,
+            isDirectory: false,
+            isSymbolicLink: false,
+          };
         }
+        throw failure;
       } finally {
-        if (walk === siblingWalk) {
-          closing();
-          await closePermission;
-          state.siblingClosed = true;
-        }
+        closing.resolve();
+        await closePermission.promise;
+        state.sharedClosed = true;
       }
     },
   };
-  return { fs, failure, closing: siblingClosing, releaseClose, state };
+  return { fs, failure, closing: closing.promise, releaseClose: closePermission.resolve, state };
 }
 
-describe("parallel retrieval failure cleanup", () => {
-  it.each([2, 3])(
-    "closes the sibling iterator before propagating auxiliary walk %i failure",
-    async (failedWalk) => {
+describe("shared filename traversal failure cleanup", () => {
+  it.each([false, true])(
+    "closes the shared symbol/document iterator before propagating failure (entry yielded: %s)",
+    async (failAfterEntry) => {
       const root = mkdtempSync(join(tmpdir(), "keiko-parallel-cleanup-"));
       roots.push(root);
       writeFileSync(
@@ -120,7 +105,7 @@ describe("parallel retrieval failure cleanup", () => {
       writeFileSync(join(root, "ADR-123456.md"), "Recorded interval 730 hours.\n");
       for (let index = 0; index < 10; index += 1)
         writeFileSync(join(root, `noise-${String(index)}.txt`), "Unrelated ordinary text.\n");
-      const controlled = interruptedWalkFs(root, failedWalk);
+      const controlled = interruptedWalkFs(root, failAfterEntry);
       const caller = new AbortController();
       const activityLog = createBufferedServerLogSink();
       let settled = false;
@@ -156,13 +141,13 @@ describe("parallel retrieval failure cleanup", () => {
         await controlled.closing;
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(settled).toBe(false);
-        expect(controlled.state.siblingClosed).toBe(false);
+        expect(controlled.state.sharedClosed).toBe(false);
         expect(activityLog.events.filter((event) => event.op.endsWith(".failed"))).toEqual([]);
         controlled.releaseClose();
         expect(await pending).toBe(controlled.failure);
-        expect(controlled.state.rootWalks).toBe(3);
-        expect(controlled.state.siblingClosed).toBe(true);
-        expect(controlled.state.siblingEntries).toBeLessThanOrEqual(1);
+        expect(controlled.state.rootWalks).toBe(2);
+        expect(controlled.state.sharedClosed).toBe(true);
+        expect(controlled.state.sharedEntries).toBeLessThanOrEqual(1);
         expect(caller.signal.aborted).toBe(false);
         expect(
           activityLog.events.filter((event) => event.op === "search.connected-context.failed"),

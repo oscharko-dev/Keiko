@@ -191,18 +191,20 @@ describe("createExplorationPlan", () => {
     expect(p.clarification?.reason).toBe("too-generic");
   });
 
-  it.each(["Was siehst du?", "Wie funktioniert die Anmeldung?", "Warum ist die Suche kaputt?"])(
-    "searches an explicitly connected repository without requiring a code anchor: %s",
-    (text) => {
-      const p = plan({
-        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({ text }),
-      });
-      expect(p.state).toBe("ready");
-      expect(p.rings.length).toBeGreaterThan(0);
-      expect(p.budget).toEqual(DEFAULT_EXPLORATION_BUDGET);
-    },
-  );
+  it.each([
+    "tell me everything",
+    "Was siehst du?",
+    "Wie funktioniert die Anmeldung?",
+    "Warum ist die Suche kaputt?",
+  ])("searches an explicitly connected repository without requiring a code anchor: %s", (text) => {
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(p.state).toBe("ready");
+    expect(p.rings.length).toBeGreaterThan(0);
+    expect(p.budget).toEqual(DEFAULT_EXPLORATION_BUDGET);
+  });
 
   it("explicitConnection: workspace-root allows project metadata lookups", () => {
     const scope = happyScope({

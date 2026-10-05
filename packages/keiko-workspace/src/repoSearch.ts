@@ -103,6 +103,8 @@ import {
 } from "./repoSearchExcerptWindow.js";
 import {
   collectStreamedSearchText,
+  collectStreamedFilenameSearches,
+  type StreamedFilenameSearch,
   type StreamedSearchCollection,
   type StreamedFilePatternGroups,
 } from "./repoSearchStream.js";
@@ -2623,6 +2625,13 @@ async function executeStreamedSearchText(
     pathPattern,
     filePatternGroups,
   );
+  return streamedSearchResult(runner, collected);
+}
+
+async function streamedSearchResult(
+  runner: SearchTextRunner,
+  collected: StreamedSearchCollection,
+): Promise<SearchResult> {
   const semantic = await collectStreamedSemanticMatches(runner, collected.state);
   const atoms = mergeSearchAtoms(
     collected.atoms,
@@ -3513,6 +3522,68 @@ export async function findFiles(
       candidateSetFor: deps.candidateSetFor,
       deadlineAtMs: deps.deadlineAtMs,
       signal: deps.signal,
+    }),
+  );
+}
+
+export interface FilenameSearchRequest {
+  readonly query: RetrievalQuery;
+  readonly limits: SearchLimits;
+  readonly filePatternGroups?: FacadeDeps["filePatternGroups"];
+}
+
+function prepareFilenameSearch(
+  scope: SearchScope,
+  request: FilenameSearchRequest,
+  deps: FacadeDeps,
+): StreamedFilenameSearch {
+  const { query, limits, filePatternGroups } = request;
+  assertQuery(query);
+  if (query.kind !== "file-pattern" || limits.maxFilesScanned !== null)
+    throw new RepoSearchInvalidQueryError(
+      "shared filename searches require streaming file-pattern queries",
+    );
+  return {
+    runner: {
+      ...searchTextRunner(scope, { ...query, kind: "regex", text: "." }, limits, deps),
+      query,
+      fingerprint: fileListingFingerprint(query, filePatternGroups),
+    },
+    pathPattern: compileGlob(query.text, query.caseSensitive),
+    filePatternGroups: compileFilePatternGroups(filePatternGroups, query, limits),
+  };
+}
+
+/** Internal request-context batch: common scope/control with independent query retention. */
+export async function findFilesBatch(
+  scope: SearchScope,
+  requests: readonly FilenameSearchRequest[],
+  deps: FacadeDeps,
+): Promise<readonly SearchResult[]> {
+  assertWorkspaceRoot(scope.workspace);
+  validateSearchScopeRelativePaths(scope.relativePaths);
+  const searches = requests.map((request) => prepareFilenameSearch(scope, request, deps));
+  const first = searches[0];
+  if (first === undefined) return [];
+  for (const search of searches) {
+    if (
+      search.runner.limits.elapsedMsMax !== first.runner.limits.elapsedMsMax ||
+      search.runner.limits.maxBytesPerFileScanned !== first.runner.limits.maxBytesPerFileScanned ||
+      JSON.stringify(search.runner.policy) !== JSON.stringify(first.runner.policy)
+    )
+      throw new RepoSearchInvalidQueryError(
+        "shared filename searches require identical traversal controls",
+      );
+  }
+  const collected = await collectStreamedFilenameSearches(
+    searches,
+    runnerExecutionControl(first.runner),
+  );
+  return Promise.all(
+    searches.map((search, index) => {
+      const result = collected[index];
+      if (result === undefined) throw new TypeError("Missing batched filename result.");
+      return streamedSearchResult(search.runner, result);
     }),
   );
 }
