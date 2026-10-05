@@ -4,7 +4,10 @@ import {
   recordGroundedPackValidation,
   GROUNDED_PACK_VALIDATION_MESSAGE,
 } from "./grounded-pack-validation.js";
-import { parseExpectedGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import {
+  deriveChatGroundingScopeIdentity,
+  parseExpectedGroundingScopeIdentity,
+} from "./store/chat-grounding-scope-identity.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
@@ -200,7 +203,6 @@ import {
   documentFormatForAtom,
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
-import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import {
   captureConversationReadinessAdmission,
