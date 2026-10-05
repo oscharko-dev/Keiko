@@ -130,18 +130,9 @@ export function groundedConversationLaneProfile(modelProfile: ContextProfile): C
   });
 }
 
-/** Select the same conversation geometry for sending, inspecting and manual compaction. */
-export function conversationProfileFor(
-  modelProfile: ContextProfile,
-  grounded: boolean,
-): ContextProfile {
-  return grounded ? groundedConversationLaneProfile(modelProfile) : modelProfile;
-}
-
 function continuityProfile(deps: UiHandlerDeps, modelId: string): ContextProfile {
-  return conversationProfileFor(
+  return groundedConversationLaneProfile(
     currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    true,
   );
 }
 

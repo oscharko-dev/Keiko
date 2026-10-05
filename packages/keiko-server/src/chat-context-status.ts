@@ -39,7 +39,7 @@ import {
 } from "./chat-compaction-thresholds.js";
 import { hasGroundingScope } from "./chat-grounding.js";
 import {
-  conversationProfileFor,
+  groundedConversationLaneProfile,
   groundedHistoryLaneTokens,
 } from "./grounded-conversation-continuity.js";
 
@@ -297,7 +297,8 @@ export function readChatContextStatus(
   // Checkpoint validity, counting and pending compaction use the same conversation profile as
   // the grounded send path. Comparing its 8,000-token checkpoint against a full model window
   // would discard a valid checkpoint as though that lane had expanded.
-  const conversationProfile = conversationProfileFor(profile, currentGrounding !== undefined);
+  const conversationProfile =
+    currentGrounding === undefined ? profile : groundedConversationLaneProfile(profile);
   const checkpoint = checkpointForProfile(deps, chatId, conversationProfile, correlationId);
   const counted = countHistory(deps, chatId, conversationProfile, checkpoint);
   const currentPrompt = currentGroundedRequest(
@@ -377,10 +378,10 @@ function manualCompactionCandidate(
   correlationId: string,
 ): ContextCompactionRecord | undefined {
   const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const profile = conversationProfileFor(
-    modelProfile,
-    groundedShare(deps, chatId, modelProfile) !== undefined,
-  );
+  const profile =
+    groundedShare(deps, chatId, modelProfile) === undefined
+      ? modelProfile
+      : groundedConversationLaneProfile(modelProfile);
   const snapshot = captureChatHistoryWithCheckpoint(
     deps.store,
     deps.evidenceStore,
