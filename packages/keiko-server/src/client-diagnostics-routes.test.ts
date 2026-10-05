@@ -1353,12 +1353,7 @@ describe("POST /api/diagnostics/client", () => {
     "persists the closed Files ownership decision %s as routine causal evidence",
     async (decision) => {
       const sink = captureServerLog();
-      const filesScopeDecision = {
-        decision,
-        sourceCount: 1,
-        candidateCount: 2,
-        bindingFingerprint: "a".repeat(64),
-      };
+      const filesScopeDecision = { decision };
       expect(
         await handleClientDiagnosticIngest(
           context(
@@ -1389,6 +1384,51 @@ describe("POST /api/diagnostics/client", () => {
       expect(record).not.toHaveProperty("messageDigest");
     },
   );
+  it.each([
+    { decision: "restored", sourceCount: 3, candidateCount: 2, bindingFingerprint: "a".repeat(64) },
+    { decision: "released", sourceCount: 0 },
+    { decision: "ack-invalidated", candidateCount: 1 },
+  ])("persists producer-defined scope fields %j", async (filesScopeDecision) => {
+    const sink = captureServerLog();
+    const response = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "Keiko Files scope ownership decision.",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_scope-fields-0001",
+          filesScopeDecision,
+        }),
+      ),
+    );
+    expect(response.status).toBe(204);
+    const event = sink.events.find((record) => record.op === "client.files-scope.decision");
+    expect(
+      expectActivityLogProof(
+        "client.files-scope.decision.line",
+        formatActivityLogProofLine(event ?? {}),
+      ),
+    ).toMatchObject(filesScopeDecision);
+  });
+  it.each([
+    { decision: "restored", sourceCount: Number.MAX_SAFE_INTEGER },
+    { decision: "restored", sourceCount: 1, candidateCount: 2 },
+    { decision: "timeout-rejected", candidateCount: 1 },
+  ])("refuses impossible scope evidence before persistence %j", async (filesScopeDecision) => {
+    const sink = captureServerLog();
+    const response = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "Keiko Files scope ownership decision.",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_scope-fields-0001",
+          filesScopeDecision,
+        }),
+      ),
+    );
+    expect(response.status).toBe(400);
+    expect(sink.events.some((record) => record.op === "client.files-scope.decision")).toBe(false);
+    expect(sink.events.some((record) => record.op === "client.diagnostic.rejected")).toBe(true);
+  });
   it.each(["files", "local-knowledge", "git-change"])(
     "persists the refused %s grounding action under its own correlation and blocker parent",
     async (mutationSurface) => {

@@ -1198,6 +1198,8 @@ const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
       required: true,
       values: CLIENT_FILES_SCOPE_DECISIONS,
     },
+    // Ingress validates these against the producer's array lengths and decision-specific fields.
+    // The registry count primitive has no numeric-bound property; do not invent an inert one here.
     sourceCount: { type: "integer", dataClass: "count", required: false },
     candidateCount: { type: "integer", dataClass: "count", required: false },
     bindingFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },

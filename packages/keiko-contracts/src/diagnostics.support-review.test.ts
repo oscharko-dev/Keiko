@@ -146,3 +146,27 @@ describe("closed support diagnostics review regressions", () => {
       ).toBe(false);
   });
 });
+
+describe("Files-scope evidence field coherence", () => {
+  it.each([
+    { decision: "restored", sourceCount: Number.MAX_SAFE_INTEGER },
+    { decision: "restored", candidateCount: 2 ** 32 },
+    { decision: "restored", sourceCount: 1, candidateCount: 2 },
+    { decision: "timeout-rejected", sourceCount: 1 },
+    { decision: "conflict-retried", candidateCount: 1 },
+    { decision: "automatic-suppressed", bindingFingerprint: "a".repeat(64) },
+    { decision: "acknowledged", mutationSurface: "files" },
+  ])("rejects fields without a producer meaning: %j", (filesScopeDecision) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, filesScopeDecision })).toBe(false);
+  });
+  it("accepts the technical array length boundary without allocating that array", () => {
+    const scope = { decision: "restored", sourceCount: 2 ** 32 - 1, candidateCount: 2 ** 32 - 1 };
+    expect(isClientDiagnosticIngestRequest({ ...base, filesScopeDecision: scope })).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        filesScopeDecision: { ...scope, sourceCount: 2 ** 32 },
+      }),
+    ).toBe(false);
+  });
+});

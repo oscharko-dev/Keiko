@@ -1812,7 +1812,7 @@ describe("Files scope ownership decision evidence", () => {
   );
   const decision = {
     decision: "blocked-ambiguous",
-    sourceCount: 1,
+    sourceCount: 3,
     candidateCount: 2,
     bindingFingerprint: "a".repeat(64),
   };

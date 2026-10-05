@@ -232,8 +232,8 @@ it("routes Files ownership decisions without replacing a real global failure", a
   const written: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
   setClientDiagnosticWriter((message, meta) => written.push({ message, meta }));
   reportFilesScopeDecision("ui_scope-decision-0001", {
-    decision: "timeout-recovered",
-    sourceCount: 1,
+    decision: "restored",
+    sourceCount: 3,
     candidateCount: 2,
     bindingFingerprint: "a".repeat(64),
   });
@@ -244,8 +244,8 @@ it("routes Files ownership decisions without replacing a real global failure", a
       meta: {
         correlationId: "ui_scope-decision-0001",
         filesScopeDecision: {
-          decision: "timeout-recovered",
-          sourceCount: 1,
+          decision: "restored",
+          sourceCount: 3,
           candidateCount: 2,
           bindingFingerprint: "a".repeat(64),
         },

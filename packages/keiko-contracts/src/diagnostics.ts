@@ -1893,9 +1893,47 @@ const FILES_SCOPE_DECISION_KEYS = new Set([
   "mutationSurface",
   "rejectionCount",
 ]);
+const SCOPE_OWNERSHIP_DECISIONS: ReadonlySet<unknown> = new Set([
+  "restored",
+  "released",
+  "blocked-ambiguous",
+  "fingerprint-absent",
+  "acknowledged",
+]);
+const SCOPE_MUTATION_DECISIONS: ReadonlySet<unknown> = new Set([
+  "conflict-retried",
+  "timeout-blocked",
+  "timeout-recovered",
+  "timeout-rejected",
+  "request-superseded",
+]);
 function isScopeDecisionCount(value: unknown): boolean {
   return (
     value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+function hasCoherentScopeDecisionFields(value: Record<string, unknown>): boolean {
+  const ownership = SCOPE_OWNERSHIP_DECISIONS.has(value.decision);
+  const candidate = ownership || value.decision === "ack-invalidated";
+  return (
+    (value.sourceCount === undefined || ownership) &&
+    (value.candidateCount === undefined || candidate) &&
+    (value.bindingFingerprint === undefined || candidate) &&
+    (value.mutationSurface === undefined || SCOPE_MUTATION_DECISIONS.has(value.decision))
+  );
+}
+function hasValidScopeArrayCounts(value: Record<string, unknown>): boolean {
+  // These producers count JS arrays of connected scopes, whose length cannot exceed uint32.
+  // This is an evidence representation constraint, not a recursive-search file-count limit.
+  const arrayLengthMax = 0xffff_ffff;
+  return (
+    (value.sourceCount === undefined ||
+      isBoundedNonNegativeInteger(value.sourceCount, arrayLengthMax)) &&
+    (value.candidateCount === undefined ||
+      isBoundedNonNegativeInteger(value.candidateCount, arrayLengthMax)) &&
+    (typeof value.sourceCount !== "number" ||
+      typeof value.candidateCount !== "number" ||
+      value.candidateCount <= value.sourceCount)
   );
 }
 function isClientFilesScopeDecision(value: unknown): value is ClientFilesScopeDecision {
@@ -1905,8 +1943,8 @@ function isClientFilesScopeDecision(value: unknown): value is ClientFilesScopeDe
     FILES_SCOPE_DECISIONS.has(value.decision) &&
     (value.mutationSurface === undefined ||
       GROUNDING_MUTATION_SURFACES.has(value.mutationSurface)) &&
-    isScopeDecisionCount(value.sourceCount) &&
-    isScopeDecisionCount(value.candidateCount) &&
+    hasValidScopeArrayCounts(value) &&
+    hasCoherentScopeDecisionFields(value) &&
     hasValidScopeRejectionCount(value) &&
     isOptional(value.bindingFingerprint, isScopeBindingFingerprint)
   );
