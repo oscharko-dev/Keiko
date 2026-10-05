@@ -571,20 +571,24 @@ it("records a failed actual reveal with its cause and never claims success", asy
     />,
   );
   await screen.findByRole("region", { name: "File preview: manual.html" });
-  const failure = writer.mock.calls.find((call) => call[0] === "[keiko] source reveal failed")?.[1];
-  expect(failure).toMatchObject({
-    correlationId: expect.any(String),
-    parentCorrelationId: "failed-reveal-parent",
-    errorEvidence: { errorClass: "TypeError" },
-  });
-  const settled = writer.mock.calls.find(
-    (call) =>
-      call[1]?.stageReport?.stage === "files source reveal" &&
-      call[1]?.stageReport?.phase === "settled",
-  )?.[1];
-  expect(settled).toMatchObject({
-    correlationId: failure?.correlationId,
-    stageReport: { navigationOutcome: "failed" },
+  await waitFor(() => {
+    const failure = writer.mock.calls.find(
+      (call) => call[0] === "[keiko] source reveal failed",
+    )?.[1];
+    expect(failure).toMatchObject({
+      correlationId: expect.any(String),
+      parentCorrelationId: "failed-reveal-parent",
+      errorEvidence: { errorClass: "TypeError" },
+    });
+    const settled = writer.mock.calls.find(
+      (call) =>
+        call[1]?.stageReport?.stage === "files source reveal" &&
+        call[1]?.stageReport?.phase === "settled",
+    )?.[1];
+    expect(settled).toMatchObject({
+      correlationId: failure?.correlationId,
+      stageReport: { navigationOutcome: "failed" },
+    });
   });
   expect(JSON.stringify(writer.mock.calls)).not.toContain("private viewport failure");
 });
