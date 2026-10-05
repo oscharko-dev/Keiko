@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4fcb95d57e1e06e5ae5bf5d809abf55091d1d9f5598409a1c06313b858660c2c" as const;
+  "a71b2c4465b7ea6e618b10a7b81ff41326f578af8b647aca0a320987547af2bd" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -11855,7 +11855,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "elapsedMsBounded",
               type: "boolean",
               dataClass: "closed-enum",
-              required: false,
+              required: true,
             },
             {
               name: "elapsedMsMax",
@@ -11879,7 +11879,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "filesReadBounded",
               type: "boolean",
               dataClass: "closed-enum",
-              required: false,
+              required: true,
             },
             {
               name: "filesReadMax",

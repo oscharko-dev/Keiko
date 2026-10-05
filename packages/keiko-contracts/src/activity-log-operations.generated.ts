@@ -26250,7 +26250,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       filesReadBounded: {
         type: "boolean",
         dataClass: "closed-enum",
-        required: false,
+        required: true,
       },
       excerptBytesMax: {
         type: "integer",
@@ -26275,7 +26275,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       elapsedMsBounded: {
         type: "boolean",
         dataClass: "closed-enum",
-        required: false,
+        required: true,
       },
       rerankCallsMax: {
         type: "integer",
@@ -26440,7 +26440,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["trimmed", "refused"],
+        values: ["trimmed", "metadata-trimmed", "refused"],
       },
       referenceCount: {
         type: "integer",

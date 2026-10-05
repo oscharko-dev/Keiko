@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4fcb95d57e1e06e5ae5bf5d809abf55091d1d9f5598409a1c06313b858660c2c"
+    "catalogDigest": "a71b2c4465b7ea6e618b10a7b81ff41326f578af8b647aca0a320987547af2bd"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2163,6 +2163,7 @@
     ],
     "search.connected-context.completed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
       "packages/keiko-server/src/grounded-portable-coverage.test.ts",
       "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts",
       "packages/keiko-server/src/grounded-source-inspection.test.ts"
@@ -2189,7 +2190,8 @@
       "packages/keiko-server/src/grounded-source-decisions.activity-log.test.ts"
     ],
     "search.connected-context.started.line": [
-      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
     ],
     "search.entailment.judged.line": [
       "packages/keiko-server/src/grounded-entailment-stage.test.ts"

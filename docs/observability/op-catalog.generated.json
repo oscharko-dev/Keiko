@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4fcb95d57e1e06e5ae5bf5d809abf55091d1d9f5598409a1c06313b858660c2c",
+    "catalogDigest": "a71b2c4465b7ea6e618b10a7b81ff41326f578af8b647aca0a320987547af2bd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -27473,7 +27473,7 @@
           "filesReadBounded": {
             "type": "boolean",
             "dataClass": "closed-enum",
-            "required": false
+            "required": true
           },
           "excerptBytesMax": {
             "type": "integer",
@@ -27498,7 +27498,7 @@
           "elapsedMsBounded": {
             "type": "boolean",
             "dataClass": "closed-enum",
-            "required": false
+            "required": true
           },
           "rerankCallsMax": {
             "type": "integer",
@@ -27673,7 +27673,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["trimmed", "refused"]
+            "values": ["trimmed", "metadata-trimmed", "refused"]
           },
           "referenceCount": {
             "type": "integer",
@@ -55404,7 +55404,7 @@
                   "name": "elapsedMsBounded",
                   "type": "boolean",
                   "dataClass": "closed-enum",
-                  "required": false
+                  "required": true
                 },
                 {
                   "name": "elapsedMsMax",
@@ -55428,7 +55428,7 @@
                   "name": "filesReadBounded",
                   "type": "boolean",
                   "dataClass": "closed-enum",
-                  "required": false
+                  "required": true
                 },
                 {
                   "name": "filesReadMax",
