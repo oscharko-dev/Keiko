@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "39f62957947e78d252e45418aac6ec3c833cb4f00a2d27ecc5c2a59587683bc8" as const;
+  "388416bd637bbc926e89a353557410b80e4797234ab89e2dac124b7a43f0b60e" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10585,11 +10585,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "search.connected-context.metadata-unavailable",
           "search.connected-context.source-details",
         ],
-        end: ["search.connected-context.completed"],
+        end: [
+          "search.connected-context.clarification-needed",
+          "search.connected-context.completed",
+        ],
         failure: ["search.connected-context.failed"],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "search.connected-context.clarification-needed",
+          mode: "correlation",
+        },
         {
           op: "search.connected-context.completed",
           mode: "correlation",
@@ -10617,6 +10624,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "search.connected-context.clarification-needed",
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.metadata-unavailable",
@@ -10625,6 +10633,66 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "search.connected-context.clarification-needed",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "anchorCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "clarificationReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "directEvidenceLookup",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "plannedRingCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "queryIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "retrievalIntent",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "scopeIdentitySha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["search.connected-context.clarification-needed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "search.connected-context.completed",
           owner: "keiko-server",
@@ -10638,6 +10706,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "augmentationDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "augmentationSkipReason",
@@ -10839,6 +10913,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "skippedRingKinds",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "stoppedRingKinds",
               type: "string-array",
               dataClass: "closed-enum",
               required: false,
@@ -11538,6 +11618,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "directEvidenceLookup",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "metadataDiscardedCount",
               type: "integer",
               dataClass: "count",
@@ -11670,6 +11756,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "overviewListingFallback",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "primaryContentPathCount",
               type: "integer",
               dataClass: "count",
@@ -11680,6 +11772,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "reusedEvidenceAtomCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "scopeIdentitySha256",
@@ -11701,6 +11799,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "semanticRejectedAtomCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "unrepresentablePathCount",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -33235,6 +33339,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "evictingCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "evictingIncidentId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "expiryReason",
               type: "string",
               dataClass: "closed-enum",
@@ -33276,6 +33392,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "retentionCause",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
@@ -33310,6 +33432,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "evictedIncidentId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "fingerprintAlgorithm",
               type: "integer",
               dataClass: "safe-version",
@@ -33340,6 +33468,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "count",
             "digest",
             "loss-state",
+            "opaque-id",
             "safe-version",
           ],
           frameCauseEvidence: {
@@ -38778,6 +38907,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.answer.assessed": "memory-knowledge",
     "search.citations.reconciled": "memory-knowledge",
     "search.citations.support-settled": "memory-knowledge",
+    "search.connected-context.clarification-needed": "memory-knowledge",
     "search.connected-context.completed": "memory-knowledge",
     "search.connected-context.completion-details": "memory-knowledge",
     "search.connected-context.failed": "memory-knowledge",
