@@ -165,7 +165,7 @@ describe("authenticated canonical report attachment", () => {
     { session: undefined, status: 403, reason: "no-session", known: true },
     { session: "other-session", status: 404, reason: "other-session", known: true },
     { session: "owner-session", status: 404, reason: "expired-or-unknown", known: false },
-    { session: undefined, status: 404, reason: "expired-or-unknown", known: false },
+    { session: undefined, status: 403, reason: "no-session", known: false },
   ])("records routine refusal evidence for $reason without claiming delivery", async (control) => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
@@ -208,6 +208,40 @@ describe("authenticated canonical report attachment", () => {
       params: { downloadId: cached.downloadPath.split("/").at(-1) },
     });
   });
+  it.each(["absent", "invalid", "revoked", "expired"] as const)(
+    "does not disclose protected cache membership to an %s session through the registered route",
+    async (authority) => {
+      let now = Date.now();
+      const registry = createSessionRegistry({ now: () => now, idleTtlMs: 1_000 });
+      const mint = registry.mint("local");
+      const owner = deps(mint.session.sessionId);
+      const channel = owner.codingAppSessionChannel;
+      if (channel === undefined) throw new TypeError("Expected session verifier");
+      vi.spyOn(channel, "verifySession").mockImplementation(registry.verify);
+      const cached = cacheSupportReportDownload(owner, mint.session.sessionId, report);
+      if (authority === "revoked") registry.revoke(mint.session.sessionId);
+      if (authority === "expired") now += 1_001;
+      const outcomes = [];
+      for (const path of [
+        cached.downloadPath,
+        `/api/diagnostics/report/download/${crypto.randomUUID()}`,
+      ]) {
+        const ctx = context(path);
+        if (authority !== "absent")
+          ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${authority === "invalid" ? "invalid-cookie" : mint.cookieToken}`;
+        const matched = matchRoute("GET", path);
+        if (typeof matched !== "object") throw new TypeError("Expected registered download route");
+        const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+        const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+        outcomes.push(await matched.definition.handler(ctx, owner));
+        expect(headers).not.toHaveBeenCalled();
+        expect(end).not.toHaveBeenCalled();
+      }
+      expect(outcomes[0]).toMatchObject({ status: 403 });
+      expect(outcomes[1]).toEqual(outcomes[0]);
+      expect(zlib.gzip).not.toHaveBeenCalled();
+    },
+  );
   it("validates the download identity before retaining bytes or arming expiry", () => {
     vi.useFakeTimers();
     const owner = deps("owner-session");
@@ -870,13 +904,17 @@ describe("authenticated canonical report attachment", () => {
     const cached = cacheSupportReportDownload(owner, "owner-session", report);
     expect(
       await handleDownloadSupportReport(context(cached.downloadPath), deps(undefined)),
-    ).toMatchObject({ status: 404 });
+    ).toMatchObject({ status: 403 });
     expect(
       await handleDownloadSupportReport(context(cached.downloadPath), deps("other-session")),
     ).toMatchObject({ status: 404 });
     const channel = owner.codingAppSessionChannel;
     if (channel === undefined) throw new TypeError("Missing session channel");
-    vi.spyOn(channel, "verifySession").mockReturnValue({
+    const verify = vi.spyOn(channel, "verifySession").mockReturnValue(undefined);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 403,
+    });
+    verify.mockReturnValue({
       sessionId: "other-session",
     } as never);
     expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({

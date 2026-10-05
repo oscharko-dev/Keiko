@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request, type IncomingHttpHeaders, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -287,7 +288,13 @@ async function fullReportJourney(): Promise<CreatedReport> {
   );
   expect(report.parsed.incident.trigger).toBe("registered-failure");
   expect(report.parsed.incident.op).toBe("support.report.ui.failed");
-  expectError(await wire(report.downloadPath), 403, "DENIED");
+  const headers = { "X-Keiko-Correlation-Id": "wire-unauthorized-probe" };
+  const denied = await wire(report.downloadPath, "GET", headers);
+  expectError(denied, 403, "DENIED");
+  const unknown = await wire(`${REPORT_PATH}/download/${randomUUID()}`, "GET", headers);
+  expectError(unknown, 403, "DENIED");
+  expect(unknown.bytes).toEqual(denied.bytes);
+  expect(unknown.headers["content-type"]).toBe(denied.headers["content-type"]);
   expectError(
     await wire(report.downloadPath, "GET", { Cookie: sessionCookie() }),
     404,

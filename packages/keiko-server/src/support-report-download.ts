@@ -186,15 +186,15 @@ function authorizeDelivery(
   deps: UiHandlerDeps,
   entry: Delivery | undefined,
 ): DeliveryAuthorization {
-  if (entry === undefined)
-    return { kind: "denied", response: refusedDelivery(ctx, 404, "expired-or-unknown") };
-  if (entry.authority.kind === "client-only") return { kind: "allowed", entry };
+  if (entry?.authority.kind === "client-only") return { kind: "allowed", entry };
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   if (session === undefined)
     return {
       kind: "denied",
-      response: refusedDelivery(ctx, 403, "no-session", entry.creationCorrelationId),
+      response: refusedDelivery(ctx, 403, "no-session", entry?.creationCorrelationId),
     };
+  if (entry === undefined)
+    return { kind: "denied", response: refusedDelivery(ctx, 404, "expired-or-unknown") };
   if (entry.authority.sessionId !== session.sessionId)
     return {
       kind: "denied",

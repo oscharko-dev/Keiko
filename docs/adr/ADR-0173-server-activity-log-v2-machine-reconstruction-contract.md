@@ -849,7 +849,11 @@ gzip replaces its raw ownership after successful compression. Concurrent downloa
 compression attempt; a failed attempt releases only its memoized promise so a later user retry can
 recompress the same retained canonical bytes. After compression, delivery rechecks the original
 authority, expiry and exact live cache entry before writing an attachment. A disposed entry cannot
-later emit a delivered result. Limited entries are removed before protected
+later emit a delivered result. Without a valid session, both an unknown reference and a known
+protected reference return the same content-free `403` response; cache membership is not disclosed.
+Only an explicitly client-only capability may deliver without a session. An authenticated caller
+receives the existing `404` refusal for an unknown reference or one owned by another session.
+Limited entries are removed before protected
 entries under byte or count pressure; unauthenticated limited creation cannot evict a protected
 artifact. Before admitting a limited replacement, the cache checks the existing protected byte and
 entry reservations. If protected artifacts leave insufficient capacity, refusal preserves already
