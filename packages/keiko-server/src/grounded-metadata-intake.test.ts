@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -10,6 +10,8 @@ import {
   type OrchestratorInput,
   type OrchestratorDeps,
 } from "./grounded-orchestrator.js";
+
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
 const roots: string[] = [];
 const invalidMetadataNames = [
@@ -24,6 +26,17 @@ function rootFixture(): string {
   roots.push(root);
   return root;
 }
+function workspaceManifestFixture(): string {
+  const root = rootFixture();
+  mkdirSync(join(root, "services", "api"), { recursive: true });
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ workspaces: ["services/*", "services/api"] }),
+  );
+  writeFileSync(join(root, "services", "api", "package.json"), '{"name":"recoverable-api"}');
+  return root;
+}
+
 function input(root: string, maxResults = 1): OrchestratorInput {
   return {
     workspaceRoot: root,
@@ -186,13 +199,8 @@ describe("metadata admission before retention", () => {
 });
 
 it("still probes an explicit workspace manifest after wildcard-parent enumeration fails", async () => {
-  const root = rootFixture();
-  mkdirSync(join(root, "services", "api"), { recursive: true });
-  writeFileSync(
-    join(root, "package.json"),
-    JSON.stringify({ workspaces: ["services/*", "services/api"] }),
-  );
-  writeFileSync(join(root, "services", "api", "package.json"), '{"name":"recoverable-api"}');
+  const root = workspaceManifestFixture();
+  const activityLog = createBufferedServerLogSink();
   const iterate = nodeWorkspaceFs.iterateDirectory;
   if (iterate === undefined) throw new TypeError("Physical iteration is required");
   let parentFailures = 0;
@@ -200,6 +208,7 @@ it("still probes an explicit workspace manifest after wildcard-parent enumeratio
   const result = await retrieveConnectedContextPack(
     input(root, 20),
     deps(root, {
+      activityLog,
       fs: {
         ...nodeWorkspaceFs,
         iterateDirectory: async function* (path) {
@@ -213,7 +222,73 @@ it("still probes an explicit workspace manifest after wildcard-parent enumeratio
     }),
   );
   expect(parentFailures).toBeGreaterThan(0);
+  expect(
+    activityLog.events.some(
+      (event) => event.op === "search.connected-context.metadata-unavailable",
+    ),
+  ).toBe(true);
+  expect(activityLog.lines().join("\n")).not.toContain(root);
   expect(result.pack.files.map((file) => file.scopePath)).toContain("services/api/package.json");
   expect(result.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
   expect(validateConnectedContextPack(result.pack).ok).toBe(true);
 });
+
+it("does not repeat explicit manifest metadata after successful wildcard coverage", async () => {
+  const root = workspaceManifestFixture();
+  const activityLog = createBufferedServerLogSink();
+  const result = await retrieveConnectedContextPack(input(root, 20), deps(root, { activityLog }));
+  expect(result.pack.files.map((file) => file.scopePath)).toEqual([
+    "package.json",
+    "services/api/package.json",
+  ]);
+  const details = activityLog.events.find(
+    (event) => event.op === "search.connected-context.source-details",
+  );
+  expect(details?.extra?.metadataObservedCount).toBe(2);
+  expect(details?.extra?.metadataRetainedCount).toBe(2);
+  expect(
+    activityLog.events.some(
+      (event) => event.op === "search.connected-context.metadata-unavailable",
+    ),
+  ).toBe(false);
+  expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+});
+
+it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+  "reads an explicitly declared manifest through an execute-only wildcard parent",
+  async () => {
+    const root = workspaceManifestFixture();
+    const activityLog = createBufferedServerLogSink();
+    const parent = join(root, "services");
+    chmodSync(parent, 0o111);
+    try {
+      const result = await retrieveConnectedContextPack(
+        input(root, 20),
+        deps(root, { activityLog }),
+      );
+      expect(result.pack.files.map((file) => file.scopePath)).toContain(
+        "services/api/package.json",
+      );
+      expect(
+        result.pack.files
+          .find((file) => file.scopePath === "services/api/package.json")
+          ?.excerpts.map((excerpt) => excerpt.content)
+          .join("\n"),
+      ).toContain("recoverable-api");
+      expect(result.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(
+        true,
+      );
+      expect(
+        activityLog.events.some(
+          (event) =>
+            event.op === "search.connected-context.metadata-unavailable" &&
+            event.extra?.reason === "permission-denied",
+        ),
+      ).toBe(true);
+      expect(activityLog.lines().join("\n")).not.toContain(root);
+      expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+    } finally {
+      chmodSync(parent, 0o755);
+    }
+  },
+);

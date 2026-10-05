@@ -3830,9 +3830,8 @@ async function workspacePatternServiceManifests(
   existsCache?: FileExistenceCache,
 ): Promise<readonly string[]> {
   if (existsCache?.metadataWildcardBases.has(base) === true) return [];
-  existsCache?.metadataWildcardBases.add(base);
   const manifests = new BoundedMetadataPaths(maxResults);
-  await visitMetadataDirectory(
+  const complete = await visitMetadataDirectory(
     searchScope,
     fs,
     base,
@@ -3854,6 +3853,7 @@ async function workspacePatternServiceManifests(
         manifests.retain(path);
     },
   );
+  if (complete) existsCache?.metadataWildcardBases.add(base);
   return manifests.sorted();
 }
 
