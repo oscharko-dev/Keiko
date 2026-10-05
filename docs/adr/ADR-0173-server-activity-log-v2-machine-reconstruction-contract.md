@@ -540,10 +540,17 @@ with an error-report action. Closed technical reasons remain in the health respo
 Log and exported report; the notice uses plain language. The shell owns the health poll, so
 readiness does not depend on the lazy footer module. Verified degraded or unavailable snapshots
 are displayed immediately; transport unavailability requires two consecutive failed polls so one
-transient read does not become a persistent outage notice. Each report selects the actual observed
-health request correlation and any captured failure facts. Observations without attribution request
-client-only evidence instead of selecting an unrelated latest incident. A pending or ready report
-keeps its original selector through health recovery. The footer displays the installed version.
+transient read does not become a persistent outage notice. Failed health reads select their actual
+request correlation and captured failure facts. Invalid diagnostic metadata records
+`validation-failed` with the response correlation (the sent request id is the fallback) and the
+closed `healthDiagnosticsInvalidReason`: `null-shape`, `readiness-value`, or `snapshot-shape`.
+These are validation observations, not thrown exceptions or assertions of version skew; no synthetic
+error class or frames are added. The notice forwards the same classification into report creation.
+A verified degraded snapshot uses the existing server report selection without a GET correlation,
+so recent failure or incident-window evidence can include uncorrelated readiness and loss lines.
+Observations without verified readiness or attributable failure request client-only evidence.
+A pending or ready report keeps its original selector through health recovery. The footer displays
+the installed version.
 
 **Sufficiency is proven compositionally (#3532).** Four mechanisms close the gap between declared
 and demonstrated evidence. Each is derived from the registry, never maintained beside it.

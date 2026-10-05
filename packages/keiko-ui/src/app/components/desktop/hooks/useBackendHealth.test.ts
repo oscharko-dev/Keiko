@@ -141,17 +141,16 @@ it("reports invalid diagnostics once without discarding the installed version", 
       correlationId: fetch.mock.calls[0]?.[0],
       failure: {
         errorKind: "validation-failed",
-        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
         context: [],
       },
     },
   });
   expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
-    "[keiko] health diagnostics invalid: TypeError",
+    "[keiko] health diagnostics failed validation",
     {
       correlationId: fetch.mock.calls[0]?.[0],
       errorKind: "validation-failed",
-      errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+      healthDiagnosticsInvalidReason: "snapshot-shape",
     },
   );
 });

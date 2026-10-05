@@ -69,6 +69,54 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it.each(["private-response-value", null, false])(
+    "refuses unknown health validation facts %j before writing a diagnostic",
+    async (healthDiagnosticsInvalidReason) => {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "[keiko] health diagnostics failed validation",
+            clientTs: CLIENT_TS,
+            correlationId: "server-health-response",
+            errorKind: "validation-failed",
+            healthDiagnosticsInvalidReason,
+          }),
+        ),
+      );
+      expect(result.status).toBe(400);
+      expect(lines("client.diagnostic")).toEqual([]);
+      expect(readPersistedActivityLog(stateDir)).not.toContain("private-response-value");
+    },
+  );
+
+  it.each(["null-shape", "readiness-value", "snapshot-shape"])(
+    "persists the closed health validation reason %s without invented error frames",
+    async (healthDiagnosticsInvalidReason) => {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "[keiko] health diagnostics failed validation",
+            clientTs: CLIENT_TS,
+            correlationId: "server-health-response",
+            errorKind: "validation-failed",
+            healthDiagnosticsInvalidReason,
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+      const [persisted] = lines("client.diagnostic");
+      expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+        correlationId: "server-health-response",
+        errorKind: "validation-failed",
+        healthDiagnosticsInvalidReason,
+      });
+      const record: unknown = JSON.parse(persisted ?? "{}");
+      expect(record).not.toHaveProperty("errorClass");
+      expect(record).not.toHaveProperty("frames");
+      expect(record).not.toHaveProperty("causeChain");
+    },
+  );
+
   it("persists issue-provenance refusal linked to the successful preview request", async () => {
     const result = await handleClientDiagnosticIngest(
       context(

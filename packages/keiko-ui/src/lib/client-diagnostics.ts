@@ -61,6 +61,7 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type HealthDiagnosticsInvalidReason,
   type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
   type ClientComposerActivity,
@@ -151,6 +152,7 @@ export interface ClientDiagnosticMeta {
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;

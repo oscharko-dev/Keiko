@@ -279,6 +279,7 @@ function clientMessagePostBody(
     voiceCaptureError: meta.voiceCaptureError,
     markdownLayout: meta.markdownLayout,
     moduleLoadFailure: meta.moduleLoadFailure,
+    healthDiagnosticsInvalidReason: meta.healthDiagnosticsInvalidReason,
     errorEvidence: meta.errorEvidence,
     gitChangeDescription: meta.gitChangeDescription,
     workspaceTrustBinding: meta.workspaceTrustBinding,

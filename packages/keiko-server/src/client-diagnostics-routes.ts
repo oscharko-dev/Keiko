@@ -80,6 +80,7 @@ import {
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  HEALTH_DIAGNOSTICS_INVALID_REASONS,
   isClientGitRetryAttemptIngestRequest,
   isClientSessionRepairIngestRequest,
   isClientStageIngestRequest,
@@ -363,6 +364,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       required: false,
       maxLength: 128,
       maxItems: 5,
+    },
+    healthDiagnosticsInvalidReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: HEALTH_DIAGNOSTICS_INVALID_REASONS,
     },
     moduleLoadFailure: {
       type: "string",
@@ -1664,6 +1671,8 @@ function projectClientFailure(
 ): void {
   if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
   if (request.renderFailure !== undefined) extra.renderFailure = request.renderFailure;
+  if (request.healthDiagnosticsInvalidReason !== undefined)
+    extra.healthDiagnosticsInvalidReason = request.healthDiagnosticsInvalidReason;
   if (request.errorEvidence !== undefined) {
     extra.errorClass = request.errorEvidence.errorClass;
     extra.frames = request.errorEvidence.frames;

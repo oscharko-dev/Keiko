@@ -194,3 +194,33 @@ describe("Files-scope evidence field coherence", () => {
     ).toBe(false);
   });
 });
+
+describe("health validation facts", () => {
+  it.each(["null-shape", "readiness-value", "snapshot-shape"])(
+    "accepts the closed reason %s without invented exception facts",
+    (healthDiagnosticsInvalidReason) => {
+      const report = { ...base, healthDiagnosticsInvalidReason, errorKind: "validation-failed" };
+      expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+      expect(isClientDiagnosticIngestRequest({ ...report, errorKind: "unavailable" })).toBe(false);
+      expect(isClientDiagnosticIngestRequest({ ...report, kind: "window-error" })).toBe(false);
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...report,
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([null, false, "private-response-value"])(
+    "rejects an unknown health reason %j",
+    (healthDiagnosticsInvalidReason) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...base,
+          errorKind: "validation-failed",
+          healthDiagnosticsInvalidReason,
+        }),
+      ).toBe(false);
+    },
+  );
+});

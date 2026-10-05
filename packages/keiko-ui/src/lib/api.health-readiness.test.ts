@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchHealth } from "./api";
-import { CORRELATION_HEADER } from "./bff-correlation";
+import { CORRELATION_HEADER, responseCorrelationIdOf } from "./bff-correlation";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("health diagnostics validation", () => {
@@ -14,9 +14,14 @@ describe("health diagnostics validation", () => {
       "observed-health-request-123",
     );
   });
-  it.each([null, false, {}, { readiness: "new-server-value" }])(
+  it.each([
+    [null, "null-shape"],
+    [false, "snapshot-shape"],
+    [{}, "snapshot-shape"],
+    [{ readiness: "new-server-value" }, "readiness-value"],
+  ])(
     "retains a body-free invalid marker for present malformed diagnostics %j",
-    async (diagnostics) => {
+    async (diagnostics, diagnosticsInvalidReason) => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue(
@@ -26,14 +31,17 @@ describe("health diagnostics validation", () => {
               version: "1.2.3",
               diagnostics,
             }),
-            { status: 200 },
+            { status: 200, headers: { [CORRELATION_HEADER]: "server-health-response" } },
           ),
         ),
       );
-      expect(await fetchHealth()).toEqual({
+      const health = await fetchHealth("client-health-request");
+      expect(responseCorrelationIdOf(health)).toBe("server-health-response");
+      expect(health).toEqual({
         status: "ok",
         version: "1.2.3",
         diagnosticsInvalid: true,
+        diagnosticsInvalidReason,
       });
     },
   );
@@ -46,7 +54,7 @@ describe("health diagnostics validation", () => {
             status: "ok",
             version: "1.2.3",
           }),
-          { status: 200 },
+          { status: 200, headers: { [CORRELATION_HEADER]: "server-health-response" } },
         ),
       ),
     );

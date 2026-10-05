@@ -12,7 +12,7 @@ import { fetchHealth, type HealthSnapshot } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { newClientCorrelationId, responseCorrelationIdOf } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
 
 export const HEALTH_POLL_INTERVAL_MS = 60_000;
@@ -38,20 +38,25 @@ interface HealthPoll {
 
 type PublishHealth = (update: (previous: BackendHealth) => BackendHealth) => void;
 
-function recordHealthFailure(
-  error: unknown,
-  correlationId: string,
-  invalid: boolean,
-): HealthReport {
-  const errorKind = invalid ? "validation-failed" : bffRequestErrorKind(error);
+function recordHealthFailure(error: unknown, correlationId: string): HealthReport {
+  const errorKind = bffRequestErrorKind(error);
   const errorEvidence = clientErrorEvidence(error);
-  reportClientDiagnostic(
-    invalid
-      ? "[keiko] health diagnostics invalid: TypeError"
-      : `[keiko] health read failed: ${clientErrorSummary(error)}`,
-    { correlationId, errorKind, errorEvidence },
-  );
+  reportClientDiagnostic(`[keiko] health read failed: ${clientErrorSummary(error)}`, {
+    correlationId,
+    errorKind,
+    errorEvidence,
+  });
   return { correlationId, failure: { errorKind, errorEvidence, context: [] } };
+}
+
+function recordInvalidHealth(health: HealthSnapshot, correlationId: string): HealthReport {
+  const healthDiagnosticsInvalidReason = health.diagnosticsInvalidReason ?? "snapshot-shape";
+  reportClientDiagnostic("[keiko] health diagnostics failed validation", {
+    correlationId,
+    errorKind: "validation-failed",
+    healthDiagnosticsInvalidReason,
+  });
+  return { correlationId, failure: { errorKind: "validation-failed", context: [] } };
 }
 
 function observedHealthReport(
@@ -62,10 +67,9 @@ function observedHealthReport(
   poll.failedPolls = 0;
   poll.failureReport = undefined;
   if (health.diagnosticsInvalid) {
-    poll.invalidReport ??= recordHealthFailure(
-      new TypeError("Health diagnostics failed validation."),
-      correlationId,
-      true,
+    poll.invalidReport ??= recordInvalidHealth(
+      health,
+      responseCorrelationIdOf(health) ?? correlationId,
     );
     return poll.invalidReport;
   }
@@ -86,11 +90,7 @@ function recordHealthReadFailure(
   error: unknown,
   requestCorrelationId: string,
 ): void {
-  poll.failureReport ??= recordHealthFailure(
-    error,
-    correlationIdOf(error) ?? requestCorrelationId,
-    false,
-  );
+  poll.failureReport ??= recordHealthFailure(error, correlationIdOf(error) ?? requestCorrelationId);
   poll.failedPolls += 1;
   if (poll.failedPolls < 2) return;
   const report = poll.failureReport;

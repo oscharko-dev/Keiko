@@ -449,6 +449,16 @@ function hasValidComposerContext(value: Record<string, unknown>): boolean {
   );
 }
 
+export const HEALTH_DIAGNOSTICS_INVALID_REASONS = [
+  "null-shape",
+  "readiness-value",
+  "snapshot-shape",
+] as const;
+export type HealthDiagnosticsInvalidReason = (typeof HEALTH_DIAGNOSTICS_INVALID_REASONS)[number];
+const HEALTH_DIAGNOSTICS_INVALID_REASON_SET: ReadonlySet<unknown> = new Set(
+  HEALTH_DIAGNOSTICS_INVALID_REASONS,
+);
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -464,6 +474,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
   readonly renderFailure?: "shell" | "window-body" | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
@@ -731,8 +742,22 @@ function hasValidRenderFailure(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidHealthDiagnostic(value: Record<string, unknown>): boolean {
+  if (value.healthDiagnosticsInvalidReason === undefined) return true;
+  return (
+    HEALTH_DIAGNOSTICS_INVALID_REASON_SET.has(value.healthDiagnosticsInvalidReason) &&
+    value.errorKind === "validation-failed" &&
+    value.kind === undefined &&
+    value.errorEvidence === undefined
+  );
+}
+
 function hasValidOperationalContext(value: Record<string, unknown>): boolean {
-  return hasValidVoiceCaptureContext(value) && hasValidGitContext(value);
+  return (
+    hasValidVoiceCaptureContext(value) &&
+    hasValidGitContext(value) &&
+    hasValidHealthDiagnostic(value)
+  );
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
@@ -1730,6 +1755,20 @@ export function isActivityLogReadinessSnapshot(
     value.lostEvents >= 0 &&
     hasCoherentDiagnosticCapacity(value)
   );
+}
+
+/** Classifies metadata already refused by isActivityLogReadinessSnapshot; never infers version skew. */
+export function classifyInvalidActivityLogReadiness(
+  value: unknown,
+): HealthDiagnosticsInvalidReason {
+  if (value === null) return "null-shape";
+  if (
+    isRecord(value) &&
+    typeof value.readiness === "string" &&
+    !READINESS_STATE_SET.has(value.readiness)
+  )
+    return "readiness-value";
+  return "snapshot-shape";
 }
 
 /** A browser initiation, never acknowledgement that the operating system saved a file. */

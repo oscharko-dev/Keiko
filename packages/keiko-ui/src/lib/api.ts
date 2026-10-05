@@ -157,6 +157,8 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isActivityLogReadinessSnapshot,
+  classifyInvalidActivityLogReadiness,
+  type HealthDiagnosticsInvalidReason,
   type HealthResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
@@ -172,6 +174,7 @@ import {
   CORRELATION_HEADER,
   newClientCorrelationId,
   recordResponseCorrelationId,
+  responseCorrelationIdOf,
 } from "./bff-correlation";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -401,14 +404,24 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
 export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
   readonly diagnostics?: HealthResponse["diagnostics"];
   readonly diagnosticsInvalid?: true;
+  readonly diagnosticsInvalidReason?: HealthDiagnosticsInvalidReason;
 };
 
 export async function fetchHealth(correlationId?: string): Promise<HealthSnapshot> {
-  const { diagnostics, ...health } = await fetchJson<
+  const response = await fetchJson<
     Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
   >("/api/health", undefined, undefined, correlationId);
-  if (isActivityLogReadinessSnapshot(diagnostics)) return { ...health, diagnostics };
-  return diagnostics === undefined ? health : { ...health, diagnosticsInvalid: true };
+  const { diagnostics, ...health } = response;
+  let snapshot: HealthSnapshot = health;
+  if (isActivityLogReadinessSnapshot(diagnostics)) snapshot = { ...health, diagnostics };
+  else if (diagnostics !== undefined)
+    snapshot = {
+      ...health,
+      diagnosticsInvalid: true,
+      diagnosticsInvalidReason: classifyInvalidActivityLogReadiness(diagnostics),
+    };
+  recordResponseCorrelationId(snapshot, responseCorrelationIdOf(response) ?? null);
+  return snapshot;
 }
 
 // The Coding Workbench provider profile fetchers (sidecar gateway + Codex subscription) used
