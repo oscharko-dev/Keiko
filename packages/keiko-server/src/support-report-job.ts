@@ -60,16 +60,10 @@ function prepareReport(
   worker: Worker,
   stateDir: string,
   correlationId: string | undefined,
-  requestCorrelationId: string | undefined,
   onCreated: ((record: SupportIncidentRecord) => void) | undefined,
 ): void {
   try {
-    const record = prepareDesktopSupportReport(
-      stateDir,
-      correlationId,
-      requestCorrelationId,
-      onCreated,
-    );
+    const record = prepareDesktopSupportReport(stateDir, correlationId, undefined, onCreated);
     worker.postMessage({ kind: "prepared", record } satisfies SupportReportPreparedMessage);
   } catch (error) {
     throw new SupportReportJobError(
@@ -87,7 +81,6 @@ function reportMessageHandler(
   correlationId: string | undefined,
   resolve: (report: DesktopSupportReportResponse) => void,
   reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
-  requestCorrelationId: string | undefined,
   onCreated: ((record: SupportIncidentRecord) => void) | undefined,
 ): (value: SupportReportWorkerMessage) => void {
   let prepareStarted = false;
@@ -106,7 +99,7 @@ function reportMessageHandler(
         return;
       }
       try {
-        prepareReport(worker, stateDir, value.correlationId, requestCorrelationId, onCreated);
+        prepareReport(worker, stateDir, value.correlationId, onCreated);
       } catch (error) {
         reject(error);
       }
@@ -124,7 +117,6 @@ async function awaitReport(
   stateDir: string,
   correlationId: string | undefined,
   signal?: AbortSignal,
-  requestCorrelationId?: string,
   onCreated?: (record: SupportIncidentRecord) => void,
 ): Promise<DesktopSupportReportResponse> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -145,7 +137,6 @@ async function awaitReport(
         correlationId,
         resolve,
         reject,
-        requestCorrelationId,
         onCreated,
       );
       worker.on("message", (value: SupportReportWorkerMessage) => {
@@ -230,20 +221,13 @@ export async function runSupportReportJob(
       workerData: { stateDir, correlationId },
       resourceLimits: { maxOldGenerationSizeMb: 256 },
     });
-    const report = await awaitReport(
-      worker,
-      stateDir,
-      correlationId,
-      signal,
-      requestCorrelationId,
-      (record): void => {
-        const preparation = { record, retired: false };
-        owned = preparation;
-        onPrepared?.((): void => {
-          reportAbandonedPreparation(stateDir, preparation, requestCorrelationId);
-        });
-      },
-    );
+    const report = await awaitReport(worker, stateDir, correlationId, signal, (record): void => {
+      const preparation = { record, retired: false };
+      owned = preparation;
+      onPrepared?.((): void => {
+        reportAbandonedPreparation(stateDir, preparation, requestCorrelationId);
+      });
+    });
     completed = true;
     return report;
   } catch (error) {

@@ -785,6 +785,12 @@ Full reports require the exact existing session that generated the artifact; the
 reference conveys no authority. Failure to acknowledge browser diagnostic delivery does not
 remove access to retained server evidence under an already valid session.
 
+The report action's request correlation identifies its own preparation and cleanup lifecycle. It
+never substitutes for a missing original Support-ID. Full-report descriptor preparation normalizes
+the selected identity through the shared report contract before looking up retained candidates; an
+unselected manual descriptor receives a fresh opaque incident correlation. An explicitly invalid
+evidence selector is refused before reading diagnostics, rather than selecting another failure.
+
 If the local session is absent, forged or expired, an explicitly insufficient client-only report
 can be produced without reading private server state. An explicit client-only privacy selection
 uses the same branch. It never reads a log, creates an incident or retention pin, or attributes a

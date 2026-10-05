@@ -1,9 +1,10 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
 import { randomBytes, randomUUID } from "node:crypto";
-import { computeDefectFingerprint, incidentCorrelationId } from "../defect-fingerprint.js";
+import { computeDefectFingerprint } from "../defect-fingerprint.js";
 import { serverLogProcessIdentity, reportServerLogFailure } from "../server-log.js";
 import {
   clientOnlySupportReportSections,
+  normalizeSupportReportCorrelationId,
   parseSupportIncidentRecord,
   supportIncidentBuild,
   supportIncidentEffectiveExpiry,
@@ -68,7 +69,7 @@ export function prepareManualSupportReportIncident(
   correlationId: string,
   onCreated?: (record: SupportIncidentRecord) => void,
 ): SupportIncidentDescriptorRecord {
-  const safeCorrelationId = incidentCorrelationId(correlationId) ?? randomUUID();
+  const safeCorrelationId = normalizeSupportReportCorrelationId(correlationId) ?? randomUUID();
   const created = recordUserReportedIncident(stateDir, { correlationId: safeCorrelationId });
   if (created.status === "rejected") {
     if (
@@ -139,26 +140,22 @@ function retainedReportCandidates(
   }
 }
 
-/** Only the owner thread creates incidents and retention pins. No log-content scan runs here. */
+/** Only the owner creates incidents/pins; the legacy third argument never supplies an incident root. */
 export function prepareDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
-  requestCorrelationId?: string,
+  _requestCorrelationId?: string,
   onCreated?: (record: SupportIncidentRecord) => void,
 ): SupportIncidentDescriptorRecord {
+  const selected = normalizeSupportReportCorrelationId(correlationId);
   const existing =
-    correlationId === undefined
+    selected === undefined
       ? undefined
-      : retainedReportCandidates(stateDir, correlationId).find(
-          (record) => record.correlation.rootCorrelationId === correlationId,
+      : retainedReportCandidates(stateDir, selected).find(
+          (record) => record.correlation.rootCorrelationId === selected,
         );
   return (
-    existing ??
-    prepareManualSupportReportIncident(
-      stateDir,
-      correlationId ?? requestCorrelationId ?? randomUUID(),
-      onCreated,
-    )
+    existing ?? prepareManualSupportReportIncident(stateDir, selected ?? randomUUID(), onCreated)
   );
 }
 
@@ -186,7 +183,10 @@ export function readDesktopSupportReportSelection(
   stateDir: string,
   correlationId?: string,
 ): DesktopSupportReportSelection {
-  const selected = correlationId ?? recentFailureCorrelation(stateDir);
+  const normalized = normalizeSupportReportCorrelationId(correlationId);
+  if (correlationId !== undefined && normalized === undefined)
+    throw new SupportReportError("selection-unavailable");
+  const selected = normalized ?? recentFailureCorrelation(stateDir);
   if (selected === undefined) return { correlationId: undefined };
   const evidence = executeLocalSupportQuery(
     stateDir,

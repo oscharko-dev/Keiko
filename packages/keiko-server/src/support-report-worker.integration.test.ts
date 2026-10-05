@@ -143,9 +143,18 @@ describe("real canonical support report worker", () => {
   });
 
   it("creates a manual report with honest absent-evidence status through the real worker", async () => {
-    const response = await runSupportReportJob(stateDir);
+    const requestId = "manual-worker-export-request";
+    const response = await runSupportReportJob(stateDir, undefined, undefined, requestId);
     expect(analyzeSupportReport(response.reportJson).selection.status).not.toBe("complete");
-    expect(listSupportIncidents(stateDir)).toHaveLength(1);
+    const retained = listSupportIncidents(stateDir);
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.correlation.rootCorrelationId).not.toBe(requestId);
+    expect(retained[0]?.correlation.rootCorrelationId).toMatch(/^[a-f0-9-]{36}$/u);
+    const report = parseSupportReport(response.reportJson);
+    expect(report.incident.incidentId).toBe(retained[0]?.incidentId);
+    expect(report.incident.trigger).toBe("user-report");
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
+    expect(response.reportJson).not.toContain(requestId);
   });
 
   it("keeps manual export focused on a retained failure under unrelated request traffic", async () => {

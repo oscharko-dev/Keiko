@@ -35,6 +35,7 @@ import {
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
 import * as serverLog from "../server-log.js";
 import * as incidentStore from "../support-incident-store.js";
+import * as incidents from "../support-incident.js";
 import { listActivityLogDirectory } from "../activity-log-store.js";
 import * as supportLocalQuery from "./support-local-query.js";
 import { ActivityLogScanner } from "./support-segment-scan.js";
@@ -80,6 +81,43 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it.each([undefined, ACTIVITY_LOG_UNKNOWN_CORRELATION_ID, "invalid selection with spaces"])(
+    "keeps an absent or rejected %s selection separate from the report request",
+    (selection) => {
+      const lookup = vi.spyOn(incidents, "listSupportIncidents");
+      const requestId = "manual-export-request";
+      const record = prepareDesktopSupportReport(stateDir, selection, requestId);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(record.correlation.rootCorrelationId).toMatch(/^[a-f0-9-]{36}$/u);
+      expect(record.correlation.rootCorrelationId).not.toBe(requestId);
+      expect(record.correlation.rootCorrelationId).not.toBe(selection);
+      const repeated = prepareDesktopSupportReport(stateDir, selection, requestId);
+      expect(repeated.correlation.rootCorrelationId).not.toBe(record.correlation.rootCorrelationId);
+      const created = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.created",
+      );
+      expect(created.map((line): unknown => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({ correlationId: record.correlation.rootCorrelationId }),
+      );
+    },
+  );
+
+  it.each([ACTIVITY_LOG_UNKNOWN_CORRELATION_ID, "invalid selection with spaces"])(
+    "refuses explicit invalid %s evidence selection before reading any retained diagnostics",
+    (selection) => {
+      writeFailures();
+      const lookup = vi.spyOn(incidents, "listSupportIncidents");
+      const query = vi.spyOn(supportLocalQuery, "executeLocalSupportQuery");
+      expect(() => createDesktopSupportReport(stateDir, selection)).toThrow(
+        "selection-unavailable",
+      );
+      expect(lookup).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+    },
+  );
+
   it.each(["selected", "manual"] as const)(
     "exports readable %s evidence when the independent candidate directory is unavailable",
     (selection) => {

@@ -450,7 +450,7 @@ describe("bounded desktop support-report worker", () => {
     expect(workers.prepare).toHaveBeenCalledExactlyOnceWith(
       "/private-report-state",
       "requested-failure",
-      "report-http-request",
+      undefined,
       expect.any(Function),
     );
     expect(workers.terminate).toHaveBeenCalledOnce();
