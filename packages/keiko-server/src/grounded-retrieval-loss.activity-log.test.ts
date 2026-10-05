@@ -186,7 +186,7 @@ describe("excerpt stop attribution", () => {
       searchScope: { workspace: WORKSPACE, scopeId: "stop", relativePaths: [] },
       fs: {
         ...memFs(ROOT, {}),
-        readFile: () => {
+        readFileUtf8: () => {
           throw new Error("Stopped reads must not access a file");
         },
       },
