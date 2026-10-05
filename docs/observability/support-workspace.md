@@ -71,7 +71,7 @@ Keiko neither uploads nor sends the file. Share it manually through an approved 
 The internal diagnostic candidate store uses the Activity Log retention-byte policy, rather than
 an independent fixed candidate-count limit. Unreported candidates expire after twenty-four hours.
 Under byte pressure, the oldest eligible candidate rolls out and its owned pin and claims are
-released. Successfully preparing an export completes the selected candidate and releases its owned
+released. Pin-ceiling checks, rollover and pin admission use `activeActivityLogPins`: only valid, unexpired pins count, and expired records awaiting cleanup cannot displace live evidence. Successfully preparing an export completes the selected candidate and releases its owned
 artifacts. The retained Activity Log remains subject to its existing byte and age policy. These
 control records support causal reconstruction; they are not a customer-facing count of unresolved
 product defects. Health reports the existing Activity Log readiness and lost-event count. It does

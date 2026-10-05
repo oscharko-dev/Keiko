@@ -264,6 +264,7 @@ const SUPPORT_INCIDENT_REJECTED_OPERATION = defineActivityLogOperation({
     fingerprintAlgorithm: ALGORITHM_FIELD,
     trigger: TRIGGER_FIELD,
     openIncidentCount: OPEN_COUNT_FIELD,
+    evictedIncidentId: { ...INCIDENT_ID_FIELD, required: false },
   },
   causal: "correlation",
   lifecycle: "loss",
@@ -421,6 +422,19 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["released", "not-pinned", "rejected"],
     },
+    retentionCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["slot-pressure", "pin-ceiling"],
+    },
+    evictingCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    evictingIncidentId: { ...INCIDENT_ID_FIELD, required: false },
     openIncidentCount: OPEN_COUNT_FIELD,
   },
   causal: "correlation",
@@ -525,6 +539,7 @@ interface RejectionFacts {
   readonly correlationId: string;
   readonly openIncidentCount: number;
   readonly fingerprintAlgorithm?: 1 | 2;
+  readonly evictedIncidentId?: string;
 }
 
 function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
@@ -545,6 +560,9 @@ function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
         fingerprintAlgorithm: facts.fingerprintAlgorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
         trigger: facts.trigger,
         openIncidentCount: facts.openIncidentCount,
+        ...(facts.evictedIncidentId === undefined
+          ? {}
+          : { evictedIncidentId: facts.evictedIncidentId }),
         completeness: "partial",
         loss: "event-dropped",
       },
@@ -692,7 +710,11 @@ interface EntryRemoval {
 
 interface ExpiryFacts {
   readonly nowMs: number;
-  readonly reason?: "retention";
+  readonly retention?: {
+    readonly cause: "slot-pressure" | "pin-ceiling";
+    readonly correlationId: string;
+    readonly incidentId: string;
+  };
   readonly entry: SupportIncidentStoreEntry;
   readonly removal: EntryRemoval;
   readonly correlationId: string;
@@ -740,7 +762,15 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
         ...(facts.removal.claimsStatus === undefined
           ? {}
           : { claimsStatus: facts.removal.claimsStatus }),
-        expiryReason: facts.reason ?? incidentExpiryReason(record, facts.nowMs),
+        expiryReason:
+          facts.retention === undefined ? incidentExpiryReason(record, facts.nowMs) : "retention",
+        ...(facts.retention === undefined
+          ? {}
+          : {
+              retentionCause: facts.retention.cause,
+              evictingCorrelationId: facts.retention.correlationId,
+              evictingIncidentId: facts.retention.incidentId,
+            }),
         removalStatus: facts.removal.removed ? "removed" : "failed",
         ...(facts.removal.pinRelease === undefined ? {} : { pinRelease: facts.removal.pinRelease }),
         ...(record === undefined
@@ -842,6 +872,8 @@ interface CandidateContext {
   readonly nowMs: number;
   readonly env: ServerLogEnv;
   readonly defectFingerprint: string;
+  // Preserve actual displacement if reserve recovery is followed by rejected admission/publication.
+  evictedIncidentId?: string;
 }
 
 function pinFromResult(result: ActivityLogPinResult): SupportIncidentPin {
@@ -1023,13 +1055,18 @@ function evictOldestCandidate(
   );
   if (entry === undefined) return undefined;
   const removal = removeEntry(context.stateDir, entry, context);
+  if (removal.removed) context.evictedIncidentId = entry.incidentId;
   expiredEvidence(context.stateDir, {
     nowMs: context.nowMs,
     entry,
     removal,
     correlationId: draft.evidenceCorrelationId,
     openIncidentCount: openIncidentCount - Number(removal.removed),
-    reason: "retention",
+    retention: {
+      cause: "slot-pressure",
+      correlationId: draft.evidenceCorrelationId,
+      incidentId: publishedIncidentId,
+    },
   });
   // Cleanup completeness describes evidence, not slot availability. The next exclusive claim
   // rechecks the actual slot; a failed pin/fingerprint cleanup must not reject a freed slot.
@@ -1135,7 +1172,10 @@ function reject(
     defectFingerprint: context.defectFingerprint,
     fingerprintAlgorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
     correlationId: draft.evidenceCorrelationId,
-    openIncidentCount,
+    openIncidentCount: openIncidentCount - Number(context.evictedIncidentId !== undefined),
+    ...(context.evictedIncidentId === undefined
+      ? {}
+      : { evictedIncidentId: context.evictedIncidentId }),
   });
   return { status: "rejected", reason };
 }
@@ -1187,7 +1227,11 @@ function rollDiagnosticPin(context: IncidentPinContext, publishedIncidentId: str
     nowMs: context.nowMs,
     entry: oldest,
     removal,
-    reason: "retention",
+    retention: {
+      cause: "pin-ceiling",
+      correlationId: context.correlationId,
+      incidentId: publishedIncidentId,
+    },
     correlationId: context.correlationId,
     openIncidentCount: entries.length - Number(removal.removed),
   });

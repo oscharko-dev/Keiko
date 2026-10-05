@@ -1636,7 +1636,7 @@ governing byte budget plus the pin quota, even when cooperating processes' own e
   inside it;
 - up to 64 named segments.
 
-At most 64 pins are active. The pin record is published before the current segment is sealed, so
+The ceiling check, rollover and pin admission all use `activeActivityLogPins`: only valid, unexpired pins count, so expired records awaiting cleanup never displace live evidence. At most 64 pins are active. The pin record is published before the current segment is sealed, so
 the next retention pass honors it. Pinned sealed segments count against `KEIKO_LOG_PIN_QUOTA_BYTES`,
 oldest pin first, and only while the quota lasts. A pin the quota cannot hold is still recorded with
 `quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
@@ -1801,7 +1801,15 @@ count as that surplus. Admission then retries exclusive claiming once. Recovery 
 snapshot, checks missing durable owners before opening claim contents, and reads only the occupied
 slot owners; it does not rescan fingerprint claims. A confirmed peer unlink between inspection and
 open declines recovery without inventing a store outage. Retention evidence counts the full open
-store even when only one priority class is eligible for eviction.
+store even when only one priority class is eligible for eviction. Each retention expiry records the
+closed `retentionCause` (`slot-pressure` or `pin-ceiling`), the actual `evictingCorrelationId` and the
+replacement's assigned `evictingIncidentId`. These are references to the displacing action, not a new
+parent edge: the victim's original lifecycle correlation and ancestry remain intact, including when
+the replacement is already its descendant. The canonical report aliases these opaque references
+through the same privacy projection as other identifiers. If full-pool reserve recovery actually
+removes a victim and the subsequent claim or publication fails, the existing rejection also records
+that exact `evictedIncidentId` and subtracts the removed victim from its retained-count snapshot.
+A refused removal emits no such rejection field; expiry by time carries no eviction fields.
 Any unpublished, torn or mismatched peer claim keeps the existing
 `quota-exhausted` refusal; failed or changed-file cleanup retains truthful partial evidence. This
 exception repairs interrupted post-publication retirement and legacy full pools without stealing

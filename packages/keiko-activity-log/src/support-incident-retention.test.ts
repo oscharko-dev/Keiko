@@ -69,6 +69,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createDesktopSupportReport,
+  createPreparedDesktopSupportReport,
   prepareManualSupportReportIncident,
 } from "./reader/support-desktop-report.js";
 import { parseSupportReport, analyzeSupportReport } from "./reader/support-report.js";
@@ -238,6 +239,40 @@ function expectRetirementStarted(
     correlationId: "new-retirement-request",
     parentCorrelationId: "original-retirement",
   });
+}
+
+function expectEvictionReportReference(
+  record: SupportIncidentRecord,
+  field: "evictingIncidentId" | "evictedIncidentId",
+  privateId: string,
+): void {
+  const response = createPreparedDesktopSupportReport(stateDir, record);
+  const report = parseSupportReport(response.reportJson);
+  expect(analyzeSupportReport(response.reportJson).analysis.evidence.classification).toBe(
+    "supported",
+  );
+  const text = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+  const events = JSON.parse(text) as readonly SupportReportEvent[];
+  const referencing = events.find((event) => event.record[field] === report.incident.incidentId);
+  expect(report.incident.incidentId).toBe(record.incidentId);
+  expect(referencing).toBeDefined();
+  expect(text).not.toContain(privateId);
+  if (field === "evictingIncidentId")
+    expect(referencing?.record.evictingCorrelationId).toBe(
+      report.incident.correlation.rootCorrelationId,
+    );
+}
+
+function expectRolledLifecycle(text: string): void {
+  const rolled = expectActivityLogProof(
+    "support.incident.expired.emitted-line",
+    persistedActivityLogLines(text, "support.incident.expired").at(-1) ?? "",
+  );
+  expect(rolled).toMatchObject({
+    correlationId: "retired-candidate",
+    evictingCorrelationId: "fresh-candidate",
+  });
+  expect(rolled).not.toHaveProperty("parentCorrelationId");
 }
 
 function expectClosedRetirementReport(correlationId: string): void {
@@ -813,6 +848,99 @@ describe("rolling diagnostic candidate retention", () => {
     expect(recordUserReportedIncident(stateDir).status).toBe("created");
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
   }, 60_000);
+
+  it.each(["claim", "publication"] as const)(
+    "records the exact displaced candidate when reserve recovery is followed by failed %s",
+    (failureStage) => {
+      const prior = occupyPublicationReserve();
+      const victim = prior[0];
+      if (victim === undefined) throw new TypeError("Expected a retained recovery victim");
+      let replacementId: string | undefined;
+      if (failureStage === "claim") {
+        vi.spyOn(incidentStore, "claimSupportIncidentSlot").mockImplementationOnce(
+          (_dir, _slot, id) => {
+            replacementId = id;
+            return false;
+          },
+        );
+      } else {
+        vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce(
+          (_dir, _text, id) => {
+            replacementId = id;
+            throw new Error("simulated replacement publication failure");
+          },
+        );
+      }
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: "failed-reserve-replacement" }),
+      ).toEqual({
+        status: "rejected",
+        reason: failureStage === "claim" ? "quota-exhausted" : "store-unavailable",
+      });
+      expect(
+        listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
+      ).toEqual(prior.slice(1).map((record) => record.incidentId));
+      const text = readPersistedActivityLog(stateDir);
+      const expired = expectActivityLogProof(
+        "support.incident.expired.emitted-line",
+        persistedActivityLogLines(text, "support.incident.expired").at(-1) ?? "",
+      );
+      expect(expired).toMatchObject({
+        incidentId: victim.incidentId,
+        correlationId: victim.correlation.rootCorrelationId,
+        expiryReason: "retention",
+        retentionCause: "slot-pressure",
+        evictingCorrelationId: "failed-reserve-replacement",
+        evictingIncidentId: replacementId,
+        removalStatus: "removed",
+        pinRelease: "released",
+      });
+      expect(
+        expectActivityLogProof(
+          "support.incident.rejected.emitted-line",
+          persistedActivityLogLines(text, "support.incident.rejected").at(-1) ?? "",
+        ),
+      ).toMatchObject({
+        correlationId: "failed-reserve-replacement",
+        evictedIncidentId: victim.incidentId,
+        openIncidentCount: prior.length - 1,
+      });
+      if (replacementId === undefined)
+        throw new TypeError("Expected assigned replacement identity");
+      expectEvictionReportReference(victim, "evictedIncidentId", replacementId);
+    },
+  );
+
+  it("does not report an eviction when the occupied reserve victim cannot be removed", () => {
+    const prior = occupyPublicationReserve();
+    vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(() => {
+      throw new Error("simulated recovery victim refusal");
+    });
+    expect(
+      recordUserReportedIncident(stateDir, { correlationId: "refused-victim-removal" }),
+    ).toEqual({ status: "rejected", reason: "quota-exhausted" });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(prior);
+    const text = readPersistedActivityLog(stateDir);
+    const rejected = expectActivityLogProof(
+      "support.incident.rejected.emitted-line",
+      persistedActivityLogLines(text, "support.incident.rejected").at(-1) ?? "",
+    );
+    expect(rejected).toMatchObject({
+      correlationId: "refused-victim-removal",
+      openIncidentCount: prior.length,
+    });
+    expect(rejected).not.toHaveProperty("evictedIncidentId");
+    expect(
+      expectActivityLogProof(
+        "support.incident.expired.emitted-line",
+        persistedActivityLogLines(text, "support.incident.expired").at(-1) ?? "",
+      ),
+    ).toMatchObject({
+      removalStatus: "failed",
+      retentionCause: "slot-pressure",
+      completeness: "partial",
+    });
+  });
 
   it("recovers an occupied publication reserve after a durable replacement could not retire its predecessor", () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
@@ -1481,6 +1609,36 @@ describe("rolling diagnostic candidate retention", () => {
     ).toEqual([]);
   });
 
+  it("names the actual new publisher when only the diagnostic pin ceiling retires an old candidate", () => {
+    occupyDiagnosticPinReserve();
+    const prior = listSupportIncidents(stateDir, { readOnly: true });
+    const victim = prior[0];
+    if (victim === undefined) throw new TypeError("Expected an owned pin candidate");
+    const next = recordUserReportedIncident(stateDir, { correlationId: "pin-ceiling-replacement" });
+    if (next.status !== "created") throw new TypeError("Expected a durable replacement");
+    expect(
+      listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
+    ).toEqual([next.incidentId]);
+    expect(
+      expectActivityLogProof(
+        "support.incident.expired.emitted-line",
+        persistedActivityLogLines(
+          readPersistedActivityLog(stateDir),
+          "support.incident.expired",
+        ).at(-1) ?? "",
+      ),
+    ).toMatchObject({
+      incidentId: victim.incidentId,
+      correlationId: "pin-release-owner",
+      retentionCause: "pin-ceiling",
+      evictingCorrelationId: "pin-ceiling-replacement",
+      evictingIncidentId: next.incidentId,
+      removalStatus: "removed",
+      pinRelease: "released",
+    });
+    expectEvictionReportReference(next.record, "evictingIncidentId", victim.incidentId);
+  });
+
   it("reuses actual freed pin capacity despite an unrelated retained slot cleanup failure", () => {
     occupyDiagnosticPinReserve();
     vi.spyOn(incidentStore, "releaseSupportIncidentSlot").mockImplementationOnce(() => {
@@ -1627,10 +1785,29 @@ describe("rolling diagnostic candidate retention", () => {
     for (let index = 1; index < capacity; index += 1) {
       expect(recordUserReportedIncident(stateDir).status).toBe("created");
     }
-    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const replacement = recordUserReportedIncident(stateDir, {
+      correlationId: "slot-pressure-replacement",
+    });
+    if (replacement.status !== "created") throw new TypeError("Expected durable replacement");
     const retained = listSupportIncidents(stateDir, { readOnly: true });
     expect(retained).toHaveLength(capacity);
     expect(retained.some((record) => record.incidentId === first.incidentId)).toBe(false);
+    expect(
+      expectActivityLogProof(
+        "support.incident.expired.emitted-line",
+        persistedActivityLogLines(
+          readPersistedActivityLog(stateDir),
+          "support.incident.expired",
+        ).at(-1) ?? "",
+      ),
+    ).toMatchObject({
+      incidentId: first.incidentId,
+      correlationId: first.record.correlation.rootCorrelationId,
+      retentionCause: "slot-pressure",
+      evictingCorrelationId: "slot-pressure-replacement",
+      evictingIncidentId: replacement.incidentId,
+      pinRelease: "released",
+    });
     expect(existsSync(pinPath)).toBe(false);
     expect(
       listSupportIncidentClaims(stateDir).filter((claim) => claim.incidentId === first.incidentId),
@@ -1694,6 +1871,7 @@ describe("rolling diagnostic candidate retention", () => {
           persistedActivityLogLines(text, op).map((line) => JSON.parse(line) as unknown),
         ).toContainEqual(expect.objectContaining({ correlationId: "retired-candidate" }));
       }
+      expectRolledLifecycle(text);
       for (const correlationId of ["retired-candidate", "fresh-candidate"]) {
         const analyzed = analyzeSupportReport(
           createDesktopSupportReport(stateDir, correlationId).reportJson,
@@ -1731,6 +1909,10 @@ describe("rolling diagnostic candidate retention", () => {
       const text = readPersistedActivityLog(stateDir);
       const expired = persistedActivityLogLines(text, "support.incident.expired");
       expect(expired).toHaveLength(1);
+      const expiredRecord: unknown = JSON.parse(expired[0] ?? "");
+      expect(expiredRecord).not.toHaveProperty("retentionCause");
+      expect(expiredRecord).not.toHaveProperty("evictingCorrelationId");
+      expect(expiredRecord).not.toHaveProperty("evictingIncidentId");
       expect(
         expectActivityLogProof("support.incident.expired.emitted-line", expired[0] ?? ""),
       ).toMatchObject({

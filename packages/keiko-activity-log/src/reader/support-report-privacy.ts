@@ -147,10 +147,16 @@ export function supportReportRetainsFrames(
   return frames === undefined || frames.every((frame) => isCodeFrame(frame, modules));
 }
 
+const INCIDENT_REFERENCE_FIELDS = new Set([
+  "incidentId",
+  "evictingIncidentId",
+  "evictedIncidentId",
+]);
+
 function technicalOpaque(name: string, value: string, context: PrivacyContext): boolean {
   if (name === "method") return HTTP_METHODS.has(value);
   if (name === "recoveredInstanceId") return isActivityLogInstanceId(value);
-  if (name === "incidentId") return value === context.incident.incidentId;
+  if (INCIDENT_REFERENCE_FIELDS.has(name)) return value === context.incident.incidentId;
   if (name === "pinId") return value === context.incident.pin.pinId;
   return (
     SYMBOL_FIELDS.has(name) &&
