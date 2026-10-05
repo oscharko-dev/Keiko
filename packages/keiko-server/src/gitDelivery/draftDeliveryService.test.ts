@@ -26,6 +26,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 
 const GIT_FIXTURE_TIMEOUT_MS = 15_000;
 
@@ -360,6 +361,28 @@ describe("draft delivery hard boundaries", () => {
       record: { phase: "recovery-required" },
     });
     expect(fixture.createCount).toBe(1);
+  });
+  it("retains post-create recovery through the mandatory mutation diagnostic", async () => {
+    await pushed();
+    fixture.failReadAfterCreate = true;
+    const proposal = await fixture.service.proposePullRequest("feat: bounded change");
+    fixture.events.length = 0;
+    expect(await execute(proposal)).toMatchObject({
+      record: { phase: "recovery-required", reason: "ambiguous-remote" },
+    });
+    const mutation = fixture.events.find((event) => event.op === "git.delivery.mutation.completed");
+    expect(JSON.parse(formatActivityLogProofLine(mutation ?? {}))).toMatchObject({
+      category: "diagnostic",
+      correlationId: "draft-delivery-test",
+    });
+    const retained = observedFailureQuery(fixture.events);
+    expect(
+      retained.events.some(
+        ({ parsed }) =>
+          parsed.view.op === "git.draft-delivery" &&
+          parsed.view.extra?.phase === "recovery-required",
+      ),
+    ).toBe(true);
   });
   it.each(["duplicate", "closed", "foreign", "base-drift"])(
     "refuses %s remote PR identity",

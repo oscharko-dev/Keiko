@@ -14,6 +14,10 @@ import {
   observeDirectoryIteration,
 } from "./grounded-directory-iteration.js";
 import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import {
+  createSymbolReadFailureObserver,
+  type SymbolReadFailureObserver,
+} from "./grounded-symbol-diagnostics.js";
 import { mergeOverviewListing } from "./grounded-overview-fallback.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -418,6 +422,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "activityDetailStatus", values: ["unavailable"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -530,6 +535,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "activityDetailStatus", values: ["unavailable"] }],
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -597,6 +603,12 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [
+    { field: "activityDetailStatus", values: ["unavailable"] },
+    { field: "semanticRejectedAtomCount", positive: true },
+    { field: "unrepresentablePathCount", positive: true },
+    { field: "metadataUnavailableInspectionCount", positive: true },
+  ],
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -799,6 +811,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
     workspaceIoExistsCalls: { type: "integer", dataClass: "count", required: true },
     workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: true },
     workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: true },
+    directoryCleanupPendingCount: { type: "integer", dataClass: "count", required: false },
     secondaryFailureCount: { type: "integer", dataClass: "count", required: false },
     secondaryFailureKinds: {
       type: "string-array",
@@ -1108,7 +1121,7 @@ type MutableWorkspaceIoActivityCounters = {
 interface WorkspaceIoActivity {
   readonly fs: WorkspaceFs;
   readonly diagnostics: () => WorkspaceIoActivityDiagnostics;
-  readonly settleCleanup: () => Promise<void>;
+  readonly pendingCleanupCount: () => number;
 }
 
 function searchLimitsKey(limits: SearchLimits): string {
@@ -4137,6 +4150,7 @@ function symbolLinesForPath(
     );
   } catch (error) {
     if (error instanceof CancelledError) throw error;
+    inputs.recordSymbolReadFailure(error, scopePath);
     return new Map();
   }
 }
@@ -4328,6 +4342,7 @@ function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: Evidence
 }
 
 interface PrioritizedSymbolInputs {
+  readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly input: OrchestratorInput;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
@@ -4470,16 +4485,25 @@ function cachedSymbolLines(
   return lines;
 }
 
+function deterministicEvidenceObservers(
+  args: Pick<AssembleGroundedPackInputs, "recordMetadataUnavailable" | "recordSymbolReadFailure">,
+): Pick<DeterministicContextInputs, "recordMetadataUnavailable" | "recordSymbolReadFailure"> {
+  return {
+    recordMetadataUnavailable: args.recordMetadataUnavailable,
+    recordSymbolReadFailure: args.recordSymbolReadFailure,
+  };
+}
+
 async function symbolFileAtoms(
   inputs: DeterministicContextInputs,
   requestContext: StructuralAdapterRequestContext,
 ): Promise<SymbolDiscoveryResult> {
-  const { input, searchScope, fs, nowMs, signal, deadlineAtMs } = inputs;
+  const { input, searchScope, fs, nowMs, signal, deadlineAtMs, recordSymbolReadFailure } = inputs;
   // Both requested filename families share discovery, including the early declaration phase.
   // Each remains a separately charged query with its own retention and coverage.
   const { symbols, documents } = await collectFilenameMatches(inputs, requestContext);
   const prioritized = await collectPrioritizedSymbolAtoms(
-    { input, searchScope, fs, nowMs, signal, deadlineAtMs },
+    { input, searchScope, fs, nowMs, signal, deadlineAtMs, recordSymbolReadFailure },
     withLexicalSymbolCandidates(symbols.matches, symbols.terms, inputs.lexicalAtoms ?? []),
     symbols.terms,
   );
@@ -4570,7 +4594,7 @@ async function discoverDefinitionsBeforeGraphs(
   const certifiedPaths = primaryContentPaths(rings);
   const evidence = await symbolFileAtoms(
     {
-      recordMetadataUnavailable: args.recordMetadataUnavailable,
+      ...deterministicEvidenceObservers(args),
       input,
       plan,
       searchScope,
@@ -5091,6 +5115,7 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
+  readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly lexicalAtoms?: readonly EvidenceAtom[];
   readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
@@ -6188,6 +6213,7 @@ function createReadyGovernedPlan(
 }
 
 interface AssembleGroundedPackInputs {
+  readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly input: OrchestratorInput;
   readonly deps: OrchestratorDeps;
@@ -6767,7 +6793,7 @@ async function augmentRingsWithDeterministicAtoms(
   if (recordAugmentationSkip(args, scopedRings))
     return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
-    recordMetadataUnavailable: args.recordMetadataUnavailable,
+    ...deterministicEvidenceObservers(args),
     symbolDiscovery: scopedRings.symbolDiscovery,
     skipOptionalTrace: scopedRings.verifiedDefinitionContext === true,
     input: args.input,
@@ -6979,6 +7005,7 @@ interface ConnectedContextExecution {
 }
 
 interface ConnectedContextActivity {
+  readonly symbolReadFailure: SymbolReadFailureObserver;
   readonly metadataUnavailable: MetadataFailureObserver;
   readonly clarification: (plan: ExplorationPlan) => void;
   readonly elapsedMs: () => number;
@@ -7684,6 +7711,10 @@ function aggregateSearchFailureDetails(
   };
 }
 
+function pendingDirectoryCleanupCount(progress: ConnectedContextProgress): number {
+  return progress.workspaceIoActivity?.pendingCleanupCount() ?? 0;
+}
+
 function failureActivityExtra(
   identity: ConnectedContextActivityIdentity,
   error: unknown,
@@ -7708,6 +7739,7 @@ function failureActivityExtra(
     ...workspaceIndexActivityExtra(index),
     ...workspaceIoActivityExtra(io),
     ...aggregateSearchFailureDetails(error),
+    directoryCleanupPendingCount: pendingDirectoryCleanupCount(progress),
     ...(frames.length === 0 ? {} : { frames }),
     ...(chain.length === 0 ? {} : { causeChain: chain }),
     completeness: "complete",
@@ -7926,6 +7958,7 @@ function createConnectedContextActivity(
   const logElapsed = startLogTimer();
   let metadataUnavailableInspectionCount = 0;
   return {
+    symbolReadFailure: createSymbolReadFailureObserver(logger, correlationId),
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
       logger.info(() =>
@@ -7964,6 +7997,7 @@ function fallbackConnectedContextActivity(
   logicalStartMs: number,
 ): ConnectedContextActivity {
   return {
+    symbolReadFailure: createSymbolReadFailureObserver(undefined, undefined),
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     metadataUnavailable: (): void => undefined,
     clarification: (): void => undefined,
@@ -8372,7 +8406,7 @@ function requestScopedWorkspaceFs(
   return {
     fs: observedFs,
     diagnostics: (): WorkspaceIoActivityDiagnostics => ({ ...counters }),
-    settleCleanup: cleanup.settle,
+    pendingCleanupCount: cleanup.pendingCount,
   };
 }
 
@@ -8592,6 +8626,7 @@ function liveGroundedPackInputs(
 ): AssembleGroundedPackInputs {
   return {
     recordMetadataUnavailable: runtime.activity.metadataUnavailable,
+    recordSymbolReadFailure: runtime.activity.symbolReadFailure,
     input,
     deps,
     plan,
@@ -8823,8 +8858,8 @@ export async function retrieveConnectedContextPack(
     activity.completed(execution);
     return execution.output;
   } catch (error) {
-    if (!isConnectedContextCancellation(error, safeConnectedContextErrorKind(error)))
-      await progress.workspaceIoActivity?.settleCleanup();
+    // A queued iterator return may be waiting on an OS read that JavaScript cannot interrupt.
+    // Publish the original failure now; the owned observer still records later cleanup failures.
     recordConnectedContextFailureOutcome(activity, error, progress);
     throw error;
   }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   expectActivityLogProof,
@@ -163,6 +164,37 @@ describe("logCitationReconciliation", () => {
     expect(serialized).not.toContain("Java 17");
     expect(serialized).not.toContain("[1, 7, 8]");
   });
+
+  it.each([
+    ["Known [1].", [1], false],
+    ["Unknown [7].", [], true],
+    ["No evidence is available.", [], false],
+  ] as const)("retains only failed marker reconciliation for %s", (answer, attached, failed) => {
+    const sink = capture();
+    logCitationReconciliation(
+      evidence({ answer, attachedIndices: attached }),
+      "citation-required-selection",
+    );
+    const query = observedFailureQuery(sink.events);
+    expect(
+      query.events.filter((event) => event.parsed.view.op === "search.citations.reconciled"),
+    ).toHaveLength(failed ? 1 : 0);
+  });
+
+  it.each(["none", "judge-undecided", "no-judge", "unjudged-citation"] as const)(
+    "retains the actual %s support decision only when verification is unavailable",
+    (supportCaveat) => {
+      const sink = capture();
+      logCitationSupport(
+        { supportCaveat, weakCitationCount: 1, hiddenProseClaimCount: 0 },
+        "support-required-selection",
+      );
+      const query = observedFailureQuery(sink.events);
+      expect(
+        query.events.filter((event) => event.parsed.view.op === "search.citations.support-settled"),
+      ).toHaveLength(supportCaveat === "none" ? 0 : 1);
+    },
+  );
 
   // PR #3678 review: the caveat is decided after the citation line, so its reason has its own line.
   it("resolves the search.citations.support-settled Activity Log proof body-free", () => {

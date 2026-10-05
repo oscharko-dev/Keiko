@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { resetServerLogFailureNotices } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -1502,7 +1503,12 @@ describe("retrieveConnectedContextPack activity log", () => {
     });
     expect(nestedExtra(failed.extra, "workspaceIndex").bypassedSearchCount).toBeGreaterThan(0);
     const registration = activityLogEventRegistration(failed);
-    expect(Object.keys(registration?.fields ?? {})).toHaveLength(44);
+    expect(registration?.fields.directoryCleanupPendingCount).toEqual({
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    });
+    expect(Object.keys(registration?.fields ?? {})).toHaveLength(45);
     expect(Object.keys(registration?.fields ?? {}).length).toBeLessThanOrEqual(MAX_LOG_FIELD_COUNT);
     expectActivityLogProof(
       "search.connected-context.failed.line",
@@ -1544,6 +1550,13 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(output.pack).toBe(hostilePack);
       const [, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
       expect(completed.extra).toMatchObject({ activityDetailStatus: "unavailable" });
+      for (const event of activityLog.events.filter(
+        (entry) => entry.extra?.activityDetailStatus === "unavailable",
+      )) {
+        expect(
+          observedFailureQuery([event]).events.filter((entry) => entry.parsed.view.op === event.op),
+        ).toHaveLength(1);
+      }
       expect(stderr).toHaveBeenCalledTimes(1);
       expect(String(stderr.mock.calls[0]?.[0])).not.toContain(projectionFailure.message);
     } finally {

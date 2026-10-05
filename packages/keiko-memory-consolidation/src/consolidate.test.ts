@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { describe, expect, it } from "vitest";
 
 import { JACCARD_DEFAULT, MAX_AGE_MS_DEFAULT, STALE_CONFIDENCE_DEFAULT } from "./_constants.js";
@@ -9,6 +10,13 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+
+function expectFallbackSelection(events: readonly ConsolidationLogEvent[], count: number): void {
+  const selected = observedFailureQuery(events).events.filter(
+    (event) => event.parsed.view.op === "consolidation.summary.fallback",
+  );
+  expect(selected).toHaveLength(count);
+}
 
 function baseOptions(overrides: Partial<ConsolidationOptions> = {}): ConsolidationOptions {
   return {
@@ -541,6 +549,7 @@ describe("runConsolidation - summaryFallbackReason", () => {
       formatActivityLogProofLine(events[0] ?? {}),
     );
     expect(persisted).toMatchObject({ reason: "absent" });
+    expectFallbackSelection(events, 0);
   });
 
   it("reports 'invalid-output' when the summaryGenerator returns null", () => {
@@ -556,6 +565,7 @@ describe("runConsolidation - summaryFallbackReason", () => {
       loss: "none",
       reason: "invalid-output",
     });
+    expectFallbackSelection(events, 1);
   });
 
   it("reports 'invalid-output' when the summaryGenerator returns an empty body", () => {
@@ -571,6 +581,7 @@ describe("runConsolidation - summaryFallbackReason", () => {
       loss: "none",
       reason: "invalid-output",
     });
+    expectFallbackSelection(events, 1);
   });
 
   it("reports 'union-not-preserved' when the generated summary drops source content", () => {
@@ -586,6 +597,7 @@ describe("runConsolidation - summaryFallbackReason", () => {
       loss: "none",
       reason: "union-not-preserved",
     });
+    expectFallbackSelection(events, 1);
   });
 
   it("reports 'generator-threw' when the summaryGenerator throws, and the sink receives the event", () => {
@@ -616,6 +628,7 @@ describe("runConsolidation - summaryFallbackReason", () => {
         },
       },
     ]);
+    expectFallbackSelection(events, 1);
   });
 
   it("never calls the sink when no fallback occurs", () => {

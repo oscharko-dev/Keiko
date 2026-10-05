@@ -1,3 +1,8 @@
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
@@ -75,6 +80,16 @@ describe("body-only description application", () => {
     if (lease === undefined) return;
     await fixture.service.executeApproved(result.preview.proposalId, lease);
     expect(fixture.writes[0]?.body).toContain(artifact.markdown);
+    const activity = fixture.events.filter((event) => event.op === "git.pr-description");
+    expectActivityLogProof(
+      "git.pr-description.emitted-line",
+      formatActivityLogProofLine(activity.at(-1) ?? {}),
+    );
+    expect(
+      observedFailureQuery(activity).events.some(
+        (event) => event.parsed.view.op === "git.pr-description",
+      ),
+    ).toBe(false);
   });
 
   it("retains an artifact captured from the live branch refs that produced its digest", async () => {
@@ -360,6 +375,12 @@ describe("body-only description application", () => {
         },
       });
       expect(fixture.writes).toHaveLength(1);
+      const activity = fixture.events.filter((event) => event.op === "git.pr-description");
+      expect(
+        observedFailureQuery(activity).events.some(
+          (event) => event.parsed.view.op === "git.pr-description",
+        ),
+      ).toBe(true);
     },
   );
   it("retains uncertain intent but never publishes current after late authority loss", async () => {

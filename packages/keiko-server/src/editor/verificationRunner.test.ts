@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 // Issue #2211 — VerificationRunnerManager unit tests. The execution port is injected (a canned
 // report/probe), so the manager exercises the real discovery + trust gate + plan composition +
 // content-free lifecycle streaming without a real spawn. Route-level coverage lives in
@@ -1444,4 +1445,70 @@ describe("decideScriptTrust", () => {
       ).toEqual({ trusted: false, refusal: "worktree-manifest-drift" });
     });
   });
+});
+
+describe("verification diagnostic retention", () => {
+  function retained(events: readonly ServerLogEvent[], op: string): number {
+    const event = events.find((entry) => entry.op === op && entry.extra?.state !== "selected");
+    if (event === undefined) throw new Error("verification event missing");
+    formatActivityLogProofLine(event);
+    return observedFailureQuery([event]).events.filter((entry) => entry.parsed.view.op === op)
+      .length;
+  }
+
+  it.each(["none", "current", "installed", "failed", "timed-out", "cancelled"] as const)(
+    "keeps only actual dependency failures mandatory: %s",
+    async (state) => {
+      const events: ServerLogEvent[] = [];
+      const failed = state === "failed" || state === "timed-out" || state === "cancelled";
+      const result: VerificationReport = {
+        ...report(["typecheck"]),
+        dependencies: { state, lockfile: "present", exitCode: failed ? 1 : 0, durationMs: 1 },
+      };
+      const manager = makeManager({
+        execute: fakePort(result).port,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+      await manager.runToReport(
+        input({ correlationId: "dependency-retention-proof" }),
+        new AbortController().signal,
+      );
+      expect(retained(events, "editor.verification.dependencies")).toBe(failed ? 1 : 0);
+    },
+  );
+
+  it.each(["passed", "skipped", "denied", "failed", "timed-out", "resource-exceeded"] as const)(
+    "keeps actual completed verification failure mandatory: %s",
+    async (status) => {
+      const events: ServerLogEvent[] = [];
+      const base = report(["typecheck"]);
+      const result: VerificationReport = {
+        ...base,
+        overallStatus: status,
+        counts: counts({ [status]: 1 }),
+        results: base.results.map((step) => ({ ...step, status })),
+      };
+      const manager = makeManager({
+        execute: fakePort(result).port,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        isWorkspaceTrustedForPackageScripts: () => true,
+      });
+      await manager.runToReport(
+        input({ correlationId: "verification-retention-proof" }),
+        new AbortController().signal,
+      );
+      const failed =
+        status === "failed" || status === "timed-out" || status === "resource-exceeded";
+      expect(retained(events, "editor.verification.execute")).toBe(failed ? 1 : 0);
+    },
+  );
 });

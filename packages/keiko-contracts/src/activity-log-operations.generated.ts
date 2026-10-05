@@ -1096,6 +1096,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["chat-context-management"],
     proofIds: ["chat.context.management.line"],
     releaseImpact: "minor",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["failed", "prompt-failed"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -1178,6 +1184,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["chat-turn"],
     proofIds: ["chat.context.selected.budget"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "omittedSummaryCategories",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -4534,6 +4546,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["github-issue-reader-authorization"],
     proofIds: ["coding-context.github-authorization.evaluated.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "decision",
+        values: ["store-unavailable"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -4912,6 +4930,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      ioFailureObserved: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       coverageReasons: {
         type: "string-array",
         dataClass: "closed-enum",
@@ -4980,6 +5003,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["coding-repository-search"],
     proofIds: ["coding-repository-handler.settled.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "ioFailureObserved",
+        values: [true],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -9847,6 +9876,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["consolidation-summary-generation"],
     proofIds: ["consolidation.summary.fallback.reason"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "reason",
+        values: ["invalid-output", "union-not-preserved", "generator-threw"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -10197,6 +10232,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["verification-dependency-bootstrap"],
     proofIds: ["editor.verification.dependencies.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "state",
+        values: ["failed", "timed-out", "cancelled"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -10337,6 +10378,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["verification-runner-refusal", "verification-runner-failure"],
     proofIds: ["editor.verification.execute.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "verificationStatus",
+        values: ["failed", "timed-out", "resource-exceeded"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -12666,6 +12713,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      truncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
     },
     causal: "none",
     lifecycle: "state",
@@ -12673,6 +12725,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["embedding-scalar-ladder"],
     proofIds: ["embedding.scalar-ladder.item-completed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "truncated",
+        values: [true],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -14152,6 +14210,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-chat-provider-call"],
     proofIds: ["gateway.readiness.compatibility-retry.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "rejectedStatus",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -14265,6 +14329,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-chat-provider-call"],
     proofIds: ["gateway.readiness.compatibility-retry.skipped.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "rejectedStatus",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -16168,6 +16238,29 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["git-ci-observation"],
     proofIds: ["git.ci-observation.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "state",
+        values: ["failed"],
+      },
+      {
+        field: "contextStatus",
+        values: ["unavailable"],
+      },
+      {
+        field: "reason",
+        values: [
+          "provider-unavailable",
+          "provider-forbidden",
+          "provider-not-found",
+          "rate-limited",
+          "timeout",
+          "pagination-exhausted",
+          "output-truncated",
+          "malformed-response",
+        ],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -18921,6 +19014,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["git-journey-observation"],
     proofIds: ["git.journey-observation.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "reason",
+        values: ["provider-unavailable"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -19130,6 +19229,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["git-journey-readiness"],
     proofIds: ["git.journey-readiness.refreshed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "store",
+        values: ["unavailable"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -19269,6 +19374,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["git-pr-description"],
     proofIds: ["git.pr-description.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "state",
+        values: ["failed"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -20280,6 +20391,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      failedCheckCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       omittedCount: {
         type: "integer",
         dataClass: "count",
@@ -20402,6 +20518,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["git-verified-commit"],
     proofIds: ["git.verified-commit.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "failedCheckCount",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -23763,6 +23885,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["pr-description-generation"],
     proofIds: ["pr-description.generation.completed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["partial", "fallback", "failed"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -23996,6 +24124,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["pr-description-model-call"],
     proofIds: ["pr-description.model.completed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "accepted",
+        values: [false],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -25018,6 +25152,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["knowledge-citation-reconciliation"],
     proofIds: ["search.citations.reconciled.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "danglingMarkerCount",
+        positive: true,
+      },
+      {
+        field: "ambiguousMarkerCount",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -25060,6 +25204,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["knowledge-citation-reconciliation"],
     proofIds: ["search.citations.support-settled.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "supportCaveat",
+        values: ["judge-undecided", "no-judge", "unjudged-citation"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -25439,6 +25589,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["connected-context-retrieval"],
     proofIds: ["search.connected-context.completed.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "activityDetailStatus",
+        values: ["unavailable"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -25696,6 +25852,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["connected-context-retrieval"],
     proofIds: ["search.connected-context.completion-details.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "activityDetailStatus",
+        values: ["unavailable"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -25930,6 +26092,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      directoryCleanupPendingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       secondaryFailureCount: {
         type: "integer",
@@ -26244,6 +26411,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["connected-context-retrieval"],
     proofIds: ["search.connected-context.source-details.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "activityDetailStatus",
+        values: ["unavailable"],
+      },
+      {
+        field: "semanticRejectedAtomCount",
+        positive: true,
+      },
+      {
+        field: "unrepresentablePathCount",
+        positive: true,
+      },
+      {
+        field: "metadataUnavailableInspectionCount",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -26619,6 +26804,70 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["rerank-degradation"],
     proofIds: ["search.rerank.completed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "search.symbol-line.unavailable",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "grounded-symbol-diagnostics.recordSymbolLineUnavailable",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      scopePathDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "permission-denied",
+          "containment-denied",
+          "source-changed",
+          "read-limit",
+          "filesystem-unavailable",
+        ],
+      },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: true,
+        maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["connected-context-retrieval"],
+    proofIds: ["search.symbol-line.unavailable.line"],
     releaseImpact: "patch",
   },
   {

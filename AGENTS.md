@@ -447,6 +447,11 @@ system that exists, never beside it:
   interrupted publication, and degraded capability in focused fault-injection tests. A missing
   transition or proof is a contract failure, not an optional follow-up; this proof set is the
   fault-injection gate for the change.
+- **Declare informational failure facts at their owner.** If a closed failure outcome or positive
+  failure counter would otherwise be optional report context, declare its exact `diagnosticWhen`
+  condition on the existing operation. Prove retention through the actual producer, registered
+  writer and incident query with zero optional context; include healthy controls. Ordinary file
+  eligibility exclusions and budget limits are not technical failures.
 - **Thread the correlation.** Every line of one logical operation carries that operation's
   `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`

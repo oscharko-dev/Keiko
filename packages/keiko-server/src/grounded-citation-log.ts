@@ -58,6 +58,10 @@ const SEARCH_CITATIONS_RECONCILED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [
+    { field: "danglingMarkerCount", positive: true },
+    { field: "ambiguousMarkerCount", positive: true },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -199,6 +203,9 @@ const SEARCH_CITATIONS_SUPPORT_SETTLED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [
+    { field: "supportCaveat", values: ["judge-undecided", "no-judge", "unjudged-citation"] },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

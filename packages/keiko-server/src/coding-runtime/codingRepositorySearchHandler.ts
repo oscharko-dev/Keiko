@@ -106,6 +106,7 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
     lowValuePolicyApplied: { type: "boolean", dataClass: "closed-enum", required: false },
     lowValueRescueApplied: { type: "boolean", dataClass: "closed-enum", required: false },
     coverageIncomplete: { type: "boolean", dataClass: "closed-enum", required: false },
+    ioFailureObserved: { type: "boolean", dataClass: "closed-enum", required: false },
     coverageReasons: {
       type: "string-array",
       dataClass: "closed-enum",
@@ -150,6 +151,7 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
   },
   causal: "correlation",
   lifecycle: "end",
+  diagnosticWhen: [{ field: "ioFailureObserved", values: [true] }],
   analyzerProjection: "process-lifecycle",
   failureClasses: ["coding-repository-search"],
   proofIds: ["coding-repository-handler.settled.emitted-line"],
@@ -222,6 +224,7 @@ function terminalEvent(
             outputBytes: Buffer.byteLength(JSON.stringify(result)),
             truncationCount: result.truncationReasons.length,
             truncationReasons: result.truncationReasons,
+            ioFailureObserved: result.truncationReasons.includes("io-error"),
             ...(result.kind === "search"
               ? {
                   resultPathSha256: result.hits.map((hit) =>

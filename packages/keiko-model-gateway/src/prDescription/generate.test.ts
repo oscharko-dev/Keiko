@@ -30,6 +30,8 @@ import type { ModelGatewayLogEvent } from "../observability.js";
 import { systemClock } from "../resilience.js";
 import type { Clock, GatewayConfig, ProviderAdapter } from "../types.js";
 import { generatePrDescription } from "./generate.js";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { prDescriptionChunks } from "./evidence.js";
 import { validatedPrDescriptionLogoUrl } from "./render.js";
 import {
@@ -253,6 +255,61 @@ function firstEventFor(events: readonly ModelGatewayLogEvent[], op: string): obj
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("PR narrative diagnostic selection", () => {
+  it.each(["not json", candidate(entry(0).evidenceId, "Tests passed.")])(
+    "retains rejected model output through the actual registered query",
+    async (content) => {
+      const setup = fixture({ respond: async () => response(content) });
+      await generatePrDescription(REQUEST, setup.deps);
+      const completed = setup.events.find((event) => event.op === "pr-description.model.completed");
+      expect(completed).toMatchObject({ extra: { accepted: false } });
+      expect(completed).toBeDefined();
+      if (completed === undefined) throw new TypeError("Missing model completion evidence");
+      expect(Reflect.has(completed, "level")).toBe(false);
+      expect(activityLogEventRegistration(completed)).toMatchObject({
+        diagnosticWhen: [{ field: "accepted", values: [false] }],
+      });
+      const selected = observedFailureQuery(setup.events).events.map((event) => ({
+        ...event.parsed.view,
+        correlationId: event.parsed.correlationId,
+      }));
+      expect(selected).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            op: "pr-description.model.completed",
+            correlationId: REQUEST.authority.correlationId,
+          }),
+          expect.objectContaining({
+            op: "pr-description.generation.completed",
+          }),
+        ]),
+      );
+    },
+  );
+
+  it("retains partial coverage while leaving an otherwise complete generation optional", async () => {
+    for (const count of [1, 2]) {
+      const setup = fixture({ count });
+      await generatePrDescription(REQUEST, setup.deps);
+      const completed = setup.events.find(
+        (event) => event.op === "pr-description.generation.completed",
+      );
+      expect(completed).toMatchObject({ extra: { outcome: count === 1 ? "complete" : "partial" } });
+      const selected = observedFailureQuery(setup.events);
+      expect(
+        selected.events.some(
+          (event) => event.parsed.view.op === "pr-description.generation.completed",
+        ),
+      ).toBe(count !== 1);
+      expect(
+        selected.events.filter(
+          (event) => event.parsed.correlationId === REQUEST.authority.correlationId,
+        ),
+      ).toHaveLength(count === 1 ? 0 : setup.events.length);
+    }
+  });
 });
 
 describe("production Gateway PR narrative composition", () => {

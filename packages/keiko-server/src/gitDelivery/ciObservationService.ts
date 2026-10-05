@@ -157,6 +157,23 @@ const CI_OBSERVATION_OPERATION = defineActivityLogOperation({
     },
   },
   causal: "correlation",
+  diagnosticWhen: [
+    { field: "state", values: ["failed"] },
+    { field: "contextStatus", values: ["unavailable"] },
+    {
+      field: "reason",
+      values: [
+        "provider-unavailable",
+        "provider-forbidden",
+        "provider-not-found",
+        "rate-limited",
+        "timeout",
+        "pagination-exhausted",
+        "output-truncated",
+        "malformed-response",
+      ],
+    },
+  ],
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-ci-observation"],

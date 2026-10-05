@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 // Route-level tests for the read-only journey observation route (#3389 AC1/AC5/AC6, epic #3384).
 //
 // Proves: the route is actually registered in the real server route table; a malformed request is
@@ -607,6 +608,36 @@ describe("journey readiness renewal after the run has settled (regression, epic 
       },
     };
   }
+
+  it.each([true, false])(
+    "retains missing persistence without treating an ordinary CAS refusal as a failure (missing=%s)",
+    async (missing) => {
+      const h = settledHarness();
+      try {
+        const { ciReadiness: _ciReadiness, ...withoutReadiness } = h.snapshots;
+        const deps = missing ? { ...h.deps, codingRuntimeSnapshotStore: withoutReadiness } : h.deps;
+        const group = createGitDeliveryJourneyRouteGroup({
+          reader: () => fakeReader(OBSERVED_FACTS),
+          description: () => Promise.resolve(null),
+          ciReader: (): GitCiProviderReader => ({
+            readFacts: () => Promise.resolve(greenCiFacts(h.draft)),
+          }),
+        });
+        await group[0]?.handler(ctxFor({ schemaVersion: "1", runId: "run-1" }), deps);
+        const event = h.events.find((entry) => entry.op === "git.journey-readiness.refreshed");
+        expect(event).toMatchObject({
+          extra: { recorded: false, store: missing ? "unavailable" : "available" },
+        });
+        if (event === undefined) throw new TypeError("Missing actual readiness record");
+        const selected = observedFailureQuery([event]).events.filter(
+          (entry) => entry.parsed.view.op === event.op,
+        );
+        expect(selected).toHaveLength(missing ? 1 : 0);
+      } finally {
+        h.cleanup();
+      }
+    },
+  );
 
   it("re-observes CI facts through a fresh, run-independent read and clears readiness-stale once the run has succeeded and the cached snapshot has expired", async () => {
     const h = settledHarness();

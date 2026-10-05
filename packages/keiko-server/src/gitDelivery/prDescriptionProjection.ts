@@ -119,6 +119,7 @@ const PR_DESCRIPTION_OPERATION = defineActivityLogOperation({
     },
   },
   causal: "correlation",
+  diagnosticWhen: [{ field: "state", values: ["failed"] }],
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-pr-description"],

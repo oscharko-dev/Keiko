@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -95,6 +96,11 @@ describe("read-only journey observation owner", () => {
       formatActivityLogProofLine(observed ?? {}),
     );
     expect(persisted).toMatchObject({ phase: "observed", state: "awaiting-ready-approval" });
+    expect(
+      observedFailureQuery(f.logs).events.some(
+        (event) => event.parsed.view.op === "git.journey-observation",
+      ),
+    ).toBe(false);
   });
   it("does not refresh CI for an already merged PR and observes delayed issue closure", async () => {
     const f = fixture();
@@ -131,6 +137,11 @@ describe("read-only journey observation owner", () => {
     expect(f.read).toHaveBeenCalledOnce();
     expect(f.readiness).not.toHaveBeenCalled();
     expect(f.description).not.toHaveBeenCalled();
+    expect(
+      observedFailureQuery(f.logs).events.some(
+        (event) => event.parsed.view.op === "git.journey-observation",
+      ),
+    ).toBe(true);
   });
   it("rejects changed review state even if an injected reader incorrectly reuses its digest", async () => {
     const f = fixture();

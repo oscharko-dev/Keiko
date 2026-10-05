@@ -258,8 +258,25 @@ and descriptor lookahead. A legacy response without that observation does not fa
 
 Streaming directory enumeration distinguishes membership changes from directory identity changes.
 Concurrent additions or disappeared entries retain safely observed evidence and sibling traversal,
-with `io-error` incomplete coverage; they never certify a stable snapshot. Replaced inode/device
-identity, unsafe aliases, and root containment changes still fail closed. Secret redaction uses
+with `io-error` incomplete coverage; they never certify a stable snapshot. Local child-directory
+`ENOENT`, `ENOTDIR`, `EACCES`, `EPERM`, `EIO`, and `ESTALE` failures at opening, iteration or closing
+are recoverable only after the connected root is freshly revalidated. Root failures, process-wide
+descriptor exhaustion, programming errors, replaced inode/device identity, unsafe aliases, and
+root containment changes still fail closed. A transient connected-root filesystem or server-resource
+outage is classified separately from an invalid or missing folder selection: the remaining healthy
+sources continue with an explicit skipped-source notice. If every source is unavailable, transient
+outages return 503 (taking precedence over permanent selection errors); permanent unavailable
+selections retain 400 and authority denials retain their existing status. The existing root-denial
+Activity Log records the closed failure kind and request correlation without exposing paths.
+Terminal retrieval failures do not wait for physical directory cleanup behind an outstanding
+operating-system read. The failure event
+records the number of pending iterator closures; owned observers retain the original correlation
+and report any later cleanup failure without replacing the primary error or consuming late entries.
+Symbol definition scans yield between uncached file reads and observe cancellation before starting
+the next file. Expected read failures retain healthy sibling evidence and emit
+`search.symbol-line.unavailable` through the existing Activity Log, with a path digest, closed
+failure reason and cause metadata. Unexpected programming failures retain their original exception
+and reach the terminal retrieval diagnostic. Secret redaction uses
 one private-key boundary scan and scheme-start guards, including conservative redaction of an
 unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
 Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
@@ -428,10 +445,14 @@ queries and genuine literal-only requests retain strict absence semantics.
 Multiple targets share the same
 recursive scan. Their literal interpretation participates in the query fingerprint and uses live
 matching rather than fuzzy hashed lexical records; approximate semantic evidence cannot substitute
-for a requested exact occurrence. Internal literal query text and aggregate unique target characters
-(including separators) remain within the planner's 4,096-character input envelope; identical targets
-are deduplicated before that aggregate check. Invalid input is rejected before needle allocation,
-fingerprinting, or filesystem access. This input bound does not limit the recursive corpus.
+for a requested exact occurrence. Anchor extraction inspects the complete admitted question, including
+long specifications and stack traces. The 4,096-character bound applies to individual literal
+targets and their aggregate selected metadata (including separators), not to the surrounding
+question. Oversized targets are omitted whole rather than sliced; valid shorter targets remain
+available. If target selection is clipped, natural-language routing remains contextual rather than
+certifying a literal-only request. Explicit literal terms are deduplicated and validated before
+needle allocation, fingerprinting, or filesystem access. This target bound does not limit the
+recursive corpus.
 Before line classification, literal searches reuse the prepared case-aware, any-alternative
 matcher to reject files with no literal occurrence. Those decoded files still count as scanned;
 matched files retain the same line selection and evidence limits.
@@ -480,7 +501,9 @@ Assembly compares requested ranges against the compacted bytes actually retained
 missing ranges, truncated windows and incompatible overlapping source views with aggregate counts,
 without one prompt marker per file. A clipped trailing newline does not authorize the next unsent
 line. Structural edges retain independent identities while a shared source body is compacted and
-charged once. Different view identities merge only when their overlapping source lines agree;
+charged once. The highest-scoring contributing atom carries that body, so downstream prompt ranking
+retains its actual relevance even when a weaker edge arrived first; metadata-only siblings keep
+their original scores. Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
 
 Canonical omission order and cache identity are independent of caller ordering. A successful

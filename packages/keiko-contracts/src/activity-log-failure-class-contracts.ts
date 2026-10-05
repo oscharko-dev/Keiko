@@ -2552,6 +2552,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "search.connected-context.completion-details",
         "search.connected-context.metadata-unavailable",
         "search.connected-context.source-details",
+        "search.symbol-line.unavailable",
       ],
       end: ["search.connected-context.clarification-needed", "search.connected-context.completed"],
       failure: ["search.connected-context.failed"],
@@ -2565,6 +2566,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "search.connected-context.metadata-unavailable",
       "search.connected-context.source-details",
       "search.connected-context.started",
+      "search.symbol-line.unavailable",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -2575,6 +2577,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "search.connected-context.metadata-unavailable",
       "search.connected-context.source-details",
       "search.connected-context.started",
+      "search.symbol-line.unavailable",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -2584,6 +2587,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "search.connected-context.metadata-unavailable",
       "search.connected-context.source-details",
       "search.connected-context.started",
+      "search.symbol-line.unavailable",
     ],
     requiredEvidenceClasses: [
       "closed-enum",
@@ -2598,10 +2602,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredFrameOperations: [
       "search.connected-context.failed",
       "search.connected-context.metadata-unavailable",
+      "search.symbol-line.unavailable",
     ],
     requiredCauseOperations: [
       "search.connected-context.failed",
       "search.connected-context.metadata-unavailable",
+      "search.symbol-line.unavailable",
     ],
   },
   {

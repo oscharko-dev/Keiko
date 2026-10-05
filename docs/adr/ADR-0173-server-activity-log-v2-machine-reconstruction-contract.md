@@ -2025,6 +2025,12 @@ mandatory even when its level is informational. Conditions reference existing sc
 validated against their declared types and closed values, and are preserved by the canonical registry;
 there is no expression language or reader-side operation list. Unrelated metadata and successful
 values remain optional. These conditions govern retention, not a fabricated severity or failure kind.
+An owner must declare a failure outcome or positive failure counter that would otherwise be optional:
+rejected provider output, degraded readiness, failed verification, unavailable storage, and actual
+source inspection failures cannot depend on the optional-context allowance. Normal selection,
+file-size, binary, and result-budget exclusions do not imply a technical failure. Regression proofs
+use the actual producer, registered writer, scanner and incident query with zero optional context;
+healthy control records prove that the declaration does not turn every event into a diagnostic.
 Registrations without this optional metadata retain their existing selection semantics. A registered causal start without a later matching
 end or failure in the pinned logical-log window also makes its correlation mandatory. Matching follows the
 existing analyzer's correlation and registered failure class; a terminal from another class does

@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { describe, expect, it } from "vitest";
 import type { SemanticSearchProvider, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
@@ -97,6 +98,11 @@ async function assertDecision(test: DecisionCase): Promise<void> {
     formatActivityLogProofLine(event ?? {}),
   );
   expect(line).toHaveProperty("correlationId", CORRELATION);
+  if (event === undefined) throw new Error("Missing source decision event");
+  const query = observedFailureQuery([event]);
+  expect(query.events.filter((entry) => entry.parsed.view.op === event.op)).toHaveLength(
+    test.rejected > 0 ? 1 : 0,
+  );
   const raw = log.lines().join("\n");
   for (const secret of [ROOT, test.text, "private provider", "related.ts"])
     expect(raw).not.toContain(secret);

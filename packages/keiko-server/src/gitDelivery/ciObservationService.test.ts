@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -348,7 +349,13 @@ describe("run-bound CI observations through existing draft authority", () => {
     );
     expect(JSON.stringify(test.changed.mock.calls)).not.toContain("Transient error details.");
     expect(JSON.stringify(fixture.events)).not.toContain("Transient error details.");
-    const line = fixture.events.filter((event) => event.op === "git.ci-observation").at(-1);
+    const activity = fixture.events.filter((event) => event.op === "git.ci-observation");
+    expect(
+      observedFailureQuery(activity).events.some(
+        (event) => event.parsed.view.op === "git.ci-observation",
+      ),
+    ).toBe(true);
+    const line = activity.at(-1);
     expect(redactLogFields(line?.extra ?? {})).toMatchObject({
       sourceCount: 1,
       entryCount: 1,
@@ -426,6 +433,15 @@ describe("run-bound CI observations through existing draft authority", () => {
     expect(fixture.createCount).toBe(1);
     const lines = fixture.events.filter((event) => event.op === "git.ci-observation");
     expect(lines).toHaveLength(2);
+    expectActivityLogProof(
+      "git.ci-observation.emitted-line",
+      formatActivityLogProofLine(lines.at(-1) ?? {}),
+    );
+    expect(
+      observedFailureQuery(lines).events.some(
+        (event) => event.parsed.view.op === "git.ci-observation",
+      ),
+    ).toBe(false);
     expect(lines.every((line) => line.correlationId === fixture.context.correlationId)).toBe(true);
     expect(redactLogFields(lines.at(-1)?.extra ?? {})).toMatchObject({
       phase: "observed",
@@ -514,6 +530,12 @@ describe("run-bound CI observations through existing draft authority", () => {
       retryAfterMs: 30_000,
       snapshot: { state: "pending", complete: false },
     });
+    const activity = fixture.events.filter((event) => event.op === "git.ci-observation");
+    expect(
+      observedFailureQuery(activity).events.some(
+        (event) => event.parsed.view.op === "git.ci-observation",
+      ),
+    ).toBe(true);
     expect(await test.service.observe()).toMatchObject({
       reason: "poll-backoff",
       retryAfterMs: 30_000,

@@ -53,7 +53,7 @@ async function closeObservedIterator(
 
 export function directoryCleanupTracker(): {
   observe: (cleanup: Promise<unknown>) => void;
-  settle: () => Promise<void>;
+  pendingCount: () => number;
 } {
   const pending = new Set<Promise<unknown>>();
   return {
@@ -64,8 +64,6 @@ export function directoryCleanupTracker(): {
       };
       void cleanup.then(settled, settled);
     },
-    settle: async (): Promise<void> => {
-      await Promise.allSettled(pending);
-    },
+    pendingCount: (): number => pending.size,
   };
 }

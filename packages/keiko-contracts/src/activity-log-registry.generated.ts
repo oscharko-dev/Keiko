@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "51a24ac3f78d1d7d12cbb4c2d5dee74269726eeb3c3610023bfbe86e5500f79f" as const;
+  "91f660308273f80acb15bcd7c47b6b561754fe79e2d52551e0667d9fe9d482cb" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5558,6 +5558,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "ioFailureObserved",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "lowValuePolicyApplied",
               type: "boolean",
               dataClass: "closed-enum",
@@ -10590,6 +10596,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "search.connected-context.completion-details",
           "search.connected-context.metadata-unavailable",
           "search.connected-context.source-details",
+          "search.symbol-line.unavailable",
         ],
         end: [
           "search.connected-context.clarification-needed",
@@ -10627,6 +10634,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "search.connected-context.started",
           mode: "correlation",
         },
+        {
+          op: "search.symbol-line.unavailable",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
@@ -10636,6 +10647,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "search.connected-context.metadata-unavailable",
         "search.connected-context.source-details",
         "search.connected-context.started",
+        "search.symbol-line.unavailable",
       ],
       replayReferences: [],
       operations: [
@@ -11294,6 +11306,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "directoryCleanupPendingCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -11967,6 +11985,61 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["search.connected-context.started.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "search.symbol-line.unavailable",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "scopePathDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["search.symbol-line.unavailable.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -15636,8 +15709,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "count",
               required: true,
             },
+            {
+              name: "truncated",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -25078,6 +25157,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "errorClass",
               type: "string",
               dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "failedCheckCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -38987,6 +39072,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "search.native-runtime-resolved": "memory-knowledge",
     "search.prompt.window-fitted": "memory-knowledge",
     "search.rerank.completed": "memory-knowledge",
+    "search.symbol-line.unavailable": "memory-knowledge",
     "security.fs.atomic-rename-failed": "runtime-packages",
     "security.fs.atomic-rename-retried": "runtime-packages",
     "security.keychain.fallback": "runtime-packages",

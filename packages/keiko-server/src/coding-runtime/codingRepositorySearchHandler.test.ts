@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,6 +68,16 @@ function fixture(
 
 function context(): { correlationId: string; signal: AbortSignal } {
   return { correlationId: "h1-handler-invocation", signal: new AbortController().signal };
+}
+
+function expectDiagnosticRetention(events: readonly ServerLogEvent[], count: number): void {
+  const event = events.find((entry) => entry.op === "coding-repository-handler.settled");
+  if (event === undefined) throw new Error("settled event missing");
+  formatActivityLogProofLine(event);
+  const retained = observedFailureQuery([event]).events.filter(
+    (entry) => entry.parsed.view.op === event.op,
+  );
+  expect(retained).toHaveLength(count);
 }
 
 function terminalLine(events: readonly ServerLogEvent[]): string {
@@ -199,10 +210,12 @@ describe("production coding repository handler composition", () => {
       coverageReasons: ["io-error"],
       oversizedFilesSkipped: 1,
       unreadableFilesSkipped: 1,
+      ioFailureObserved: true,
       truncationReasons: ["file-too-large", "io-error"],
     });
     expect(JSON.stringify(line)).not.toContain(root);
     expect(JSON.stringify(line)).not.toContain("unreadable.ts");
+    expectDiagnosticRetention(events, 1);
   });
 
   it("sums primary and rescue exclusions in a Git workspace without claiming explicit scope", async () => {
@@ -230,6 +243,16 @@ describe("production coding repository handler composition", () => {
       coverageReasons: [],
       truncationReasons: ["file-too-large"],
     });
+    expectDiagnosticRetention(events, 0);
+  });
+
+  it("keeps requested result limits optional in diagnostic export", async () => {
+    const { root, handler, events } = fixture();
+    writeFileSync(join(root, "src/second.ts"), "parseConfig");
+    const result = await handler.invoke({ ...request, maxResults: 1 }, context());
+    expect(result).toMatchObject({ ok: true, truncationReasons: ["result-limit"] });
+    expect(events[1]?.extra).toMatchObject({ ioFailureObserved: false });
+    expectDiagnosticRetention(events, 0);
   });
 
   it("keeps include-glob filtering inside the bound root policy rather than fabricating selected scope", async () => {
@@ -263,10 +286,12 @@ describe("production coding repository handler composition", () => {
       truncationReasons: ["io-error"],
     });
     expect(disappeared).toBeGreaterThan(0);
+    expectDiagnosticRetention(events, 1);
     expect(settledProof(events)).toMatchObject({
       lowValuePolicyApplied: true,
       lowValueRescueApplied: true,
       coverageIncomplete: true,
+      ioFailureObserved: true,
       coverageReasons: ["io-error"],
       truncationReasons: ["io-error"],
     });
@@ -317,6 +342,7 @@ describe("production coding repository handler composition", () => {
       truncationReasons: ["time-limit"],
       durationMs: 60,
     });
+    expectDiagnosticRetention(events, 0);
   });
 
   it("records actual closed search policy and exclusions without a sampled path dependency", async () => {
@@ -335,6 +361,7 @@ describe("production coding repository handler composition", () => {
       oversizedFilesSkipped: 0,
       unreadableFilesSkipped: 0,
     });
+    expectDiagnosticRetention(events, 0);
   });
 
   it("preserves actual partial scan counters when cancellation follows a safe file read", async () => {

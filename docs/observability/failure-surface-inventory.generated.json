@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "51a24ac3f78d1d7d12cbb4c2d5dee74269726eeb3c3610023bfbe86e5500f79f"
+    "catalogDigest": "91f660308273f80acb15bcd7c47b6b561754fe79e2d52551e0667d9fe9d482cb"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 519,
-    "proofCount": 526,
-    "resolvedProofCount": 526,
+    "operationCount": 520,
+    "proofCount": 527,
+    "resolvedProofCount": 527,
     "failureClassCount": 336,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -472,6 +472,7 @@
         "search.native-runtime-resolved",
         "search.prompt.window-fitted",
         "search.rerank.completed",
+        "search.symbol-line.unavailable",
         "store.encryption-checkpoint-degraded",
         "store.encryption-migrated"
       ],
@@ -1872,7 +1873,8 @@
       "packages/keiko-server/src/gitDelivery/journeyRoutes.test.ts"
     ],
     "git.pr-description.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/prDescriptionProjection.test.ts"
+      "packages/keiko-server/src/gitDelivery/prDescriptionProjection.test.ts",
+      "packages/keiko-server/src/gitDelivery/prDescriptionService.test.ts"
     ],
     "git.pr-description.receipt.emitted-line": [
       "packages/keiko-server/src/gitDelivery/prDescriptionReceiptStore.test.ts"
@@ -2162,10 +2164,12 @@
       "packages/keiko-server/src/grounded-planner-outcomes.activity-log.test.ts"
     ],
     "search.connected-context.completed.line": [
+      "packages/keiko-server/src/grounded-case-sensitive.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
       "packages/keiko-server/src/grounded-portable-coverage.test.ts",
       "packages/keiko-server/src/grounded-ring-decisions.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-search-release-blockers.test.ts",
       "packages/keiko-server/src/grounded-source-inspection.test.ts"
     ],
     "search.connected-context.completion-details.line": [
@@ -2175,7 +2179,8 @@
     "search.connected-context.failed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts",
-      "packages/keiko-server/src/grounded-parallel-cleanup.test.ts"
+      "packages/keiko-server/src/grounded-parallel-cleanup.test.ts",
+      "packages/keiko-server/src/grounded-terminal-cleanup.test.ts"
     ],
     "search.connected-context.metadata-unavailable.line": [
       "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
@@ -2192,6 +2197,7 @@
       "packages/keiko-server/src/grounded-source-decisions.activity-log.test.ts"
     ],
     "search.connected-context.started.line": [
+      "packages/keiko-server/src/grounded-case-sensitive.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log.test.ts"
     ],
@@ -2210,6 +2216,9 @@
       "packages/keiko-server/src/knowledge-prompt-window.test.ts"
     ],
     "search.rerank.completed.line": ["packages/keiko-server/src/grounded-rerank-facade.test.ts"],
+    "search.symbol-line.unavailable.line": [
+      "packages/keiko-server/src/grounded-symbol-read-failure.test.ts"
+    ],
     "security.fs.atomic-rename-failed.attempts": [
       "packages/keiko-security/src/fs-atomic-rename.test.ts"
     ],
@@ -2289,7 +2298,8 @@
     "server.diagnostic.failure.activity-log-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
-      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts"
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/grounded-qa-multi-source.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "speech.stt.language.normalized.emitted-line": [

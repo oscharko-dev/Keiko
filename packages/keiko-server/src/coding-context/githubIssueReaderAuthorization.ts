@@ -39,6 +39,7 @@ const GITHUB_AUTHORIZATION_EVALUATED_OPERATION = defineActivityLogOperation({
   },
   causal: "correlation",
   lifecycle: "state",
+  diagnosticWhen: [{ field: "decision", values: ["store-unavailable"] }],
   analyzerProjection: "timeline",
   failureClasses: ["github-issue-reader-authorization"],
   proofIds: ["coding-context.github-authorization.evaluated.line"],

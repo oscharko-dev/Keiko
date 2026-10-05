@@ -19,6 +19,8 @@ import {
   expectActivityLogProof,
 } from "../../../tests/support/activity-log-proof.js";
 
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
+
 const CORRELATION = "metadata-failure-review-0001";
 const PRIVATE_MESSAGE = "private customer directory and source detail";
 
@@ -93,10 +95,25 @@ async function runMetadataFailure(test: FailureCase): Promise<void> {
       join(root, "pom.xml"),
       "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>",
     );
-    const result = await retrieveConnectedContextPack(metadataInput(root), {
+    const fs = metadataFailureFs(root, test.failure);
+    const input = metadataInput(root);
+    // Explicit files are readable without directory traversal. A missing streaming port then
+    // affects supplemental metadata discovery only, instead of invalidating primary retrieval.
+    const selectedInput =
+      test.failure === undefined
+        ? {
+            ...input,
+            scope: {
+              ...input.scope,
+              kind: "files" as const,
+              relativePaths: ["package.json", "pom.xml"],
+            },
+          }
+        : input;
+    const result = await retrieveConnectedContextPack(selectedInput, {
       correlationId: CORRELATION,
       activityLog: log,
-      fs: metadataFailureFs(root, test.failure),
+      fs,
       nowMs: () => 0,
       detectWorkspace: () => workspace(root),
       answerer: { answer: () => Promise.resolve("unused") },
@@ -112,6 +129,10 @@ async function runMetadataFailure(test: FailureCase): Promise<void> {
       (event) => event.op === "search.connected-context.source-details",
     );
     expect(details?.extra?.metadataUnavailableInspectionCount).toBe(events.length);
+    expect(details).toBeDefined();
+    if (details === undefined) throw new TypeError("Missing source diagnostics.");
+    const retained = observedFailureQuery([details]);
+    expect(retained.events.some((event) => event.parsed.view.op === details.op)).toBe(true);
     expect(
       log.events.filter((event) => event.op === "search.connected-context.completed"),
     ).toHaveLength(1);
@@ -166,7 +187,7 @@ describe("metadata enumeration failure evidence", () => {
       errorKind: "permission-denied",
     },
     {
-      name: "missing streaming port",
+      name: "missing streaming port with explicitly selected manifests",
       failure: undefined,
       reason: "streaming-unavailable",
       failureKind: "MetadataDirectoryUnavailableError",

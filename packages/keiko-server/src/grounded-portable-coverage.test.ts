@@ -1,3 +1,4 @@
+import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
 import { describe, expect, it } from "vitest";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { validateConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -139,10 +140,14 @@ describe("canonical portable coverage evidence", () => {
       (event) => event.op === "search.connected-context.source-details",
     );
     const terminal = log.events.find((event) => event.op === "search.connected-context.completed");
+    if (detail === undefined) throw new Error("Missing source detail event");
+    expect(
+      observedFailureQuery([detail]).events.filter((entry) => entry.parsed.view.op === detail.op),
+    ).toHaveLength(1);
     expect(
       expectActivityLogProof(
         "search.connected-context.source-details.line",
-        formatActivityLogProofLine(detail ?? {}),
+        formatActivityLogProofLine(detail),
       ),
     ).toMatchObject({ correlationId: "portable-coverage-request", unrepresentablePathCount: 1 });
     expect(
