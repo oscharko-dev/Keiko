@@ -199,6 +199,11 @@ requests clarification settles with `search.connected-context.clarification-need
 event carrying the closed clarification reason, retrieval intent, anchor/ring counts and request
 digests. It does not emit a retrieval failure. The existing user-facing clarification response is
 unchanged; unexpected planning errors still emit the correlated failure event.
+Pre-graph definition discovery can reuse certified lexical atoms, but merges them by stable identity
+before ranking: the same evidence is counted once, while distinct declaration provenance remains.
+The ranking boundary also removes stable-identity duplicates from later augmentation. The existing
+source-details event records the actual total reused-evidence atom count without paths, query text
+or source bodies.
 
 #### Traversal and explicit caller budgets
 

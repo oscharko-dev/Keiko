@@ -554,6 +554,7 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
     },
     directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
     unrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
+    reusedEvidenceAtomCount: { type: "integer", dataClass: "count", required: false },
     semanticProviderDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -2440,6 +2441,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly reusedEvidenceAtomCount?: number | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
   readonly verifiedDefinitionContext?: boolean | undefined;
@@ -2750,6 +2752,7 @@ async function runReservedRing(
 }
 
 interface RingEvidenceAccumulator {
+  reusedEvidenceAtomCount?: number;
   symbolDiscovery?: SymbolDiscoveryResult;
   verifiedDefinitionContext?: boolean;
   knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
@@ -2884,7 +2887,11 @@ async function discoverRequiredDefinitionsForRing(
   throwIfCancelled(inputs.signal);
   evidence.symbolDiscovery = discovery.evidence;
   evidence.verifiedDefinitionContext = discovery.verified;
-  for (const atom of discovery.evidence.atoms) evidence.atoms.push(atom);
+  const previousCount = evidence.atoms.length;
+  const seen = new Set(evidence.atoms.map((atom) => atom.stableId));
+  for (const atom of discovery.evidence.atoms) pushUniqueAtom(evidence.atoms, seen, atom);
+  evidence.reusedEvidenceAtomCount =
+    discovery.evidence.atoms.length - (evidence.atoms.length - previousCount);
   for (const marker of discovery.evidence.uncertainty) evidence.uncertainty.push(marker);
   return discovery.governor;
 }
@@ -6279,6 +6286,7 @@ function assembleOptionsFor(
 }
 
 interface PreparedPackAssembly {
+  readonly reusedEvidenceAtomCount: number;
   readonly atoms: readonly EvidenceAtom[];
   readonly initialUsage: ExplorationUsage;
   readonly ordered: CandidateOrdering;
@@ -6429,6 +6437,21 @@ function selectionEvidencePaths(
   return paths;
 }
 
+function rankingEvidence(
+  rings: RingRunSummary,
+  scope: SelectedScope,
+): Pick<PreparedPackAssembly, "atoms" | "reusedEvidenceAtomCount"> {
+  const sourceAtoms = codeEvidenceAtoms(rings.atoms, scope);
+  const atoms: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const atom of sourceAtoms) pushUniqueAtom(atoms, seen, atom);
+  return {
+    atoms,
+    reusedEvidenceAtomCount:
+      (rings.reusedEvidenceAtomCount ?? 0) + sourceAtoms.length - atoms.length,
+  };
+}
+
 function preparePackAssembly(
   input: OrchestratorInput,
   plan: ExplorationPlan,
@@ -6436,7 +6459,7 @@ function preparePackAssembly(
   nowMs: () => number,
   hasGitMetadata: boolean,
 ): PreparedPackAssembly {
-  const atoms = codeEvidenceAtoms(rings.atoms, input.scope);
+  const { atoms, reusedEvidenceAtomCount } = rankingEvidence(rings, input.scope);
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
   // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
@@ -6475,6 +6498,7 @@ function preparePackAssembly(
   const selectedAtoms = selectPackAtoms(atoms, selectedPaths, input, plan);
   return {
     atoms: selectedAtoms,
+    reusedEvidenceAtomCount,
     initialUsage,
     ordered,
     atomsByPath: groupEvidenceAtomsByPath(selectedAtoms),
@@ -6725,6 +6749,7 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly reusedEvidenceAtomCount?: number | undefined;
   readonly excerptObservation?: ExcerptReadObservation | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly readWindowCount?: number | undefined;
@@ -6837,6 +6862,7 @@ async function assembleGroundedPack(
   if (ctx.cached !== undefined) {
     return {
       pack: withGroundedContextDiagnostics(ctx.cached, deps),
+      reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
       metadataRetention: augmentedRings.metadataRetention,
       elapsedBudgetBlocked: false,
     };
@@ -6867,6 +6893,7 @@ async function assembleGroundedPack(
   });
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
+    reusedEvidenceAtomCount: prepared.reusedEvidenceAtomCount,
     metadataRetention: augmentedRings.metadataRetention,
     excerptObservation: excerptReads.observation,
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
@@ -6878,6 +6905,7 @@ async function assembleGroundedPack(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly reusedEvidenceAtomCount?: number | undefined;
   readonly sourceDecision?: SourceDecisionObservation | undefined;
   readonly scopeContextObservation?: ScopeContextObservation | undefined;
   readonly excerptObservation?: ExcerptReadObservation | undefined;
@@ -6971,6 +6999,7 @@ function liveRetrievalCompletion(
     excerptReadWindowCount: assembled.readWindowCount,
     excerptObservation: assembled.excerptObservation,
     metadataRetention: assembled.metadataRetention,
+    reusedEvidenceAtomCount: assembled.reusedEvidenceAtomCount,
     decisions,
     readBudgetBlocked: assembled.excerptObservation?.readBudgetBlocked ?? false,
     elapsedBudgetBlocked: assembled.elapsedBudgetBlocked,
@@ -7552,6 +7581,7 @@ function sourceDetailsActivityExtra(
       ...shared,
       activityDetailStatus: "complete",
       directEvidenceLookup: execution.output.plan.directEvidenceLookup,
+      reusedEvidenceAtomCount: execution.status.reusedEvidenceAtomCount ?? 0,
       unrepresentablePathCount:
         execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
       ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
