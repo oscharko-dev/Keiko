@@ -317,7 +317,12 @@ function previewRangeLabel(start: number, end: number, partial: boolean, t: I18n
   return t("filePreview.revealedRange", { start, end });
 }
 
-function PreviewRevealNotice(props: TextFilePreviewProps): ReactNode {
+function PreviewRevealNotice(
+  props: Pick<
+    TextFilePreviewProps,
+    "revealLineStart" | "revealLineEnd" | "precedingLineCount" | "lines" | "hiddenLineCount" | "t"
+  >,
+): ReactNode {
   const start = props.revealLineStart;
   if (start === undefined) return null;
   const end = props.revealLineEnd ?? start;
