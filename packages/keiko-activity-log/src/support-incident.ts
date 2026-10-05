@@ -41,6 +41,7 @@ import {
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogEvent,
+  activityLogErrorKindOr,
   activityLogOperationSchema,
   defineActivityLogOperation,
   normalizeDefectFrameSignature,
@@ -71,6 +72,7 @@ import {
   pinActivityLogWindow,
   releaseActivityLogPin,
   reportServerLogFailure,
+  errorKindOf,
   serverLogProcessIdentity,
   type ActivityLogPinResult,
   type ServerLogEvent,
@@ -82,6 +84,7 @@ import {
   registeredFailureFingerprintInput,
   registeredFailureDeduplicationKey,
 } from "./defect-fingerprint.js";
+import { causeChain, keikoStackFrames } from "./stack-frames.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
   claimSupportIncidentFingerprint,
@@ -294,6 +297,51 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+const SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.incident.retirement-failed",
+  category: "diagnostic",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.retirementFailedEvidence",
+  fields: {
+    incidentId: INCIDENT_ID_FIELD,
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+      maxItems: 5,
+    },
+    failureStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["read", "sweep"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["abandoned"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-incident"],
+  proofIds: ["support.incident.retirement-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -338,6 +386,7 @@ export const SUPPORT_INCIDENT_OPERATIONS: ReadonlySet<string> = new Set([
   SUPPORT_INCIDENT_DEDUPLICATED_OPERATION.op,
   SUPPORT_INCIDENT_REJECTED_OPERATION.op,
   SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+  SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION.op,
   SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
 ]);
 
@@ -628,6 +677,9 @@ export interface SupportIncidentOptions {
   readonly nowMs?: number | undefined;
   // The correlation of the user action (Report a problem); a fresh one is minted when absent.
   readonly correlationId?: string | undefined;
+}
+
+interface SupportIncidentRetirementOptions extends SupportIncidentOptions {
   /** Owner withdrawal of a newly created manual preparation whose report never completed. */
   readonly retirementReason?: "abandoned" | undefined;
 }
@@ -1635,28 +1687,79 @@ function failedWithdrawal(
   return "failed";
 }
 
-/**
- * Withdraws the owned record and releases its Activity Log pin, so the window
- * returns to ordinary retention. A pin that cannot be released still lapses at its bounded expiry.
- */
+interface RetirementInspection {
+  readonly record: SupportIncidentRecord;
+  readonly openIncidentCount: number;
+}
+
+function retirementFailedEvidence(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentRetirementOptions & { readonly correlationId: string },
+  failureStage: "read" | "sweep",
+  error: unknown,
+): void {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  writeEvidence(
+    stateDir,
+    activityLogEvent(
+      SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION,
+      {
+        level: "warn",
+        correlationId: options.correlationId,
+        errorKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
+      },
+      {
+        incidentId,
+        failureStage,
+        failureKind: errorKindOf(error),
+        ...(options.retirementReason === undefined ? {} : { reason: options.retirementReason }),
+        ...(frames.length === 0 ? {} : { frames }),
+        ...(causes.length === 0 ? {} : { causeChain: causes }),
+        completeness: "partial",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function inspectRetirement(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentRetirementOptions & { readonly correlationId: string },
+): RetirementInspection | "not-found" | "failed" {
+  let stage: "read" | "sweep" = "read";
+  try {
+    if (readSupportIncidentRecord(stateDir, incidentId) === undefined) return "not-found";
+    stage = "sweep";
+    const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), options.correlationId);
+    const record = open.find((entry) => entry.incidentId === incidentId)?.record;
+    return record === undefined ? "not-found" : { record, openIncidentCount: open.length };
+  } catch (error) {
+    retirementFailedEvidence(stateDir, incidentId, options, stage, error);
+    return "failed";
+  }
+}
+
+/** Withdraw the owned record before releasing its pin and claims; retain ownership on failure. */
 function retireSupportIncident(
   stateDir: string,
   incidentId: string,
-  options: SupportIncidentOptions,
+  options: SupportIncidentRetirementOptions,
   state: "candidate" | "reported",
 ): SupportIncidentDismissal {
-  if (readSupportIncidentRecord(stateDir, incidentId) === undefined) return "not-found";
   const correlationId = options.correlationId ?? randomUUID();
-  const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId);
-  const record = open.find((entry) => entry.incidentId === incidentId)?.record;
-  if (record === undefined) return "not-found";
+  const inspected = inspectRetirement(stateDir, incidentId, { ...options, correlationId });
+  if (typeof inspected === "string") return inspected;
+  const { record, openIncidentCount } = inspected;
   try {
     removeSupportIncidentRecord(stateDir, incidentId);
   } catch (error) {
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
     return failedWithdrawal(stateDir, record, {
       correlationId,
-      openIncidentCount: open.length,
+      openIncidentCount,
       reason: options.retirementReason,
     });
   }
@@ -1674,7 +1777,7 @@ function retireSupportIncident(
     { ...record, state },
     {
       correlationId,
-      openIncidentCount: open.length - 1,
+      openIncidentCount: openIncidentCount - 1,
       pinRelease,
       claimsReleased,
       reason: options.retirementReason,
@@ -1687,7 +1790,7 @@ function retireSupportIncident(
 export function dismissSupportIncident(
   stateDir: string,
   incidentId: string,
-  options: SupportIncidentOptions = {},
+  options: SupportIncidentRetirementOptions = {},
 ): SupportIncidentDismissal {
   return retireSupportIncident(stateDir, incidentId, options, "candidate");
 }
@@ -1698,15 +1801,7 @@ export function completePreparedSupportIncident(
   incidentId: string,
   options: SupportIncidentOptions = {},
 ): SupportIncidentDismissal {
-  try {
-    return retireSupportIncident(stateDir, incidentId, options, "reported");
-  } catch (error) {
-    reportServerLogFailure(error, {
-      op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
-      correlationId: options.correlationId,
-    });
-    return "failed";
-  }
+  return retireSupportIncident(stateDir, incidentId, options, "reported");
 }
 
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────

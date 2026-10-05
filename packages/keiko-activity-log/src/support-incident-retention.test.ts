@@ -991,6 +991,59 @@ describe("rolling diagnostic candidate retention", () => {
     );
   });
 
+  it.each(["read", "sweep"] as const)(
+    "records a failed retirement %s before removal without losing ownership",
+    (stage) => {
+      const created = recordUserReportedIncident(stateDir, {
+        correlationId: "original-retirement",
+      });
+      if (created.status !== "created") throw new TypeError("Expected manual candidate");
+      const claims = listSupportIncidentClaims(stateDir);
+      const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+      const error = new TypeError("private customer contents must not leave this process", {
+        cause: new RangeError("private cause"),
+      });
+      error.stack =
+        "TypeError: private contents\n    at retire (/private/work/packages/keiko-activity-log/dist/support-incident.js:20:4)";
+      const method = stage === "read" ? "readSupportIncidentRecord" : "listSupportIncidentEntries";
+      vi.spyOn(incidentStore, method).mockImplementationOnce(() => {
+        throw error;
+      });
+      expect(
+        dismissSupportIncident(stateDir, created.incidentId, {
+          correlationId: "cancelled-retirement",
+          retirementReason: "abandoned",
+        }),
+      ).toBe("failed");
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([created.record]);
+      expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.retirement-failed",
+      );
+      expect(lines).toHaveLength(1);
+      const line = expectActivityLogProof(
+        "support.incident.retirement-failed.emitted-line",
+        lines[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        incidentId: created.incidentId,
+        correlationId: "cancelled-retirement",
+        failureStage: stage,
+        reason: "abandoned",
+        errorKind: "internal",
+        failureKind: "TypeError",
+        completeness: "partial",
+        loss: "none",
+        frames: ["packages/keiko-activity-log/dist/support-incident.js:20:4"],
+        causeChain: ["RangeError"],
+      });
+      expect(line).not.toHaveProperty("openIncidentCount");
+      expect(lines[0]).not.toContain("private customer");
+    },
+  );
+
   it("records failed abandoned withdrawal without claiming removal or touching the owned pin", () => {
     const created = recordUserReportedIncident(stateDir, {
       correlationId: "abandoned-owned-cause",

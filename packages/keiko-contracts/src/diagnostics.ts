@@ -40,6 +40,10 @@ import {
   isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "./observability.js";
+import {
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
+  type SupportReportAvailabilityReason,
+} from "./support-report-policy.js";
 import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
@@ -355,7 +359,7 @@ function isClientErrorClass(value: unknown): value is string {
   return typeof value === "string" && CLIENT_ERROR_CLASSES.has(value);
 }
 
-function isClientErrorEvidence(value: unknown): value is ClientErrorEvidence {
+export function isClientErrorEvidence(value: unknown): value is ClientErrorEvidence {
   if (!isRecord(value) || !isClientErrorClass(value.errorClass)) return false;
   if (
     !Array.isArray(value.frames) ||
@@ -672,6 +676,43 @@ function hasValidSupportPreparationContext(value: Record<string, unknown>): bool
   );
 }
 
+const CLOSED_CLIENT_REPORT_KEYS = [
+  "selectDismissal",
+  "knowledgeCatalog",
+  "answerCopy",
+  "answerSpeech",
+  "citationActivation",
+  "supportReportDelivery",
+  "supportReportPreparation",
+  "filesScopeDecision",
+] as const;
+const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
+  "message",
+  "clientTs",
+  "correlationId",
+  "parentCorrelationId",
+  "loss",
+]);
+function allowsClosedReportFailureField(value: Record<string, unknown>, key: string): boolean {
+  return (
+    isRecord(value.answerCopy) &&
+    value.answerCopy.outcome === "failed" &&
+    (key === "errorKind" || key === "errorEvidence")
+  );
+}
+function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolean {
+  const selected = CLOSED_CLIENT_REPORT_KEYS.filter((key) => value[key] !== undefined);
+  if (selected.length === 0) return true;
+  if (selected.length !== 1) return false;
+  return Object.keys(value).every(
+    (key) =>
+      value[key] === undefined ||
+      key === selected[0] ||
+      CLOSED_CLIENT_REPORT_ENVELOPE_KEYS.has(key) ||
+      allowsClosedReportFailureField(value, key),
+  );
+}
+
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
@@ -679,6 +720,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
+    hasExclusiveClosedReportContext(value) &&
     hasValidCitationActivationContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
     hasValidSupportPreparationContext(value) &&
@@ -790,6 +832,7 @@ export interface ClientStageStartedIngestRequest {
   readonly phase: "started";
   readonly ordinal: number;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
@@ -807,6 +850,7 @@ export interface ClientStageSettledIngestRequest {
   readonly ordinal: number;
   readonly durationMs: number;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
   readonly navigationOutcome?: ClientNavigationOutcome | undefined;
   readonly preview?: ClientSourcePreviewCounts | undefined;
@@ -824,6 +868,7 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "ordinal",
   "durationMs",
   "correlationId",
+  "parentCorrelationId",
   "deletion",
   "navigationOutcome",
   "preview",
@@ -922,7 +967,10 @@ function hasValidSourcePreview(value: Record<string, unknown>): boolean {
 
 function hasValidStageContext(value: Record<string, unknown>): boolean {
   return (
-    hasValidStageDeletion(value) && hasValidNavigationOutcome(value) && hasValidSourcePreview(value)
+    hasValidStageDeletion(value) &&
+    hasValidNavigationOutcome(value) &&
+    hasValidSourcePreview(value) &&
+    isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
   );
 }
 
@@ -1686,12 +1734,34 @@ export function isActivityLogReadinessSnapshot(
 }
 
 /** A browser initiation, never acknowledgement that the operating system saved a file. */
-export type ClientSupportReportDelivery = "automatic" | "manual";
-
+export type ClientSupportReportDelivery =
+  | "automatic"
+  | "manual"
+  | {
+      readonly mode: "manual";
+      readonly source: "server" | "browser";
+      readonly evidenceScope: "server" | "client-only";
+      readonly reportDigest?: string | undefined;
+    };
+function isReportDigest(value: unknown): value is string {
+  return typeof value === "string" && SHA256_PATTERN.test(value);
+}
+const SUPPORT_REPORT_DELIVERY_SOURCES = new Set(["server", "browser"]);
+const SUPPORT_REPORT_DELIVERY_SCOPES = new Set(["server", "client-only"]);
+const SUPPORT_REPORT_DELIVERY_KEYS = new Set(["mode", "source", "evidenceScope", "reportDigest"]);
 export function isClientSupportReportDelivery(
   value: unknown,
 ): value is ClientSupportReportDelivery {
-  return value === "automatic" || value === "manual";
+  // Legacy strings remain accepted from already-open tabs; current producers supply provenance.
+  if (value === "automatic" || value === "manual") return true;
+  if (!isRecord(value) || Object.keys(value).some((key) => !SUPPORT_REPORT_DELIVERY_KEYS.has(key)))
+    return false;
+  return (
+    value.mode === "manual" &&
+    isSetMember(value.source, SUPPORT_REPORT_DELIVERY_SOURCES) &&
+    isSetMember(value.evidenceScope, SUPPORT_REPORT_DELIVERY_SCOPES) &&
+    isOptional(value.reportDigest, isReportDigest)
+  );
 }
 
 /** Successful browser fallback preparation; no report content or claim of an OS save. */
@@ -1700,13 +1770,7 @@ interface ClientSupportReportPrepared {
   readonly evidenceScope: "server" | "client-only";
   readonly completeness: ActivityLogCompletenessState;
   readonly loss: ActivityLogLossState;
-  readonly availabilityReason?:
-    | "session-unavailable"
-    | "diagnostic-delivery-unavailable"
-    | "service-unavailable"
-    | "client-only-selected"
-    | "correlation-unavailable"
-    | undefined;
+  readonly availabilityReason?: SupportReportAvailabilityReason | undefined;
 }
 export type ClientSupportReportPreparation =
   | ClientSupportReportPrepared
@@ -1724,13 +1788,20 @@ const SUPPORT_REPORT_PREPARATION_KEYS = new Set([
   "loss",
   "availabilityReason",
 ]);
-const REPORT_AVAILABILITY = new Set([
-  "session-unavailable",
-  "diagnostic-delivery-unavailable",
-  "service-unavailable",
-  "client-only-selected",
-  "correlation-unavailable",
-]);
+const REPORT_AVAILABILITY = new Set<string>(SUPPORT_REPORT_AVAILABILITY_REASONS);
+// Initialized after module evaluation to avoid the existing observability/report import cycle.
+let supportPreparationStates:
+  { completeness: ReadonlySet<string>; loss: ReadonlySet<string> } | undefined;
+function supportReportStateSets(): {
+  completeness: ReadonlySet<string>;
+  loss: ReadonlySet<string>;
+} {
+  return (supportPreparationStates ??= {
+    completeness: new Set(ACTIVITY_LOG_COMPLETENESS_STATES),
+    loss: new Set(ACTIVITY_LOG_LOSS_STATES),
+  });
+}
+
 function isSupportReportPreparationBytes(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -1755,8 +1826,8 @@ export function isClientSupportReportPreparation(
   return (
     isSupportReportPreparationBytes(value.reportBytes) &&
     (value.evidenceScope === "server" || value.evidenceScope === "client-only") &&
-    isSetMember(value.completeness, new Set(ACTIVITY_LOG_COMPLETENESS_STATES)) &&
-    isSetMember(value.loss, new Set(ACTIVITY_LOG_LOSS_STATES)) &&
+    isSetMember(value.completeness, supportReportStateSets().completeness) &&
+    isSetMember(value.loss, supportReportStateSets().loss) &&
     coherentReportPreparationScope(value)
   );
 }
@@ -1792,14 +1863,17 @@ export interface ClientFilesScopeDecision {
   readonly sourceCount?: number | undefined;
   readonly candidateCount?: number | undefined;
   readonly bindingFingerprint?: string | undefined;
-  readonly mutationSurface?: "files" | "local-knowledge" | "git-change" | undefined;
+  readonly mutationSurface?: (typeof CLIENT_GROUNDING_MUTATION_SURFACES)[number] | undefined;
 }
 const FILES_SCOPE_DECISIONS: ReadonlySet<unknown> = new Set(CLIENT_FILES_SCOPE_DECISIONS);
-const GROUNDING_MUTATION_SURFACES: ReadonlySet<unknown> = new Set([
+export const CLIENT_GROUNDING_MUTATION_SURFACES = [
   "files",
   "local-knowledge",
   "git-change",
-]);
+] as const;
+const GROUNDING_MUTATION_SURFACES: ReadonlySet<unknown> = new Set(
+  CLIENT_GROUNDING_MUTATION_SURFACES,
+);
 const FILES_SCOPE_DECISION_KEYS = new Set([
   "decision",
   "sourceCount",

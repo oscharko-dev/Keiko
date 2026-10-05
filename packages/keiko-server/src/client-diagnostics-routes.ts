@@ -74,6 +74,7 @@ import {
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
   CLIENT_FILES_SCOPE_DECISIONS,
+  CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
@@ -86,6 +87,7 @@ import {
 import {
   activityLogEvent,
   ACTIVITY_LOG_ERROR_KINDS,
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
   defineActivityLogOperation,
   recordActivityLogLoss,
   type ActivityLogErrorKind,
@@ -1156,6 +1158,19 @@ const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperat
       required: true,
       values: ["automatic", "manual"],
     },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "browser"],
+    },
+    evidenceScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "client-only"],
+    },
+    reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1188,7 +1203,7 @@ const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["files", "local-knowledge", "git-change"],
+      values: CLIENT_GROUNDING_MUTATION_SURFACES,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -1246,13 +1261,7 @@ const CLIENT_SUPPORT_REPORT_PREPARED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [
-        "session-unavailable",
-        "diagnostic-delivery-unavailable",
-        "service-unavailable",
-        "client-only-selected",
-        "correlation-unavailable",
-      ],
+      values: SUPPORT_REPORT_AVAILABILITY_REASONS,
     },
     reportCompleteness: { type: "string", dataClass: "completeness-state", required: true },
     reportLoss: { type: "string", dataClass: "loss-state", required: true },
@@ -1535,7 +1544,7 @@ function clientDiagnosticErrorKind(
 }
 
 function clientDiagnosticCorrelation(
-  request: ClientDiagnosticIngestRequest,
+  request: Pick<ClientDiagnosticIngestRequest, "parentCorrelationId">,
   correlationId: string,
 ): {
   readonly correlationId: string;
@@ -1826,13 +1835,23 @@ function logClientSupportReportDownload(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
-  if (request.supportReportDelivery === undefined) return false;
+  const delivery = request.supportReportDelivery;
+  if (delivery === undefined) return false;
+  const fields =
+    typeof delivery === "string"
+      ? { deliveryMode: delivery }
+      : {
+          deliveryMode: delivery.mode,
+          source: delivery.source,
+          evidenceScope: delivery.evidenceScope,
+          ...(delivery.reportDigest === undefined ? {} : { reportDigest: delivery.reportDigest }),
+        };
   getServerLogger().info(
     activityLogEvent(
       CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION,
       clientDiagnosticCorrelation(request, correlationId),
       {
-        deliveryMode: request.supportReportDelivery,
+        ...fields,
         completeness: "complete",
         loss: "none",
       },
@@ -2034,7 +2053,7 @@ function logClientStageStarted(
   getServerLogger().info(
     activityLogEvent(
       CLIENT_STAGE_STARTED_OPERATION,
-      { correlationId },
+      clientDiagnosticCorrelation(request, correlationId),
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
@@ -2066,7 +2085,7 @@ function logClientStageSettled(
   getServerLogger().info(
     activityLogEvent(
       CLIENT_STAGE_SETTLED_OPERATION,
-      { correlationId, durationMs: request.durationMs },
+      { ...clientDiagnosticCorrelation(request, correlationId), durationMs: request.durationMs },
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,

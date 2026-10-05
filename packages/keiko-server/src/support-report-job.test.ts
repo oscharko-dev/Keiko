@@ -13,11 +13,21 @@ import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as filesystem from "node:fs";
 import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
 
 vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
   const actual = await importOriginal<typeof artifactFiles>();
-  return { ...actual, removeSafeArtifactFile: vi.fn(actual.removeSafeArtifactFile) };
+  return {
+    ...actual,
+    removeSafeArtifactFile: vi.fn(actual.removeSafeArtifactFile),
+    openSafeArtifactFile: vi.fn(actual.openSafeArtifactFile),
+  };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof filesystem>();
+  return { ...actual, closeSync: vi.fn(actual.closeSync) };
 });
 
 const workers = vi.hoisted(() => ({
@@ -58,6 +68,25 @@ const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
   "@oscharko-dev/keiko-security/fs-hardening",
 );
 
+const actualFilesystem = await vi.importActual<typeof filesystem>("node:fs");
+
+function failNextIncidentReadClose(): void {
+  let incidentDescriptor: number | undefined;
+  vi.mocked(artifactFiles.openSafeArtifactFile).mockImplementation((path, options) => {
+    const descriptor = actualArtifactFiles.openSafeArtifactFile(path, options);
+    if (options.mode === "read" && options.trustedRoot.endsWith(SUPPORT_INCIDENT_DIRECTORY_NAME))
+      incidentDescriptor = descriptor;
+    return descriptor;
+  });
+  vi.mocked(filesystem.closeSync).mockImplementation((descriptor) => {
+    actualFilesystem.closeSync(descriptor);
+    if (descriptor !== incidentDescriptor) return;
+    incidentDescriptor = undefined;
+    vi.mocked(filesystem.closeSync).mockImplementation(actualFilesystem.closeSync);
+    throw new TypeError("simulated incident descriptor close failure");
+  });
+}
+
 function activeWorker(): EventEmitter {
   const worker = workers.instances.at(-1);
   if (worker === undefined) throw new Error("Worker was not started");
@@ -91,6 +120,10 @@ afterEach(() => {
   vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementation(
     actualArtifactFiles.removeSafeArtifactFile,
   );
+  vi.mocked(artifactFiles.openSafeArtifactFile).mockImplementation(
+    actualArtifactFiles.openSafeArtifactFile,
+  );
+  vi.mocked(filesystem.closeSync).mockImplementation(actualFilesystem.closeSync);
   closeFileServerLogSinks();
   for (const directory of reportDirectories.splice(0))
     rmSync(directory, { recursive: true, force: true });
@@ -139,6 +172,48 @@ describe("bounded desktop support-report worker", () => {
       ).toHaveLength(1);
     },
   );
+
+  it("keeps cancellation and releases the worker when abandoned record inspection fails", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-failed-retirement-read-"));
+    reportDirectories.push(stateDir);
+    const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-activity-log/reader")>(
+      "@oscharko-dev/keiko-activity-log/reader",
+    );
+    workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+    const controller = new AbortController();
+    const result = runSupportReportJob(stateDir, undefined, controller.signal, "failed-inspection");
+    const rejection = result.catch((error: unknown) => error);
+    activeWorker().emit("message", { kind: "prepare" });
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const artifacts = readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME));
+    failNextIncidentReadClose();
+    controller.abort();
+    expect(await rejection).toMatchObject({ reason: "cancelled" });
+    expect(workers.terminate).toHaveBeenCalledOnce();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))).toEqual(artifacts);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.retirement-failed",
+    );
+    expect(lines).toHaveLength(1);
+    expect(
+      expectRegisteredActivityLogLine("support.incident.retirement-failed", lines[0] ?? ""),
+    ).toMatchObject({
+      correlationId: "failed-inspection",
+      failureStage: "read",
+      errorKind: "internal",
+      failureKind: "TypeError",
+      reason: "abandoned",
+      completeness: "partial",
+      loss: "none",
+    });
+    const next = runSupportReportJob(stateDir);
+    const nextRejected = expect(next).rejects.toMatchObject({ reason: "unavailable" });
+    activeWorker().emit("exit", 0);
+    await nextRejected;
+    expect(workers.terminate).toHaveBeenCalledTimes(2);
+  });
 
   it("records a refused abandoned withdrawal while preserving cancellation and releasing its worker", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-refused-abandoned-report-"));

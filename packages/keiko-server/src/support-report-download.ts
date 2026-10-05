@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { gzip } from "node:zlib";
 import {
   MAX_SUPPORT_REPORT_BYTES,
+  SUPPORT_REPORT_DELIVERY_TTL_MS,
   isSupportReportFileName,
   supportReportDownloadPath,
   type DesktopSupportReportResponse,
@@ -21,7 +22,6 @@ import type { HandlerOutcome, RouteContext } from "./routes.js";
 import { STREAMING } from "./route-outcome.js";
 import { errorBody } from "./route-error.js";
 
-const DELIVERY_TTL_MS = 15 * 60_000;
 const MAX_DELIVERY_ENTRIES = 128;
 // Retain the ready artifact while a replacement is prepared, each within the canonical byte cap.
 export const MAX_SUPPORT_REPORT_DELIVERY_BYTES = 2 * MAX_SUPPORT_REPORT_BYTES;
@@ -108,7 +108,7 @@ export function cacheSupportReportDownload(
     assertLimitedDeliveryCapacity(cache, bytes);
   }
   const id = randomUUID();
-  const expiresAtMs = Date.now() + DELIVERY_TTL_MS;
+  const expiresAtMs = Date.now() + SUPPORT_REPORT_DELIVERY_TTL_MS;
   const authority =
     sessionId === undefined
       ? { kind: "client-only" as const }
@@ -129,7 +129,7 @@ export function cacheSupportReportDownload(
   cache.set(id, entry);
   entry.expiryTimer = setTimeout(() => {
     disposeDelivery(cache, id, entry, "expired");
-  }, DELIVERY_TTL_MS);
+  }, SUPPORT_REPORT_DELIVERY_TTL_MS);
   entry.expiryTimer.unref();
   prune(cache, Date.now());
   if (!cache.has(id)) throw new SupportReportDeliveryCapacityError();

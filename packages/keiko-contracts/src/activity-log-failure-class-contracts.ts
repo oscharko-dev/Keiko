@@ -7845,7 +7845,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: ["support.incident.created"],
       state: ["support.diagnostics.capacity", "support.incident.deduplicated"],
       end: ["support.incident.dismissed", "support.incident.expired"],
-      failure: [],
+      failure: ["support.incident.retirement-failed"],
       loss: ["support.incident.rejected"],
     },
     requiredCausalOperations: [
@@ -7855,6 +7855,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "support.incident.dismissed",
       "support.incident.expired",
       "support.incident.rejected",
+      "support.incident.retirement-failed",
     ],
     requiredLossOperations: ["support.incident.rejected"],
     requiredProofOperations: [
@@ -7864,6 +7865,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "support.incident.dismissed",
       "support.incident.expired",
       "support.incident.rejected",
+      "support.incident.retirement-failed",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -7878,12 +7880,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "completeness-state",
       "count",
       "digest",
+      "error-kind",
       "loss-state",
       "opaque-id",
+      "safe-platform-class",
       "safe-version",
     ],
-    requiredFrameOperations: [],
-    requiredCauseOperations: [],
+    requiredFrameOperations: ["support.incident.retirement-failed"],
+    requiredCauseOperations: ["support.incident.retirement-failed"],
   },
   {
     contractKind: "activity-log-failure-class",

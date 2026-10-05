@@ -47,7 +47,9 @@ Use **Create error report** on a visible error, then **Download report** to save
 that error's Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the
 same action. Uncaught browser failures expose the action in the existing shell alert area. The
 footer retains the centered product version; there is no separate Diagnosis window or incident
-counter for customers.
+counter for customers. A degraded or unavailable diagnostic writer adds a plain-language workspace
+notice with the same report action. Closed technical reasons remain in `/api/health`, `keiko status`,
+the Activity Log and the downloaded report.
 
 Creation has a bounded deadline, blocks duplicate clicks and remains retryable after failure.
 Generation keeps a real browser download link available so the customer can retry a blocked
@@ -58,8 +60,10 @@ without changing the report schema or integrity rules.
 
 Prepared reports remain in the existing bounded, transient download cache for at most fifteen
 minutes, without a persistent report archive. The browser cache holds at most 10 MiB of canonical
-report bytes. Server attachments require the original authenticated local session on every
-attempt; a download reference alone grants no authority. Expired downloads can be prepared again.
+report bytes. The server cache reserves at most 20 MiB of retained raw-or-gzip payload and 128
+entries. Full server-evidence attachments require their original authenticated local session on
+every attempt; a download reference alone grants no authority. Validated limited client-only
+attachments may be downloaded without pairing and never grant stored server-log access. Expired downloads can be prepared again.
 Global errors remain until the person dismisses them; successful preparation alone never dismisses
 the only recovery action. A failed preparation keeps the original error and Support ID visible.
 Keiko neither uploads nor sends the file. Share it manually through an approved support channel.
@@ -76,7 +80,9 @@ expiring files or claiming writer ownership. Capacity changes emit body-free
 
 If the report action says to open Keiko from the launcher, the local application session was refused.
 Open Keiko through its trusted launcher and retry the **same** error's report. Refreshing an old tab
-alone cannot restore a session invalidated by a server restart. Report requests wait for application bootstrap and require a valid paired session. Local session
+alone cannot restore a session invalidated by a server restart. Full server-evidence reports wait for application bootstrap and require a valid paired session.
+Limited client-only reports can still be prepared and downloaded from validated body-free browser
+facts without pairing; if the BFF is unavailable, the browser uses the shared canonical producer. Local session
 confirmation restores missing scoped cookie projections of an already valid bearer after an upgrade;
 it never mints authority or extends the server-owned absolute lifetime. Neither recovery nor error reporting
 bypasses that authority.
@@ -94,11 +100,38 @@ as a substitute. A support report cannot recover evidence already removed by ret
 was never durably written; the canonical result records insufficiency or a closed refusal instead
 of claiming a complete reconstruction.
 
+The server records `support.report.ui.delivered` only when the attachment response finishes;
+its `parentCorrelationId` joins report creation and its `reportDigest` identifies the canonical
+artifact. `reportBytes` is canonical size; `transportBytes` is the separate gzip response size.
+Cancellation, compression and response-write failures use `support.report.ui.failed` instead.
+A refusal uses `support.report.ui.download-refused` with a closed reason. These facts never prove
+that the operating system saved the file. Preparation reports the artifact's quality separately
+as `reportCompleteness` and `reportLoss`; the preparation event's own completeness/loss describe
+whether that event was recorded intact. Availability reasons apply only to client-only scope.
+
+### Recognising a limited report
+
+After validation, `incident.clientReport` identifies a limited artifact with
+`serverEvidence: unavailable`, empty registered server evidence and unverified, validated browser
+failure facts when available. Its closed `availabilityReason` is one of `session-unavailable`,
+`diagnostic-delivery-unavailable`, `service-unavailable`, `client-only-selected` or
+`correlation-unavailable`. The last two describe an explicit scope choice or a missing trustworthy
+original correlation, not an inferred service outage. A structurally complete canonical report
+may still have insufficient diagnostic evidence; integrity and diagnostic sufficiency answer
+different questions. Never treat browser descriptors as authoritative server attribution.
+
+`.json.gz` is an outer transport. Section/report digests and `sourceArtifactDigest` cover the
+decoded canonical report text, not gzip header metadata or the compressed file bytes. Equivalent
+gzip framing may therefore validate to the same artifact digest. Keep a separate SHA-256 of the
+received file if a custody workflow requires identity of those exact transport bytes. Decompression
+remains bounded and gzip corruption, invalid decoded JSON and changed canonical evidence fail
+validation; transport metadata is never interpreted as report evidence.
+
 ## On the support team's machine
 
 1. Receive the file manually into an access-controlled workspace, under a locally chosen filename.
-   Transfer it byte for byte (binary mode, no line-ending or encoding conversion): any changed byte
-   fails validation. Keep the directory owner-only (0700 on POSIX) and the file owner-only (0600).
+   Preserve the received bytes for chain of custody (binary mode, no line-ending or encoding
+   conversion). Canonical report bytes are integrity checked after transport decompression. Keep the directory owner-only (0700 on POSIX) and the file owner-only (0600).
    Do not grant an agent broader filesystem/network authority just to handle the report. Do not
    preview its raw
    contents in a terminal, editor, model context or automation before validation.

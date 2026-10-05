@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b627c9e5d2cbf3048b5775446cdce419543f8d7bd8f0738772a1408718fcf877" as const;
+  "77a80bd7934a17b1a6df4b474c155615befb6e9f33be0ce684aea1e5538f6878" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10658,14 +10658,38 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "retrievalAnchorCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "retrievalElapsedBudgetBlocked",
               type: "boolean",
               dataClass: "closed-enum",
               required: false,
             },
             {
+              name: "retrievalIntent",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "retrievalReadBudgetBlocked",
               type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "retrievalTargetCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "retrievalTargetDecision",
+              type: "string",
               dataClass: "closed-enum",
               required: false,
             },
@@ -32371,12 +32395,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "support-incident",
       requirementContract: "support-incident",
       productSurfaces: ["keiko-activity-log", "keiko-server"],
-      lifecycleTransitions: ["end", "loss", "start", "state"],
+      lifecycleTransitions: ["end", "failure", "loss", "start", "state"],
       lifecycleOperations: {
         start: ["support.incident.created"],
         state: ["support.diagnostics.capacity", "support.incident.deduplicated"],
         end: ["support.incident.dismissed", "support.incident.expired"],
-        failure: [],
+        failure: ["support.incident.retirement-failed"],
         loss: ["support.incident.rejected"],
       },
       causalEdges: [
@@ -32402,6 +32426,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "support.incident.rejected",
+          mode: "correlation",
+        },
+        {
+          op: "support.incident.retirement-failed",
           mode: "correlation",
         },
       ],
@@ -32798,6 +32826,67 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["support.incident.rejected.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "support.incident.retirement-failed",
+          owner: "keiko-activity-log",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: true,
+            },
+            {
+              name: "failureStage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "incidentId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["support.incident.retirement-failed.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -33207,8 +33296,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "evidenceScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "reportDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "source",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -38045,6 +38152,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.incident.dismissed": "lifecycle-crash",
     "support.incident.expired": "lifecycle-crash",
     "support.incident.rejected": "lifecycle-crash",
+    "support.incident.retirement-failed": "lifecycle-crash",
     "support.manifest.rebuilt": "runtime-packages",
     "support.query.completed": "runtime-packages",
     "support.query.failed": "runtime-packages",

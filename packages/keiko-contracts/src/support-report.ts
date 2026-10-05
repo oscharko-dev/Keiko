@@ -1,3 +1,4 @@
+export * from "./support-report-policy.js";
 import type {
   ActivityLogCompletenessState,
   ActivityLogLossState,

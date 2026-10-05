@@ -341,6 +341,62 @@ describe("client diagnostics loss evidence", () => {
     expect(lines("client.diagnostic")).toEqual([]);
   });
 
+  it.each(["started", "settled"] as const)(
+    "preserves the user action parent through a %s stage ingest and stored line",
+    async (phase) => {
+      const body = {
+        kind: "stage",
+        stage: "files source preview",
+        phase,
+        ordinal: 1,
+        correlationId: "ui_preview-child-0001",
+        parentCorrelationId: "ui_navigation-parent-0001",
+        ...(phase === "settled" ? { durationMs: 9 } : {}),
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+      const op = `client.stage.${phase}` as const;
+      const line = lines(op)[0] ?? "";
+      const record =
+        phase === "started"
+          ? expectActivityLogProof("client.stage.started.line", line)
+          : expectActivityLogProof("client.stage.settled.line", line);
+      expect(record).toMatchObject({
+        correlationId: body.correlationId,
+        parentCorrelationId: body.parentCorrelationId,
+        stage: "files-source-preview",
+      });
+      expect(lines("client.diagnostic")).toEqual([]);
+    },
+  );
+
+  it.each(["server", "browser"] as const)(
+    "persists the %s report identity on the download click",
+    async (source) => {
+      const reportDigest = "ab".repeat(32);
+      const evidenceScope = source === "server" ? "server" : "client-only";
+      const body = {
+        message: "download",
+        clientTs: CLIENT_TS,
+        correlationId: "ui_download-child-0001",
+        parentCorrelationId: "ui_prepare-parent-0001",
+        supportReportDelivery: { mode: "manual", source, evidenceScope, reportDigest },
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+      const op = "client.support-report.download-started";
+      expect(
+        expectActivityLogProof("client.support-report.download-started.line", lines(op)[0] ?? ""),
+      ).toMatchObject({
+        correlationId: body.correlationId,
+        parentCorrelationId: body.parentCorrelationId,
+        deliveryMode: "manual",
+        source,
+        evidenceScope,
+        reportDigest,
+      });
+      expect(lines("client.diagnostic")).toEqual([]);
+    },
+  );
+
   it("persists a started stage report as client.stage.started", async () => {
     const body = JSON.stringify({
       kind: "stage",

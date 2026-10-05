@@ -614,8 +614,12 @@ already recorded:
 
 1. **Get the artifact.** Use `keiko support export --incident <id>` or a correlation selector.
    Manual UI and CLI export must also work at retained incident capacity through the canonical
-   transient descriptor, without evicting incidents or widening retention. UI export requires an
-   authenticated app session; scoped-cookie refresh reuses its verified bearer and absolute expiry.
+   transient descriptor, without stealing in-flight reservations or widening retention. At byte
+   pressure, completed candidates may roll over; in-flight reservations remain protected.
+   Exporting stored server evidence requires an authenticated app session; scoped-cookie refresh
+   reuses its verified bearer and absolute expiry. An unpaired or offline browser can still create
+   and download a limited report from validated body-free client failure facts. That fallback
+   grants no access to stored server evidence.
    Received evidence is one canonical private report; raw logs, legacy open bundles and inclusion
    flags are not accepted at the support-report boundary. For local debugging, use
    `keiko support query --correlation-id <id> --json` on the existing Activity Log.

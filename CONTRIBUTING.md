@@ -257,9 +257,13 @@ both production composition and these consumers when changing this wiring.
 
 For local defect evidence, use `keiko support export --incident <id>` or a correlation selector.
 Manual UI and CLI export remain available when all retained incident slots are occupied: the
-canonical exporter can use a transient descriptor without evicting incidents or widening retention.
-The UI report route requires an authenticated app session. Confirming a valid session refreshes
-its scoped cookies using the same bearer; it neither mints authority nor extends registry expiry.
+canonical exporter can use a transient descriptor without stealing in-flight reservations or
+widening retention. Completed candidates may roll over at byte pressure; in-flight reservations
+remain protected. Exporting stored server evidence requires an authenticated app session.
+Confirming a valid session refreshes its scoped cookies using the same bearer; it neither mints
+authority nor extends registry expiry. An unpaired or offline browser can still create and download
+a limited report from validated body-free client failure facts, without accessing stored server
+evidence.
 The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling (`--max-bytes`
 may only lower it) and explicit sufficiency. `--out` names a private directory, never a file; the
 filename always uses the fixed product/schema/incident/date class. Inclusion flags and raw-log or

@@ -1,12 +1,13 @@
 import { Worker } from "node:worker_threads";
 import {
+  SUPPORT_REPORT_WORKER_TIMEOUT_MS,
   type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
   type SupportReportFailure,
   type SupportIncidentDescriptorRecord,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { dismissSupportIncident, reportServerLogFailure } from "@oscharko-dev/keiko-activity-log";
+import { dismissSupportIncident } from "@oscharko-dev/keiko-activity-log";
 import {
   prepareDesktopSupportReport,
   SupportReportError,
@@ -136,7 +137,7 @@ async function awaitReport(
       };
       timer = setTimeout(() => {
         reject(new SupportReportJobError("timeout"));
-      }, 30_000);
+      }, SUPPORT_REPORT_WORKER_TIMEOUT_MS);
       signal?.addEventListener("abort", cancel, { once: true });
       const onMessage = reportMessageHandler(
         worker,
@@ -180,15 +181,10 @@ function reportAbandonedPreparation(
   record: SupportIncidentRecord,
   correlationId: string | undefined,
 ): void {
-  if (record.trigger !== "user-report") return;
-  try {
-    dismissSupportIncident(stateDir, record.incidentId, {
-      correlationId,
-      retirementReason: "abandoned",
-    });
-  } catch (error) {
-    reportServerLogFailure(error, { op: "support.incident.dismissed", correlationId });
-  }
+  dismissSupportIncident(stateDir, record.incidentId, {
+    correlationId,
+    retirementReason: "abandoned",
+  });
 }
 
 async function releaseReportJob(

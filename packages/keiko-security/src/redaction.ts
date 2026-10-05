@@ -4,8 +4,7 @@
 // Private-key blocks use one boundary scan, including conservative masking of an unclosed block.
 // URL patterns start only at a scheme boundary, avoiding repeated scans within a long scheme-like
 // string. The remaining built-in patterns use flat character classes and bounded alternatives.
-// Caller-supplied
-// literals are escaped via escapeRegExp before any RegExp is built, so no caller-controlled
+// Caller-supplied literals are escaped via escapeRegExp before any RegExp is built, so no caller-controlled
 // metacharacter reaches the regex engine. This keeps the CodeQL js/polynomial-redos required
 // gate green (ADR-0002).
 
@@ -76,8 +75,11 @@ const SECRET_KEY_VALUE_PATTERN = new RegExp(
 );
 
 // scheme://user:password@host — strip the userinfo credentials from any URL or DSN. One linear
+// Leading diff punctuation/digits are consumed once before the first scheme letter, so a valid
+// URL behind them remains detectable without retrying within a long scheme run. One linear
 // userinfo class on each side of the ':' and bounded by '@', so no catastrophic backtracking.
-const URL_CREDENTIALS_PATTERN = /(?<![a-z0-9+.-])\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi;
+const URL_CREDENTIALS_PATTERN =
+  /(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi;
 
 // scheme://<userinfo>@host with NO ':' in the userinfo. A personal-access token used as the
 // username (https://<pat>@github.com/o/r.git — common for GitHub/GitLab) carries no colon, so the
@@ -88,7 +90,7 @@ const URL_CREDENTIALS_PATTERN = /(?<![a-z0-9+.-])\b([a-z][a-z0-9+.-]*:\/\/)[^\s:
 // matching the existing intent of stripping credentials rather than usernames. Scoped to the URL
 // authority (a real scheme:// must precede the userinfo), so general '@' text is not over-matched.
 // ReDoS-safe: one linear userinfo class bounded by '@', no nesting.
-const URL_USERINFO_PATTERN = /(?<![a-z0-9+.-])\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+@/gi;
+const URL_USERINFO_PATTERN = /(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+@/gi;
 const SSH_USERINFO_SCHEME = /^(?:git\+)?ssh(?:\+git)?:\/\/$/i;
 
 const BUILTIN_PATTERNS: readonly RegExp[] = [
@@ -97,7 +99,6 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
   STRIPE_KEY_PATTERN,
-  PEM_PRIVATE_KEY_HEADER_PATTERN,
 ];
 
 function escapeRegExp(value: string): string {
@@ -227,7 +228,9 @@ export function redact(
     .replace(SECRET_KEY_VALUE_PATTERN, `$1$2${REDACTED}`)
     .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
     .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
-      SSH_USERINFO_SCHEME.test(scheme) ? match : `${scheme}${REDACTED}@`,
+      SSH_USERINFO_SCHEME.test(scheme.slice(scheme.search(/[a-z]/i)))
+        ? match
+        : `${scheme}${REDACTED}@`,
     )
     .replace(GERMAN_IBAN_PATTERN, REDACTED)
     .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
@@ -268,8 +271,11 @@ function redactPrivateKeyBlocks(input: string, preserveSourceLineBreaks: boolean
     if (boundary[1] === "BEGIN" && openBlockStart === undefined) {
       chunks.push(input.slice(copiedThrough, boundary.index));
       openBlockStart = boundary.index;
-    } else if (boundary[1] === "END" && openBlockStart !== undefined) {
-      const span = input.slice(openBlockStart, boundary.index + boundary[0].length);
+    } else if (boundary[1] === "END") {
+      const span = input.slice(
+        openBlockStart ?? copiedThrough,
+        boundary.index + boundary[0].length,
+      );
       chunks.push(redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks));
       copiedThrough = boundary.index + boundary[0].length;
       openBlockStart = undefined;

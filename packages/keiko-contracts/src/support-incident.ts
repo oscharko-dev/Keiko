@@ -1,3 +1,7 @@
+import {
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
+  type SupportReportAvailabilityReason,
+} from "./support-report-policy.js";
 // The canonical, body-free SupportIncident contract (#3533).
 //
 // A SupportIncident is a local control and selection artifact over the one logical Activity Log —
@@ -44,7 +48,7 @@
 
 import { parseActivityLogSegmentId, ACTIVITY_LOG_PIN_ID_PATTERN } from "./activity-log-files.js";
 import { isClientDefectContext, normalizeClientDefectFrames } from "./client-defect-signature.js";
-import { isClientDiagnosticIngestRequest, type ClientErrorEvidence } from "./diagnostics.js";
+import { isClientErrorEvidence, type ClientErrorEvidence } from "./diagnostics.js";
 export { clientDefectContext } from "./client-defect-signature.js";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -650,12 +654,7 @@ export interface SupportIncidentPrivateProjection extends SupportIncidentPublicP
   readonly clientReport?:
     | {
         readonly serverEvidence: "unavailable";
-        readonly availabilityReason:
-          | "session-unavailable"
-          | "diagnostic-delivery-unavailable"
-          | "service-unavailable"
-          | "client-only-selected"
-          | "correlation-unavailable";
+        readonly availabilityReason: SupportReportAvailabilityReason;
         /** Browser-observed facts, never a claim of registered server evidence. */
         readonly failure?:
           | {
@@ -889,11 +888,7 @@ export function isClientReportFailure(
     return false;
   return (
     isActivityLogErrorKind(value.errorKind) &&
-    isClientDiagnosticIngestRequest({
-      message: "Client-only report failure",
-      clientTs: "1970-01-01T00:00:00.000Z",
-      errorEvidence: value.errorEvidence,
-    })
+    (value.errorEvidence === undefined || isClientErrorEvidence(value.errorEvidence))
   );
 }
 
@@ -905,16 +900,7 @@ function validClientReport(value: unknown, projection: PlainObject): boolean {
       isClientReportFailure(value.failure) &&
       value.serverEvidence === "unavailable" &&
       clientOnlyProjection(projection) &&
-      isOneOf(
-        [
-          "session-unavailable",
-          "diagnostic-delivery-unavailable",
-          "service-unavailable",
-          "client-only-selected",
-          "correlation-unavailable",
-        ],
-        value.availabilityReason,
-      ))
+      isOneOf(SUPPORT_REPORT_AVAILABILITY_REASONS, value.availabilityReason))
   );
 }
 

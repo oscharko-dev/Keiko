@@ -230,7 +230,7 @@ export interface ServerDiagnosticRecord {
   // The deadline a request was admitted under, when that deadline (not a fault) ended it: the tool
   // bridge's own request deadline (PR #3452, F44). A duration only, never content.
   readonly deadlineMs?: number | undefined;
-  // The provider-supplied retry delay a `RateLimitError` carried (ADR-0173 D5 g26), same
+  // The provider-supplied retry delay a `ProviderError` or `RateLimitError` carried (ADR-0173 D5 g26), same
   // `providerErrorDetail` derivation. A count only — never content.
   readonly retryAfterMs?: number | undefined;
   // Bounded numeric occurrence for rate-limited diagnostics; never parsed from content.

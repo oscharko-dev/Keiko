@@ -745,7 +745,10 @@ operating-system save. The report action exposes a persistent **Download report*
 user gesture; it performs no asynchronous synthetic-anchor download. The same link retries the
 prepared bytes without a second report request. The BFF serves a standard gzip HTTP attachment
 at `/api/diagnostics/report/download/:downloadId`; decompression yields the exact canonical report
-bytes. The response has `application/gzip` content type and an attachment filename ending in
+bytes. The outer gzip framing is transport, not integrity-covered report content: section/report
+digests and `sourceArtifactDigest` cover decoded canonical text. Equivalent gzip metadata may
+therefore yield the same artifact digest; exact received-file custody requires a separate file
+hash. Bounded decompression and canonical validation remain mandatory. The response has `application/gzip` content type and an attachment filename ending in
 `.json.gz`, without `Content-Encoding` that would cause transparent decoding during download.
 Full reports require the exact existing session that generated the artifact; their opaque
 reference conveys no authority. Failure to acknowledge browser diagnostic delivery does not
@@ -781,7 +784,10 @@ transport, and existing fulfilled reports preserve their canonical content durin
 recovery. Readiness and a manual initiation never claim an operating-system save. Successful local
 preparation emits the routine `client.support-report.prepared` state on the existing diagnostic
 sink, with the original correlation when available, closed evidence scope and availability reason,
-the already measured canonical byte count, and directly projected completeness and loss. It contains no report content or failure kind
+the already measured canonical byte count, and artifact quality in `reportCompleteness` and
+`reportLoss`. The event itself is complete with no event loss when recorded successfully.
+`availabilityReason` is present only for client-only scope, and canonical structural completeness
+does not imply diagnostic sufficiency. It contains no report content or failure kind
 and creates no new failure incident. A failed local attempt uses the same preparation member's
 closed `outcome: failed` variant with only an error kind and measured duration; it never invents
 artifact bytes or availability. Ingest records `client.support-report.preparation-failed` as routine
@@ -806,7 +812,11 @@ token, filename or report body and does not claim evidence loss or an operating-
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on
 eviction or explicit global-error dismissal. A global error stays visible until human dismissal.
 The body-free `support.report.ui.delivered` state records canonical artifact bytes and the separate
-compressed transport byte count, without claiming that the operating system saved them. The routine
+compressed transport byte count, without claiming that the operating system saved them. It emits
+only on response finish; `parentCorrelationId` joins the creating request and `reportDigest`
+identifies the canonical artifact. `support.report.ui.failed` records cancellation, compression
+failure and response-write failure. `support.report.ui.download-refused` records closed authority
+or unavailable-reference refusals. Neither implies a successful download. The routine
 `client.support-report.download-started` line records `automatic` or `manual` initiation under the
 selected error's correlation; it records no report body, destination, filename or saved claim.
 
@@ -828,7 +838,11 @@ cache admission preserves pre-existing diagnostic candidates. The owner preparat
 only a newly created retained manual candidate; cancellation, timeout, worker failure or failed
 delivery admission withdraws that exact owned candidate and its claims and pin through the existing
 retirement path. Its `support.incident.dismissed` line carries the closed `abandoned` reason and
-candidate state, never a successful-report or human-dismissal claim. Existing candidates and
+candidate state, never a successful-report or human-dismissal claim. Failed record inspection or
+expiry inspection emits `support.incident.retirement-failed` on the owning Activity Log port with
+the attempted incident ID, closed read/sweep stage, original reduced error class, safe frames and
+causes, and request correlation. It leaves ownership intact and does not invent unavailable record
+metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
 transient descriptors grant no abandonment ownership. No additional report archive is created.
 When a manual descriptor's supported causal selection retains a registry-eligible failure
 under the requested root or its direct child, desktop composition derives a registered-failure
@@ -1051,6 +1065,10 @@ counts, estimated removed-prefix and summary costs, savings, final estimated pro
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
+
+Only an explicit `STREAMING_UNSUPPORTED` response permits the browser to retry a chat request
+through buffered transport. Ambiguous non-envelope responses or a missing stream body retain the
+request identity and require reconciliation, without automatic replay.
 
 The live grounded context meter records `conversationInputBudgetTokens` and
 `sourceCapacityTokens` on `chat.context.management`. Its compaction threshold applies to the
