@@ -613,6 +613,41 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
   });
 
+  it("preserves correlated complete scan evidence after literal content prefiltering", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: memFs(FIXTURE_ROOT, {
+        [PRIVATE_SCOPE_FILE]: `export const value = "${target}";\n`,
+        [`${PRIVATE_SCOPE_PATH}/unmatched.ts`]: "export const unrelated = true;\n".repeat(200),
+      }),
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({ incomplete: false, reasons: [] });
+    expect(output.pack.diagnostics?.coverage?.filesScanned).toBeGreaterThanOrEqual(2);
+    const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+    expectCommonExtra(started, completed, input);
+    expect(completed.correlationId).toBe(CORRELATION_ID);
+    expect(completed.extra).toMatchObject(expectedCoverageExtra(output));
+    expectBodyFree(activityLog);
+    expect(JSON.stringify(activityLog.events)).not.toContain(target);
+    expectActivityLogProof(
+      "search.connected-context.completed.line",
+      formatActivityLogProofLine(completed),
+    );
+  });
+
   it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
     const activityLog = createBufferedServerLogSink();
     const profile = deriveContextProfile({

@@ -412,6 +412,9 @@ for a requested exact occurrence. Internal literal query text and aggregate uniq
 (including separators) remain within the planner's 4,096-character input envelope; identical targets
 are deduplicated before that aggregate check. Invalid input is rejected before needle allocation,
 fingerprinting, or filesystem access. This input bound does not limit the recursive corpus.
+Before line classification, literal searches reuse the prepared case-aware, any-alternative
+matcher to reject files with no literal occurrence. Those decoded files still count as scanned;
+matched files retain the same line selection and evidence limits.
 General natural-language and orientation requests retain their
 existing broader retrieval behavior. Literal lookup prioritizes actual lexical
 content matches ahead of incidental natural-language path overlap. Files with the same basename

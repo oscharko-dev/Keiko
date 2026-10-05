@@ -1514,6 +1514,13 @@ function collectRankedSemanticDocument(
   );
 }
 
+function fileCanContainMatches(runner: SearchTextRunner, text: string): boolean {
+  if (runner.sourceInspection === true) return true;
+  // Reuse the prepared literal matcher: alternatives and case folding must match line selection.
+  if (runner.literalTerms !== undefined) return runner.matcher.match(text) > 0;
+  return shouldScoreContent(runner.query, text, runner.policy);
+}
+
 function textFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -1523,13 +1530,7 @@ function textFileMatches(
 ): FileMatches | undefined {
   observeEligibleTextFile(runner, file, text);
   collectRankedSemanticDocument(runner, file, text);
-  if (
-    runner.sourceInspection !== true &&
-    runner.literalTerms === undefined &&
-    !shouldScoreContent(runner.query, text, runner.policy)
-  ) {
-    return undefined;
-  }
+  if (!fileCanContainMatches(runner, text)) return undefined;
   const matched = scanLines(runner, text, state, file.relativePath);
   const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {
