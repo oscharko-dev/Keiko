@@ -23,6 +23,7 @@ import { isImageScopePath } from "./repoSearchScan.js";
 import {
   assertStructuralExecutionActive,
   executionControlledWorkspaceFs,
+  StructuralExecutionStoppedError,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import type { WorkspaceInfo } from "./types.js";
@@ -42,6 +43,9 @@ export interface CodingRepositorySearchOptions {
   readonly signal?: AbortSignal | undefined;
   readonly nowMs?: (() => number) | undefined;
   readonly deadlineAtMs?: number | undefined;
+  /** Soft phases within the caller's hard deadline; neither is a corpus eligibility limit. */
+  readonly scanDeadlineAtMs?: number | undefined;
+  readonly projectionDeadlineAtMs?: number | undefined;
   readonly onSearchObservation?:
     ((observation: CodingRepositorySearchObservation) => void) | undefined;
 }
@@ -60,6 +64,8 @@ interface CodingRepositoryContext {
   readonly fs: WorkspaceFs;
   readonly control: StructuralExecutionControl;
   readonly startedAtMs: number;
+  readonly scanDeadlineAtMs: number;
+  readonly projectionDeadlineAtMs: number;
   readonly onSearchObservation: CodingRepositorySearchOptions["onSearchObservation"];
 }
 
@@ -86,6 +92,11 @@ function createContext(
     fs: executionControlledWorkspaceFs(options.fs ?? nodeWorkspaceFs, control),
     control,
     startedAtMs,
+    scanDeadlineAtMs: Math.min(options.scanDeadlineAtMs ?? Infinity, control.deadlineAtMs),
+    projectionDeadlineAtMs: Math.min(
+      options.projectionDeadlineAtMs ?? Infinity,
+      control.deadlineAtMs,
+    ),
     onSearchObservation: options.onSearchObservation,
   };
 }
@@ -152,7 +163,7 @@ async function searchHits(
     ...(request.mode === "literal" ? { queryInterpretation: { kind: "literal" } as const } : {}),
     fs: context.fs,
     nowMs: context.control.nowMs,
-    deadlineAtMs: context.control.deadlineAtMs,
+    deadlineAtMs: context.scanDeadlineAtMs,
     ...(context.control.signal === undefined ? {} : { signal: context.control.signal }),
     contentLane: "editor",
     searchHints: { retrievalIntent: "targeted-code-search" },
@@ -161,22 +172,81 @@ async function searchHits(
   const observation = searchObservation(result, context);
   context.onSearchObservation?.(observation);
   assertStructuralExecutionActive(context.control);
-  const hits: CodingRepositoryHit[] = [];
-  for (const atom of result.atoms) {
-    hits.push(await projectSearchHit(context, query, atom, request.mode === "literal"));
-  }
-  const truncationReasons: CodingRepositoryTruncationReason[] = [];
-  if (observation.diagnostics.oversizedFilesSkipped > 0) truncationReasons.push("file-too-large");
-  if (result.coverage.reasons.includes("match-cap")) truncationReasons.push("result-limit");
-  if (result.coverage.reasons.includes("io-error")) truncationReasons.push("io-error");
+  const projected = await projectSearchHits(
+    context,
+    query,
+    result.atoms,
+    request.mode === "literal",
+  );
+  const finalObservation = projectionObservation(observation, context, projected.truncated);
+  context.onSearchObservation?.(finalObservation);
   return boundCodingRepositoryResult({
     ok: true,
     kind: "search",
-    hits,
-    truncationReasons,
-    metrics: observation.metrics,
-    diagnostics: observation.diagnostics,
+    hits: projected.hits,
+    truncationReasons: searchTruncationReasons(finalObservation),
+    metrics: finalObservation.metrics,
+    diagnostics: finalObservation.diagnostics,
   });
+}
+
+function searchTruncationReasons(
+  observation: CodingRepositorySearchObservation,
+): readonly CodingRepositoryTruncationReason[] {
+  const truncationReasons: CodingRepositoryTruncationReason[] = [];
+  if (observation.diagnostics.oversizedFilesSkipped > 0) truncationReasons.push("file-too-large");
+  if (observation.diagnostics.coverageReasons.includes("match-cap"))
+    truncationReasons.push("result-limit");
+  if (observation.diagnostics.coverageReasons.includes("io-error"))
+    truncationReasons.push("io-error");
+  if (observation.diagnostics.coverageReasons.includes("timeout"))
+    truncationReasons.push("time-limit");
+  return truncationReasons;
+}
+
+function projectionObservation(
+  observation: CodingRepositorySearchObservation,
+  context: CodingRepositoryContext,
+  truncated: boolean,
+): CodingRepositorySearchObservation {
+  return {
+    metrics: {
+      ...observation.metrics,
+      durationMs: Math.max(0, context.control.nowMs() - context.startedAtMs),
+    },
+    diagnostics: {
+      ...observation.diagnostics,
+      coverageIncomplete: observation.diagnostics.coverageIncomplete || truncated,
+      coverageReasons: truncated
+        ? [...new Set([...observation.diagnostics.coverageReasons, "timeout" as const])]
+        : observation.diagnostics.coverageReasons,
+    },
+  };
+}
+
+async function projectSearchHits(
+  context: CodingRepositoryContext,
+  query: RetrievalQuery,
+  atoms: readonly EvidenceAtom[],
+  literal: boolean,
+): Promise<{ readonly hits: readonly CodingRepositoryHit[]; readonly truncated: boolean }> {
+  const control = { ...context.control, deadlineAtMs: context.projectionDeadlineAtMs };
+  const projection = { ...context, fs: executionControlledWorkspaceFs(context.fs, control) };
+  const hits: CodingRepositoryHit[] = [];
+  for (const atom of atoms) {
+    assertStructuralExecutionActive(context.control);
+    try {
+      assertStructuralExecutionActive(control);
+      hits.push(await projectSearchHit(projection, query, atom, literal));
+    } catch (error) {
+      assertStructuralExecutionActive(context.control);
+      if (error instanceof StructuralExecutionStoppedError && error.reason === "timeout") {
+        return { hits, truncated: true };
+      }
+      throw error;
+    }
+  }
+  return { hits, truncated: false };
 }
 
 function searchObservation(

@@ -330,6 +330,7 @@ function repositorySearchSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "read-only",
     handlerId: "opencode-repository-search-port",
+    maxDurationMs: DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
   };
 }
 

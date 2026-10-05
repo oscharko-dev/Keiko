@@ -225,6 +225,17 @@ most 32 globs of 200 characters. Yield after at most 32 candidates. Search must 
 regexes, honor cancellation during inventory and scanning, and report omitted coverage. Existing
 `repoSearch` defaults of 200 hits do not widen the coding projection's 50-hit cap.
 
+The governed repository tool declares the existing sandbox settlement budget explicitly. Its
+server-private execution guard carries the catalog's effective deadline and clock, including any
+shorter authority deadline; model arguments cannot replace them. Inside that invocation, the
+handler reserves up to one second each for validated snippet projection and final bounded-result
+settlement (at most one quarter of the remaining invocation for each phase). Reaching either soft
+phase deadline returns already validated hits with `time-limit` and incomplete `timeout` coverage.
+Optional semantic reranking is then skipped with `budget-exhausted` provenance so it cannot consume
+the settlement reserve. A user cancellation, revoked authority, or the catalog's hard deadline still
+withholds content. Direct searches without a caller deadline remain unlimited in elapsed time;
+these settlement phases introduce no corpus file-count or source eligibility limit.
+
 Recursive search does not require Git metadata. In an ordinary folder, directory names such as
 `build`, `dist` or `generated` alone do not classify text documents as code noise; Git repositories
 retain their coding-noise exclusions. Both scopes retain the same sensitive-path, containment,

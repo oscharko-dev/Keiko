@@ -117,7 +117,14 @@ function handlerContext(
     ...context,
     invocationId: invocation.invocationId,
     signal: invocation.controller.signal,
-    mutationGuard: { ...admitted.mutationGuard, check: beforeEffect },
+    mutationGuard: {
+      ...admitted.mutationGuard,
+      check: beforeEffect,
+      executionBudget: {
+        nowMs: () => invocation.state.options.now(),
+        deadlineAtMs: invocation.deadlineAtMs,
+      },
+    },
     beforeEffect,
     pageSequence: invocation.continuation?.pageSequence ?? 0,
     createCursor: (): string => {

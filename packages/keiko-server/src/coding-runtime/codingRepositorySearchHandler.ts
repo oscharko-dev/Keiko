@@ -78,7 +78,7 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 7,
+      maxItems: 8,
       values: [
         "result-limit",
         "file-limit",
@@ -87,6 +87,7 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
         "depth-limit",
         "io-error",
         "file-too-large",
+        "time-limit",
       ],
     },
     progressStatus: {
@@ -236,6 +237,26 @@ function observationStatus(
   return result.ok && result.kind === "read" ? "not-applicable" : "unavailable";
 }
 
+// Reserve time for at most 50 validated snippets and the bounded result/log settlement. For a
+// short remaining invocation, split its remainder instead of moving either phase beyond it.
+const RESULT_SETTLEMENT_RESERVE_MS = 1_000;
+
+function searchPhaseDeadlines(
+  options: CodingRepositorySearchHandlerOptions,
+  nowMs: number,
+): Pick<CodingRepositorySearchOptions, "scanDeadlineAtMs" | "projectionDeadlineAtMs"> {
+  const deadline = options.deadlineAtMs ?? Infinity;
+  if (!Number.isFinite(deadline)) return {};
+  const reserve = Math.min(RESULT_SETTLEMENT_RESERVE_MS, Math.max(0, deadline - nowMs) / 4);
+  return {
+    scanDeadlineAtMs: Math.min(options.scanDeadlineAtMs ?? Infinity, deadline - reserve * 2),
+    projectionDeadlineAtMs: Math.min(
+      options.projectionDeadlineAtMs ?? Infinity,
+      deadline - reserve,
+    ),
+  };
+}
+
 async function invoke(
   options: CodingRepositorySearchHandlerOptions,
   request: unknown,
@@ -256,6 +277,7 @@ async function invoke(
     if (!options.isCurrent()) throw new CodingRepositorySearchError("authority-stale");
     result = await executeCodingRepositoryRequest(options.workspace, captured, {
       ...options,
+      ...searchPhaseDeadlines(options, nowMs()),
       signal:
         options.signal === undefined
           ? context.signal

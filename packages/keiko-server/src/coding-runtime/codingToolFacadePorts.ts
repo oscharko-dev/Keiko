@@ -12,6 +12,9 @@ export interface CodingToolProducerBinding {
 }
 
 export interface CodingToolMutationGuard {
+  /** Actual catalog invocation clock/deadline, supplied only by server admission. */
+  readonly executionBudget?:
+    { readonly nowMs: () => number; readonly deadlineAtMs: number } | undefined;
   /** Server-held one-use delivery execution lease, never populated from IPC. */
   readonly deliveryApproval?: object;
   readonly stageApproval?: object;

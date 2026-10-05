@@ -56,6 +56,7 @@ export const CODING_REPOSITORY_TRUNCATION_REASONS = Object.freeze([
   "depth-limit",
   "io-error",
   "file-too-large",
+  "time-limit",
 ] as const);
 export type CodingRepositoryTruncationReason =
   (typeof CODING_REPOSITORY_TRUNCATION_REASONS)[number];

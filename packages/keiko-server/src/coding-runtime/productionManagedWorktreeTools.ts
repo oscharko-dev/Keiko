@@ -1500,6 +1500,11 @@ async function rerankedSearch(
 ): Promise<CodingRepositoryResult> {
   // The union narrows on its own discriminant; a read request never reaches the index at all.
   if (!result.ok || result.kind !== "search" || requested.kind !== "search") return result;
+  if (result.truncationReasons.includes("time-limit")) {
+    const provenance = lexicalProvenance(result.hits, "budget-exhausted");
+    logRerank(input, provenance);
+    return { ...result, provenance };
+  }
   const resolve = input.repositorySemanticSearch?.current;
   const root = input.resolveWorkspaceRootAccess()?.canonicalRoot;
   const outcome =
@@ -1532,6 +1537,8 @@ function repositorySearchHandler(
   return createCodingRepositorySearchHandler({
     workspace: detectWorkspaceAt(access.canonicalRoot, access.fs),
     fs: access.fs,
+    nowMs: guard.executionBudget?.nowMs,
+    deadlineAtMs: guard.executionBudget?.deadlineAtMs,
     isCurrent: (): boolean => !signalAborted(signal) && guard.check() && live(input),
     log: input.activityLog ?? processServerLogSink(),
   });
