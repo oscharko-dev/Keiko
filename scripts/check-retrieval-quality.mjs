@@ -33,7 +33,7 @@ const DEFAULT_BUDGET_PATH = resolve(HERE, "check-retrieval-quality.budget.json")
 const MEM_ROOT = "/quality";
 const FIXED_NOW = () => 1_700_000_000_000;
 const EVAL_K = 5;
-const CASES = [
+export const WORKSPACE_QUALITY_CASES = [
   {
     id: "java-maven-version-declaration",
     category: "project-metadata",
@@ -632,7 +632,7 @@ export async function runRetrievalQualityCheck({
   fail,
   localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
   regressionProbes = runLocalKnowledgeRegressionProbes,
-  workspaceCases = CASES,
+  workspaceCases = WORKSPACE_QUALITY_CASES,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
   const onFail =

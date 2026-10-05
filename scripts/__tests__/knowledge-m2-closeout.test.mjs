@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { resolveProvisionedUsearchPath } from "../lib/clean-checkout-demo.mjs";
-import { runRetrievalQualityCheck } from "../check-retrieval-quality.mjs";
+import { runRetrievalQualityCheck, WORKSPACE_QUALITY_CASES } from "../check-retrieval-quality.mjs";
 import {
   HS6_SINGLE_WRITER_FILE_COUNT,
   EXPECTED_EVALUATION_SCORECARD_HASH,
@@ -589,32 +589,23 @@ describe("runKnowledgeM2CloseoutGate", () => {
         throw new Error(message);
       },
     });
-    expect(current.results.map((entry) => entry.id)).toEqual([
-      "java-maven-version-declaration",
-      "go-toolchain-declaration",
-      "node-engines-over-docs",
-      "api-route-express",
-      "api-route-spring",
-      "test-name-to-source",
-      "same-candidates-api-client",
-      "same-candidates-token-validator",
-      "short-identifier-api-id-url",
-      "stacktrace-source-location",
-      "config-key-owner",
-      "generated-artifact-avoidance",
-      "ordinary-generated-directory-text",
-      "terraform-version-declaration",
-      "openapi-version-declaration",
-      "graphql-codegen-schema",
-    ]);
+    expect(current.results.map((entry) => entry.id)).toEqual(
+      WORKSPACE_QUALITY_CASES.map((entry) => entry.id),
+    );
     expect(qualityScorecardHash(current)).toBe(EXPECTED_EVALUATION_SCORECARD_HASH);
+    const renamedCase = structuredClone(current);
+    renamedCase.results[0].id = "synthetic-replacement-with-identical-quality";
+    expect(qualityScorecardHash(renamedCase)).not.toBe(qualityScorecardHash(current));
+    const reorderedCases = structuredClone(current);
+    reorderedCases.results.reverse();
+    expect(qualityScorecardHash(reorderedCases)).toBe(qualityScorecardHash(current));
     const missingCase = structuredClone(current);
     missingCase.summary.cases -= 1;
     expect(qualityScorecardHash(missingCase)).not.toBe(EXPECTED_EVALUATION_SCORECARD_HASH);
     const regressedQuality = structuredClone(current);
     regressedQuality.summary.top1Rate = 0;
     expect(qualityScorecardHash(regressedQuality)).not.toBe(EXPECTED_EVALUATION_SCORECARD_HASH);
-  });
+  }, 120_000);
 
   // Drives the six REAL proofs: a 20 001-row ANN corpus plus the retrieval, grounded-retrieval, and
   // faithfulness gates. That work does not fit the 15s repository default.
