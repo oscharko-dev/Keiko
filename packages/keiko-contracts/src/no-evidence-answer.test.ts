@@ -25,6 +25,7 @@ describe("connected search abstention", () => {
     "Find the den implementation.",
     "What does Ölwechsel mean in the handbook?",
     "Explain the field named `die`.",
+    "Inspect pruefeInput and prüfeInput.",
   ])("does not mistake English wording or source names for German: %s", (question) => {
     expect(shouldUseGermanForSystemAnswer(question)).toBe(false);
   });
@@ -34,6 +35,8 @@ describe("connected search abstention", () => {
     "Suche nach parseConfig.",
     "Wo finde ich die Version?",
     "Erkläre das bitte.",
+    "Prüfe den Knowledge Pod.",
+    "Pruefe den Knowledge Pod.",
   ])("recognizes ordinary German questions: %s", (question) => {
     expect(shouldUseGermanForSystemAnswer(question)).toBe(true);
   });
