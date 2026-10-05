@@ -19,9 +19,6 @@ import {
   type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
-// Instrument the owning producer without adding a public runtime export for its scoring helper.
-import { searchText as sourceSearchText } from "../../keiko-workspace/src/repoSearch.js";
-import * as searchPolicy from "../../keiko-workspace/src/repoSearchPolicy.js";
 import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   EMBEDDING_INSTRUCTION_VERSION,
@@ -457,7 +454,6 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         repositoryPod: unavailablePod(mode),
         observePodRetrieval: (observation) => observations.push(observation),
       });
-      const score = vi.spyOn(searchPolicy, "scoreContentForSearch");
       try {
         // The factory already resolved the pod. The observation must precede any workspace scan.
         expect(observations).toEqual([
@@ -470,11 +466,8 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
           },
         ]);
         const scope = { scopeId: "unavailable-pod", workspace: testWorkspace(), relativePaths: [] };
-        const baseline = await sourceSearchText(scope, QUERY, undefined, { fs, nowMs: () => 1 });
-        const baselineScoreCalls = score.mock.calls.length;
-        expect(baselineScoreCalls).toBeGreaterThan(0);
-        score.mockClear();
-        const result = await sourceSearchText(scope, QUERY, undefined, {
+        const baseline = await searchText(scope, QUERY, undefined, { fs, nowMs: () => 1 });
+        const result = await searchText(scope, QUERY, undefined, {
           fs,
           nowMs: () => 1,
           ...(provider === undefined ? {} : { semanticSearchProvider: provider }),
@@ -483,12 +476,10 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         expect(result.atoms.map((atom) => atom.scopePath)).toContain("src/auth.ts");
         expect(result.coverage).toMatchObject({ filesScanned: 65, incomplete: false, reasons: [] });
         expect(result.coverage).toEqual(baseline.coverage);
-        expect(score).toHaveBeenCalledTimes(baselineScoreCalls);
         expect(provider).toBeUndefined();
         expect(embeddingRequest).not.toHaveBeenCalled();
         expect(observations).toHaveLength(1);
       } finally {
-        score.mockRestore();
         deps.store.close();
       }
     },

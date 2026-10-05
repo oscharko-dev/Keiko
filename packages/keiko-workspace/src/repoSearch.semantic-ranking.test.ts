@@ -83,4 +83,34 @@ describe("semantic document scoring through the public search producer", () => {
     expect(result.coverage).toMatchObject({ filesScanned: 3, incomplete: false });
     expect(new Set(score.mock.calls.map((call) => call[3]))).toEqual(new Set(Object.keys(FILES)));
   });
+
+  it("keeps nonmatching content scoring exclusive to an admitted semantic session", async () => {
+    const nonmatching = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [
+        `deep/group-${String(index)}/manual.txt`,
+        "Ordinary handbook background.\n".repeat(100),
+      ]),
+    );
+    const files = { ...nonmatching, "src/auth.ts": "export const note = 'session renewal';\n" };
+    const score = vi.spyOn(searchPolicy, "scoreContentForSearch");
+    const lexical = await searchText(scope(), QUERY, undefined, {
+      fs: memFs("/ws", files),
+      nowMs: () => 1,
+    });
+    expect(score.mock.calls.map((call) => call[3])).toEqual(["src/auth.ts"]);
+    score.mockClear();
+    const provider = vi.fn(() => Promise.resolve([]));
+    const semantic = await searchText(scope(), QUERY, undefined, {
+      fs: memFs("/ws", files),
+      nowMs: () => 1,
+      semanticSearchProvider: { name: "admitted-session-control", search: provider },
+    });
+    expect(provider).toHaveBeenCalledOnce();
+    expect(new Set(score.mock.calls.map((call) => call[3]))).toEqual(new Set(Object.keys(files)));
+    expect(semantic.atoms.map((atom) => atom.scopePath)).toEqual(
+      lexical.atoms.map((atom) => atom.scopePath),
+    );
+    expect(lexical.coverage).toMatchObject({ filesScanned: 65, incomplete: false, reasons: [] });
+    expect(semantic.coverage).toEqual(lexical.coverage);
+  });
 });
