@@ -60,6 +60,19 @@ function attachmentBytes(value: unknown): Buffer {
 function decodeAttachment(value: unknown): string {
   return gunzipSync(attachmentBytes(value)).toString("utf8");
 }
+function holdCompression(): () => void {
+  let finish = (): void => {
+    throw new TypeError("Compression not entered");
+  };
+  vi.mocked(zlib.gzip).mockImplementationOnce((buffer, options, callback) => {
+    finish = (): void => {
+      callback(null, zlib.gzipSync(buffer, options));
+    };
+  });
+  return (): void => {
+    finish();
+  };
+}
 afterEach(() => {
   vi.useRealTimers();
   resetServerLogger();
@@ -164,6 +177,8 @@ describe("authenticated canonical report attachment", () => {
     expect(gzip).toHaveBeenCalledTimes(1);
   });
   it("rechecks the original session after pending compression before releasing protected bytes", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
     const registry = createSessionRegistry();
     const mint = registry.mint("local");
     const owner = deps(mint.session.sessionId);
@@ -173,22 +188,68 @@ describe("authenticated canonical report attachment", () => {
     const cached = cacheSupportReportDownload(owner, mint.session.sessionId, report);
     const ctx = context(cached.downloadPath);
     ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`;
-    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
     const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
-    let finishCompression = (): void => {
-      throw new TypeError("Compression not entered");
-    };
-    vi.mocked(zlib.gzip).mockImplementationOnce((buffer, options, callback) => {
-      finishCompression = (): void => {
-        callback(null, zlib.gzipSync(buffer, options));
-      };
-    });
+    const finishCompression = holdCompression();
     const pending = handleDownloadSupportReport(ctx, owner);
     registry.revoke(mint.session.sessionId);
     finishCompression();
     expect(await pending).toMatchObject({ status: 403 });
+    expect(headers).not.toHaveBeenCalled();
     expect(end).not.toHaveBeenCalled();
+    const refusal = sink.events.filter(
+      (event) => event.op === "support.report.ui.download-refused",
+    );
+    expect(refusal).toHaveLength(1);
+    expect(
+      expectActivityLogProof(
+        "support.report.ui.download-refused.line",
+        formatActivityLogProofLine(refusal[0] ?? {}),
+      ),
+    ).toMatchObject({ correlationId: ctx.correlationId, reason: "no-session", httpStatus: 403 });
+    expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
   });
+  it.each(["expiry", "destroyed-response"] as const)(
+    "does not send protected bytes after %s during compression",
+    async (control) => {
+      vi.useFakeTimers();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("owner-session");
+      const cached = cacheSupportReportDownload(owner, "owner-session", report, "creation-test");
+      const ctx = context(cached.downloadPath);
+      const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      const finishCompression = holdCompression();
+      const pending = handleDownloadSupportReport(ctx, owner);
+      if (control === "expiry") vi.setSystemTime(cached.downloadExpiresAtMs);
+      else ctx.res.destroy();
+      finishCompression();
+      const result = await pending;
+      expect(result).toEqual(
+        control === "expiry" ? expect.objectContaining({ status: 404 }) : STREAMING,
+      );
+      expect(headers).not.toHaveBeenCalled();
+      expect(end).not.toHaveBeenCalled();
+      const op =
+        control === "expiry" ? "support.report.ui.download-refused" : "support.report.ui.failed";
+      const failure = sink.events.filter((event) => event.op === op);
+      expect(failure).toHaveLength(1);
+      const line = formatActivityLogProofLine(failure[0] ?? {});
+      const proof =
+        control === "expiry"
+          ? expectActivityLogProof("support.report.ui.download-refused.line", line)
+          : expectActivityLogProof("support.report.ui.failed.lifecycle", line);
+      expect(proof).toMatchObject({
+        correlationId: ctx.correlationId,
+        ...(control === "expiry"
+          ? { reason: "expired-or-unknown", httpStatus: 404 }
+          : { errorKind: "cancelled", parentCorrelationId: "creation-test" }),
+      });
+      expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+      expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);
+    },
+  );
   it("does not claim a delivered attachment until the response finishes", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
