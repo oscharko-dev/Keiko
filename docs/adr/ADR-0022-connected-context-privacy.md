@@ -220,6 +220,12 @@ bounds. An unlimited default lookup uses the live traversal rather than treating
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+An intentional uncapped index bypass is reported as `live-scan`, with its own count of completed
+text-search calls. It is not an index failure or evidence of index reuse. If no indexed result,
+snapshot load, or snapshot save was observed, both completion projections report the provider as
+`not-evaluated`, even when an index was injected. Actual finite indexed searches retain their
+cold, warm, reconciliation, and load/save-failure observations; the finite workspace-index tests
+own those guarantees. The bypass counter counts logical searches, not physical directory walks.
 Raw directory entries must also satisfy the shared portable scope-path contract before resolution;
 unsupported names are never normalized into a different file or traversed. Unlike a sensitive-path
 policy denial, this exclusion means the requested tree could not be fully examined. Search reports

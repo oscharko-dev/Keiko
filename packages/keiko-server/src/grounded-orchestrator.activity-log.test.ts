@@ -46,8 +46,15 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "./observability/index.js";
-import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
-import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "@oscharko-dev/keiko-activity-log";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
+import {
+  ACTIVITY_LOG_STORAGE_OPERATIONS,
+  MAX_LOG_FIELD_COUNT,
+} from "@oscharko-dev/keiko-activity-log";
 
 const FIXTURE_NOW_MS = 1_700_000_000_000;
 const FIXTURE_ROOT = "/private/customer/connected-context-log-fixture";
@@ -281,6 +288,7 @@ const COMPLETION_FIELD_GROUPS: Readonly<Record<string, Readonly<Record<string, s
     searchCount: "indexSearchCount",
     reportCount: "indexReportCount",
     fallbackSearchCount: "indexFallbackSearchCount",
+    bypassedSearchCount: "indexBypassedSearchCount",
     loadFailures: "indexLoadFailures",
     saveFailures: "indexSaveFailures",
   },
@@ -411,7 +419,7 @@ function expectedExtra(
     ...coverage,
     retrievalReadBudgetBlocked: readBudgetBlocked,
     retrievalElapsedBudgetBlocked: elapsedBudgetBlocked,
-    retrievalWorkspaceIndexProviderStatus: retrievalBlocked ? "not-evaluated" : "unavailable",
+    retrievalWorkspaceIndexProviderStatus: "not-evaluated",
     completeness: "complete",
     loss: "none",
   };
@@ -463,6 +471,7 @@ const WORKSPACE_INDEX_COUNTER_FIELDS = [
   "searchCount",
   "reportCount",
   "fallbackSearchCount",
+  "bypassedSearchCount",
   "indexedRecords",
   "reusedRecords",
   "staleRecords",
@@ -620,13 +629,14 @@ describe("retrieveConnectedContextPack activity log", () => {
       expectWorkspaceIoCounters(details);
       const workspaceIndex = nestedExtra(details, "workspaceIndex");
       expect(workspaceIndex).toMatchObject({
-        providerStatus: "unavailable",
+        providerStatus: "not-evaluated",
         loadStatus: "not-attempted",
         saveStatus: "not-attempted",
       });
-      expect(workspaceIndex.searchMode).toBe("live-fallback");
+      expect(workspaceIndex.searchMode).toBe("live-scan");
       expect(workspaceIndex.reportCount).toBe(0);
-      expect(workspaceIndex.fallbackSearchCount).toBeGreaterThan(0);
+      expect(workspaceIndex.fallbackSearchCount).toBe(0);
+      expect(workspaceIndex.bypassedSearchCount).toBeGreaterThan(0);
       expect(typeof nestedExtra(completed, "uncertainty").scopeIncompleteUncertaintyCount).toBe(
         "number",
       );
@@ -637,7 +647,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(nestedExtra(completed, "retrievalStatus")).toEqual({
         readBudgetBlocked: false,
         elapsedBudgetBlocked: false,
-        workspaceIndexProviderStatus: "unavailable",
+        workspaceIndexProviderStatus: "not-evaluated",
       });
       expect(completed).not.toHaveProperty("_truncatedFieldCount");
       expect(details).not.toHaveProperty("_truncatedFieldCount");
@@ -648,7 +658,49 @@ describe("retrieveConnectedContextPack activity log", () => {
     }
   });
 
-  it("persists uncapped live fallback and fresh reads with an injected index", async () => {
+  it.each(["absent", "ready", "failing"] as const)(
+    "reports intentional uncapped index bypass with a %s provider",
+    async (provider) => {
+      const activityLog = createBufferedServerLogSink();
+      const loadSnapshot = vi.fn(() =>
+        provider === "failing"
+          ? Promise.reject(new TypeError("private index read failure"))
+          : Promise.resolve(undefined),
+      );
+      const saveSnapshot = vi.fn(() => Promise.resolve());
+      await retrieveConnectedContextPack(fixtureInput(), {
+        ...fixtureDeps(activityLog, CORRELATION_ID),
+        workspaceIndexForRoot: () =>
+          provider === "absent" ? undefined : { loadSnapshot, saveSnapshot },
+      });
+      expect(loadSnapshot).not.toHaveBeenCalled();
+      expect(saveSnapshot).not.toHaveBeenCalled();
+      const [, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+      const index = nestedExtra(completionDetailsEvent(activityLog).extra, "workspaceIndex");
+      expect(index).toMatchObject({
+        providerStatus: "not-evaluated",
+        searchMode: "live-scan",
+        reportCount: 0,
+        fallbackSearchCount: 0,
+        loadFailures: 0,
+        saveFailures: 0,
+      });
+      expect(index.bypassedSearchCount).toBeGreaterThan(0);
+      expect(index.bypassedSearchCount).toBe(index.searchCount);
+      expect(nestedExtra(completed.extra, "retrievalStatus")).toMatchObject({
+        workspaceIndexProviderStatus: index.providerStatus,
+      });
+      const registration = activityLogEventRegistration(completionDetailsEvent(activityLog));
+      expect(registration).toBeDefined();
+      expect(Object.keys(registration?.fields ?? {})).toHaveLength(44);
+      expect(Object.keys(registration?.fields ?? {}).length).toBeLessThanOrEqual(
+        MAX_LOG_FIELD_COUNT,
+      );
+      expectBodyFree(activityLog);
+    },
+  );
+
+  it("persists uncapped live scans and fresh reads with an injected index", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-index-log-"));
     const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
     const workspaceIndex = createWorkspaceIndex();
@@ -692,8 +744,8 @@ describe("retrieveConnectedContextPack activity log", () => {
       for (const line of [cold, warm, stale]) {
         expectWorkspaceIndexCounters(line);
         expect(nestedExtra(line, "workspaceIndex")).toMatchObject({
-          providerStatus: "available",
-          searchMode: "live-fallback",
+          providerStatus: "not-evaluated",
+          searchMode: "live-scan",
           loadStatus: "not-attempted",
           saveStatus: "not-attempted",
           indexedRecords: 0,
@@ -701,10 +753,18 @@ describe("retrieveConnectedContextPack activity log", () => {
           staleRecords: 0,
           loadFailures: 0,
           saveFailures: 0,
+          fallbackSearchCount: 0,
         });
+        expect(nestedExtra(line, "workspaceIndex").bypassedSearchCount).toBeGreaterThan(0);
+        expect(line).not.toHaveProperty("_truncatedFieldCount");
         expect(nestedExtra(line, "workspaceIo").contentReadCalls).toBeGreaterThan(0);
       }
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
+      const completedLine = raw
+        .split("\n")
+        .find((line) => line.includes('"op":"search.connected-context.completion-details"'));
+      if (completedLine === undefined) throw new Error("Missing persisted index diagnostics");
+      expectActivityLogProof("search.connected-context.completion-details.line", completedLine);
     } finally {
       activityLog.close?.();
       rmSync(stateDir, { recursive: true, force: true });
@@ -737,8 +797,8 @@ describe("retrieveConnectedContextPack activity log", () => {
       }
       expectWorkspaceIndexCounters(completedDetails);
       expect(nestedExtra(completedDetails, "workspaceIndex")).toMatchObject({
-        providerStatus: "available",
-        searchMode: "live-fallback",
+        providerStatus: "not-evaluated",
+        searchMode: "live-scan",
         loadStatus: "not-attempted",
         saveStatus: "not-attempted",
         loadFailures: 0,
@@ -1023,7 +1083,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const details = completionDetailsEvent(activityLog);
     const workspaceIndex = nestedExtra(details.extra, "workspaceIndex");
     expect(workspaceIndex).toMatchObject({
-      providerStatus: "unavailable",
+      providerStatus: "not-evaluated",
       searchMode: "unused",
       reportCount: 0,
       fallbackSearchCount: 0,
@@ -1301,6 +1361,19 @@ describe("retrieveConnectedContextPack activity log", () => {
     expectWorkspaceIndexCounters(failed.extra ?? {});
     expectWorkspaceIoCounters(failed.extra ?? {});
     expect(nestedExtra(failed.extra, "workspaceIndex").searchCount).toBeGreaterThan(0);
+    expect(nestedExtra(failed.extra, "workspaceIndex")).toMatchObject({
+      providerStatus: "not-evaluated",
+      searchMode: "live-scan",
+      fallbackSearchCount: 0,
+    });
+    expect(nestedExtra(failed.extra, "workspaceIndex").bypassedSearchCount).toBeGreaterThan(0);
+    const registration = activityLogEventRegistration(failed);
+    expect(Object.keys(registration?.fields ?? {})).toHaveLength(44);
+    expect(Object.keys(registration?.fields ?? {}).length).toBeLessThanOrEqual(MAX_LOG_FIELD_COUNT);
+    expectActivityLogProof(
+      "search.connected-context.failed.line",
+      formatActivityLogProofLine(failed),
+    );
     expectBodyFree(activityLog);
   });
 

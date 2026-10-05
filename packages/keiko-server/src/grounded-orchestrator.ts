@@ -489,6 +489,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       values: [
         "not-evaluated",
         "unused",
+        "live-scan",
         "live-fallback",
         "persistent-cold",
         "persistent-warm",
@@ -516,6 +517,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     indexSearchCount: { type: "integer", dataClass: "count", required: false },
     indexReportCount: { type: "integer", dataClass: "count", required: false },
     indexFallbackSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexBypassedSearchCount: { type: "integer", dataClass: "count", required: false },
     indexLoadFailures: { type: "integer", dataClass: "count", required: false },
     indexSaveFailures: { type: "integer", dataClass: "count", required: false },
     workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: false },
@@ -759,6 +761,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
       values: [
         "not-evaluated",
         "unused",
+        "live-scan",
         "live-fallback",
         "persistent-cold",
         "persistent-warm",
@@ -786,6 +789,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
     indexSearchCount: { type: "integer", dataClass: "count", required: true },
     indexReportCount: { type: "integer", dataClass: "count", required: true },
     indexFallbackSearchCount: { type: "integer", dataClass: "count", required: true },
+    indexBypassedSearchCount: { type: "integer", dataClass: "count", required: true },
     indexLoadFailures: { type: "integer", dataClass: "count", required: true },
     indexSaveFailures: { type: "integer", dataClass: "count", required: true },
     workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: true },
@@ -894,8 +898,8 @@ export interface OrchestratorDeps {
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
   // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
   readonly contextProfile?: ContextProfile | undefined;
-  // Issue #1736 — optional production index provider. Tests and unsupported runtime dirs omit it;
-  // the lexical ring falls back to bounded live scans.
+  // Issue #1736 — optional production index provider for compatible finite searches. Uncapped
+  // searches deliberately use live traversal without consulting this finite index.
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
@@ -1030,6 +1034,7 @@ type WorkspaceIndexProviderStatus = "not-evaluated" | "available" | "unavailable
 type WorkspaceIndexSearchMode =
   | "not-evaluated"
   | "unused"
+  | "live-scan"
   | "live-fallback"
   | "persistent-cold"
   | "persistent-warm"
@@ -1048,6 +1053,7 @@ interface WorkspaceIndexActivityDiagnostics extends WorkspaceIndexPreparationRep
   readonly searchCount: number;
   readonly reportCount: number;
   readonly fallbackSearchCount: number;
+  readonly bypassedSearchCount: number;
   readonly loadAttempts: number;
   readonly loadHits: number;
   readonly loadMisses: number;
@@ -1069,6 +1075,7 @@ interface MutableWorkspaceIndexActivityCounters {
   searchCount: number;
   reportCount: number;
   fallbackSearchCount: number;
+  bypassedSearchCount: number;
   loadAttempts: number;
   loadHits: number;
   loadMisses: number;
@@ -1146,6 +1153,7 @@ function emptyWorkspaceIndexActivityCounters(): MutableWorkspaceIndexActivityCou
     searchCount: 0,
     reportCount: 0,
     fallbackSearchCount: 0,
+    bypassedSearchCount: 0,
     loadAttempts: 0,
     loadHits: 0,
     loadMisses: 0,
@@ -1173,7 +1181,9 @@ function addWorkspaceIndexResult(
   counters.searchCount += 1;
   const report = result.workspaceIndex;
   if (report === undefined) {
-    if (!stoppedBeforeWorkspaceScan(result)) counters.fallbackSearchCount += 1;
+    if (stoppedBeforeWorkspaceScan(result)) return;
+    if (result.coverage.limits.maxFilesScanned === null) counters.bypassedSearchCount += 1;
+    else counters.fallbackSearchCount += 1;
     return;
   }
   counters.reportCount += 1;
@@ -1195,15 +1205,20 @@ function workspaceIndexPersistenceSucceeded(
   return counters.loadHits > 0 || counters.saveSuccesses > 0;
 }
 
+function unindexedWorkspaceSearchMode(
+  counters: MutableWorkspaceIndexActivityCounters,
+): WorkspaceIndexSearchMode {
+  if (counters.fallbackSearchCount > 0) return "live-fallback";
+  return counters.bypassedSearchCount > 0 ? "live-scan" : "unused";
+}
+
 function workspaceIndexSearchMode(
   providerStatus: WorkspaceIndexProviderStatus,
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndexSearchMode {
   if (providerStatus === "not-evaluated") return "not-evaluated";
   if (counters.searchCount === 0) return "unused";
-  if (counters.reportCount === 0) {
-    return counters.fallbackSearchCount > 0 ? "live-fallback" : "unused";
-  }
+  if (counters.reportCount === 0) return unindexedWorkspaceSearchMode(counters);
   const reconciled = counters.staleRecords + counters.deletedEntries + counters.droppedRecords > 0;
   const persistent = workspaceIndexPersistenceSucceeded(providerStatus, counters);
   if (reconciled) return persistent ? "persistent-reconciled" : "request-local-reconciled";
@@ -1234,7 +1249,10 @@ function workspaceIndexActivityDiagnostics(
   counters: MutableWorkspaceIndexActivityCounters,
 ): WorkspaceIndexActivityDiagnostics {
   return {
-    providerStatus,
+    providerStatus:
+      counters.reportCount + counters.loadAttempts + counters.saveAttempts > 0
+        ? providerStatus
+        : "not-evaluated",
     searchMode: workspaceIndexSearchMode(providerStatus, counters),
     loadStatus: workspaceIndexLoadStatus(counters),
     saveStatus: workspaceIndexSaveStatus(counters),
@@ -6990,7 +7008,7 @@ const NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS = workspaceIndexActivityDiagnost
 // a live retrieval whose excerpt reads were stopped by the absolute deadline reached this status
 // claiming an unblocked elapsed budget, contradicting the elapsed-budget marker on its own pack.
 function liveRetrievalCompletion(
-  workspaceIndexAvailable: boolean,
+  workspaceIndexProviderStatus: WorkspaceIndexProviderStatus,
   assembled: GroundedPackAssembly,
   decisions: RingDecisionAudit | undefined,
 ): ConnectedContextCompletionStatus {
@@ -7003,7 +7021,7 @@ function liveRetrievalCompletion(
     decisions,
     readBudgetBlocked: assembled.excerptObservation?.readBudgetBlocked ?? false,
     elapsedBudgetBlocked: assembled.elapsedBudgetBlocked,
-    workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
+    workspaceIndexProviderStatus,
   };
 }
 
@@ -7330,6 +7348,7 @@ type FailedIndexFields = Pick<
   | "indexSearchCount"
   | "indexReportCount"
   | "indexFallbackSearchCount"
+  | "indexBypassedSearchCount"
   | "indexLoadFailures"
   | "indexSaveFailures"
 >;
@@ -7393,6 +7412,7 @@ function workspaceIndexActivityExtra(
     indexSearchCount: index.searchCount,
     indexReportCount: index.reportCount,
     indexFallbackSearchCount: index.fallbackSearchCount,
+    indexBypassedSearchCount: index.bypassedSearchCount,
     indexLoadFailures: index.loadFailures,
     indexSaveFailures: index.saveFailures,
   };
@@ -8444,7 +8464,6 @@ interface LiveRetrievalContext {
   readonly searchScope: SearchScope;
   readonly ringFs: WorkspaceFs;
   readonly structuralContexts: StructuralRequestContextPool;
-  readonly workspaceIndexSource: WorkspaceIndex | undefined;
   readonly workspaceIndexActivity: WorkspaceIndexActivity;
   readonly workspaceIndex: WorkspaceIndex | undefined;
 }
@@ -8524,7 +8543,6 @@ function prepareLiveRetrievalContext(
     searchScope,
     ringFs,
     structuralContexts,
-    workspaceIndexSource,
     workspaceIndexActivity,
     workspaceIndex: workspaceIndexActivity.workspaceIndex,
   };
@@ -8575,21 +8593,18 @@ async function retrieveLiveConnectedContext(
     liveGroundedPackInputs(input, deps, plan, runtime, context, rings),
   );
   throwIfCancelled(deps.signal);
+  const workspaceIndex = context.workspaceIndexActivity.diagnostics();
   return connectedContextExecution(
     assembled.pack,
     plan,
     runtime.activity,
     {
-      ...liveRetrievalCompletion(
-        context.workspaceIndexSource !== undefined,
-        assembled,
-        rings.decisions,
-      ),
+      ...liveRetrievalCompletion(workspaceIndex.providerStatus, assembled, rings.decisions),
       scopeContextObservation: runtime.progress.scopeContextObservation,
       sourceDecision: runtime.progress.sourceDecision,
     },
     context.structuralContexts.diagnostics(),
-    context.workspaceIndexActivity.diagnostics(),
+    workspaceIndex,
     runtime.workspaceIoActivity.diagnostics(),
   );
 }
