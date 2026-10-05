@@ -1711,16 +1711,22 @@ claims and pin and preserves prior candidates. Concurrent publishers cannot stea
 a fully occupied pool can restore its publication reserve by retiring one eligible older candidate
 only when every occupied pool slot has a matching durable record and owning claim, and the eligible
 class stock exceeds its governing share. Protected classes occupying overlapping indexes do not
-count as that surplus. Admission then retries exclusive claiming once. Any unpublished, torn or mismatched peer claim keeps the existing
+count as that surplus. Admission then retries exclusive claiming once. Recovery reuses that admission's slot-occupancy
+snapshot, checks missing durable owners before opening claim contents, and reads only the occupied
+slot owners; it does not rescan fingerprint claims. A confirmed peer unlink between inspection and
+open declines recovery without inventing a store outage. Retention evidence counts the full open
+store even when only one priority class is eligible for eviction.
+Any unpublished, torn or mismatched peer claim keeps the existing
 `quota-exhausted` refusal; failed or changed-file cleanup retains truthful partial evidence. This
 exception repairs interrupted post-publication retirement and legacy full pools without stealing
 in-flight ownership or enlarging the byte pool. Unreported
 candidates expire after twenty-four hours, including older records written with a longer expiry.
 One pure contract computes the effective deadline from the original expiry and the current lifetime;
 admission, reads, retirement, projections, recent selection and CLI output use that same deadline.
-Historical records are not rewritten. When expiry shortens an original deadline, the existing
+Historical records are not rewritten. When the sweep has reached the effective deadline but is
+still before the original deadline, the existing
 `support.incident.expired` event records the closed reason `ttl-shortened`, releases the owned pin
-and claims, and retains truthful partial evidence if any cleanup fails. Ordinary expiry and byte
+and claims, and retains truthful partial evidence if any cleanup fails. Sweeps at or after the original deadline use ordinary expiry. Ordinary expiry and byte
 pressure retain their distinct `expired` and `retention` reasons.
 On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
 Generated reports remain only in the existing transient download cache, without a disk archive.

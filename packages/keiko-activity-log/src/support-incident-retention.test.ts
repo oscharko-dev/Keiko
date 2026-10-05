@@ -139,6 +139,47 @@ function occupyPublicationReserve(): readonly SupportIncidentRecord[] {
   return retained;
 }
 
+function expectLegacyRecoveryOwnership(
+  prior: readonly SupportIncidentRecord[],
+  created: SupportIncidentRecord,
+): void {
+  const expected = [...prior.slice(2), created];
+  const actual = listSupportIncidents(stateDir, { readOnly: true });
+  expect(actual.map((record) => record.incidentId).sort()).toEqual(
+    expected.map((record) => record.incidentId).sort(),
+  );
+  expect(
+    listSupportIncidentClaims(stateDir)
+      .map((claim) => claim.incidentId)
+      .sort(),
+  ).toEqual(expected.map((record) => record.incidentId).sort());
+  expect(
+    listActivityLogDirectory(join(stateDir, "logs"))
+      .pins.map((entry) => entry.pinId)
+      .sort(),
+  ).toEqual(expected.map((record) => record.pin.pinId).sort());
+  const expired = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "support.incident.expired",
+  );
+  expect(expired).toHaveLength(2);
+  expect(
+    expired.map((line) => expectActivityLogProof("support.incident.expired.emitted-line", line)),
+  ).toEqual(
+    prior.slice(0, 2).map((record): unknown =>
+      expect.objectContaining({
+        incidentId: record.incidentId,
+        expiryReason: "retention",
+        removalStatus: "removed",
+        claimsStatus: "released",
+        pinRelease: "released",
+        openIncidentCount: expected.length,
+        completeness: "complete",
+      }),
+    ),
+  );
+}
+
 function persistFreshFailure(): void {
   const op = "coding-runtime.readiness.failed";
   const registration = activityLogOperationSchema(op);
@@ -278,6 +319,41 @@ describe("rolling diagnostic candidate retention", () => {
           completeness: "complete",
         }),
       );
+    },
+  );
+
+  it.each([336, 400])(
+    "uses ordinary expiry once the original %sh deadline has also elapsed",
+    (hours) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "late-legacy-expiry" });
+      if (created.status !== "created") throw new TypeError("Expected retained candidate");
+      const legacy = {
+        ...created.record,
+        expiresAtMs: created.record.createdAtMs + 336 * 60 * 60_000,
+      };
+      const payload = incidentStore.serializeSupportIncidentRecord(legacy);
+      if (payload === undefined) throw new TypeError("Expected historical record payload");
+      incidentStore.removeSupportIncidentRecord(stateDir, legacy.incidentId);
+      incidentStore.writeSupportIncidentRecord(
+        incidentStore.supportIncidentDirectory(stateDir),
+        payload,
+        legacy.incidentId,
+      );
+      expect(
+        listSupportIncidents(stateDir, { nowMs: legacy.createdAtMs + hours * 60 * 60_000 }),
+      ).toEqual([]);
+      const expired = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.expired",
+      );
+      expect(expired).toHaveLength(1);
+      expect(
+        expectActivityLogProof("support.incident.expired.emitted-line", expired[0] ?? ""),
+      ).toMatchObject({
+        incidentId: legacy.incidentId,
+        expiryReason: "expired",
+        removalStatus: "removed",
+      });
     },
   );
 
@@ -914,11 +990,10 @@ describe("rolling diagnostic candidate retention", () => {
     writeActivityLogPolicyRecord(directory, directory, { ...policy, retentionBytes: 65536 });
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     const records = listSupportIncidents(stateDir, { readOnly: true });
-    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const created = recordUserReportedIncident(stateDir);
+    if (created.status !== "created") throw new TypeError("Expected recovered legacy admission");
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(smaller.capacity);
-    expect(
-      listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
-    ).toEqual(expect.arrayContaining(records.slice(2).map((record) => record.incidentId)));
+    expectLegacyRecoveryOwnership(records, created.record);
   });
 
   it.each(["corrupt", "unsafe-permissions"] as const)(

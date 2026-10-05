@@ -34,7 +34,6 @@ import {
   SUPPORT_INCIDENT_TTL_MS,
   supportIncidentEffectiveExpiry,
   supportIncidentWindow,
-  supportIncidentSlotClaimFileName,
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
@@ -95,6 +94,7 @@ import {
   listSupportIncidentSlotIndexes,
   listSupportIncidentEntries,
   readSupportIncidentFingerprintClaim,
+  readSupportIncidentSlotClaim,
   readSupportIncidentRecord,
   releaseSupportIncidentFingerprintClaim,
   releaseSupportIncidentSlot,
@@ -699,6 +699,7 @@ interface EntryRemoval {
 }
 
 interface ExpiryFacts {
+  readonly nowMs: number;
   readonly reason?: "retention";
   readonly entry: SupportIncidentStoreEntry;
   readonly removal: EntryRemoval;
@@ -721,9 +722,11 @@ function incidentLifecycleCorrelation(
 
 function incidentExpiryReason(
   record: SupportIncidentRecord | undefined,
+  nowMs: number,
 ): "invalid-record" | "ttl-shortened" | "expired" {
   if (record === undefined) return "invalid-record";
-  if (supportIncidentEffectiveExpiry(record) < record.expiresAtMs) return "ttl-shortened";
+  if (supportIncidentEffectiveExpiry(record) <= nowMs && nowMs < record.expiresAtMs)
+    return "ttl-shortened";
   return "expired";
 }
 
@@ -745,7 +748,7 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
         ...(facts.removal.claimsStatus === undefined
           ? {}
           : { claimsStatus: facts.removal.claimsStatus }),
-        expiryReason: facts.reason ?? incidentExpiryReason(record),
+        expiryReason: facts.reason ?? incidentExpiryReason(record, facts.nowMs),
         removalStatus: facts.removal.removed ? "removed" : "failed",
         ...(facts.removal.pinRelease === undefined ? {} : { pinRelease: facts.removal.pinRelease }),
         ...(record === undefined
@@ -993,13 +996,13 @@ function claimAvailableSlot(
   draft: CandidateDraft,
   incidentId: string,
   capacity: number,
+  occupied: Set<number>,
 ): number | undefined {
-  const occupied = occupiedSlots(context.stateDir);
   for (let offset = 0; offset < capacity; offset += 1) {
     const index = draft.trigger === "user-report" ? capacity - 1 - offset : offset;
-    if (!occupied.has(index) && claimSupportIncidentSlot(context.stateDir, index, incidentId)) {
-      return index;
-    }
+    if (occupied.has(index)) continue;
+    occupied.add(index);
+    if (claimSupportIncidentSlot(context.stateDir, index, incidentId)) return index;
   }
   return undefined;
 }
@@ -1016,6 +1019,7 @@ function evictOldestCandidate(
   entries: readonly SupportIncidentStoreEntry[],
   capacity: number,
   publishedIncidentId: string,
+  openIncidentCount = entries.length,
 ): string | undefined {
   const entry = entries.find(
     ({ record }) =>
@@ -1027,10 +1031,11 @@ function evictOldestCandidate(
   if (entry === undefined) return undefined;
   const removal = removeEntry(context.stateDir, entry, context);
   expiredEvidence(context.stateDir, {
+    nowMs: context.nowMs,
     entry,
     removal,
     correlationId: draft.evidenceCorrelationId,
-    openIncidentCount: entries.length - Number(removal.removed),
+    openIncidentCount: openIncidentCount - Number(removal.removed),
     reason: "retention",
   });
   return removal.complete ? entry.incidentId : undefined;
@@ -1040,35 +1045,47 @@ interface ClaimedQuotaSlot {
   readonly slotIndex: number;
 }
 
+function ownsRecoveryClaim(stateDir: string, record: SupportIncidentRecord | undefined): boolean {
+  return (
+    record !== undefined &&
+    readSupportIncidentSlotClaim(stateDir, record.slotIndex)?.incidentId === record.incidentId
+  );
+}
+
 function recoverPublicationReserve(
   context: CandidateContext,
   draft: CandidateDraft,
   entries: readonly SupportIncidentStoreEntry[],
   capacity: number,
   incidentId: string,
-): void {
-  const occupied = new Set(
-    [...occupiedSlots(context.stateDir)].filter((index) => index <= capacity),
-  );
-  if (occupied.size <= capacity) return;
-  const owners = new Map(
-    listSupportIncidentClaims(context.stateDir).map((claim) => [claim.fileName, claim.incidentId]),
-  );
+  occupied: ReadonlySet<number>,
+): number | undefined {
+  const classSlots = new Set([...occupied].filter((index) => index <= capacity));
+  if (classSlots.size <= capacity) return undefined;
   const durable = entries.filter(
-    ({ record }) =>
-      record !== undefined &&
-      occupied.has(record.slotIndex) &&
-      owners.get(supportIncidentSlotClaimFileName(record.slotIndex)) === record.incidentId,
+    ({ record }) => record !== undefined && classSlots.has(record.slotIndex),
   );
-  const durableSlots = new Set(durable.map((entry) => entry.record?.slotIndex));
-  // An unpublished or changed peer claim is active ownership, not a recoverable reserve.
-  if (durableSlots.size !== occupied.size) return;
+  // Unpublished peers are recognized by names alone, before any claim contents are opened.
+  if (new Set(durable.map((entry) => entry.record?.slotIndex)).size !== classSlots.size)
+    return undefined;
+  for (const { record } of durable) {
+    if (!ownsRecoveryClaim(context.stateDir, record)) return undefined;
+  }
   const eligible = durable.filter(
     ({ record }) => record !== undefined && mayEvictCandidate(draft, record),
   );
-  // Protected classes can occupy overlapping indexes without exceeding this class's share.
-  if (eligible.length <= capacity) return;
-  evictOldestCandidate(context, draft, durable, capacity, incidentId);
+  if (eligible.length <= capacity) return undefined;
+  const removed = evictOldestCandidate(
+    context,
+    draft,
+    durable,
+    capacity,
+    incidentId,
+    entries.length,
+  );
+  return removed === undefined
+    ? undefined
+    : durable.find((entry) => entry.incidentId === removed)?.record?.slotIndex;
 }
 
 function claimQuotaSlot(
@@ -1078,19 +1095,28 @@ function claimQuotaSlot(
   entries: readonly SupportIncidentStoreEntry[],
 ): ClaimedQuotaSlot | undefined {
   const capacity = slotCapacity(context, draft);
-  const occupied = [...occupiedSlots(context.stateDir)].filter((index) => index <= capacity);
+  const occupied = new Set(occupiedSlots(context.stateDir));
   if (
-    occupied.length >= capacity &&
+    [...occupied].filter((index) => index <= capacity).length >= capacity &&
     !entries.some(
       ({ record }) =>
         record !== undefined && record.slotIndex <= capacity && mayEvictCandidate(draft, record),
     )
   )
     return undefined;
-  let slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1);
+  let slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
   if (slotIndex === undefined) {
-    recoverPublicationReserve(context, draft, entries, capacity, incidentId);
-    slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1);
+    const released = recoverPublicationReserve(
+      context,
+      draft,
+      entries,
+      capacity,
+      incidentId,
+      occupied,
+    );
+    if (released === undefined) return undefined;
+    occupied.delete(released);
+    slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
   }
   return slotIndex === undefined ? undefined : { slotIndex };
 }
@@ -1178,6 +1204,7 @@ function rollDiagnosticPin(context: IncidentPinContext, publishedIncidentId: str
   if (oldest === undefined) return;
   const removal = removeEntry(context.stateDir, oldest, context);
   expiredEvidence(context.stateDir, {
+    nowMs: context.nowMs,
     entry: oldest,
     removal,
     reason: "retention",
@@ -1739,7 +1766,13 @@ function sweepExpiredEntries(
   for (const entry of entries) {
     if (!removableEntry(entry, nowMs)) continue;
     const removal = removeEntry(stateDir, entry, { correlationId });
-    expiredEvidence(stateDir, { entry, removal, correlationId, openIncidentCount: open.length });
+    expiredEvidence(stateDir, {
+      entry,
+      removal,
+      correlationId,
+      openIncidentCount: open.length,
+      nowMs,
+    });
   }
   sweepOrphanedClaims(stateDir, correlationId);
   return open;

@@ -312,8 +312,8 @@ export function removeSupportIncidentRecord(stateDir: string, incidentId: string
 
 // No claim at this path is the common, expected outcome for most fingerprints and slots (most
 // were simply never claimed), so it is checked first and treated as a plain `undefined`, never a
-// caught failure. A file that exists but cannot be read (permission, corruption, a same-instant
-// removal after this check) is a genuine anomaly and propagates: support-incident-store.ts never
+// caught failure. A peer unlink between inspection and open is also confirmed as absence.
+// A present file that cannot be read (permission or corruption) remains an anomaly and propagates: support-incident-store.ts never
 // imports the evidence sink (server-log.ts also reaches this module, and reporting from here would
 // cycle back through it), so every caller that can legitimately hit that anomaly reports it itself.
 /** A claim as read: the occurrence holding it, and when it was claimed. */
@@ -325,14 +325,27 @@ export interface SupportIncidentClaim {
   readonly claimedAtMs: number;
 }
 
+function openClaim(path: string, directory: string): number | undefined {
+  try {
+    return openSafeArtifactFile(path, {
+      artifactClass: ARTIFACT_CLASS,
+      mode: "read",
+      trustedRoot: directory,
+    });
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError && error.kind === "open-failed") {
+      assertSafeArtifactAncestors(path, ARTIFACT_CLASS);
+      if (lstatSync(path, { throwIfNoEntry: false }) === undefined) return undefined;
+    }
+    throw error;
+  }
+}
+
 function readClaim(path: string, directory: string): SupportIncidentClaim | undefined {
   const state = regularFileState(path);
   if (state === undefined) return undefined;
-  const descriptor = openSafeArtifactFile(path, {
-    artifactClass: ARTIFACT_CLASS,
-    mode: "read",
-    trustedRoot: directory,
-  });
+  const descriptor = openClaim(path, directory);
+  if (descriptor === undefined) return undefined;
   try {
     const text = readBoundedText(descriptor);
     return {
@@ -460,6 +473,15 @@ export function claimSupportIncidentSlot(
     supportIncidentSlotClaimFileName(slotIndex),
     incidentId,
   );
+}
+
+/** One occupied slot owner; recovery never needs to open unrelated fingerprint claims. */
+export function readSupportIncidentSlotClaim(
+  stateDir: string,
+  slotIndex: number,
+): SupportIncidentClaim | undefined {
+  const directory = supportIncidentDirectory(stateDir);
+  return readClaim(join(directory, supportIncidentSlotClaimFileName(slotIndex)), directory);
 }
 
 export function releaseSupportIncidentSlot(
