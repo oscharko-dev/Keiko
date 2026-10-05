@@ -7,6 +7,7 @@ import {
   clientOnlySupportReportSections,
   isActivityLogCorrelationId,
   supportIncidentBuild,
+  supportIncidentEffectiveExpiry,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   supportIncidentPrivateProjection,
@@ -153,7 +154,7 @@ function recentFailureCorrelation(stateDir: string): string | undefined {
       const record = entry.record;
       return record?.trigger === "registered-failure" &&
         !record.fingerprint.op.startsWith("support.report.") &&
-        record.expiresAtMs > now &&
+        supportIncidentEffectiveExpiry(record) > now &&
         record.createdAtMs >= now - SUPPORT_INCIDENT_WINDOW_BEFORE_MS
         ? [record]
         : [];

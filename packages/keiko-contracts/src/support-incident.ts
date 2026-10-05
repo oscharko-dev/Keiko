@@ -74,6 +74,13 @@ export const SUPPORT_INCIDENT_TTL_MS = 24 * 60 * 60_000;
 export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * 60_000;
 export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * 60_000;
 
+/** Current retention deadline; historical records keep their original serialized expiry. */
+export function supportIncidentEffectiveExpiry(
+  record: Pick<SupportIncidentDescriptorRecord, "createdAtMs" | "expiresAtMs">,
+): number {
+  return Math.min(record.expiresAtMs, record.createdAtMs + SUPPORT_INCIDENT_TTL_MS);
+}
+
 export function supportIncidentWindow(nowMs: number): SupportIncidentWindow {
   return {
     fromMs: Math.max(0, nowMs - SUPPORT_INCIDENT_WINDOW_BEFORE_MS),
@@ -715,7 +722,7 @@ export function supportIncidentPrivateProjection(
     sufficiencyReasons: [...incident.sufficiency.reasons],
     coverage: { ...incident.sufficiency.coverage },
     createdAtMs: incident.createdAtMs,
-    expiresAtMs: incident.expiresAtMs,
+    expiresAtMs: supportIncidentEffectiveExpiry(incident),
   };
 }
 

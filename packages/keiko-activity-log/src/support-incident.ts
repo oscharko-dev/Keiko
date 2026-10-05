@@ -32,6 +32,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   SUPPORT_INCIDENT_TTL_MS,
+  supportIncidentEffectiveExpiry,
   supportIncidentWindow,
   supportIncidentSlotClaimFileName,
   ACTIVITY_LOG_DIRECTORY_NAME,
@@ -300,7 +301,7 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["expired", "invalid-record", "retention"],
+      values: ["expired", "invalid-record", "retention", "ttl-shortened"],
     },
     removalStatus: {
       type: "string",
@@ -362,7 +363,9 @@ function createdEvidence(
         pinnedBytes: record.pin.pinnedBytes,
         evidenceLostBeforePin: record.pin.evidenceLostBeforePin,
         windowSeconds: Math.ceil((record.window.toMs - record.window.fromMs) / 1000),
-        expiresInSeconds: Math.ceil((record.expiresAtMs - record.createdAtMs) / 1000),
+        expiresInSeconds: Math.ceil(
+          (supportIncidentEffectiveExpiry(record) - record.createdAtMs) / 1000,
+        ),
         openIncidentCount,
         completeness:
           record.pin.status === "pinned" && !record.pin.evidenceLostBeforePin
@@ -513,6 +516,14 @@ function incidentLifecycleCorrelation(
   );
 }
 
+function incidentExpiryReason(
+  record: SupportIncidentRecord | undefined,
+): "invalid-record" | "ttl-shortened" | "expired" {
+  if (record === undefined) return "invalid-record";
+  if (supportIncidentEffectiveExpiry(record) < record.expiresAtMs) return "ttl-shortened";
+  return "expired";
+}
+
 function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
   const record = facts.entry.record;
   writeEvidence(
@@ -522,7 +533,7 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
       { correlationId: incidentLifecycleCorrelation(record, facts.correlationId) },
       {
         incidentId: facts.entry.incidentId,
-        expiryReason: facts.reason ?? (record === undefined ? "invalid-record" : "expired"),
+        expiryReason: facts.reason ?? incidentExpiryReason(record),
         removalStatus: facts.removal.removed ? "removed" : "failed",
         ...(facts.removal.pinRelease === undefined ? {} : { pinRelease: facts.removal.pinRelease }),
         ...(record === undefined
@@ -1355,12 +1366,8 @@ export function recordUserReportedIncident(
 
 // ─── Reading, expiry, dismissal ────────────────────────────────────────────────────────────────
 
-function candidateExpiry(record: SupportIncidentRecord): number {
-  return Math.min(record.expiresAtMs, record.createdAtMs + SUPPORT_INCIDENT_TTL_MS);
-}
-
 function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
-  return entry.record !== undefined && candidateExpiry(entry.record) > nowMs;
+  return entry.record !== undefined && supportIncidentEffectiveExpiry(entry.record) > nowMs;
 }
 
 // An expired record, or an unreadable one whose writer is gone. An unreadable record younger than
@@ -1368,7 +1375,7 @@ function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
 function removableEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
   return entry.record === undefined
     ? abandonedStoreFile(entry.modifiedAtMs)
-    : candidateExpiry(entry.record) <= nowMs;
+    : supportIncidentEffectiveExpiry(entry.record) <= nowMs;
 }
 
 // Releases the quota-slot claim, and (for a registered failure) the fingerprint claim, that a
@@ -1533,7 +1540,8 @@ export function readSupportIncident(
   options: Pick<SupportIncidentOptions, "nowMs"> = {},
 ): SupportIncidentRecord | undefined {
   const record = readSupportIncidentRecord(stateDir, incidentId);
-  return record !== undefined && candidateExpiry(record) > (options.nowMs ?? Date.now())
+  return record !== undefined &&
+    supportIncidentEffectiveExpiry(record) > (options.nowMs ?? Date.now())
     ? record
     : undefined;
 }

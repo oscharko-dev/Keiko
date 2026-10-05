@@ -1677,6 +1677,12 @@ count as that surplus. Admission then retries exclusive claiming once. Any unpub
 exception repairs interrupted post-publication retirement and legacy full pools without stealing
 in-flight ownership or enlarging the byte pool. Unreported
 candidates expire after twenty-four hours, including older records written with a longer expiry.
+One pure contract computes the effective deadline from the original expiry and the current lifetime;
+admission, reads, retirement, projections, recent selection and CLI output use that same deadline.
+Historical records are not rewritten. When expiry shortens an original deadline, the existing
+`support.incident.expired` event records the closed reason `ttl-shortened`, releases the owned pin
+and claims, and retains truthful partial evidence if any cleanup fails. Ordinary expiry and byte
+pressure retain their distinct `expired` and `retention` reasons.
 On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
 Generated reports remain only in the existing transient download cache, without a disk archive.
 The health projection reports actual retained stock and the governing admission capacity separately;

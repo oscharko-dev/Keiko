@@ -103,6 +103,7 @@ export {
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   SUPPORT_INCIDENT_WINDOW_AFTER_MS,
   supportIncidentWindow,
+  supportIncidentEffectiveExpiry,
   supportIncidentBuild,
   supportIncidentFileName,
   supportIncidentFingerprintClaimFileName,

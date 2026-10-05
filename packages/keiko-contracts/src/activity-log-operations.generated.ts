@@ -28243,7 +28243,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["expired", "invalid-record", "retention"],
+        values: ["expired", "invalid-record", "retention", "ttl-shortened"],
       },
       removalStatus: {
         type: "string",

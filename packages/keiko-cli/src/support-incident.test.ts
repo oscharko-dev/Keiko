@@ -3,12 +3,14 @@ import { resetServerLogFailureNotices } from "../../../tests/support/activity-lo
 // pinned window, the public/private projections the CLI prints, and the report/dismiss actions,
 // all through the production server module (no mocks of the store or the analyzer).
 
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activityLogOperationSchema,
+  SUPPORT_INCIDENT_TTL_MS,
+  supportIncidentFileName,
   attachActivityLogEventRegistration,
   type SupportIncidentPrivateProjection,
   type SupportIncidentPublicProjection,
@@ -124,6 +126,32 @@ describe("keiko support incident", () => {
     expect(parsed.status).toBe("created");
     return parsed.incidentId;
   }
+
+  it("shows a historical record's effective expiry without rewriting its raw 336h deadline", async () => {
+    const id = await reportIncident();
+    const path = join(stateDir, "support-incidents", supportIncidentFileName(id));
+    const original = JSON.parse(readFileSync(path, "utf8")) as SupportIncidentRecord;
+    const legacy = { ...original, expiresAtMs: original.createdAtMs + 336 * 60 * 60_000 };
+    const raw = `${JSON.stringify(legacy)}\n`;
+    writeFileSync(path, raw, { mode: 0o600 });
+    const human = await run(["list", "--state-dir", stateDir]);
+    expect(human.code).toBe(0);
+    expect(human.out).toContain(
+      new Date(legacy.createdAtMs + SUPPORT_INCIDENT_TTL_MS).toISOString(),
+    );
+    expect(human.out).not.toContain(new Date(legacy.expiresAtMs).toISOString());
+    const listed = await run(["list", "--state-dir", stateDir, "--json"]);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.out)).toMatchObject({
+      incidents: [{ incidentId: id, expiresAtMs: legacy.createdAtMs + SUPPORT_INCIDENT_TTL_MS }],
+    });
+    const shown = await run(["show", id, "--state-dir", stateDir, "--json"]);
+    expect(shown.code).toBe(0);
+    expect(JSON.parse(shown.out)).toMatchObject({
+      expiresAtMs: legacy.createdAtMs + SUPPORT_INCIDENT_TTL_MS,
+    });
+    expect(readFileSync(path, "utf8")).toBe(raw);
+  });
 
   it("records a user report that resolves insufficient with a closed instrumentation-gap reason", async () => {
     const incidentId = await reportIncident();

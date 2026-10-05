@@ -29,6 +29,7 @@ import {
   recordRegisteredFailureIncident,
   setSupportIncidentTriggerForTests,
   completePreparedSupportIncident,
+  readSupportIncident,
   dismissSupportIncident,
   drainSupportIncidentCandidates,
 } from "./support-incident.js";
@@ -43,6 +44,8 @@ import {
   MAX_ACTIVITY_LOG_PINS,
   listActivityLogDirectory,
   readActivityLogPolicyRecord,
+  readActivityLogPins,
+  writeActivityLogPinRecord,
   writeActivityLogPolicyRecord,
 } from "./activity-log-store.js";
 import * as incidentStore from "./support-incident-store.js";
@@ -58,6 +61,7 @@ import {
   supportIncidentSlotClaimFileName,
   supportIncidentFingerprintClaimFileName,
   ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
+  SUPPORT_INCIDENT_TTL_MS,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -158,6 +162,77 @@ function persistFreshFailure(): void {
 }
 
 describe("rolling diagnostic candidate retention", () => {
+  it.each([
+    ["list", "manual"],
+    ["admission", "manual"],
+    ["list", "registered"],
+    ["admission", "registered"],
+  ] as const)(
+    "shortens an immutable historical 336h record and pin at 24h during %s for %s",
+    (action, trigger) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const created =
+        trigger === "manual"
+          ? recordUserReportedIncident(stateDir, { correlationId: "historical-expiry" })
+          : recordRegisteredFailureIncident(stateDir, {
+              op: "coding-runtime.readiness.failed",
+              errorKind: "unavailable",
+              correlationId: "historical-expiry",
+            });
+      if (created?.status !== "created") throw new Error("Expected candidate");
+      const legacy = {
+        ...created.record,
+        expiresAtMs: created.record.createdAtMs + 336 * 60 * 60_000,
+      };
+      const directory = incidentStore.supportIncidentDirectory(stateDir);
+      const payload = incidentStore.serializeSupportIncidentRecord(legacy);
+      if (payload === undefined) throw new Error("Expected historical record payload");
+      incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
+      incidentStore.writeSupportIncidentRecord(directory, payload, legacy.incidentId);
+      const logDirectory = join(stateDir, "logs");
+      const pin = readActivityLogPins(listActivityLogDirectory(logDirectory), logDirectory)[0];
+      if (pin?.record === undefined) throw new Error("Expected produced pin");
+      rmSync(pin.entry.path);
+      writeActivityLogPinRecord(logDirectory, logDirectory, {
+        ...pin.record,
+        expiresAtMs: legacy.expiresAtMs,
+      });
+      now.mockReturnValue(legacy.createdAtMs + 23 * 60 * 60_000);
+      expect(readSupportIncident(stateDir, legacy.incidentId)).toEqual(legacy);
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([legacy]);
+      expect(readFileSync(join(directory, supportIncidentFileName(legacy.incidentId)))).toEqual(
+        payload,
+      );
+      now.mockReturnValue(legacy.createdAtMs + SUPPORT_INCIDENT_TTL_MS);
+      expect(readSupportIncident(stateDir, legacy.incidentId)).toBeUndefined();
+      if (action === "admission")
+        expect(recordUserReportedIncident(stateDir).status).toBe("created");
+      else expect(listSupportIncidents(stateDir)).toEqual([]);
+      expect(
+        listSupportIncidentClaims(stateDir).some((claim) => claim.incidentId === legacy.incidentId),
+      ).toBe(false);
+      expect(
+        listActivityLogDirectory(logDirectory).pins.some(
+          (entry) => entry.pinId === legacy.pin.pinId,
+        ),
+      ).toBe(false);
+      expect(existsSync(join(directory, supportIncidentFileName(legacy.incidentId)))).toBe(false);
+      const ended = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.expired",
+      );
+      expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({
+          correlationId: "historical-expiry",
+          expiryReason: "ttl-shortened",
+          removalStatus: "removed",
+          pinRelease: "released",
+          completeness: "complete",
+        }),
+      );
+    },
+  );
+
   it.each(["dismissal", "expiry"] as const)(
     "treats an already released owned pin as complete during %s",
     (action) => {

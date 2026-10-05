@@ -6,6 +6,7 @@ import { ACTIVITY_LOG_FAILURE_SURFACES } from "./activity-log-registry.generated
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
+  SUPPORT_INCIDENT_TTL_MS,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   defectFingerprintPreimage,
   isSupportIncidentSurface,
@@ -380,6 +381,24 @@ describe("the closed record schema", () => {
 });
 
 describe("public and private projections", () => {
+  it("projects the effective expiry of an immutable historical fourteen-day incident", () => {
+    const original = incident();
+    const legacy = { ...original, expiresAtMs: original.createdAtMs + 336 * 60 * 60_000 };
+    expect(
+      parseSupportIncidentRecord({ ...record(), expiresAtMs: legacy.expiresAtMs }),
+    ).toBeDefined();
+    const raw = JSON.stringify(legacy);
+    expect(supportIncidentPrivateProjection(legacy).expiresAtMs).toBe(
+      legacy.createdAtMs + SUPPORT_INCIDENT_TTL_MS,
+    );
+    expect(JSON.stringify(legacy)).toBe(raw);
+  });
+
+  it("does not extend an earlier explicit expiry in the private projection", () => {
+    const original = incident();
+    expect(supportIncidentPrivateProjection(original).expiresAtMs).toBe(original.expiresAtMs);
+  });
+
   it("makes the public projection a strict subset of the private one", () => {
     const publicView = supportIncidentPublicProjection(incident());
     const privateView = supportIncidentPrivateProjection(incident());

@@ -14,6 +14,7 @@
 
 import {
   isSupportIncidentId,
+  supportIncidentEffectiveExpiry,
   supportIncidentPrivateProjection,
   supportIncidentPublicProjection,
   type SupportIncident,
@@ -133,7 +134,7 @@ function renderRecordLine(record: SupportIncidentRecord): string {
     record.fingerprint.errorKind,
     `fingerprint=${record.fingerprint.defectFingerprint.slice(0, 12)}`,
     `pin=${record.pin.status}`,
-    `expires=${new Date(record.expiresAtMs).toISOString()}`,
+    `expires=${new Date(supportIncidentEffectiveExpiry(record)).toISOString()}`,
   ].join("  ");
 }
 
@@ -175,7 +176,13 @@ function printJson(io: CliIo, value: unknown): void {
 
 function runList(context: IncidentContext): number {
   const records = context.activityLog.listSupportIncidents(context.stateDir);
-  if (context.json) printJson(context.io, { incidents: records });
+  if (context.json)
+    printJson(context.io, {
+      incidents: records.map((record) => ({
+        ...record,
+        expiresAtMs: supportIncidentEffectiveExpiry(record),
+      })),
+    });
   else context.io.out(renderSupportIncidentList(records));
   return 0;
 }
