@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import * as clientDiagnostics from "@/lib/client-diagnostics";
 import { ApiError } from "@/lib/api";
+import { I18nProvider } from "@/lib/i18n";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import {
   createSupportReport,
@@ -27,10 +28,73 @@ const local = {
   report: { fileName: "report.json", reportJson: "{}", evidenceScope: "client-only" as const },
   download: { href: "blob:offline-report", fileName: "report.json.gz", dispose: vi.fn() },
 };
+const READY_COPY = {
+  en: {
+    create: "Create error report",
+    download: "Download report",
+    server: "Report ready. Download it and send it to support.",
+    "client-only": "Limited report ready (server diagnostics unavailable).",
+    expired: "Download link expired. Regenerate this report.",
+    failed: "Report unavailable. Try again.",
+    unavailable: "Report unavailable. Check that Keiko is running locally, then retry.",
+  },
+  de: {
+    create: "Fehlerbericht erstellen",
+    download: "Bericht herunterladen",
+    server: "Bericht bereit. Lade ihn herunter und sende ihn an den Support.",
+    "client-only": "Eingeschränkter Bericht bereit (Serverdiagnosen fehlen).",
+    expired: "Der Download-Link ist abgelaufen. Bericht erneut erstellen.",
+    failed: "Bericht nicht verfügbar. Erneut versuchen.",
+    unavailable: "Bericht nicht verfügbar. Prüfen, ob Keiko lokal läuft, dann erneut versuchen.",
+  },
+} as const;
+
+function expectReadyCopy(locale: "en" | "de", scope: "server" | "client-only"): void {
+  const copy = READY_COPY[locale];
+  expect(screen.getByRole("status").textContent).toBe(copy[scope]);
+  expect(screen.queryByText(copy[scope === "server" ? "client-only" : "server"])).toBeNull();
+  for (const forbidden of [copy.expired, copy.failed, copy.unavailable]) {
+    expect(screen.queryByText(forbidden)).toBeNull();
+  }
+}
+
 afterEach(() => {
   resetSupportReportOutcomesForTests();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  window.localStorage.removeItem("keiko.locale");
+});
+
+it.each([
+  ["en", "server"],
+  ["de", "server"],
+  ["en", "client-only"],
+  ["de", "client-only"],
+] as const)("pins the exact %s ready copy for %s evidence", async (locale, scope) => {
+  window.localStorage.setItem("keiko.locale", locale);
+  if (scope === "client-only") {
+    vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+    vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  } else {
+    vi.mocked(createSupportReport).mockResolvedValueOnce({
+      fileName: "full.json",
+      reportJson: "{}",
+    });
+    vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+      href: "/api/prepared-full",
+      dispose: vi.fn(),
+    });
+  }
+  render(
+    <I18nProvider>
+      <SupportReportButton correlationId={`ready-copy-${locale}-${scope}`} />
+    </I18nProvider>,
+  );
+  await userEvent.click(await screen.findByRole("button", { name: READY_COPY[locale].create }));
+  const link = await screen.findByRole("link", { name: READY_COPY[locale].download });
+  expectReadyCopy(locale, scope);
+  await userEvent.click(link);
+  expectReadyCopy(locale, scope);
 });
 
 it("reuses full canonical bytes locally after an attachment expires and the server goes offline", async () => {
@@ -96,7 +160,7 @@ it("reuses full canonical bytes locally after an attachment expires and the serv
       reportDigest: report.summary.reportDigest,
     },
   });
-  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expectReadyCopy("en", "server");
 });
 
 it.each([new TypeError("private network failure"), new ApiError("INTERNAL", "private", 502)])(
@@ -115,7 +179,7 @@ it.each([new TypeError("private network failure"), new ApiError("INTERNAL", "pri
       correlationId: "original-offline-error",
       supportReportDelivery: { mode: "manual", source: "browser", evidenceScope: "client-only" },
     });
-    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expectReadyCopy("en", "client-only");
     expect(screen.queryByText(/private/u)).toBeNull();
     expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
       correlationId: "original-offline-error",
@@ -180,7 +244,7 @@ it("passes the original error correlation and safe class to the offline producer
       context: [],
     },
   });
-  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expectReadyCopy("en", "client-only");
 });
 
 it("preserves the normal Chat string Support-ID and its known BAD_REQUEST classification", async () => {
