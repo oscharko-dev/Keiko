@@ -2544,12 +2544,14 @@ async function prepareGroundedMemory(
 function groundedScopeRefusal(
   admitted: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-  reason: "scope-identity-mismatch" | "grounding-mode-changed",
+  reason: "scope-identity-mismatch" | "grounding-mode-changed" | "scope-changed-during-answer",
 ): RouteResult {
-  const message =
-    reason === "scope-identity-mismatch"
-      ? "The grounded source scope changed before the turn could run."
-      : "The chat grounding mode changed before the turn could run.";
+  const message = {
+    "scope-identity-mismatch": "The grounded source scope changed before the turn could run.",
+    "grounding-mode-changed": "The chat grounding mode changed before the turn could run.",
+    "scope-changed-during-answer":
+      "The grounded source scope changed while the answer was in progress.",
+  }[reason];
   logChatRejection(
     "chat.send.rejected",
     admitted.correlationId,
@@ -2568,10 +2570,11 @@ function groundedScopeRefusal(
     }),
     errorClass: "invalid-request",
     httpStatus: 409,
+    diagnosticOutcome: "request-refused",
   });
   return settleGroundedChatTurn(admitted, deps, {
     status: 409,
-    body: errorBody("GROUNDING_SCOPE_CHANGED", message),
+    body: errorBody("GROUNDING_SCOPE_CHANGED", message, admitted.correlationId),
   });
 }
 
@@ -2764,14 +2767,7 @@ function settleGroundedChatTurn(
   }
   if (!groundedScopeStillCurrent(prepared, deps)) {
     discardGroundedTurn(result.body.assistantMessageId);
-    deps.store.failChatTurn(prepared.chat.id, commitTurnId);
-    return {
-      status: 409,
-      body: errorBody(
-        "GROUNDING_SCOPE_CHANGED",
-        "The grounded source scope changed while the answer was in progress.",
-      ),
-    };
+    return groundedScopeRefusal(prepared, deps, "scope-changed-during-answer");
   }
   if (
     result.body.memory !== undefined ||

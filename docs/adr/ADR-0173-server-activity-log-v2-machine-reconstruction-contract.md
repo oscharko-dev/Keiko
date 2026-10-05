@@ -605,7 +605,11 @@ projection retains these closed fields on the existing Activity Log timeline.
 The `grounded-pack-validation` diagnostic carries closed `validationReasons`, `violationCount`,
 `validatorThrew`, sanitized `originalCode`, optional `sourceIndex`, and `diagnosticOutcome`.
 `source-skipped` is a warning preserving independent healthy sources; `request-failed` retains the
-failure status. `search.connected-context.completion-details` separates scope-context state,
+failure status. Expected stale-scope refusals before admission or after generation use
+`request-refused` at warning level and return the same correlation identifier in their 409 response.
+They retain rejection and diagnostic evidence without automatically allocating an incident or pin;
+an explicit report action can still select and export their cause.
+`search.connected-context.completion-details` separates scope-context state,
 observed/retained files and charged/capacity bytes; excerpt omitted ranges, truncated windows,
 unread files and stop reasons; and metadata observed, retained and discarded counts. These are
 phase measurements, not a claim that every discovered file reached the model.
@@ -1331,9 +1335,13 @@ request":
   without making another provider call. Both successful and failed probes remain traceable from create, send and
   regeneration requests. Assistant-response links accept only validated correlation identities;
   malformed response bodies and invalid identities produce no fabricated link.
-  Known browser prerequisite failures use closed structured fields: a Git-sync validator chunk
-  failure records `moduleLoadFailure: git-sync` before any Git request, with a fresh correlation ID
-  shared by the UI error and diagnostic. Markdown layout evidence may carry a separately validated,
+  Known browser prerequisite failures use closed structured fields. Git validators record
+  `moduleLoadFailure: git-read`, `git-history`, or `git-sync` before any Git request, preserving the
+  caller's correlation ID or minting one shared by the UI error and diagnostic. Optional widget
+  catalog failures record `widget-locale`, `unavailable`, and one correlation ID per shared import
+  attempt. Failed catalogs retain the English fallback and defer further consumer-triggered imports
+  for five seconds on the monotonic clock; no background retry is scheduled. Markdown layout
+  evidence may carry a separately validated,
   bounded opaque `messageId`; Coding Workbench uses its run ID as the diagnostic correlation so
   provider message IDs shorter than the correlation minimum remain joinable. Native recorder
   errors retain their cause in memory; browser failure reports may also carry a closed error class,

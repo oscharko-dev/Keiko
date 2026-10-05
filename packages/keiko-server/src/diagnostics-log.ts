@@ -58,7 +58,7 @@ export const PACK_VALIDATION_REASONS = [
 ] as const;
 export type PackValidationReason = (typeof PACK_VALIDATION_REASONS)[number];
 const PACK_VALIDATION_REASON_SET: ReadonlySet<string> = new Set(PACK_VALIDATION_REASONS);
-const DIAGNOSTIC_OUTCOMES = ["request-failed", "source-skipped"] as const;
+const DIAGNOSTIC_OUTCOMES = ["request-failed", "source-skipped", "request-refused"] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -523,7 +523,11 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
   return activityLogEvent(
     SERVER_DIAGNOSTIC_FAILURE_OPERATION,
     {
-      level: record.diagnosticOutcome === "source-skipped" ? "warn" : "error",
+      level:
+        record.diagnosticOutcome === "source-skipped" ||
+        record.diagnosticOutcome === "request-refused"
+          ? "warn"
+          : "error",
       correlationId: record.correlationId,
       errorKind: closedDiagnosticErrorKind(record.errorClass),
     },
@@ -947,10 +951,7 @@ function diagnosticValidationFields(
   record: ServerDiagnosticRecord,
 ): Partial<ServerDiagnosticRecord> {
   return {
-    diagnosticOutcome:
-      record.diagnosticOutcome === "source-skipped" || record.diagnosticOutcome === "request-failed"
-        ? record.diagnosticOutcome
-        : undefined,
+    diagnosticOutcome: DIAGNOSTIC_OUTCOMES.find((outcome) => outcome === record.diagnosticOutcome),
     validationReasons: validationReasons(record.validationReasons),
     violationCount: validationCount(record.violationCount),
     validatorThrew: typeof record.validatorThrew === "boolean" ? record.validatorThrew : undefined,

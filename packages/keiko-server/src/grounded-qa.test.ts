@@ -4,6 +4,7 @@ import {
   occupySupportIncidentRetentionForTests,
   supportIncidentReservationsForTests,
   setSupportIncidentTriggerForTests,
+  drainSupportIncidentCandidates,
 } from "../../../tests/support/activity-log-test-support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -2332,26 +2333,57 @@ describe("handleGroundedAsk", () => {
     const { chatId } = await setupChatWithScope();
     const started = deferred<undefined>();
     const answer = deferred<OrchestratorOutput>();
-    const outcome = handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "scope-sensitive request" })),
-      deps(),
-      () => {
-        started.resolve(undefined);
-        return answer.promise;
-      },
-    );
-    await started.promise;
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    try {
+      const outcome = handleGroundedAsk(
+        {
+          ...ctx(JSON.stringify({ chatId, content: "scope-sensitive request" })),
+          correlationId: "scope-changed-during-answer",
+        },
+        deps(undefined, {}, { diagnostics: { record: (record) => diagnostics.push(record) } }),
+        () => {
+          started.resolve(undefined);
+          return answer.promise;
+        },
+      );
+      await started.promise;
 
-    store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
-    answer.resolve({ pack: emptyPack(), assistantContent: "stale scoped answer", elapsedMs: 1 });
+      store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+      answer.resolve({ pack: emptyPack(), assistantContent: "stale scoped answer", elapsedMs: 1 });
 
-    await expect(outcome).resolves.toMatchObject({
-      status: 409,
-      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
-    });
-    expect(store.listMessages(chatId)).toMatchObject([
-      { role: "user", content: "scope-sensitive request" },
-    ]);
+      await expect(outcome).resolves.toMatchObject({
+        status: 409,
+        body: {
+          error: { code: "GROUNDING_SCOPE_CHANGED", correlationId: "scope-changed-during-answer" },
+        },
+      });
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", content: "scope-sensitive request" },
+      ]);
+      expect(diagnostics).toMatchObject([
+        {
+          correlationId: "scope-changed-during-answer",
+          source: "grounded.qa.scope-changed-during-answer",
+          code: "GROUNDING_SCOPE_CHANGED",
+          diagnosticOutcome: "request-refused",
+          httpStatus: 409,
+        },
+      ]);
+      expect(activityLog.events.filter((event) => event.op === "chat.send.rejected")).toMatchObject(
+        [
+          {
+            level: "warn",
+            correlationId: "scope-changed-during-answer",
+            status: 409,
+            extra: { reason: "grounding-scope" },
+          },
+        ],
+      );
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it.each(["scope-identity-mismatch", "grounding-mode-changed"] as const)(
@@ -2390,7 +2422,9 @@ describe("handleGroundedAsk", () => {
       );
       expect(result).toMatchObject({
         status: 409,
-        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+        body: {
+          error: { code: "GROUNDING_SCOPE_CHANGED", correlationId: "scope-refusal-correlation" },
+        },
       });
       const persistedMessages = store.listMessages(chatId);
       expect(persistedMessages).toMatchObject([{ role: "user", turnState: "failed" }]);
@@ -2404,6 +2438,7 @@ describe("handleGroundedAsk", () => {
         code: "GROUNDING_SCOPE_CHANGED",
         httpStatus: 409,
         errorClass: "invalid-request",
+        diagnosticOutcome: "request-refused",
       });
       expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
       for (const canary of ["private-scope-refusal-canary", tmp, capturedIdentity])
@@ -2424,6 +2459,7 @@ describe("handleGroundedAsk", () => {
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
+      setSupportIncidentTriggerForTests(true);
       const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
       const result = await handleGroundedAsk(
         {
@@ -2441,6 +2477,11 @@ describe("handleGroundedAsk", () => {
       );
       expect(result.status).toBe(409);
       expect(scopedRunner).not.toHaveBeenCalled();
+      drainSupportIncidentCandidates();
+      expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+        retainedIds,
+      );
+      expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
       closeFileServerLogSinks();
       const response = await runSupportReportJob(stateDir, correlationId);
       const report = parseSupportReport(response.reportJson);
@@ -2454,7 +2495,13 @@ describe("handleGroundedAsk", () => {
       expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
       expect(analyzed.selection.status).toBe("complete");
       const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
-      for (const field of ['"reason":"grounding-scope"', '"httpStatus":409', '"frames":['])
+      for (const field of [
+        '"reason":"grounding-scope"',
+        '"httpStatus":409',
+        '"diagnosticOutcome":"request-refused"',
+        '"level":"warn"',
+        '"frames":[',
+      ])
         expect(evidence).toContain(field);
       for (const canary of [
         "private-scope-report-canary",
@@ -2467,6 +2514,7 @@ describe("handleGroundedAsk", () => {
         retainedIds,
       );
     } finally {
+      setSupportIncidentTriggerForTests(undefined);
       stderr.mockRestore();
       vi.unstubAllEnvs();
       closeFileServerLogSinks();
