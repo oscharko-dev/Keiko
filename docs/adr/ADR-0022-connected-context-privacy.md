@@ -206,9 +206,19 @@ Definition-line lookup inspects every retained symbol candidate sequentially wit
 Located symbol lines use the existing definition priority for atom and excerpt-window selection;
 requested definitions consume their per-file byte share before unrelated file headers. File-level
 matches without a located line retain ordinary priority and the existing header fallback.
-For direct definition lookups, a located definition replaces its same-query, same-path generic
-filename-discovery header before source reads. Overview headers, independently matched ranges,
-and discovery from other queries remain eligible; actual excerpt truncation remains reported.
+For requested definitions, a located definition replaces its same-query, same-path generic
+filename-discovery header before source reads, including contextual requests. Overview headers,
+independently matched ranges, and discovery from other queries remain eligible; actual excerpt
+truncation remains reported. Mandatory named-definition discovery runs once before optional graph
+work and reuses its result during assembly. Verification scans retained lexical candidate paths
+and filename candidates with one guarded source decode per file, sharing the existing structural
+source lexer across requested targets. Comments, string data, and unsupported source syntax cannot
+certify declarations. Canonical requested targets cover the full bounded query independently of
+the planner's eight ranking hints. Explicit anchor intake limits remain honored; omitted original
+technical or quoted targets prevent declaration certification. Optional graph work may be skipped
+only when every requested technical target has a verified declaration and the primary traversal is complete, or its sole limitation
+is retained-match clipping. Related semantic context remains eligible; this choice never asserts
+answer completeness or removes actual clipping, unreadable-source, or interrupted-scan evidence.
 Default Chat queries share the lexical ring's finite retained-result capacity, derived from the
 accepted excerpt-byte and model-input-token budgets rather than a fixed independent file count.
 Retention uses a worst-first heap, preserving deterministic ordering without linear insertion

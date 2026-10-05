@@ -274,7 +274,11 @@ function hasQueryTerm(text: string, terms: ReadonlySet<string>): boolean {
 }
 
 function hasHistoryQuery(text: string): boolean {
-  return hasQueryTerm(text, HISTORY_QUERY_TERMS);
+  return [...queryContextOutsideQuotes(text).toLowerCase().matchAll(QUERY_TERM_RE)].some(
+    (match) =>
+      HISTORY_QUERY_TERMS.has(match[0]) ||
+      /^histor(?:ical(?:ly)?|isch(?:e[nmrs]?)?)$/u.test(match[0]),
+  );
 }
 
 function hasDefinitionLookup(text: string): boolean {
@@ -420,9 +424,20 @@ function isFactClause(words: readonly string[]): boolean {
   const clause = words.join(" ");
   return (
     isDefinitionClause(words) ||
+    isCompoundDefinitionFact(words) ||
     ENGLISH_VALUE_REQUEST_RE.test(clause) ||
     GERMAN_VALUE_REQUEST_RE.test(clause) ||
     GERMAN_INFORMATION_REQUEST_RE.test(clause)
+  );
+}
+
+function isCompoundDefinitionFact(words: readonly string[]): boolean {
+  const separator = words.lastIndexOf("and");
+  if (separator < 0 || !isDefinitionClause(words.slice(0, separator))) return false;
+  const returnedValue = words.slice(separator + 1).join(" ");
+  return (
+    /^what values? do (?:they|\0(?: and \0)*) return$/iu.test(returnedValue) ||
+    /^what does \0 return$/iu.test(returnedValue)
   );
 }
 
@@ -464,8 +479,11 @@ function definitionTarget(
 export function resolveQueryTargetDecision(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
+  maxTargets = query.text.length,
 ): QueryTargetDecision {
-  const strongTargets = requestContentTargets(query, anchors);
+  // Routing hints may be clipped; requested technical targets use the existing query envelope.
+  const requested = extractAnchors({ text: query.text, maxAnchors: maxTargets }).anchors;
+  const strongTargets = requestContentTargets(query, requested);
   const possibleTargets =
     strongTargets.length > 0
       ? strongTargets
@@ -524,7 +542,12 @@ export function directDefinitionSymbol(
   anchors: readonly SearchAnchor[],
   decision = resolveQueryTargetDecision(query, anchors),
 ): string | undefined {
-  return decision.definitionSymbol;
+  const symbol = decision.definitionSymbol;
+  return anchors.some(
+    (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term === symbol,
+  )
+    ? symbol
+    : undefined;
 }
 
 function composeRings(
@@ -694,7 +717,11 @@ export function createExplorationPlan(
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
-  const targetDecision = resolveQueryTargetDecision(input.query, extraction.anchors);
+  const targetDecision = resolveQueryTargetDecision(
+    input.query,
+    extraction.anchors,
+    input.maxAnchors,
+  );
   const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
   const rings =
     decision.state === "ready"

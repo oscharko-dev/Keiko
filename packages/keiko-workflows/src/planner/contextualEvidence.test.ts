@@ -6,6 +6,7 @@ import {
   isDirectEvidenceLookup,
   requiresContextualEvidence,
   resolveQueryTargetDecision,
+  requiresRelationshipOrHistoryRings,
 } from "./plan.js";
 
 function query(text: string): RetrievalQuery {
@@ -16,6 +17,42 @@ function anchors(text: string): ReturnType<typeof extractAnchors>["anchors"] {
 }
 
 describe("contextual evidence query shape", () => {
+  it.each([
+    "Where was RetryWorker historically defined?",
+    "Show the historical implementation of RetryWorker.",
+    "Wo war RetryWorker historisch definiert?",
+    "Zeige die historischen Definitionen von RetryWorker.",
+  ])("retains history intent across ordinary word forms: %s", (text) => {
+    expect(requiresRelationshipOrHistoryRings(query(text))).toBe(true);
+    expect(isDirectEvidenceLookup(query(text), anchors(text))).toBe(false);
+  });
+  it.each([
+    'Find the exact literal "historically".',
+    'Find the exact literal "historische Definition".',
+  ])("does not mistake quoted historical data for history work: %s", (text) => {
+    expect(requiresRelationshipOrHistoryRings(query(text))).toBe(false);
+    expect(resolveQueryTargetDecision(query(text), anchors(text)).kind).toBe("literal-search");
+  });
+  it.each([
+    "Where are WindowFrame and ChatPanel implemented, and what values do they return?",
+    "Where are InvoicePolicy and ParcelService defined and what value do they return?",
+    "Where is RetryWorker implemented and what does RetryWorker return?",
+  ])("fully parses compound definition and returned-value facts: %s", (text) => {
+    expect(resolveQueryTargetDecision(query(text), anchors(text)).kind).toBe("direct-fact");
+    expect(isDirectEvidenceLookup(query(text), anchors(text))).toBe(true);
+  });
+
+  it.each([
+    "Where are InvoicePolicy and ParcelService defined and what value do they return to avoid errors?",
+    "Where are InvoicePolicy and ParcelService defined and what values do they return? Explain why.",
+    "Where are InvoicePolicy and ParcelService defined and how do they invoke RetryWorker?",
+    "Where are InvoicePolicy and ParcelService defined and why does InvoicePolicy fail?",
+    "Where are InvoicePolicy and ParcelService defined and what are their historical values?",
+  ])("keeps unparsed contextual dimensions after compound facts: %s", (text) => {
+    expect(resolveQueryTargetDecision(query(text), anchors(text)).kind).toBe("contextual");
+    expect(isDirectEvidenceLookup(query(text), anchors(text))).toBe(false);
+  });
+
   it.each([
     "Why does implementation of RetryWorker fail?",
     "Why does the declaration of RetryWorker cause an exception?",
@@ -55,7 +92,7 @@ describe("contextual evidence query shape", () => {
 
   it("cannot authorize a complete literal command from a truncated target set", () => {
     const text = 'Find "First concept" and "Second concept".';
-    expect(resolveQueryTargetDecision(query(text), anchors(text).slice(0, 1)).kind).toBe(
+    expect(resolveQueryTargetDecision(query(text), anchors(text).slice(0, 1), 1).kind).toBe(
       "contextual",
     );
   });

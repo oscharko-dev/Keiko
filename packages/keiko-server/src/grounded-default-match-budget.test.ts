@@ -65,7 +65,8 @@ afterEach((): void => {
 describe("default connected-folder retained matches", () => {
   it("retains all ninety-six definitions when the actual evidence and prompt budgets fit", async (): Promise<void> => {
     const { pack, plan } = await retrieve();
-    expect(plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+    expect(plan.targetDecision?.kind).toBe("contextual");
+    expect(plan.rings[0]?.kind).toBe("lexical");
     expect(pack.files).toHaveLength(96);
     expect(pack.diagnostics?.coverage).toMatchObject({
       filesDiscovered: 96,

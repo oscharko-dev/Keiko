@@ -33,6 +33,7 @@ import {
   type SelectedScope,
   type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import * as workspace from "@oscharko-dev/keiko-workspace";
 import {
   gitHistoryAdapter,
   symbolGraphAdapter,
@@ -83,6 +84,7 @@ import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evid
 
 const NOW = 1_700_000_000_000;
 const listingGuardPhase = new AsyncLocalStorage<boolean>();
+const excerptReadPhase = new AsyncLocalStorage<boolean>();
 let ROOT = "";
 
 const echoAnswerer: GroundedAnswerer = {
@@ -498,7 +500,9 @@ interface FsOperationCounts {
 function countingNodeFs(): {
   readonly fs: WorkspaceFs;
   readonly counts: () => FsOperationCounts;
+  readonly excerptReads: () => { readonly readCalls: number; readonly contentReadBytes: number };
   readonly listingGuards: () => {
+    readonly contentReadBytes: number;
     readonly stat: number;
     readonly realPath: number;
     readonly readCalls: number;
@@ -517,6 +521,7 @@ function countingNodeFs(): {
   let listingGuardStats = 0;
   let listingGuardRealPaths = 0;
   let listingGuardReads = 0;
+  let listingGuardBytes = 0;
   let readDirCalls = 0;
   let unboundedReadDirCalls = 0;
   let streamedReadDirCalls = 0;
@@ -525,6 +530,13 @@ function countingNodeFs(): {
   let realPathCalls = 0;
   let existsCalls = 0;
   let contentReadBytes = 0;
+  let excerptReadCalls = 0;
+  let excerptReadBytes = 0;
+  const recordExcerptRead = (bytes: number): void => {
+    if (excerptReadPhase.getStore() !== true) return;
+    excerptReadCalls += 1;
+    excerptReadBytes += bytes;
+  };
   const descriptorUtf8 = nodeWorkspaceFs.readFileUtf8SameDescriptor;
   const containedDescriptorUtf8 = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
   const readFileBytes = nodeWorkspaceFs.readFileBytes;
@@ -538,6 +550,7 @@ function countingNodeFs(): {
         readFileUtf8Calls += 1;
         const value = nodeWorkspaceFs.readFileUtf8(absolutePath);
         contentReadBytes += Buffer.byteLength(value, "utf8");
+        recordExcerptRead(Buffer.byteLength(value, "utf8"));
         return value;
       },
       stat: (absolutePath): WorkspaceStat => {
@@ -586,6 +599,7 @@ function countingNodeFs(): {
               descriptorUtf8Calls += 1;
               const value = descriptorUtf8(absolutePath, maxBytes, hardLinkPolicy, expected);
               contentReadBytes += value.sizeBytes;
+              recordExcerptRead(value.sizeBytes);
               return value;
             },
           }),
@@ -608,6 +622,7 @@ function countingNodeFs(): {
                 completeness,
               );
               contentReadBytes += value.sizeBytes;
+              recordExcerptRead(value.sizeBytes);
               return value;
             },
           }),
@@ -623,7 +638,9 @@ function countingNodeFs(): {
               readFileBytesCalls += 1;
               if (listingGuardPhase.getStore() === true) listingGuardReads += 1;
               const value = await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
+              if (listingGuardPhase.getStore() === true) listingGuardBytes += value.byteLength;
               contentReadBytes += value.byteLength;
+              recordExcerptRead(value.byteLength);
               return value;
             },
           }),
@@ -639,6 +656,7 @@ function countingNodeFs(): {
               readFileUtf8PrefixCalls += 1;
               const value = readFileUtf8Prefix(absolutePath, maxBytes, hardLinkPolicy, expected);
               contentReadBytes += Buffer.byteLength(value, "utf8");
+              recordExcerptRead(Buffer.byteLength(value, "utf8"));
               return value;
             },
           }),
@@ -661,6 +679,7 @@ function countingNodeFs(): {
                 expected,
               );
               contentReadBytes += value.byteLength;
+              recordExcerptRead(value.byteLength);
               return value;
             },
           }),
@@ -685,13 +704,16 @@ function countingNodeFs(): {
                   readerReadRangeCalls += 1;
                   const value = await reader.readRange(startByte, length);
                   contentReadBytes += value.byteLength;
+                  recordExcerptRead(value.byteLength);
                   return value;
                 },
               };
             },
           }),
     },
+    excerptReads: () => ({ readCalls: excerptReadCalls, contentReadBytes: excerptReadBytes }),
     listingGuards: () => ({
+      contentReadBytes: listingGuardBytes,
       stat: listingGuardStats,
       realPath: listingGuardRealPaths,
       readCalls: listingGuardReads,
@@ -868,7 +890,9 @@ interface TraversalMeasurement {
   readonly packValid: boolean;
   readonly operations: FsOperationCounts;
   readonly excerptReadOperations: FsOperationCounts;
+  readonly actualExcerptReads: { readonly readCalls: number; readonly contentReadBytes: number };
   readonly listingGuardOperations: {
+    readonly contentReadBytes: number;
     readonly stat: number;
     readonly realPath: number;
     readonly readCalls: number;
@@ -978,6 +1002,12 @@ async function measureRetrievalTraversal(
       classifierCalls += 1;
       return listingGuardPhase.run(true, () => nativeClassification(...args));
     });
+  const nativeExcerpt = workspace.readExcerpt;
+  let excerptCalls = 0;
+  const excerpt = vi.spyOn(workspace, "readExcerpt").mockImplementation((...args) => {
+    excerptCalls += 1;
+    return excerptReadPhase.run(true, () => nativeExcerpt(...args));
+  });
   const out = await retrieveConnectedContextPack(
     input({
       workspaceRoot: fixtureRoot,
@@ -999,7 +1029,10 @@ async function measureRetrievalTraversal(
     },
   ).finally(() => {
     classification.mockRestore();
+    excerpt.mockRestore();
   });
+  expect(excerptCalls).toBeGreaterThan(0);
+  expect(counted.excerptReads().readCalls).toBeGreaterThan(0);
   expect(classifierCalls).toBeGreaterThan(0);
   expect(counted.listingGuards().readCalls).toBeGreaterThan(0);
   expect(counted.listingGuards().readCalls).toBeLessThanOrEqual(classifierCalls);
@@ -1030,6 +1063,7 @@ async function measureRetrievalTraversal(
     packValid: validateConnectedContextPack(out.pack).ok,
     operations: counted.counts(),
     excerptReadOperations: await measureAcceptedExcerptReads(fixtureRoot, out, completed?.extra),
+    actualExcerptReads: counted.excerptReads(),
     listingGuardOperations: { ...counted.listingGuards(), classifierCalls },
     workspaceIo: workspaceIoCounts(workspaceIo),
     searchCalls: out.pack.usage.searchCalls,
@@ -3833,12 +3867,24 @@ describe("runGroundedExploration", () => {
       16,
     );
     expect(multi.operations.exists).toBe(single.operations.exists);
+    // Delegated live excerpt reads (delta 42) and selected-file classification (delta 21)
+    // account for additional accepted evidence. The remaining 21 declaration reads stay
+    // within the original 32-read discovery allowance; no phase is inferred from file counts.
     expect(
       workspaceReadOperationCount(multi.operations) -
-        workspaceReadOperationCount(single.operations),
+        multi.actualExcerptReads.readCalls -
+        multi.listingGuardOperations.readCalls -
+        (workspaceReadOperationCount(single.operations) -
+          single.actualExcerptReads.readCalls -
+          single.listingGuardOperations.readCalls),
     ).toBeLessThanOrEqual(32);
     expect(
-      multi.operations.contentReadBytes - single.operations.contentReadBytes,
+      multi.operations.contentReadBytes -
+        multi.actualExcerptReads.contentReadBytes -
+        multi.listingGuardOperations.contentReadBytes -
+        (single.operations.contentReadBytes -
+          single.actualExcerptReads.contentReadBytes -
+          single.listingGuardOperations.contentReadBytes),
     ).toBeLessThanOrEqual(32 * multi.maxReadableFixtureFileBytes);
     // Replay the production excerpt-read phase for the actually selected files and ranges. Its
     // containment and identity checks scale with the accepted read budget, not discovery work.

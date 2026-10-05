@@ -56,6 +56,33 @@ function plan(
 }
 
 describe("createExplorationPlan", () => {
+  it("retains every requested technical target independently of the routing hint working set", () => {
+    const symbols = Array.from(
+      { length: 8 },
+      (_, index) => `TargetProbe${String.fromCharCode(65 + index)}`,
+    );
+    const result = plan({
+      query: happyQuery({
+        text: `Trace ${symbols.join(" ")} ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations`,
+      }),
+    });
+    expect(result.anchors).toHaveLength(8);
+    expect(result.targetDecision?.targets).toHaveLength(12);
+    expect(result.targetDecision?.targets.map((anchor) => anchor.term)).toEqual(
+      expect.arrayContaining(symbols.map((symbol) => symbol.toLowerCase())),
+    );
+  });
+
+  it("honors an explicit target intake limit without certifying the clipped direct request", () => {
+    const result = plan({
+      query: happyQuery({ text: "Where are FirstWorkerProbe and SecondWorkerProbe defined?" }),
+      maxAnchors: 1,
+    });
+    expect(result.anchors).toHaveLength(1);
+    expect(result.targetDecision?.targets).toHaveLength(1);
+    expect(result.targetDecision?.kind).toBe("contextual");
+    expect(result.targetDecision?.definitionSymbol).toBeUndefined();
+  });
   it.each([
     { excerptBytesMax: 1024, modelInputTokensMax: 4096 },
     { excerptBytesMax: 4096, modelInputTokensMax: 1024 },

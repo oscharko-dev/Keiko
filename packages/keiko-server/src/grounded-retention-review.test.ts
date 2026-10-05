@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
-import { buildQuery } from "./grounded-qa.js";
+import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
 
 let root = "";
 beforeEach((): void => {
@@ -61,11 +61,36 @@ describe("retained evidence review regressions", () => {
 
   it("does not expose rejected semantic-only candidates as current ranking evidence", async (): Promise<void> => {
     writeFileSync(join(root, "related.txt"), "DifferentPolicyProbe valuealpha\n");
-    const { pack } = await retrieve("Which values does AbsentPolicyProbe document?", {
+    const { pack } = await retrieve('Find the exact literal "AbsentPolicyProbe".', {
       name: "synthetic",
       search: () => Promise.resolve([{ scopePath: "related.txt", line: 1, score: 0.99 }]),
     });
     expect(pack.files).toEqual([]);
     expect(pack.diagnostics?.rankedCandidates).toEqual([]);
+  });
+
+  it("keeps contextual semantic evidence secondary when the named literal has no match", async (): Promise<void> => {
+    const question = "Which values does AbsentPolicyProbe document?";
+    writeFileSync(join(root, "related.txt"), "DifferentPolicyProbe valuealpha\n");
+    const { pack } = await retrieve(question, {
+      name: "synthetic",
+      search: () => Promise.resolve([{ scopePath: "related.txt", line: 1, score: 0.99 }]),
+    });
+    expect(pack.files.map((file) => file.scopePath)).toEqual(["related.txt"]);
+    expect(
+      pack.files
+        .flatMap((file) => file.excerpts)
+        .every((excerpt) => excerpt.atom.provenance.tool.startsWith("repo.semanticSearch:")),
+    ).toBe(true);
+    expect(pack.uncertainty).toContainEqual(
+      expect.objectContaining({
+        kind: "low-confidence",
+        claim:
+          "No verified exact content match for the requested target; retained semantic evidence provides related context only.",
+      }),
+    );
+    const prompt = JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value));
+    expect(prompt).toContain("Related semantic context (not verified as an exact literal match)");
+    expect(prompt).toContain("No verified exact content match for the requested target");
   });
 });

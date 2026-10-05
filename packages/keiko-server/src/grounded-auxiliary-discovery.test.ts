@@ -75,8 +75,10 @@ function expectMultiSymbolRouting(
   direct: boolean,
 ): void {
   expect(output.plan.targetDecision?.kind).toBe(direct ? "direct-fact" : "contextual");
-  expect(output.pack.usage.searchCalls).toBe(direct ? 2 : 11);
-  if (direct) expect(output.pack.uncertainty).toEqual([]);
+  // Both routes reuse verified declarations after the complete primary scan. Contextual
+  // classification preserves the question while avoiding unrequested optional graph work.
+  expect(output.pack.usage.searchCalls).toBe(2);
+  expect(output.pack.uncertainty).toEqual([]);
 }
 
 beforeAll(() => {

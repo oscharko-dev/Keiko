@@ -111,6 +111,9 @@ import {
   createEcosystemStructureAdapters,
   importGraphAdapter,
   runStructuralAdapters,
+  repositorySourceLines,
+  structuralLineLooksLikeSymbolDefinition,
+  type RepositorySourceLine,
   type StructuralAdapterRequestContext,
   type StructuralRequestContextDiagnostics,
   type StructuralAdapterRegistry,
@@ -709,6 +712,10 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface SearchInputs {
+  readonly discoverDefinitions: (
+    governor: GovernorState,
+    evidence: RingEvidenceAccumulator,
+  ) => Promise<DefinitionDiscoveryExecution>;
   readonly scopeContextBytesMax: number;
   readonly tryReserveAdditionalSearchCall?: (() => boolean) | undefined;
   readonly hasGitMetadata: boolean;
@@ -1664,17 +1671,24 @@ function primaryRankingAnchors(
   input: OrchestratorInput,
   plan: ExplorationPlan,
 ): readonly SearchAnchor[] {
-  const targets = primaryLexicalAnchors(
-    input.query,
-    plan.anchors,
-    plan.retrievalIntent,
-    plan.targetDecision,
+  const anchors = [
+    ...new Map(
+      [...plan.anchors, ...(plan.targetDecision?.targets ?? [])].map((anchor) => [
+        `${anchor.kind}:${anchor.term}`,
+        anchor,
+      ]),
+    ).values(),
+  ];
+  const targets = new Set(
+    primaryLexicalAnchors(input.query, anchors, plan.retrievalIntent, plan.targetDecision).map(
+      (anchor) => anchor.term,
+    ),
   );
-  return targets.length === 0 || requiresRelationshipOrHistoryRings(input.query)
-    ? plan.anchors
-    : plan.anchors.filter(
+  return targets.size === 0 || requiresRelationshipOrHistoryRings(input.query)
+    ? anchors
+    : anchors.filter(
         (anchor) =>
-          targets.includes(anchor) || anchor.kind !== "literal" || !/^\d+$/u.test(anchor.term),
+          targets.has(anchor.term) || anchor.kind !== "literal" || !/^\d+$/u.test(anchor.term),
       );
 }
 
@@ -1829,10 +1843,37 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
     atoms: result.atoms,
     primaryContentIdentities: certifiedLexicalContent(result, inputs),
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
-    uncertainty: coverageUncertainty(result, inputs.nowMs()),
+    uncertainty: [
+      ...coverageUncertainty(result, inputs.nowMs()),
+      ...missingPrimaryContextMarker(result, inputs),
+    ],
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
     diagnostics: toPackDiagnostics(result),
   };
+}
+
+function missingPrimaryContextMarker(
+  result: ContextSearchResult,
+  inputs: SearchInputs,
+): readonly UncertaintyMarker[] {
+  if (
+    inputs.targetDecision.kind !== "contextual" ||
+    anchoredLexicalTargets(inputs).length === 0 ||
+    !result.atoms.some((atom) => atom.provenance.tool.startsWith("repo.semanticSearch:")) ||
+    result.atoms.some(
+      (atom) => atom.provenance.tool === "repo.searchText" && atom.lineRange !== undefined,
+    )
+  )
+    return [];
+  return [
+    {
+      kind: "low-confidence",
+      claim:
+        "No verified exact content match for the requested target; retained semantic evidence provides related context only.",
+      impactedAtomIds: [],
+      emittedAtMs: inputs.nowMs(),
+    },
+  ];
 }
 
 function registryForRing(ring: NonLexicalRing): StructuralAdapterRegistry {
@@ -2037,6 +2078,8 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
+  readonly verifiedDefinitionContext?: boolean | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly decisions?: RingDecisionAudit | undefined;
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
@@ -2236,6 +2279,7 @@ function optionalRingSkipReason(
   evidence: RingEvidenceAccumulator,
 ): RingSkipReason | undefined {
   if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
+  if (evidence.verifiedDefinitionContext === true) return "verified-target-context";
   if (
     hasVerifiedTargetContext(inputs.query, inputs.targetDecision, inputs.retrievalIntent, evidence)
   )
@@ -2342,6 +2386,8 @@ async function runReservedRing(
 }
 
 interface RingEvidenceAccumulator {
+  symbolDiscovery?: SymbolDiscoveryResult;
+  verifiedDefinitionContext?: boolean;
   knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   atoms: EvidenceAtom[];
   omitted: OmittedContextEntry[];
@@ -2378,6 +2424,32 @@ function newRingDecisions(): RingDecisionAudit {
   };
 }
 
+function declarationCoverageAllowsVerification(
+  coverage: ContextCoverageDiagnostics | undefined,
+): boolean {
+  return (
+    coverage !== undefined &&
+    coverage.filesScanned === coverage.filesAfterPolicy &&
+    (!coverage.incomplete || onlyRetainedMatchesLimited(coverage)) &&
+    coverage.reasons.every((reason) => reason === "match-cap")
+  );
+}
+
+function shouldDiscoverDefinitionsBeforeGraphs(
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+): boolean {
+  return (
+    evidence.symbolDiscovery === undefined &&
+    inputs.targetDecision.kind === "contextual" &&
+    inputs.targetDecision.definitionRequested &&
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(inputs.query) &&
+    declarationCoverageAllowsVerification(evidence.diagnostics?.coverage) &&
+    certifiedContentPaths(evidence.atoms, evidence.primaryContentIdentities).size > 0
+  );
+}
+
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
@@ -2390,6 +2462,7 @@ async function runAllRings(
   const decisions = newRingDecisions();
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
+    governor = await discoverRequiredDefinitionsForRing(ring, inputs, evidence, governor);
     if (skipPlannedRing(ring, inputs, evidence, decisions)) {
       governor = advanceRing(governor);
       continue;
@@ -2420,6 +2493,23 @@ async function runAllRings(
     governor = complete(governor);
   }
   return { ...evidence, governor, decisions };
+}
+
+async function discoverRequiredDefinitionsForRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  evidence: RingEvidenceAccumulator,
+  governor: GovernorState,
+): Promise<GovernorState> {
+  if (ring.kind === "lexical" || !shouldDiscoverDefinitionsBeforeGraphs(inputs, evidence))
+    return governor;
+  const discovery = await inputs.discoverDefinitions(governor, evidence);
+  throwIfCancelled(inputs.signal);
+  evidence.symbolDiscovery = discovery.evidence;
+  evidence.verifiedDefinitionContext = discovery.verified;
+  for (const atom of discovery.evidence.atoms) evidence.atoms.push(atom);
+  for (const marker of discovery.evidence.uncertainty) evidence.uncertainty.push(marker);
+  return discovery.governor;
 }
 
 export interface ExcerptInputs {
@@ -3360,7 +3450,7 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
   }
   const terms: string[] = [];
   const seen = new Set<string>();
-  for (const anchor of plan.anchors) {
+  for (const anchor of [...(plan.targetDecision?.targets ?? []), ...plan.anchors]) {
     if ((anchor.kind !== "identifier" && anchor.kind !== "quoted") || anchor.weight < 0.7) {
       continue;
     }
@@ -3382,34 +3472,6 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
   return terms;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-}
-
-function symbolDefinitionPatterns(term: string): readonly RegExp[] {
-  const escaped = escapeRegex(term);
-  return [
-    new RegExp(String.raw`\b(?:export\s+)?(?:async\s+)?function\s+${escaped}\b`, "iu"),
-    new RegExp(String.raw`\b(?:export\s+)?(?:class|interface|type|enum)\s+${escaped}\b`, "iu"),
-    new RegExp(String.raw`\b(?:export\s+)?(?:const|let|var)\s+${escaped}\b`, "iu"),
-    new RegExp(
-      String.raw`\b(?:public\s+|private\s+|protected\s+|abstract\s+|final\s+|data\s+)*(?:class|interface|record|enum)\s+${escaped}\b`,
-      "iu",
-    ),
-    new RegExp(
-      String.raw`\b(?:public\s+|private\s+|protected\s+|static\s+|final\s+)*[A-Za-z_$][\w$<>, ?.[\]]+\s+${escaped}\s*\(`,
-      "iu",
-    ),
-    new RegExp(String.raw`\b(?:def|func|fn|fun)\s+${escaped}\s*\(`, "iu"),
-    new RegExp(String.raw`\btype\s+${escaped}\s+(?:struct|interface)\b`, "iu"),
-    new RegExp(String.raw`\b(?:struct|trait|enum|class)\s+${escaped}\b`, "iu"),
-  ];
-}
-
-function lineDefinesSymbol(line: string, patterns: readonly RegExp[]): boolean {
-  return patterns.some((pattern) => pattern.test(line));
-}
-
 interface SymbolLineScanControl {
   readonly signal: AbortSignal | undefined;
   readonly nowMs: () => number;
@@ -3419,10 +3481,22 @@ interface SymbolLineScanControl {
 interface SymbolLineLookupResult {
   readonly lineNumber: number | undefined;
   readonly deadlineReached: boolean;
+  readonly definitionMatch?: true;
 }
 
 function symbolLineDeadlineReached(control: SymbolLineScanControl): boolean {
   return control.nowMs() >= control.deadlineMs;
+}
+
+function sourceLineDefinesSymbol(
+  sourceLines: readonly RepositorySourceLine[] | undefined,
+  lineNumber: number,
+  term: string,
+): boolean {
+  const structural = sourceLines?.[lineNumber - 1]?.structural;
+  return (
+    structural !== undefined && structuralLineLooksLikeSymbolDefinition(structural, term, false)
+  );
 }
 
 // Exported only for deterministic cancellation/deadline regression coverage; this file is not a
@@ -3432,9 +3506,9 @@ export function scanFirstSymbolLine(
   rawText: string,
   term: string,
   control: SymbolLineScanControl,
+  sourceLines?: readonly RepositorySourceLine[],
 ): SymbolLineLookupResult {
   const loweredTerm = term.toLowerCase();
-  const definitionPatterns = symbolDefinitionPatterns(term);
   let firstOccurrence: number | undefined;
   let lineNumber = 1;
   let start = 0;
@@ -3445,8 +3519,8 @@ export function scanFirstSymbolLine(
     }
     const newline = rawText.indexOf("\n", start);
     const line = rawText.slice(start, newline < 0 ? rawText.length : newline);
-    if (lineDefinesSymbol(line, definitionPatterns)) {
-      return { lineNumber, deadlineReached: false };
+    if (sourceLineDefinesSymbol(sourceLines, lineNumber, term)) {
+      return { lineNumber, deadlineReached: false, definitionMatch: true };
     }
     if (firstOccurrence === undefined && line.toLowerCase().includes(loweredTerm)) {
       firstOccurrence = lineNumber;
@@ -3473,30 +3547,30 @@ function boundedSymbolFileText(fs: WorkspaceFs, absolutePath: string): string | 
     : undefined;
 }
 
-function firstSymbolLine(
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
+function symbolLinesForPath(
+  inputs: PrioritizedSymbolInputs,
   scopePath: string,
-  term: string,
+  terms: readonly string[],
   control: SymbolLineScanControl,
-): SymbolLineLookupResult {
+): ReadonlyMap<string, SymbolLineLookupResult> {
   throwIfCancelled(control.signal);
-  if (symbolLineDeadlineReached(control)) {
-    return { lineNumber: undefined, deadlineReached: true };
-  }
+  if (symbolLineDeadlineReached(control)) return new Map();
   try {
-    const contained = canonicalContainedSearchPath(searchScope, fs, scopePath);
-    if (contained === undefined) return { lineNumber: undefined, deadlineReached: false };
+    const contained = canonicalContainedSearchPath(inputs.searchScope, inputs.fs, scopePath);
     throwIfCancelled(control.signal);
-    if (symbolLineDeadlineReached(control)) {
-      return { lineNumber: undefined, deadlineReached: true };
-    }
-    const rawText = boundedSymbolFileText(fs, contained.path);
-    if (rawText === undefined) return { lineNumber: undefined, deadlineReached: false };
-    return scanFirstSymbolLine(rawText, term, control);
+    if (symbolLineDeadlineReached(control)) return new Map();
+    const text =
+      contained === undefined ? undefined : boundedSymbolFileText(inputs.fs, contained.path);
+    if (text === undefined) return new Map();
+    throwIfCancelled(control.signal);
+    if (symbolLineDeadlineReached(control)) return new Map();
+    const sourceLines = repositorySourceLines(text, scopePath);
+    return new Map(
+      terms.map((term) => [term, scanFirstSymbolLine(text, term, control, sourceLines)]),
+    );
   } catch (error) {
     if (error instanceof CancelledError) throw error;
-    return { lineNumber: undefined, deadlineReached: false };
+    return new Map();
   }
 }
 
@@ -3506,8 +3580,10 @@ function symbolLineAtom(
   lineNumber: number,
   queryFingerprint: string,
   nowMs: () => number,
+  definitionMatch = false,
 ): EvidenceAtom {
   const lineRange = { startLine: lineNumber, endLine: lineNumber };
+  const tool = definitionMatch ? "discovered-symbol-definition" : "repo.symbolFileDiscovery";
   return {
     schemaVersion: scope.schemaVersion,
     stableId: evidenceAtomStableId({
@@ -3515,7 +3591,7 @@ function symbolLineAtom(
       scopePath,
       lineRange,
       provenanceKind: "lexical-search",
-      provenanceTool: "repo.symbolFileDiscovery",
+      provenanceTool: tool,
       queryFingerprint,
     }),
     scopePath,
@@ -3523,7 +3599,7 @@ function symbolLineAtom(
     score: 1,
     provenance: {
       kind: "lexical-search",
-      tool: "repo.symbolFileDiscovery",
+      tool,
       queryFingerprint,
     },
     redactionState: "redacted",
@@ -3559,6 +3635,9 @@ interface SymbolDefinitionMatch {
 interface SymbolDiscoveryResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
+  readonly verifiedTerms?: ReadonlySet<string>;
+  readonly observedTerms?: ReadonlySet<string>;
+  readonly complete?: boolean;
 }
 
 function symbolCoverageIncomplete(
@@ -3627,11 +3706,12 @@ async function collectSymbolDefinitionMatches(
   requestContext: StructuralAdapterRequestContext,
   budget: AugmentationBudgetMeter,
 ): Promise<{
+  readonly terms: readonly string[];
   readonly matches: readonly SymbolDefinitionMatch[];
   readonly uncertainty: readonly UncertaintyMarker[];
 }> {
   const reservedTerms = reserveAugmentationSearchTerms(terms, signal, budget);
-  if (reservedTerms.length === 0) return { matches: [], uncertainty: [] };
+  if (reservedTerms.length === 0) return { terms: [], matches: [], uncertainty: [] };
   const result = await requestContext.findFiles(
     symbolFileQuery(input, "**/*"),
     SYMBOL_FILE_SEARCH_LIMITS,
@@ -3653,7 +3733,7 @@ async function collectSymbolDefinitionMatches(
     }
   }
   const marker = symbolCoverageIncomplete(reservedTerms.join(", "), result.coverage, nowMs);
-  return { matches, uncertainty: marker === undefined ? [] : [marker] };
+  return { terms: reservedTerms, matches, uncertainty: marker === undefined ? [] : [marker] };
 }
 
 function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: EvidenceAtom): void {
@@ -3681,18 +3761,22 @@ interface SymbolLineAtomTarget {
   readonly atoms: EvidenceAtom[];
   readonly seen: Set<string>;
   readonly control: SymbolLineScanControl;
+  readonly lookup: SymbolLineLookupResult | undefined;
+  readonly verifiedTerms: Set<string>;
+  readonly observedTerms: Set<string>;
 }
 
 function pushSymbolLineAtom(
   inputs: PrioritizedSymbolInputs,
   target: SymbolLineAtomTarget,
 ): boolean {
-  const { match, atoms, seen, control } = target;
+  const { match, atoms, seen, control, lookup } = target;
   const { atom, term } = match;
-  const lookup = firstSymbolLine(inputs.searchScope, inputs.fs, atom.scopePath, term, control);
-  if (lookup.lineNumber === undefined) {
-    return lookup.deadlineReached;
+  if (lookup?.lineNumber === undefined) {
+    return lookup?.deadlineReached === true || symbolLineDeadlineReached(control);
   }
+  target.observedTerms.add(term);
+  if (lookup.definitionMatch === true) target.verifiedTerms.add(term);
   pushUniqueAtom(
     atoms,
     seen,
@@ -3702,6 +3786,7 @@ function pushSymbolLineAtom(
       lookup.lineNumber,
       atom.provenance.queryFingerprint,
       inputs.nowMs,
+      lookup.definitionMatch === true,
     ),
   );
   return false;
@@ -3720,6 +3805,24 @@ function orderSymbolMatchesForTerms(
   return [...firstPerTerm, ...sorted.filter((match) => !firstPerTerm.has(match))];
 }
 
+function withLexicalSymbolCandidates(
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+  lexicalAtoms: readonly EvidenceAtom[],
+): readonly SymbolDefinitionMatch[] {
+  const combined = new Map(
+    matches.map((match) => [`${match.atom.scopePath}\0${match.term}`, match]),
+  );
+  for (const atom of lexicalAtoms) {
+    for (const term of terms) {
+      const key = `${atom.scopePath}\0${term}`;
+      if (!combined.has(key))
+        combined.set(key, { atom, term, priority: symbolDefinitionPriority(atom.scopePath, term) });
+    }
+  }
+  return [...combined.values()];
+}
+
 function collectPrioritizedSymbolAtoms(
   inputs: PrioritizedSymbolInputs,
   matches: readonly SymbolDefinitionMatch[],
@@ -3727,6 +3830,10 @@ function collectPrioritizedSymbolAtoms(
 ): SymbolDiscoveryResult {
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
+  const verifiedTerms = new Set<string>();
+  const observedTerms = new Set<string>();
+  const lookups = new Map<string, ReadonlyMap<string, SymbolLineLookupResult>>();
+  let complete = true;
   let deadlineSkippedCount = 0;
   let lineDeadlineReached = false;
   const control: SymbolLineScanControl = {
@@ -3740,16 +3847,43 @@ function collectPrioritizedSymbolAtoms(
     if (lineDeadlineReached) {
       deadlineSkippedCount += 1;
     } else {
-      lineDeadlineReached = pushSymbolLineAtom(inputs, { match, atoms, seen, control });
+      const fileLookups = cachedSymbolLines(inputs, match.atom.scopePath, terms, control, lookups);
+      complete &&= fileLookups.size === terms.length;
+      lineDeadlineReached = pushSymbolLineAtom(inputs, {
+        match,
+        atoms,
+        seen,
+        control,
+        lookup: fileLookups.get(match.term),
+        verifiedTerms,
+        observedTerms,
+      });
       if (lineDeadlineReached) deadlineSkippedCount += 1;
     }
   }
   return {
     atoms,
+    verifiedTerms,
+    observedTerms,
+    complete: complete && !lineDeadlineReached,
     uncertainty: [symbolLineDeadlineMarker(deadlineSkippedCount, inputs.nowMs)].filter(
       (marker): marker is UncertaintyMarker => marker !== undefined,
     ),
   };
+}
+
+function cachedSymbolLines(
+  inputs: PrioritizedSymbolInputs,
+  scopePath: string,
+  terms: readonly string[],
+  control: SymbolLineScanControl,
+  cache: Map<string, ReadonlyMap<string, SymbolLineLookupResult>>,
+): ReadonlyMap<string, SymbolLineLookupResult> {
+  const existing = cache.get(scopePath);
+  if (existing !== undefined) return existing;
+  const lines = symbolLinesForPath(inputs, scopePath, terms, control);
+  cache.set(scopePath, lines);
+  return lines;
 }
 
 async function symbolFileAtoms(
@@ -3770,6 +3904,7 @@ async function symbolFileAtoms(
     requestContext,
     budget,
   );
+  if (collected.terms.length === 0) return { atoms: [], uncertainty: [] };
   const prioritized = collectPrioritizedSymbolAtoms(
     {
       input,
@@ -3779,13 +3914,112 @@ async function symbolFileAtoms(
       signal,
       deadlineAtMs,
     },
-    collected.matches,
-    terms,
+    withLexicalSymbolCandidates(collected.matches, collected.terms, inputs.lexicalAtoms ?? []),
+    collected.terms,
   );
   return {
-    atoms: prioritized.atoms,
+    ...prioritized,
     uncertainty: [...collected.uncertainty, ...prioritized.uncertainty],
   };
+}
+
+interface DefinitionDiscoveryExecution {
+  readonly evidence: SymbolDiscoveryResult;
+  readonly governor: GovernorState;
+  readonly verified: boolean;
+}
+
+function requiredDeclarationTargets(
+  query: RetrievalQuery,
+  decision: QueryTargetDecision,
+): ReadonlySet<string> {
+  const original = extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors;
+  const required = new Set(
+    [...decision.targets, ...original]
+      .filter((anchor) => anchor.kind === "quoted" || anchor.weight >= 0.9)
+      .map((anchor) => anchor.term),
+  );
+  for (const token of query.text.matchAll(/[\p{L}\p{N}_$.-]+/gu)) {
+    const term = token[0].toLowerCase();
+    const anchor = extractAnchors({ text: token[0], maxAnchors: 1 }).anchors[0];
+    if (anchor?.kind === "identifier" && anchor.weight >= 0.85 && anchor.term === term)
+      required.add(term);
+  }
+  return required;
+}
+
+function verifiedDefinitionDiscovery(
+  evidence: SymbolDiscoveryResult,
+  query: RetrievalQuery,
+  decision: QueryTargetDecision,
+): boolean {
+  const verified = evidence.verifiedTerms ?? new Set<string>();
+  return (
+    evidence.complete === true &&
+    evidence.uncertainty.length === 0 &&
+    verified.size > 0 &&
+    [...requiredDeclarationTargets(query, decision)].every((term) => verified.has(term)) &&
+    [...(evidence.observedTerms ?? [])].every((term) => verified.has(term))
+  );
+}
+
+function finishDefinitionDiscovery(
+  args: AssembleGroundedPackInputs,
+  evidence: SymbolDiscoveryResult,
+  result: AugmentationBudgetResult,
+): DefinitionDiscoveryExecution {
+  return {
+    evidence:
+      result.marker === undefined
+        ? evidence
+        : { ...evidence, uncertainty: [...evidence.uncertainty, result.marker] },
+    governor: result.governor,
+    verified:
+      result.marker === undefined &&
+      verifiedDefinitionDiscovery(
+        evidence,
+        args.input.query,
+        args.plan.targetDecision ?? resolveQueryTargetDecision(args.input.query, args.plan.anchors),
+      ),
+  };
+}
+
+async function discoverDefinitionsBeforeGraphs(
+  args: AssembleGroundedPackInputs,
+): Promise<DefinitionDiscoveryExecution> {
+  const {
+    input,
+    plan,
+    rings,
+    searchScope,
+    fs,
+    metadataFs,
+    nowMs,
+    structuralContexts,
+    deadlineAtMs,
+    deps,
+  } = args;
+  const budget = createAugmentationBudgetMeter(plan, rings.governor, nowMs, deadlineAtMs);
+  const certifiedPaths = primaryContentPaths(rings);
+  const evidence = await symbolFileAtoms(
+    {
+      input,
+      plan,
+      searchScope,
+      fs,
+      metadataFs,
+      nowMs,
+      structuralContexts,
+      deadlineAtMs,
+      budget,
+      signal: deps.signal,
+      lexicalAtoms: rings.atoms.filter(
+        (atom) => certifiedPaths.has(atom.scopePath) && atom.provenance.tool === "repo.searchText",
+      ),
+    },
+    structuralContexts.forLimits(SYMBOL_FILE_SEARCH_LIMITS),
+  );
+  return finishDefinitionDiscovery(args, evidence, budget.finish(rings.governor));
 }
 
 function selectedFileAtom(
@@ -4282,6 +4516,9 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
+  readonly lexicalAtoms?: readonly EvidenceAtom[];
+  readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
+  readonly skipOptionalTrace?: boolean;
   readonly input: OrchestratorInput;
   readonly plan: ExplorationPlan;
   readonly searchScope: SearchScope;
@@ -4306,20 +4543,24 @@ async function collectParallelDeterministicEvidence(
   const signal = parallelStageSignal(controller, inputs.signal);
   const { input, plan, searchScope, fs, nowMs, deadlineAtMs, budget } = inputs;
   const pending = [
-    collectFollowSymbolTraceEvidence({
-      scope: input.scope,
-      query: input.query,
-      anchors: plan.anchors,
-      retrievalIntent: plan.retrievalIntent,
-      searchScope,
-      fs,
-      nowMs,
-      signal,
-      requestContext: traceContext,
-      deadlineAtMs,
-      tryReserveSearchCall: budget.tryReserveSearchCall,
-    }),
-    symbolFileAtoms({ ...inputs, signal }, fileSearchContext),
+    inputs.skipOptionalTrace === true
+      ? Promise.resolve({ atoms: [], uncertainty: [] })
+      : collectFollowSymbolTraceEvidence({
+          scope: input.scope,
+          query: input.query,
+          anchors: plan.anchors,
+          retrievalIntent: plan.retrievalIntent,
+          searchScope,
+          fs,
+          nowMs,
+          signal,
+          requestContext: traceContext,
+          deadlineAtMs,
+          tryReserveSearchCall: budget.tryReserveSearchCall,
+        }),
+    inputs.symbolDiscovery === undefined
+      ? symbolFileAtoms({ ...inputs, signal }, fileSearchContext)
+      : Promise.resolve({ atoms: [], uncertainty: [] }),
     documentReferenceAtoms(input, plan, nowMs, signal, fileSearchContext, budget),
   ] as const;
   return settleParallelStage(Promise.all(pending), pending, controller);
@@ -5581,11 +5822,13 @@ function selectPackAtoms(
   input: OrchestratorInput,
   plan: ExplorationPlan,
 ): readonly EvidenceAtom[] {
+  const targetDecision =
+    plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors);
   return selectGroundedEvidenceAtoms(
     atoms,
     selectedPaths,
     input.scope.scopeId,
-    isDirectEvidenceLookup(input.query, plan.anchors),
+    targetDecision.definitionRequested,
   );
 }
 
@@ -5606,6 +5849,24 @@ function codeEvidenceAtoms(
   return scope.kind === "files" && scope.explicitConnection === true
     ? atoms.filter((atom) => !isConnectedDocumentPath(atom.scopePath))
     : atoms;
+}
+
+function selectionEvidencePaths(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  rings: RingRunSummary,
+): ReadonlySet<string> {
+  const paths = new Set(primaryContentPaths(rings));
+  const decision = plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors);
+  if (decision.kind === "contextual") {
+    for (const atom of rings.atoms) {
+      if (atom.lineRange !== undefined && atom.provenance.tool.startsWith("repo.semanticSearch:"))
+        paths.add(atom.scopePath);
+    }
+  }
+  // This changes only relative selection, after normal absolute-score filtering. Semantic
+  // context remains secondary and cannot certify literal presence or declaration discovery.
+  return paths;
 }
 
 function preparePackAssembly(
@@ -5645,7 +5906,7 @@ function preparePackAssembly(
   const ordered = selectGroundedCandidateFiles({
     ...refined,
     scopeKind: input.scope.kind,
-    protectedContentPaths: primaryContentPaths(rings),
+    protectedContentPaths: selectionEvidencePaths(input, plan, rings),
     pathOnlyPaths: pathOnlyEvidencePaths(atoms),
     filesReadMax: plan.budget.filesReadMax,
     nowMs: nowMs(),
@@ -5883,6 +6144,8 @@ async function augmentRingsWithDeterministicAtoms(
   if (recordAugmentationSkip(args, scopedRings))
     return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
+    symbolDiscovery: scopedRings.symbolDiscovery,
+    skipOptionalTrace: scopedRings.verifiedDefinitionContext === true,
     input,
     plan,
     searchScope,
@@ -6895,6 +7158,10 @@ function connectedContextSearchInputs(
 ): SearchInputs {
   const { workspaceIndex } = context;
   return {
+    discoverDefinitions: (governor, evidence) =>
+      discoverDefinitionsBeforeGraphs(
+        liveGroundedPackInputs(input, deps, plan, runtime, context, { ...evidence, governor }),
+      ),
     scopeContextBytesMax: plan.budget.excerptBytesMax,
     hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
