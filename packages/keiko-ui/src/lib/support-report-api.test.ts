@@ -6,7 +6,7 @@ import {
   SupportReportEvidenceUnavailable,
   supportReportAvailabilityReason,
 } from "./support-report-api";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, type BffResponseMetadata } from "./http";
 import { ApiError } from "./api";
 import * as diagnostics from "./client-diagnostics";
 import { canonicalSupportReportFixture } from "../test-utils/support-report-fixture";
@@ -31,8 +31,14 @@ vi.mock("./http", () => ({
     async (
       path: string,
       _init: RequestInit,
-      options: { validator: (path: string, value: unknown) => unknown },
-    ) => options.validator(path, response.value),
+      options: {
+        validator: (path: string, value: unknown, metadata: BffResponseMetadata) => unknown;
+      },
+    ) =>
+      options.validator(path, response.value, {
+        headers: new Headers(),
+        receivedAtMs: performance.now(),
+      }),
   ),
 }));
 afterEach(() => {

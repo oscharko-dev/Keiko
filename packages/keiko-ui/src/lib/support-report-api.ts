@@ -100,8 +100,12 @@ export async function createSupportReport(
       signal: requestSignal,
     },
     {
-      validator: (_path, value): DesktopSupportReportResponse =>
-        validateSupportReportResponse(value),
+      validator: (_path, value, response): DesktopSupportReportResponse =>
+        validateSupportReportResponse(
+          value,
+          response.headers,
+          performance.now() - response.receivedAtMs,
+        ),
     },
   );
 }
@@ -139,6 +143,10 @@ export interface SupportReportDownload {
   readonly dispose: () => void;
 }
 
+// Keep the wire's server timestamp intact; only the existing browser expiry timer needs a local
+// projection. Weak ownership follows the response through the report cache without retaining it.
+const browserDownloadExpiries = new WeakMap<DesktopSupportReportResponse, number>();
+
 /** A stable download target until the report action is dismissed or its cache is evicted. */
 export function createSupportReportDownload(
   report: DesktopSupportReportResponse,
@@ -147,14 +155,18 @@ export function createSupportReportDownload(
     return {
       href: report.downloadPath,
       fileName: `${report.fileName}.gz`,
-      expiresAtMs: report.downloadExpiresAtMs,
+      expiresAtMs: browserDownloadExpiries.get(report) ?? report.downloadExpiresAtMs,
       dispose: (): void => undefined,
     };
   const href = URL.createObjectURL(new Blob([report.reportJson], { type: "application/json" }));
   return { href, dispose: (): void => URL.revokeObjectURL(href) };
 }
 
-function validateSupportReportResponse(value: unknown): DesktopSupportReportResponse {
+function validateSupportReportResponse(
+  value: unknown,
+  headers: Headers | undefined,
+  elapsedMs: number,
+): DesktopSupportReportResponse {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -169,23 +181,52 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
     new TextEncoder().encode(value.reportJson).byteLength > MAX_SUPPORT_REPORT_BYTES
   )
     throw new SupportReportResponseInvalid("Invalid support report response");
-  return {
+  const report = {
     fileName: value.fileName,
     reportJson: value.reportJson,
     ...validateDownloadTarget(value),
     ...validateEvidenceScope(value),
     ...validateSummary(value),
   };
+  if (report.downloadExpiresAtMs !== undefined)
+    browserDownloadExpiries.set(
+      report,
+      browserDownloadExpiry(report.downloadExpiresAtMs, headers, elapsedMs),
+    );
+  return report;
 }
 
-function isDownloadExpiry(value: unknown): value is number {
+function isExpiryTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function serverRelativeExpiry(expiry: number, date: string, elapsedMs: number): number {
+  const serverNow = Date.parse(date);
+  if (
+    !Number.isFinite(serverNow) ||
+    new Date(serverNow).toUTCString() !== date ||
+    !Number.isFinite(elapsedMs) ||
+    elapsedMs < 0 ||
+    expiry - serverNow > SUPPORT_REPORT_DELIVERY_TTL_MS + 999
+  )
+    throw new SupportReportResponseInvalid("Invalid support report download target");
+  // HTTP Date has one-second precision. Only time observed after receiving its headers consumes
+  // this timer; preparation before the response may precede capability creation. Unmeasurable
+  // network transit remains subject to the server's authoritative expiry check on download.
+  return Math.floor(expiry - serverNow - 1_000 - elapsedMs);
+}
+
+function browserDownloadExpiry(
+  expiry: number,
+  headers: Headers | undefined,
+  elapsedMs: number,
+): number {
   const now = Date.now();
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value > now &&
-    value <= now + SUPPORT_REPORT_DELIVERY_TTL_MS
-  );
+  const date = headers?.get("Date");
+  const remaining = date == null ? expiry - now : serverRelativeExpiry(expiry, date, elapsedMs);
+  if (remaining <= 0 || remaining > SUPPORT_REPORT_DELIVERY_TTL_MS)
+    throw new SupportReportResponseInvalid("Invalid support report download target");
+  return now + remaining;
 }
 
 function validateDownloadTarget(
@@ -197,7 +238,7 @@ function validateDownloadTarget(
     typeof value.downloadPath !== "string" ||
     !isSupportReportDownloadPath(value.downloadPath) ||
     !("downloadExpiresAtMs" in value) ||
-    !isDownloadExpiry(value.downloadExpiresAtMs)
+    !isExpiryTimestamp(value.downloadExpiresAtMs)
   )
     throw new SupportReportResponseInvalid("Invalid support report download target");
   return { downloadPath: value.downloadPath, downloadExpiresAtMs: value.downloadExpiresAtMs };

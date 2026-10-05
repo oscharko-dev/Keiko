@@ -72,12 +72,19 @@ export interface BffErrorEnvelope {
   };
 }
 
+export interface BffResponseMetadata {
+  readonly headers: Headers;
+  /** Monotonic timestamp when fetch yields headers, before reading the body. */
+  readonly receivedAtMs: number;
+}
+
 export interface BffFetchOptions<T> {
   /**
    * Contract validator for the route's success body (Step-01 Git validators). When supplied the
-   * parsed 2xx body is routed through it; a failure throws `ApiError('CONTRACT_VALIDATION_FAILED')`.
+   * parsed 2xx body and actual response metadata are routed through it; a failure throws
+   * `ApiError('CONTRACT_VALIDATION_FAILED')`.
    */
-  readonly validator?: (path: string, value: unknown) => T;
+  readonly validator?: (path: string, value: unknown, response: BffResponseMetadata) => T;
   /**
    * Message used when the non-2xx body is not a parseable error envelope. Defaults to the machine
    * `HTTP <status>` string. local-knowledge-api passes a friendly message (uiux-fix F033/C064).
@@ -161,6 +168,7 @@ async function performBffFetch<T>(
     ...init,
     headers: buildBffHeaders(init, correlationId),
   });
+  const receivedAtMs = performance.now();
 
   if (!res.ok) {
     const { code, message, envelope } = await parseBffErrorBody(res, opts);
@@ -200,7 +208,7 @@ async function performBffFetch<T>(
   recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
   if (opts?.validator === undefined) return value as T;
   try {
-    return opts.validator(path, value);
+    return opts.validator(path, value, { headers: res.headers, receivedAtMs });
   } catch (error) {
     // RB-6 (#2768): a contract-validation failure is as traceable as a non-2xx — the request DID
     // reach the server and produced a server-side record under this id. Attaching it here, at the

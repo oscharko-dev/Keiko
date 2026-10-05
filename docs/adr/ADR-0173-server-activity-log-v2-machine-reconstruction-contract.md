@@ -833,7 +833,16 @@ This browser-local outcome does not close a server report lifecycle and does not
 request start; server report failures retain their existing start and terminal obligations.
 Ordinary server preparation retains its existing lifecycle without duplicating this browser recovery state.
 Process-local delivery caching is bounded by twice the canonical per-report cap (20 MiB), 128 entries
-and a 15-minute lifetime. The aggregate byte allowance retains one ready maximum-size artifact while
+and a 15-minute lifetime. The server remains authoritative for attachment expiry. The browser
+projects that response's server expiry onto its local download timer using the HTTP `Date` header,
+subtracting its one-second precision uncertainty and observed time spent reading and validating
+the body after the headers arrive. Preparation before the response does not consume a newly issued
+capability's lifetime. Network transit before header receipt cannot be measured separately from
+preparation; the server's expiry check remains authoritative. The browser never rewrites the wire
+timestamp. Older responses with no `Date` retain strict local-clock bounds; malformed dates never
+grant an extended lifetime.
+The normal manual-download diagnostic retains its existing source, scope and digest.
+The aggregate byte allowance retains one ready maximum-size artifact while
 its replacement is prepared, also admitting a small canonical limited report beside one full report.
 Each artifact remains capped at 10 MiB. This is a payload-byte retention bound, not an exact resident-memory measurement: JavaScript object overhead and temporary compression buffers are additional. Only the retained raw or compressed representation is charged;
 gzip replaces its raw ownership after successful compression. Concurrent downloads share one

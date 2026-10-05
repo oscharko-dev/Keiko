@@ -215,10 +215,19 @@ describe("bffFetchJson — success bodies", () => {
   });
 
   it("routes the body through opts.validator when supplied", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ raw: true })));
+    const response = jsonResponse({ raw: true });
+    response.headers.set("Date", "Mon, 05 Oct 2026 12:00:00 GMT");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
     const validator = vi.fn((_: string, value: unknown) => ({ mapped: value }));
     const result = await bffFetchJson<{ mapped: unknown }>("/api/x", undefined, { validator });
-    expect(validator).toHaveBeenCalledWith("/api/x", { raw: true });
+    expect(validator).toHaveBeenCalledExactlyOnceWith(
+      "/api/x",
+      { raw: true },
+      {
+        headers: response.headers,
+        receivedAtMs: expect.any(Number),
+      },
+    );
     expect(result).toEqual({ mapped: { raw: true } });
   });
 });
