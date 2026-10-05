@@ -7886,8 +7886,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "safe-platform-class",
       "safe-version",
     ],
-    requiredFrameOperations: ["support.incident.retirement-failed"],
-    requiredCauseOperations: ["support.incident.retirement-failed"],
+    requiredFrameOperations: [
+      "support.incident.dismissed",
+      "support.incident.expired",
+      "support.incident.retirement-failed",
+    ],
+    requiredCauseOperations: [
+      "support.incident.dismissed",
+      "support.incident.expired",
+      "support.incident.retirement-failed",
+    ],
   },
   {
     contractKind: "activity-log-failure-class",
