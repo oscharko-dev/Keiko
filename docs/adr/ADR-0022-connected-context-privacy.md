@@ -304,7 +304,9 @@ Retention uses a worst-first heap, preserving deterministic ordering without lin
 movement for every matching file. Each matching file's strongest range precedes secondary ranges
 so repeated hits in one file cannot consume every retained slot before another relevant file.
 Omission samples use the same bounded heap, ordered by path independently of read-completion timing.
-The streamed semantic lane retains the best 32 score/path-ranked documents within its existing
+An explicitly finite traversal passes its collected documents through without computing an unused
+semantic sampling score; that session does not select by score. The streamed semantic lane retains
+the best 32 score/path-ranked documents within its existing
 128 KiB text pool. Each document receives a bounded equal share; existing anchored byte windows
 retain relevant late content and its actual source-line origin. Admission encodes an anchored
 source once; an unanchored fallback encodes only a prefix bounded by that document’s byte grant.

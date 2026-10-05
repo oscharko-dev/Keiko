@@ -1498,6 +1498,11 @@ function collectRankedSemanticDocument(
   text: string,
 ): void {
   if (runner.semantic === undefined) return;
+  const document = { scopePath: file.relativePath, text };
+  if (runner.semantic.maxDocumentBytes === undefined) {
+    collectSemanticSearchDocument(runner.semantic, document);
+    return;
+  }
   const contentScore = scoreContentForSearch(runner.query, text, runner.policy, file.relativePath);
   const ranked = orderCandidatesForSearch({
     files: [file],
@@ -1507,11 +1512,7 @@ function collectRankedSemanticDocument(
     ignoredByDiscovery: 0,
     deniedByDiscovery: 0,
   }).diagnostics.rankedCandidates[0];
-  collectSemanticSearchDocument(
-    runner.semantic,
-    { scopePath: file.relativePath, text },
-    ranked?.score ?? 0,
-  );
+  collectSemanticSearchDocument(runner.semantic, document, ranked?.score ?? 0);
 }
 
 function fileCanContainMatches(runner: SearchTextRunner, text: string): boolean {
