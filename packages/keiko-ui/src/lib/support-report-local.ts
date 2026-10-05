@@ -5,10 +5,8 @@ import {
   defectFingerprintPreimage,
   MAX_SUPPORT_REPORT_BYTES,
   SUPPORT_REPORT_DELIVERY_TTL_MS,
-  isActivityLogCorrelationId,
   isClientReportFailure,
-  looksLikeSecret,
-  looksLikePersonalIdentifier,
+  normalizeSupportReportCorrelationId,
   sealSupportReportEnvelope,
   serializeSupportReport,
   supportIncidentBuild,
@@ -60,15 +58,10 @@ function validatedOriginalFailure(
 }
 
 function validatedLocalCorrelationId(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  if (
-    isActivityLogCorrelationId(value) &&
-    !looksLikeSecret(value) &&
-    !looksLikePersonalIdentifier(value)
-  )
-    return value;
-  recordClientDiagnosticLoss("errorsSuppressed");
-  return undefined;
+  const correlationId = normalizeSupportReportCorrelationId(value);
+  if (value !== undefined && correlationId === undefined)
+    recordClientDiagnosticLoss("errorsSuppressed");
+  return correlationId;
 }
 
 export function originalSupportReportFailure(

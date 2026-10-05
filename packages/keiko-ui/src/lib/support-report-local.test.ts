@@ -127,6 +127,57 @@ it("still prepares canonical limited evidence when an original notice has a malf
   }
 });
 
+it.each([
+  "unknown-correlation-id",
+  "short",
+  "proxy:original-request",
+  "customer@example.test",
+  `sk-proj-${"a".repeat(32)}`,
+])(
+  "rejects selected identity %s before retained-failure lookup and counts the loss once",
+  async (correlationId) => {
+    const lookup = vi.fn(() => suppliedFailure);
+    setClientDiagnosticDeliveryRetry(async () => undefined, lookup);
+    const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+      correlationId,
+      failure: suppliedFailure,
+    });
+    try {
+      const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+      expect(report.incident.correlation.rootCorrelationId).toBe("id000001");
+      expect(report.incident.clientReport?.failure).toEqual(suppliedFailure);
+      expect(prepared.report.reportJson).not.toContain(correlationId);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(takeClientDiagnosticLoss()?.errorsSuppressed).toBe(1);
+      expect(takeClientDiagnosticLoss()).toBeUndefined();
+    } finally {
+      prepared.download.dispose();
+    }
+  },
+);
+
+it.each([undefined, "selected-health-request"])(
+  "keeps selected identity %j and absence distinct without a false suppression",
+  async (correlationId) => {
+    const lookup = vi.fn(() => undefined);
+    setClientDiagnosticDeliveryRetry(async () => undefined, lookup);
+    const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+      correlationId,
+      failure: suppliedFailure,
+    });
+    try {
+      const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+      expect(report.incident.correlation.rootCorrelationId).toBe(correlationId ?? "id000001");
+      expect(report.incident.clientReport?.failure).toEqual(suppliedFailure);
+      if (correlationId === undefined) expect(lookup).not.toHaveBeenCalled();
+      else expect(lookup).toHaveBeenCalledExactlyOnceWith(correlationId);
+      expect(takeClientDiagnosticLoss()).toBeUndefined();
+    } finally {
+      prepared.download.dispose();
+    }
+  },
+);
+
 const suppliedFailure: NonNullable<ClientOnlySupportReportInput["failure"]> = {
   errorKind: "permission-denied",
   context: ["stage:files-directory-load"],
