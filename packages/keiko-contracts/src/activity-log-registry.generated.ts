@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ca57d15b19a69e01b1aaf7c506c88bbb4bb193f1e41d4fd3929e674a1731a293" as const;
+  "0426cf3f96481ff42bcb25727baec00142c045a5233742b7136493db069da925" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -1571,11 +1571,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "chat-admission",
       requirementContract: "chat-admission",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["failure"],
+      lifecycleTransitions: ["end", "failure"],
       lifecycleOperations: {
         start: [],
         state: [],
-        end: [],
+        end: ["chat.scope.update"],
         failure: ["chat.creation.rejected", "chat.regeneration.rejected", "chat.send.rejected"],
         loss: [],
       },
@@ -1589,12 +1589,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "chat.scope.update",
+          mode: "correlation",
+        },
+        {
           op: "chat.send.rejected",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: [],
+      resourceSignals: ["chat.scope.update"],
       replayReferences: [],
       operations: [
         {
@@ -1678,6 +1682,66 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["chat.regeneration.rejected.reason"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "chat.scope.update",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "actualScopeDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "connectedSourceCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "expectedScopeDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "gitChangeSourceCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "localKnowledgeSourceCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "resultScopeDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["chat.scope.update.outcome"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -31299,6 +31363,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "completionKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "completionTokens",
               type: "integer",
               dataClass: "count",
@@ -31321,6 +31391,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "opaque-id",
               required: true,
+            },
+            {
+              name: "diagnosticOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "diagnosticStage",
@@ -31374,6 +31450,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "occurrenceCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "originalCode",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -31431,6 +31513,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "sourceIndex",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "unsupportedModelCount",
               type: "integer",
               dataClass: "count",
@@ -31450,6 +31538,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "unverifiedEmbeddingModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "validationReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "validatorThrew",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "violationCount",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -37917,6 +38023,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "chat.request.dispatch": "model-gateway",
     "chat.response.message": "bff",
     "chat.response.streamed": "model-gateway",
+    "chat.scope.update": "bff",
     "chat.send.rejected": "bff",
     "chat.turn.started": "bff",
     "cli.audit.completed": "runtime-packages",
