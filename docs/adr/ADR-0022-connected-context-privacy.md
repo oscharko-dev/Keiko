@@ -382,9 +382,17 @@ graph/history work in Git folders, including facts stored in source-code files. 
 "exactly" in an explanatory or diagnostic question do not establish that the lookup is complete.
 Incomplete lexical evidence and explicitly requested
 definitions, relationships, and history retain their existing retrieval and uncertainty behavior.
-The existing connected-context completion event records executed/skipped ring kinds, closed skip
-reasons, and whether optional augmentation was skipped. Planned rings are never presented as
-executed work in the diagnostic audit.
+The existing connected-context completion event partitions planned rings into executed, deliberately
+skipped, and stopped-before-execution kinds, including an initially blocked budget. Closed skip
+reasons explain policy decisions; augmentation separately records `not-reached`, `used`, or `skipped`.
+An overview's additional file listing records `used`, `not-needed`, `skipped-budget`, or
+`skipped-stopped` on the same request's source-details event (`not-evaluated` before lexical search).
+It reserves and charges its own search call. A refused reservation retains a budget marker; a
+deadline or cancellation cannot start another listing. Recoverable term-search incompleteness does
+not prevent listing readable siblings. Combined diagnostics preserve both operations' exclusions,
+coverage reasons and search-work counts, so an earlier read failure cannot become complete coverage.
+These counts describe work across the two searches, not unique files: a path examined by each is
+counted twice. Planned rings are never presented as executed work in the diagnostic audit.
 Git-history discovery is not attempted for a folder without Git unless the question requests
 history or relationships. Requested definition, relationship, and history evidence retains its
 existing retrieval path and reports genuine unavailability.

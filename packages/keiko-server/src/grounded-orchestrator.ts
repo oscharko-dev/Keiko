@@ -14,6 +14,7 @@ import {
   observeDirectoryIteration,
 } from "./grounded-directory-iteration.js";
 import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import { mergeOverviewListing } from "./grounded-overview-fallback.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -313,6 +314,19 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       maxItems: 3,
       values: ["lexical", "structural", "git-history"],
     },
+    stoppedRingKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["lexical", "structural", "git-history"],
+    },
+    augmentationDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-reached", "used", "skipped"],
+    },
     ringSkipReasons: {
       type: "string-array",
       dataClass: "closed-enum",
@@ -537,6 +551,12 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
       values: ["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"],
     },
     semanticProviderCallCount: { type: "integer", dataClass: "count", required: false },
+    overviewListingFallback: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "not-needed", "used", "skipped-budget", "skipped-stopped"],
+    },
     semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
     primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
     metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
@@ -897,7 +917,10 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 
 type SemanticProviderDisposition =
   "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected";
+type OverviewListingFallback =
+  "not-evaluated" | "not-needed" | "used" | "skipped-budget" | "skipped-stopped";
 interface SourceDecisionObservation {
+  overviewListingFallback: OverviewListingFallback;
   semanticProviderDisposition: SemanticProviderDisposition;
   semanticProviderCallCount: number;
   semanticRejectedAtomCount: number;
@@ -906,6 +929,7 @@ interface SourceDecisionObservation {
 
 function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
   return {
+    overviewListingFallback: "not-evaluated",
     semanticProviderDisposition: disposition,
     semanticProviderCallCount: 0,
     semanticRejectedAtomCount: 0,
@@ -2042,13 +2066,9 @@ async function lexicalRingSearch(
   inputs: SearchInputs,
 ): Promise<ContextSearchResult> {
   const result = await searchLexicalTerms(ring, inputs);
-  if (
-    inputs.retrievalIntent !== "repository-overview" ||
-    result.atoms.length > 0 ||
-    result.coverage.incomplete ||
-    inputs.tryReserveAdditionalSearchCall?.() !== true
-  )
-    return result;
+  const decision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
+  decision.overviewListingFallback = overviewListingDecision(result, inputs);
+  if (decision.overviewListingFallback !== "used") return { ...result, sourceDecision: decision };
   const listing = await findFiles(
     inputs.searchScope,
     { ...inputs.query, kind: "file-pattern", text: "**/*" },
@@ -2056,10 +2076,24 @@ async function lexicalRingSearch(
     lexicalSearchOptions(inputs),
   );
   return {
-    ...listing,
-    sourceDecision: result.sourceDecision,
-    elapsedMs: result.elapsedMs + listing.elapsedMs,
+    ...mergeOverviewListing(result, listing),
+    sourceDecision: decision,
   };
+}
+
+function overviewListingDecision(
+  result: ContextSearchResult,
+  inputs: SearchInputs,
+): OverviewListingFallback {
+  if (inputs.retrievalIntent !== "repository-overview" || result.atoms.length > 0)
+    return "not-needed";
+  throwIfCancelled(inputs.signal);
+  if (
+    inputs.nowMs() >= inputs.deadlineAtMs ||
+    result.coverage.reasons.some((reason) => reason === "timeout" || reason === "aborted")
+  )
+    return "skipped-stopped";
+  return inputs.tryReserveAdditionalSearchCall?.() === true ? "used" : "skipped-budget";
 }
 
 function withoutNamedSemanticSubstitution(
@@ -2115,6 +2149,9 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
     uncertainty: [
       ...coverageUncertainty(result, inputs.nowMs()),
       ...missingPrimaryContextMarker(result, inputs),
+      ...(sourceDecision.overviewListingFallback === "skipped-budget"
+        ? [budgetClipped("budget-exhausted on searchCalls", inputs.nowMs())]
+        : []),
     ],
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
     diagnostics: toPackDiagnostics(result),
@@ -2341,7 +2378,9 @@ type RingSkipReason =
 interface RingDecisionAudit {
   readonly executedRingKinds: RetrievalRing["kind"][];
   readonly skippedRingKinds: RetrievalRing["kind"][];
+  readonly stoppedRingKinds: RetrievalRing["kind"][];
   readonly ringSkipReasons: RingSkipReason[];
+  augmentationDisposition: "not-reached" | "used" | "skipped";
   augmentationSkipped: boolean;
   augmentationSkipReason?: RingSkipReason | "budget-exhausted";
 }
@@ -2457,6 +2496,7 @@ function initialBlockedRingSummary(
     atoms: [],
     omitted: [],
     governor: complete(governor),
+    decisions: newRingDecisions(governor.plan.rings),
     uncertainty: [budgetClipped(reason, inputs.nowMs())],
   };
 }
@@ -2685,13 +2725,25 @@ function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResul
   for (const omission of result.omitted) evidence.omitted.push(omission);
   for (const marker of result.uncertainty) evidence.uncertainty.push(marker);
 }
-function newRingDecisions(): RingDecisionAudit {
+function newRingDecisions(stopped: readonly RetrievalRing[] = []): RingDecisionAudit {
   return {
     executedRingKinds: [],
     skippedRingKinds: [],
+    stoppedRingKinds: stopped.map((ring) => ring.kind),
     ringSkipReasons: [],
+    augmentationDisposition: "not-reached",
     augmentationSkipped: false,
   };
+}
+
+function recordStoppedRings(rings: readonly RetrievalRing[], decisions: RingDecisionAudit): void {
+  for (const ring of rings) {
+    if (
+      !decisions.executedRingKinds.includes(ring.kind) &&
+      !decisions.skippedRingKinds.includes(ring.kind)
+    )
+      decisions.stoppedRingKinds.push(ring.kind);
+  }
 }
 
 function declarationCoverageAllowsVerification(
@@ -2762,6 +2814,7 @@ async function runAllRings(
   if (governor.status === "running") {
     governor = complete(governor);
   }
+  recordStoppedRings(rings, decisions);
   return { ...evidence, governor, decisions };
 }
 
@@ -4986,6 +5039,7 @@ async function withDeterministicContextAtoms(
   rings: RingRunSummary,
   inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
+  markAugmentationUsed(rings);
   const deterministic = await deterministicContextEvidence(inputs);
   if (
     deterministic.atoms.length === 0 &&
@@ -6518,8 +6572,13 @@ function markAugmentationSkipped(
   reason: RingSkipReason | "budget-exhausted",
 ): void {
   if (rings.decisions === undefined) return;
+  rings.decisions.augmentationDisposition = "skipped";
   rings.decisions.augmentationSkipped = true;
   rings.decisions.augmentationSkipReason = reason;
+}
+
+function markAugmentationUsed(rings: RingRunSummary): void {
+  if (rings.decisions !== undefined) rings.decisions.augmentationDisposition = "used";
 }
 
 function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRunSummary): boolean {
@@ -6858,8 +6917,10 @@ function liveRetrievalCompletion(
 function stoppedRetrievalCompletion(
   readBudgetBlocked: boolean,
   elapsedBudgetBlocked: boolean,
+  rings: readonly RetrievalRing[],
 ): ConnectedContextCompletionStatus {
   return {
+    decisions: newRingDecisions(rings),
     readBudgetBlocked,
     elapsedBudgetBlocked,
     workspaceIndexProviderStatus: "not-evaluated",
@@ -8441,7 +8502,7 @@ async function emptyBudgetExhaustedRetrieval(
     pack,
     plan,
     runtime.activity,
-    stoppedRetrievalCompletion(stop.readBudgetBlocked, stop.elapsedBudgetBlocked),
+    stoppedRetrievalCompletion(stop.readBudgetBlocked, stop.elapsedBudgetBlocked, plan.rings),
     EMPTY_STRUCTURAL_DIAGNOSTICS,
     NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
     runtime.workspaceIoActivity.diagnostics(),
