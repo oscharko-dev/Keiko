@@ -276,6 +276,10 @@ function knownCorrelation(value: string | undefined): value is string {
   return value !== undefined && value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID;
 }
 
+function isNonCausal(parsed: ParsedLine): boolean {
+  return activityLogOperationSchema(parsed.view.op)?.causal === "none";
+}
+
 function lineMs(parsed: ParsedLine): number {
   return Date.parse(parsed.view.ts);
 }
@@ -488,6 +492,7 @@ function expandClosure(state: EngineState, closure: ClosureState, frontier: Fron
   const up = new Set<string>();
   const down = new Set<string>();
   for (const { parsed } of acceptedLines(state, files, false)) {
+    if (isNonCausal(parsed)) continue;
     const id = parsed.correlationId;
     const parent = parsed.view.parentCorrelationId;
     if (!knownCorrelation(id) || !knownCorrelation(parent)) continue;
@@ -643,7 +648,8 @@ function windowRoots(
     if (!windows.some((window) => lineInWindow(window, accepted))) continue;
     noteWindowLifecycle(pending, accepted);
     const id = accepted.parsed.correlationId;
-    if (knownCorrelation(id) && !routineWindowActivity(accepted)) roots.add(id);
+    if (knownCorrelation(id) && !isNonCausal(accepted.parsed) && !routineWindowActivity(accepted))
+      roots.add(id);
     if (roots.size > limit || pending.size > limit) return windowRootResult(roots, pending, limit);
   }
   return windowRootResult(roots, pending, limit);
@@ -669,7 +675,7 @@ function closureRole(
   windows: readonly SupportQueryWindow[],
 ): SupportQueryEventRole | undefined {
   const id = accepted.parsed.correlationId;
-  if (knownCorrelation(id) && members.has(id)) return "closure";
+  if (knownCorrelation(id) && !isNonCausal(accepted.parsed) && members.has(id)) return "closure";
   if (routineWindowActivity(accepted)) return undefined;
   return windows.some((window) => lineInWindow(window, accepted)) ? "window" : undefined;
 }
@@ -978,6 +984,7 @@ function isContextLine(
 ): boolean {
   if (
     knownCorrelation(accepted.parsed.correlationId) &&
+    !isNonCausal(accepted.parsed) &&
     !(routineWindowActivity(accepted) && windows.some((window) => lineInWindow(window, accepted)))
   )
     return false;

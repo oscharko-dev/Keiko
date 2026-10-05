@@ -1707,6 +1707,10 @@ protection-failure record with segment counts, bytes and the seq span. It declar
 and `loss: "none"`: the marker is emitted before retention may delete the unprotected segments, so
 it cannot claim an event was dropped. This is a non-causal observation of the shared pin pool:
 maintenance may carry an unrelated or unknown correlation without claiming a missing pin start.
+The support query never derives a causal root or parent/child edge from a registered `causal: none`
+operation. A quota warning inside a manual report's window remains mandatory window evidence; near
+an explicitly selected request it is process context, not part of that request's causal closure.
+Its physical correlation stays intact in exported evidence.
 Individual pin creation and expiry retain their causal lifecycle. The pin class remains degraded by `evidence-partial`;
 unrelated retained process evidence is not classified as lost. Historical registered quota records
 that declared `event-dropped` retain their exact bytes and are interpreted as this same protection

@@ -124,6 +124,34 @@ function streamLifecycle(
   });
 }
 
+function pinProtectionWarning(
+  process: FixtureProcess,
+  atMs: number,
+  correlationId: string,
+  parentCorrelationId?: string,
+): string {
+  return fixtureLine(process, atMs, {
+    op: "activity-log.pin.quota-exhausted",
+    correlationId,
+    parentCorrelationId,
+    level: "error",
+    errorKind: "unavailable",
+    fields: {
+      pinQuotaBytes: 1,
+      requestedPinnedBytes: 512,
+      protectedPinnedBytes: 0,
+      protectedSegmentCount: 0,
+      unprotectedSegmentCount: 1,
+      unprotectedBytes: 512,
+      unprotectedSeqSpan: 1,
+      unknownSpanSegmentCount: 0,
+      activePinCount: 1,
+      completeness: "partial",
+      loss: "none",
+    },
+  });
+}
+
 function writeGraph(stateDir: string): GraphFixture {
   const a = fixtureProcess(4101, "aaaaaaa1");
   const b = fixtureProcess(4202, "bbbbbbb2");
@@ -946,6 +974,69 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
   });
 
+  it("keeps non-causal protection evidence without promoting its borrowed successful request tree", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 - 100, 1), [
+      fixtureLine(process, T0 - 100, { op: "process.started" }),
+      requestLine(process, IDS.unrelated, undefined, 200, T0 - 60),
+      requestLine(process, IDS.child, IDS.unrelated, 200, T0 - 50),
+      pinProtectionWarning(process, T0 + 100, IDS.unrelated),
+      requestLine(process, IDS.unrelated, undefined, 200, T0 + 150),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(0);
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      "activity-log.pin.quota-exhausted",
+    ]);
+    expect(result.events[1]?.role).toBe("window");
+    expect(result.metrics.closureEventCount).toBe(0);
+    expect(result.truncation.omittedContextEventCount).toBe(1);
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-partial");
+    expect(result.diagnosticSufficiency.reasons).not.toContain("lifecycle-start-missing");
+  });
+
+  it.each(["ancestor", "descendant"] as const)(
+    "does not create a closure %s from a declared non-causal parent field",
+    (direction) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      const id = direction === "ancestor" ? IDS.root : IDS.unrelated;
+      const parent = direction === "ancestor" ? IDS.unrelated : IDS.root;
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+        fixtureLine(process, T0, { op: "process.started" }),
+        diagnostic(process, T0 + 100, IDS.root),
+        pinProtectionWarning(process, T0 + 101, id, parent),
+        requestLine(process, IDS.unrelated, undefined, 200, T0 + 102),
+      ]);
+      const { result } = query(stateDir, correlationSelection(IDS.root), {
+        maxContextEvents: 0,
+      });
+      expect(result.closure).toMatchObject({ rootCount: 1, ancestorCount: 0, descendantCount: 0 });
+      expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+        "process.started",
+        DIAGNOSTIC,
+      ]);
+      expect(result.metrics.closureEventCount).toBe(1);
+    },
+  );
+
+  it("retains a borrowed maintenance identity only as nearby process context for a selected failure", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      diagnostic(process, T0 + 100, IDS.root),
+      pinProtectionWarning(process, T0 + 101, IDS.root),
+      diagnostic(process, T0 + 102, IDS.child, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.closure).toMatchObject({ rootCount: 1, descendantCount: 1 });
+    expect(
+      result.events.find((event) => event.parsed.view.op === "activity-log.pin.quota-exhausted"),
+    ).toMatchObject({ role: "context" });
+    expect(result.metrics.closureEventCount).toBe(2);
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-partial");
+  });
+
   it.each(["never finished", "restarted"] as const)(
     "keeps a %s stream mandatory among 4097 completed lifecycles",
     (state) => {
@@ -1091,7 +1182,6 @@ describe("support query causal closure (#3531)", () => {
     ["unregistered operation", { op: "legacy.unregistered.operation" }],
     ["diagnostic category", { op: "client.stage.settled" }],
     ["failure lifecycle at info", { op: "gateway.stream.failed" }],
-    ["loss lifecycle at info", { op: "gateway.log.sink-failed" }],
     ["missing completeness", { completeness: undefined }],
     ["missing loss", { loss: undefined }],
     ["no extra fields", { completeness: undefined, loss: undefined }],
@@ -1112,6 +1202,25 @@ describe("support query causal closure (#3531)", () => {
     expect(result.closure?.rootCount).toBe(1);
     expect(result.events).toHaveLength(1);
     expect(result.events[0]).toMatchObject({ role: "closure", text });
+    expect(result.integrity.legacyLineCount).toBe(1);
+  });
+
+  it("keeps a retained non-causal loss mandatory without assigning its borrowed correlation a closure", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const text = JSON.stringify({
+      ts: new Date(T0 + 100).toISOString(),
+      level: "info",
+      category: "gateway",
+      op: "gateway.log.sink-failed",
+      correlationId: IDS.root,
+      completeness: "complete",
+      loss: "none",
+    });
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [text]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(0);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({ role: "window", text });
     expect(result.integrity.legacyLineCount).toBe(1);
   });
 
