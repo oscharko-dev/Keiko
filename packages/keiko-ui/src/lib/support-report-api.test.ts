@@ -11,6 +11,7 @@ import { ApiError } from "./api";
 import { canonicalSupportReportFixture } from "../test-utils/support-report-fixture";
 import {
   MAX_SUPPORT_REPORT_BYTES,
+  SUPPORT_INCIDENT_TRIGGERS,
   supportReportFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -40,6 +41,24 @@ afterEach(() => {
 const fileName = supportReportFileName(1, "aabbccddeeff".padEnd(32, "0"), Date.UTC(2026, 9, 3));
 
 describe("support report browser download", () => {
+  it.each(SUPPORT_INCIDENT_TRIGGERS)(
+    "accepts the actual closed incident trigger %s",
+    async (incidentTrigger) => {
+      const report = await canonicalSupportReportFixture();
+      response.value = { ...report, summary: { ...report.summary, incidentTrigger } };
+      expect((await createSupportReport()).summary).toMatchObject({ incidentTrigger });
+    },
+  );
+
+  it.each(["private-trigger", null, 42])(
+    "rejects invalid incident trigger %j",
+    async (incidentTrigger) => {
+      const report = await canonicalSupportReportFixture();
+      response.value = { ...report, summary: { ...report.summary, incidentTrigger } };
+      await expect(createSupportReport()).rejects.toThrow("Invalid report summary");
+    },
+  );
+
   it("requests only the supplied client failure when the displayed notice has no trusted correlation", async () => {
     response.value = await canonicalSupportReportFixture();
     const failure = { errorKind: "unavailable", context: [] } as const;

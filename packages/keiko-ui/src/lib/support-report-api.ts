@@ -15,6 +15,7 @@ import {
   MAX_SUPPORT_REPORT_BYTES,
   SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
   SUPPORT_REPORT_DELIVERY_TTL_MS,
+  SUPPORT_INCIDENT_TRIGGERS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
@@ -213,6 +214,7 @@ const SUMMARY_REASONS = new Set<string>(DIAGNOSTIC_SUFFICIENCY_REASONS);
 const SUMMARY_COMPLETENESS = new Set<string>(ACTIVITY_LOG_COMPLETENESS_STATES);
 const SUMMARY_LOSS = new Set<string>(ACTIVITY_LOG_LOSS_STATES);
 const SUMMARY_PIN = new Set(["pinned", "quota-exceeded", "rejected"]);
+const SUMMARY_TRIGGERS = new Set<string>(SUPPORT_INCIDENT_TRIGGERS);
 const SUMMARY_RETENTION = new Set(["stored", "transient"]);
 const SUMMARY_AVAILABILITY = new Set([
   "session-unavailable",
@@ -234,7 +236,8 @@ function validSummaryDisposition(value: Record<string, unknown>): boolean {
     optionalSummaryEnum(value.loss, SUMMARY_LOSS) &&
     optionalSummaryEnum(value.pinDisposition, SUMMARY_PIN) &&
     optionalSummaryEnum(value.retentionDisposition, SUMMARY_RETENTION) &&
-    optionalSummaryEnum(value.availabilityReason, SUMMARY_AVAILABILITY)
+    optionalSummaryEnum(value.availabilityReason, SUMMARY_AVAILABILITY) &&
+    optionalSummaryEnum(value.incidentTrigger, SUMMARY_TRIGGERS)
   );
 }
 const SUMMARY_KEYS = new Set([
@@ -248,6 +251,7 @@ const SUMMARY_KEYS = new Set([
   "pinDisposition",
   "retentionDisposition",
   "availabilityReason",
+  "incidentTrigger",
 ]);
 function isSummaryIdentity(fields: Record<string, unknown>): boolean {
   return (
