@@ -31,17 +31,21 @@ const WORKSPACE: WorkspaceInfo = {
 };
 
 function completedLine(raw: string): Readonly<Record<string, unknown>> {
+  const joined: Record<string, unknown> = {};
   for (const line of raw.split("\n").filter(Boolean)) {
     const value: unknown = JSON.parse(line);
+    if (typeof value !== "object" || value === null || !("op" in value)) continue;
     if (
-      typeof value === "object" &&
-      value !== null &&
-      "op" in value &&
-      value.op === "search.connected-context.completed"
-    )
-      return value;
+      value.op === "search.connected-context.completed" ||
+      value.op === "search.connected-context.completion-details"
+    ) {
+      expect(value).toHaveProperty("correlationId", CORRELATION);
+      Object.assign(joined, value);
+    }
   }
-  throw new Error("Expected a persisted retrieval completion");
+  if (!("activityDetailStatus" in joined))
+    throw new Error("Expected persisted retrieval completion evidence");
+  return joined;
 }
 
 async function loggedRetrieval(

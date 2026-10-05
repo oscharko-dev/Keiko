@@ -334,21 +334,6 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
     excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
     excerptReadWindowCount: { type: "integer", dataClass: "count", required: false },
-    excerptOmittedRangeCount: { type: "integer", dataClass: "count", required: false },
-    excerptTruncatedWindowCount: { type: "integer", dataClass: "count", required: false },
-    excerptUnreadFileCount: { type: "integer", dataClass: "count", required: false },
-    excerptStopReasons: {
-      type: "string-array",
-      dataClass: "closed-enum",
-      required: false,
-      maxItems: 3,
-      values: ["file-grant", "byte-grant", "deadline"],
-    },
-    metadataObservedCount: { type: "integer", dataClass: "count", required: false },
-    metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
-    metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
-    metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
-    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
@@ -424,6 +409,21 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       required: true,
       values: ["complete", "unavailable"],
     },
+    excerptOmittedRangeCount: { type: "integer", dataClass: "count", required: false },
+    excerptTruncatedWindowCount: { type: "integer", dataClass: "count", required: false },
+    excerptUnreadFileCount: { type: "integer", dataClass: "count", required: false },
+    excerptStopReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["file-grant", "byte-grant", "deadline"],
+    },
+    metadataObservedCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
+    metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
+    metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
     structuralContextCount: { type: "integer", dataClass: "count", required: false },
     structuralCandidateInventoryBuildCount: {
       type: "integer",
@@ -6941,7 +6941,7 @@ function contextObservationActivityExtra(
 
 function retrievalLossActivityExtra(
   status: ConnectedContextCompletionStatus,
-): Partial<ConnectedContextCompletedActivityFields> {
+): Partial<ConnectedContextCompletionDetailsActivityFields> {
   const { excerptObservation: excerpt, metadataRetention: metadata } = status;
   return {
     ...(excerpt === undefined
@@ -6988,7 +6988,6 @@ function completionActivityExtra(
     usageExcerptBytes: pack.usage.excerptBytes,
     excerptAnchoredWindowCount: execution.status.anchoredExcerptWindowCount ?? 0,
     excerptReadWindowCount: execution.status.excerptReadWindowCount ?? 0,
-    ...retrievalLossActivityExtra(execution.status),
     usageModelInputTokens: pack.usage.modelInputTokens,
     usageModelOutputTokens: pack.usage.modelOutputTokens,
     usageElapsedMs: pack.usage.elapsedMs,
@@ -7023,6 +7022,7 @@ function completionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
+    ...retrievalLossActivityExtra(execution.status),
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),
     ...workspaceIoActivityExtra(execution.workspaceIo),
