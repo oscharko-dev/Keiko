@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useEffect, useState, type ReactNode } from "react";
+import * as React from "react";
+import { useEffect, useState, type EffectCallback, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as i18n from "./i18n";
 import type { OptionalWidgetTranslate } from "./optional-widget-i18n";
@@ -11,6 +12,7 @@ vi.doMock("./i18n", () => i18n);
 vi.doMock("./client-diagnostics", () => diagnostics);
 
 afterEach(() => {
+  vi.doUnmock("react");
   vi.doUnmock("./i18n-messages.optional.de");
   resetClientDiagnosticWriter();
 });
@@ -93,6 +95,39 @@ describe("optional widget locale recovery", () => {
 });
 
 describe("optional translator identity", () => {
+  it("reconciles the rendered fallback when the catalog resolves before its passive effect", async () => {
+    vi.resetModules();
+    const passiveEffects: EffectCallback[] = [];
+    vi.doMock("react", () => ({
+      ...React,
+      useEffect: (effect: EffectCallback): void => {
+        passiveEffects.push(effect);
+      },
+    }));
+    const widget = await import("./optional-widget-i18n");
+    const translators: OptionalWidgetTranslate[] = [];
+    function Probe(): ReactNode {
+      const t = widget.useOptionalWidgetTranslate();
+      translators.push(t);
+      return <button type="button">{t("memoria.approve")}</button>;
+    }
+    window.localStorage.setItem("keiko.locale", "de");
+    render(
+      <i18n.I18nProvider>
+        <Probe />
+      </i18n.I18nProvider>,
+    );
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+    expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
+    const renderedTranslator = translators.at(-1);
+    await widget.loadOptionalWidgetMessages("de");
+    await act(async () => {
+      passiveEffects.forEach((effect) => effect());
+    });
+    expect(screen.getByRole("button", { name: "Akzeptieren" })).toBeVisible();
+    expect(translators.at(-1)).toBe(renderedTranslator);
+  });
+
   it("updates delayed German labels without restarting effects that depend on the translator", async () => {
     vi.resetModules();
     let release: () => void = () => undefined;
