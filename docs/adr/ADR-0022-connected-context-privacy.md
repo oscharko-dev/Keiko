@@ -283,7 +283,10 @@ so repeated hits in one file cannot consume every retained slot before another r
 Omission samples use the same bounded heap, ordered by path independently of read-completion timing.
 The streamed semantic lane retains the best 32 score/path-ranked documents within its existing
 128 KiB text pool. Each document receives a bounded equal share; existing anchored byte windows
-retain relevant late content and its actual source-line origin. Neither document selection nor
+retain relevant late content and its actual source-line origin. Admission encodes an anchored
+source once; an unanchored fallback encodes only a prefix bounded by that document’s byte grant.
+Retained excerpts are not re-encoded to maintain an unused byte total. The small retained list
+continues to use the same score/path sort and provider-payload limit. Neither document selection nor
 omission sampling depends on which concurrent read finishes first. Explicit finite query limits remain authoritative. Excerpts
 are read in bounded concurrent waves; unused byte grants are recycled after a wave settles, while
 the actual accepted byte/token budgets determine which evidence fits. A large matching set therefore

@@ -47,8 +47,7 @@ export interface SemanticSearchSession {
   readonly maxDocumentBytes?: number;
   readonly maxDocuments?: number;
   readonly queryTerms?: readonly string[];
-  documentScores?: Map<string, number>;
-  documentBytes?: number;
+  readonly documentScores: Map<string, number>;
 }
 
 export interface SemanticSearchExecutionOptions {
@@ -175,7 +174,6 @@ export function createSemanticSearchSession(
     provider,
     documents: [],
     ...bounds,
-    documentBytes: 0,
     queryTerms: semanticExcerptTerms(query),
     documentScores: new Map(),
   };
@@ -189,7 +187,7 @@ function boundedSemanticDocument(
   const window = anchoredExcerptByteWindow(document.text, session.queryTerms ?? [], maxBytes, 1);
   if (window !== undefined)
     return { scopePath: document.scopePath, text: window.content, startLine: window.startLine };
-  const bytes = new TextEncoder().encode(document.text).subarray(0, maxBytes);
+  const bytes = new TextEncoder().encode(document.text.slice(0, maxBytes)).subarray(0, maxBytes);
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true });
   return { ...document, text };
 }
@@ -199,7 +197,7 @@ function rankedSemanticDocument(
   document: SemanticSearchDocument,
   score: number,
 ): void {
-  const scores = (session.documentScores ??= new Map<string, number>());
+  const scores = session.documentScores;
   const compare = (a: SemanticSearchDocument, b: SemanticSearchDocument): number =>
     (scores.get(b.scopePath) ?? 0) - (scores.get(a.scopePath) ?? 0) ||
     comparePath(a.scopePath, b.scopePath);
@@ -219,10 +217,6 @@ function rankedSemanticDocument(
     const removed = session.documents.pop();
     if (removed !== undefined) scores.delete(removed.scopePath);
   }
-  session.documentBytes = session.documents.reduce(
-    (sum, entry) => sum + new TextEncoder().encode(entry.text).length,
-    0,
-  );
 }
 
 export function collectSemanticSearchDocument(
