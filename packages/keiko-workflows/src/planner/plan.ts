@@ -4,6 +4,7 @@
 // network. Execution and persistence of plans land in #182/#183/#187.
 
 import { createHash } from "node:crypto";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -648,8 +649,8 @@ function canonicalize(seed: PlanSeed): string {
     seed.queryKind,
     seed.queryText,
     seed.retrievalIntent,
-    [...seed.anchorTerms].sort((left, right) => left.localeCompare(right)),
-    [...seed.ringKinds].sort((left, right) => left.localeCompare(right)),
+    [...seed.anchorTerms].sort(compareStrings),
+    [...seed.ringKinds].sort(compareStrings),
   ]);
 }
 

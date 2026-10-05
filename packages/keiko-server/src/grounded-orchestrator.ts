@@ -260,6 +260,26 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       required: true,
       values: ["complete", "unavailable"],
     },
+    retrievalIntent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "project-metadata",
+        "repository-overview",
+        "targeted-code-search",
+        "diagnostic-search",
+        "clarification-needed",
+      ],
+    },
+    retrievalTargetDecision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["literal-search", "direct-fact", "contextual"],
+    },
+    retrievalTargetCount: { type: "integer", dataClass: "count", required: false },
+    retrievalAnchorCount: { type: "integer", dataClass: "count", required: false },
     plannedRingCount: { type: "integer", dataClass: "count", required: false },
     executedRingKinds: {
       type: "string-array",
@@ -6839,6 +6859,14 @@ function completionActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     plannedRingCount: plan.rings.length,
+    retrievalIntent: plan.retrievalIntent,
+    ...(plan.targetDecision === undefined
+      ? {}
+      : {
+          retrievalTargetDecision: plan.targetDecision.kind,
+          retrievalTargetCount: plan.targetDecision.targets.length,
+        }),
+    retrievalAnchorCount: plan.anchors.length,
     ...execution.status.decisions,
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,

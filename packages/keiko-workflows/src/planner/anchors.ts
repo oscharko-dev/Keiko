@@ -1,3 +1,5 @@
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+
 // Deterministic search-anchor extraction for the exploration planner (Epic #177, Issue #181).
 // Pure JS — no IO, no clock, no randomness. Given free-form prompt text, this module produces
 // a small, stable, weight-ordered set of search anchors. The stop-word list is intentionally
@@ -155,10 +157,10 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "zur",
 ]);
 
-// Module-scope regex pool. Each pattern uses character classes only (no nested quantifiers),
-// so scanning is linear in input length — ReDoS-safe.
+// Module-scope patterns are scanned only inside the bounded input envelope. Identifier and
+// path runs also have bounded backtracking per possible start position.
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
-const QUOTED_SINGLE_RE = /(?<![\p{L}\p{N}_])'([^'\n]+)'(?![\p{L}\p{N}_])/gu;
+const QUOTED_SINGLE_RE = /(?<![\p{Script=Latin}\p{N}_])'([^'\n]+)'(?![\p{Script=Latin}\p{N}_])/gu;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any
@@ -183,8 +185,10 @@ const DEFINITION_TARGET_AFTER_NOUN_RE =
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
 // with a non-symbol — see planner/plan.ts decideClarification and grounded symbolFileAnchorTerms.
-const CAMEL_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*[a-z0-9][A-Z][A-Za-z0-9_$]*)\b/g;
-const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]*_[A-Za-z0-9_$]+)\b/g;
+const CAMEL_IDENTIFIER_RE =
+  /\b([A-Za-z_$][A-Za-z0-9_$]{0,127}[a-z0-9][A-Z][A-Za-z0-9_$]{0,127})\b/g;
+const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]{0,127}_[A-Za-z0-9_$]{1,127})\b/g;
+const FILENAME_RE = /\b([A-Za-z0-9$-]{0,127}_[A-Za-z0-9_$-]{1,127}\.[A-Za-z0-9]{1,16})(?![\w.])/g;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
@@ -360,7 +364,7 @@ function sortAnchors(anchors: MutableAnchor[]): MutableAnchor[] {
     if (a.weight !== b.weight) {
       return b.weight - a.weight;
     }
-    return a.term.localeCompare(b.term);
+    return compareStrings(a.term, b.term);
   });
 }
 
@@ -449,6 +453,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
     collected,
     isDefinitionTarget,
   );
+  remaining = collectMatches(remaining, FILENAME_RE, "identifier", 0.8, collected);
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
