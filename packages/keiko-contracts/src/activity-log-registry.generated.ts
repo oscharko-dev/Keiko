@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "388416bd637bbc926e89a353557410b80e4797234ab89e2dac124b7a43f0b60e" as const;
+  "e1d51907c898360993c436470f9b6b4c7a6807b10c3ca3966a96b271e465c0df" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -3751,6 +3751,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "gitClientOperationReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "healthDiagnosticsInvalidReason",
               type: "string",
               dataClass: "closed-enum",
               required: false,
@@ -11039,6 +11045,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "indexBypassedSearchCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "indexFallbackSearchCount",
               type: "integer",
               dataClass: "count",
@@ -11295,6 +11307,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string-array",
               dataClass: "safe-platform-class",
               required: false,
+            },
+            {
+              name: "indexBypassedSearchCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
             },
             {
               name: "indexFallbackSearchCount",
@@ -18662,16 +18680,58 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "discoverySource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "elapsedMs",
               type: "integer",
               dataClass: "duration",
               required: true,
             },
             {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "httpStatus",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "metadataEnrichedModelCount",
               type: "integer",
               dataClass: "count",
               required: false,
+            },
+            {
+              name: "modelGroupInfoOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "modelInfoOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "modelListOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
             },
             {
               name: "notDiscoveredModelCount",
@@ -18698,10 +18758,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["gateway.setup.metadata.resolved.line"],
           replayReferences: [],
