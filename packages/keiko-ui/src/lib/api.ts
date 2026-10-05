@@ -183,7 +183,6 @@ import {
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
-  type GitChangeBlockedReason,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -204,10 +203,10 @@ import {
   GITHUB_ISSUE_BINDING_ID_MAX_CHARS,
   isBoundedText,
   isRecordValue,
-  SHA256_HEX,
 } from "./api-shared-primitives";
 
-export { ApiError, GITHUB_ISSUE_BINDING_ID_MAX_CHARS, isBoundedText, isRecordValue, SHA256_HEX };
+export { ApiError, GITHUB_ISSUE_BINDING_ID_MAX_CHARS, isBoundedText, isRecordValue };
+export { SHA256_HEX } from "./api-shared-primitives";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -3670,7 +3669,8 @@ export async function updateGitHubIssueReaderAuthorization(
 
 // ─── Issue #3400 — Git-to-Chat connect/refresh (server-resolved comparison, never a browser root)
 
-export type { GitChangeBlockedReason, GitChangeConnectResponse, GitChangeRefreshResponse };
+export type { GitChangeBlockedReason } from "@oscharko-dev/keiko-contracts/bff-wire";
+export type { GitChangeConnectResponse, GitChangeRefreshResponse };
 
 export interface ConnectGitChangeComparisonInput {
   readonly chatId: string;
