@@ -152,13 +152,16 @@ export function resetSupportReportOutcomesForTests(): void {
   notifyOutcomes();
 }
 
+type SupportReportFailure =
+  ClientOnlySupportReportInput["failure"] | (() => ClientOnlySupportReportInput["failure"]);
+
 interface SupportReportButtonProps {
   readonly correlationId?: string | undefined;
   readonly errorKey?: string | undefined;
   readonly compact?: boolean;
   readonly clientOnly?: boolean;
   readonly disposeOnUnmount?: boolean;
-  readonly failure?: ClientOnlySupportReportInput["failure"];
+  readonly failure?: SupportReportFailure;
 }
 
 type ReportFailure = "error" | "session-denied" | "service-unavailable" | "rate-limited";
@@ -476,7 +479,7 @@ async function runReport(
   request: ReportRequestRef,
   setFeedback: (feedback: ReportFeedback) => void,
   regenerate: boolean,
-  failure: ClientOnlySupportReportInput["failure"],
+  failureInput: SupportReportFailure,
   clientOnly: boolean,
 ): Promise<void> {
   const controller = beginReport(key, regenerate);
@@ -488,8 +491,11 @@ async function runReport(
     AbortSignal.timeout(SUPPORT_REPORT_REQUEST_TIMEOUT_MS),
   ]);
   let api: typeof import("@/lib/support-report-api") | undefined;
-  let phase: "module" | "facts" | "request" | "artifact" = "module";
+  let phase: "module" | "facts" | "request" | "artifact" = "facts";
+  let failure: ClientOnlySupportReportInput["failure"];
   try {
+    failure = typeof failureInput === "function" ? failureInput() : failureInput;
+    phase = "module";
     api = await waitForReportStep(import("@/lib/support-report-api"), signal);
     const local = await loadLocalReport(signal);
     phase = "facts";

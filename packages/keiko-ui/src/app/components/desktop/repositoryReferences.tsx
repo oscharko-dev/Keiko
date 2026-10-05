@@ -850,10 +850,12 @@ export function RepositoryReferenceInline({
   const dismissOnEscape = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
       if (event.key !== "Escape" || status === "idle") return;
-      event.preventDefault();
-      event.stopPropagation();
+      if (status === "choosing") {
+        event.preventDefault();
+        event.stopPropagation();
+        recordActivation("picker-dismissed");
+      }
       clearIdleReset();
-      if (status === "choosing") recordActivation("picker-dismissed");
       resetToIdle();
       triggerRef.current?.focus();
     },

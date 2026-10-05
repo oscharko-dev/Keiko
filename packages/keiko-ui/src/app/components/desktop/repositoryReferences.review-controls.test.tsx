@@ -163,3 +163,30 @@ describe("repository source picker lifecycle", () => {
     }
   });
 });
+
+it.each([true, false])("preserves parent Escape after citation navigation settles (%s)", (ok) => {
+  const parentKeyDown = vi.fn();
+  const { container } = render(
+    <RepositoryReferenceInline
+      reference={reference}
+      roots={[singleRoot]}
+      openReference={() =>
+        ok ? { ok: true, windowId: "editor" } : { ok: false, message: "Refused" }
+      }
+    />,
+  );
+  const parent = container.parentElement;
+  if (parent === null) throw new TypeError("Missing mounted parent");
+  parent.addEventListener("keydown", parentKeyDown);
+  try {
+    const trigger = screen.getByRole("button");
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("data-state", ok ? "opened" : "failed");
+    const escaped = fireEvent.keyDown(trigger, { key: "Escape" });
+    expect(escaped).toBe(true);
+    expect(parentKeyDown).toHaveBeenCalledOnce();
+    expect(trigger).toHaveAttribute("data-state", "idle");
+  } finally {
+    parent.removeEventListener("keydown", parentKeyDown);
+  }
+});

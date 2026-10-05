@@ -2,6 +2,9 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
+import { StrictMode } from "react";
+import * as errorEvidence from "@/lib/client-error-evidence";
+import * as clientDiagnostics from "@/lib/client-diagnostics";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fireEvent, render, screen, within } from "@testing-library/react";
@@ -285,4 +288,48 @@ it("gives the text-only alert remaining row width before its sibling dismiss con
   } finally {
     style.remove();
   }
+});
+
+it("keeps a dismissed error hidden for the same instance but shows an equal new instance", () => {
+  const error = new Error("Same failure");
+  const view = render(<ErrorNoticeFromError error={error} fallback="Failed" />);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+  view.rerender(<ErrorNoticeFromError error={error} fallback="Failed" />);
+  expect(screen.queryByRole("alert")).toBeNull();
+  view.rerender(<ErrorNoticeFromError error={new Error("Same failure")} fallback="Failed" />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Same failure");
+});
+
+it("collects stack and cause evidence only when the user requests a report", async () => {
+  const report = await canonicalSupportReportFixture();
+  const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+  vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+    href: "blob:lazy-evidence",
+    dispose: vi.fn(),
+  });
+  const evidence = vi.spyOn(errorEvidence, "clientErrorEvidence");
+  const loss = vi.spyOn(clientDiagnostics, "recordClientDiagnosticLoss");
+  const error = Object.defineProperty(new Error("Visible failure"), "stack", {
+    get: (): never => {
+      throw new Error("private stack getter");
+    },
+  });
+  const content = (
+    <StrictMode>
+      <ErrorNoticeFromError error={error} fallback="Failed" />
+    </StrictMode>
+  );
+  const view = render(content);
+  view.rerender(
+    <StrictMode>
+      <ErrorNoticeFromError error={error} fallback="Failed again" />
+    </StrictMode>,
+  );
+  expect(evidence).not.toHaveBeenCalled();
+  expect(loss).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(evidence).toHaveBeenCalledExactlyOnceWith(error);
+  expect(create).toHaveBeenCalledOnce();
+  expect(loss).toHaveBeenCalledExactlyOnceWith("errorsSuppressed");
 });

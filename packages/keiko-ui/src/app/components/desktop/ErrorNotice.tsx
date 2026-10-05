@@ -53,7 +53,7 @@ function ErrorNoticeReportAction({
 }: {
   readonly notice: UserErrorNotice;
   readonly noticeKey: string;
-  readonly failure: ClientOnlySupportReportInput["failure"];
+  readonly failure: () => ClientOnlySupportReportInput["failure"];
 }): ReactNode {
   return (
     <SupportReportButton
@@ -111,7 +111,7 @@ function ErrorNotice({
 }: {
   readonly notice: UserErrorNotice;
   readonly noticeKey: string;
-  readonly failure: ClientOnlySupportReportInput["failure"];
+  readonly failure: () => ClientOnlySupportReportInput["failure"];
   readonly className?: string | undefined;
   readonly id?: string | undefined;
   readonly onDismiss?: (() => void) | undefined;
@@ -165,7 +165,7 @@ export function ErrorNoticeFromError({
       className={className}
       notice={notice}
       noticeKey={`${occurrence}:${notice.correlationId ?? ""}`}
-      failure={noticeFailure(error, notice)}
+      failure={() => noticeFailure(error, notice)}
       onDismiss={onDismiss}
       dismissible={dismissible}
     />
