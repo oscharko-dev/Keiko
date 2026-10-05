@@ -1174,10 +1174,12 @@ function allowedSizeExclusionPaths(pack: ConnectedContextPack): readonly string[
 
 // The existing pack owns eligibility decisions. Project only safe omission metadata, never
 // unread file bodies; bound prompt bytes without changing which files retrieval inspects.
+const MAX_SIZE_EXCLUSION_PATH_BYTES = 4096;
+
 export function sizeExclusionLines(
   pack: ConnectedContextPack,
   redactor: Redactor,
-  pathByteLimit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
+  pathByteLimit = MAX_SIZE_EXCLUSION_PATH_BYTES,
 ): readonly string[] {
   if (pathByteLimit < 0) return [];
   const paths = allowedSizeExclusionPaths(pack);
@@ -1194,8 +1196,8 @@ export function sizeExclusionLines(
   let listed = 0;
   for (const path of paths) {
     const line = `- omitted path: ${JSON.stringify(redactedString(redactor, path))}; reason=size-exceeded`;
-    const bytes = Buffer.byteLength(line, "utf8");
-    if (pathBytes + bytes > pathByteLimit) break;
+    const bytes = Buffer.byteLength(line, "utf8") + 1;
+    if (pathBytes + bytes > Math.min(pathByteLimit, MAX_SIZE_EXCLUSION_PATH_BYTES)) break;
     lines.push(line);
     pathBytes += bytes;
     listed += 1;

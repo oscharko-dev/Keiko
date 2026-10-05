@@ -3446,28 +3446,43 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("reports low-value rescue coverage when generated source is the only evidence", async () => {
-    writeFileSync(join(ROOT, ".git"), "gitdir: ../fixture.git\n");
-    mkdirSync(join(ROOT, "generated"), { recursive: true });
-    writeFileSync(join(ROOT, "generated/client.ts"), "export const GeneratedNeedle = 1;\n");
-    const out = await retrieveConnectedContextPack(
-      input({
-        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({ text: "Where is GeneratedNeedle defined?" }),
-      }),
-      {
-        correlationId: undefined,
-        answerer: echoAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-      },
-    );
-    expect(out.pack.files.some((file) => file.scopePath === "generated/client.ts")).toBe(true);
-    expect(out.pack.omitted.some((entry) => entry.scopePath === "generated/client.ts")).toBe(false);
-    expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesDiscovered).toBe(1);
-    expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesScanned).toBe(1);
-    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-  });
+  it.each([
+    { directory: "generated", rescued: 1 },
+    { directory: "dist", rescued: 1 },
+    { directory: "build", rescued: 1 },
+    { directory: "coverage", rescued: 1 },
+    // Snapshot directories are searched in the primary pass, but ranking also marks them generated.
+    { directory: "__snapshots__", rescued: 0 },
+  ])(
+    "reports low-value rescue coverage when $directory source is the only evidence",
+    async ({ directory, rescued }) => {
+      writeFileSync(join(ROOT, ".git"), "gitdir: ../fixture.git\n");
+      const sourcePath = `${directory}/client.ts`;
+      mkdirSync(join(ROOT, directory), { recursive: true });
+      writeFileSync(join(ROOT, sourcePath), "export const GeneratedNeedle = 1;\n");
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({ text: "Where is GeneratedNeedle defined?" }),
+        }),
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      expect(out.pack.files.some((file) => file.scopePath === sourcePath)).toBe(true);
+      expect(out.pack.omitted.some((entry) => entry.scopePath === sourcePath)).toBe(false);
+      expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesDiscovered).toBe(rescued);
+      expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesScanned).toBe(rescued);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    },
+  );
 
   it("injects a root-level glob manifest (*.csproj) for a project-metadata question (M4 root glob scan)", async () => {
     // *.csproj has no fixed basename, so the exact-name injection list cannot enumerate it; the
@@ -4109,6 +4124,52 @@ describe("runGroundedExploration", () => {
     ).toBe(false);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   }, 15_000);
+
+  it("processes a user stop between symbol definition file scans", async () => {
+    seedOverflowImplementations(ROOT, 96);
+    const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+    if (read === undefined) throw new TypeError("Missing bounded descriptor fixture");
+    const caller = new AbortController();
+    const activityLog = createBufferedServerLogSink();
+    let definitionReads = 0;
+    const pending = retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Trace OverflowProbe implementations" }),
+      }),
+      {
+        correlationId: "symbol-scan-stop",
+        activityLog,
+        signal: caller.signal,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs: {
+          ...nodeWorkspaceFs,
+          readFileUtf8SameDescriptor: (...args): WorkspaceDescriptorUtf8Read => {
+            if (new Error().stack?.includes("boundedSymbolFileText") === true) {
+              definitionReads += 1;
+              if (definitionReads === 1)
+                setImmediate(() => {
+                  caller.abort();
+                });
+            }
+            return read(...args);
+          },
+        },
+      },
+    );
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
+    expect(definitionReads).toBe(1);
+    const cancelled = activityLog.events.find(
+      (event) => event.op === "search.connected-context.failed",
+    );
+    expect(cancelled).toMatchObject({
+      correlationId: "symbol-scan-stop",
+      errorKind: "cancelled",
+      extra: { outcome: "cancelled" },
+    });
+  });
 
   it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
     writeFileSync(

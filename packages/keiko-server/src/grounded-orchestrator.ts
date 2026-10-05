@@ -4406,11 +4406,11 @@ function withLexicalSymbolCandidates(
   return [...combined.values()];
 }
 
-function collectPrioritizedSymbolAtoms(
+async function collectPrioritizedSymbolAtoms(
   inputs: PrioritizedSymbolInputs,
   matches: readonly SymbolDefinitionMatch[],
   terms: readonly string[],
-): SymbolDiscoveryResult {
+): Promise<SymbolDiscoveryResult> {
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
   const verifiedTerms = new Set<string>();
@@ -4425,6 +4425,7 @@ function collectPrioritizedSymbolAtoms(
     deadlineMs: inputs.deadlineAtMs,
   };
   for (const match of orderSymbolMatchesForTerms(matches, terms)) {
+    if (!lookups.has(match.atom.scopePath)) await groundedSchedulingYield(inputs.signal);
     throwIfCancelled(inputs.signal);
     pushUniqueAtom(atoms, seen, match.atom);
     if (lineDeadlineReached) {
@@ -4477,7 +4478,7 @@ async function symbolFileAtoms(
   // Both requested filename families share discovery, including the early declaration phase.
   // Each remains a separately charged query with its own retention and coverage.
   const { symbols, documents } = await collectFilenameMatches(inputs, requestContext);
-  const prioritized = collectPrioritizedSymbolAtoms(
+  const prioritized = await collectPrioritizedSymbolAtoms(
     { input, searchScope, fs, nowMs, signal, deadlineAtMs },
     withLexicalSymbolCandidates(symbols.matches, symbols.terms, inputs.lexicalAtoms ?? []),
     symbols.terms,
@@ -6123,7 +6124,7 @@ async function fileStateCacheIdentity(
       const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
       if (strongIdentity === undefined) return undefined;
       identity.push(strongIdentity);
-      if (identity.length % 64 === 0) await cacheIdentitySchedulingYield(signal);
+      if (identity.length % 64 === 0) await groundedSchedulingYield(signal);
     }
   } catch (error) {
     rethrowMetadataCancellation(error);
@@ -6146,7 +6147,7 @@ export async function _fileStateCacheIdentityForTests(
   return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, signal);
 }
 
-async function cacheIdentitySchedulingYield(signal?: AbortSignal): Promise<void> {
+async function groundedSchedulingYield(signal?: AbortSignal): Promise<void> {
   // Scheduling batches bound event-loop monopolization, not eligible paths or cache coverage.
   await new Promise<void>((resolve) => setImmediate(resolve));
   throwIfCancelled(signal);
@@ -6450,9 +6451,11 @@ function selectPackAtoms(
 }
 
 function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OPTIONS {
+  const certifiedPaths = primaryContentPaths(rings);
   return {
     ...DEFAULT_FILTER_OPTIONS,
-    minScoreExemptPaths: primaryContentPaths(rings),
+    minScoreExemptPaths: certifiedPaths,
+    generatedExemptPaths: certifiedPaths,
     maxKept: new Set(rings.atoms.map((atom) => atom.scopePath)).size,
   };
 }

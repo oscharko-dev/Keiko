@@ -394,8 +394,14 @@ must never prove that an exact target is absent. Intentional eligibility exclusi
 Generated-source rescue runs only for supported targeted queries after a complete no-hit scan
 actually observed low-value exclusions. It does not repeat a Git traversal for an overview,
 project-metadata request, regex, or a scope with no skipped low-value evidence.
+Policy-admitted, certified exact-content matches from that rescue remain eligible for ranking even
+when their directory has a generated-source hint. This exemption cannot override binary, denied,
+or other explicit eligibility exclusions. Symbol-line inspection yields between physical file
+scans so cancellation can run without imposing a separate candidate-count limit.
 Validated, policy-allowed, redacted relative paths and `size-exceeded` reasons are projected into
-the existing model prompt within its input budget. This metadata proves eligibility exclusions
+the existing model prompt within its input budget and a separate 4 KiB per-source path-list budget.
+This is a prompt metadata limit, not a search or file-count limit. Listed paths remain untrusted
+data, never instructions. This metadata proves eligibility exclusions
 only: it contains no unread body and cannot establish file-content citations or line references.
 Exact exclusion counts remain when the remaining prompt budget cannot hold every path name.
 

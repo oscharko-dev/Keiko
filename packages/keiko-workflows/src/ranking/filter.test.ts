@@ -44,6 +44,23 @@ function annotated(
 }
 
 describe("filterCandidates", () => {
+  it("retains certified generated content without overriding eligibility denials", () => {
+    const blocked = {
+      ...annotated("dist/blocked.ts", 0.9, true),
+      candidate: { ...candidate("dist/blocked.ts", 0.9), omitted: "binary" as const },
+    };
+    const certified = new Set(["dist/exact.ts", "dist/blocked.ts"]);
+    const result = filterCandidates(
+      [annotated("dist/exact.ts", 0.05, true), annotated("dist/other.ts", 0.9, true), blocked],
+      options({ minScoreExemptPaths: certified, generatedExemptPaths: certified }),
+    );
+    expect(result.kept.map((entry) => entry.scopePath)).toEqual(["dist/exact.ts"]);
+    expect(result.omitted).toEqual([
+      { scopePath: "dist/blocked.ts", reason: "binary", omittedAtMs: FIXED_NOW },
+      { scopePath: "dist/other.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+    ]);
+  });
+
   it("exempts only certified content from the absolute relevance floor", () => {
     const result = filterCandidates(
       [

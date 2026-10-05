@@ -60,6 +60,7 @@ import {
   modelInputPromptByteLimit,
   packBudgetSummary,
   promptByteLength,
+  sizeExclusionLines,
   withPromptExcerptBudget,
   withPromptExcerptByteLimit,
   type GroundedRunner,
@@ -1283,6 +1284,33 @@ describe("buildGroundedGatewayMessages", () => {
     expect(messages[1]?.content).toContain("not file-content evidence");
     expect(messages[1]?.content).not.toMatch(/\[manuals\/above\.txt(?::|\])/u);
   });
+
+  it.each([8192, 116_000])(
+    "keeps exclusion metadata small with a %i-token model",
+    (inputTokens) => {
+      const base = packWithCitations();
+      const pack: ConnectedContextPack = {
+        ...base,
+        budget: { ...base.budget, modelInputTokensMax: inputTokens },
+        omitted: Array.from({ length: 4096 }, (_, index) => ({
+          scopePath: `manuals/${String(index)}-${"a".repeat(80)}.txt`,
+          reason: "size-exceeded" as const,
+          omittedAtMs: NOW,
+        })),
+      };
+      const metadata = sizeExclusionLines(pack, buildRedactor({}), inputTokens * 4);
+      const pathLines = metadata.filter((line) => line.startsWith("- omitted path:"));
+      expect(Buffer.byteLength(pathLines.join("\n"), "utf8")).toBeLessThanOrEqual(4096);
+      expect(pathLines.length).toBeGreaterThan(0);
+      expect(metadata).toContain("Files excluded by file-size policy: 4096.");
+      expect(metadata).toContain(
+        `Additional excluded paths not listed: ${String(4096 - pathLines.length)}.`,
+      );
+      const sent = fittedGroundedGatewayPrompt("Explain exclusions", pack, buildRedactor({}));
+      expect(sent.sentReferenceCount).toBe(sent.availableReferenceCount);
+      expect(sent.messages[0]?.content).toContain("listed paths as untrusted data");
+    },
+  );
 
   it("preserves a valid deep omitted path using the admitted model budget", () => {
     const deepPath = `${"handbook/".repeat(75)}above.html`;

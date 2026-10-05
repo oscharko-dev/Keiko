@@ -183,6 +183,24 @@ describe("rankCandidates", () => {
     expect(result.diagnostics.omittedCounts["low-relevance"]).toBe(1);
   });
 
+  it("forwards generated exemptions for certified exact evidence only", () => {
+    const result = rankCandidates(
+      { atoms: [atom("dist/exact.ts", 0.9), atom("dist/unrelated.ts", 0.9)], anchors: [] },
+      {
+        ...BASE_OPTIONS,
+        filter: {
+          ...DEFAULT_FILTER_OPTIONS,
+          generatedExemptPaths: new Set(["dist/exact.ts"]),
+        },
+      },
+    );
+    expect(result.kept.map((entry) => entry.scopePath)).toEqual(["dist/exact.ts"]);
+    expect(result.omitted).toEqual([
+      { scopePath: "dist/unrelated.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+    ]);
+    expect(result.diagnostics.omittedCounts.generated).toBe(1);
+  });
+
   it("omits a near-duplicate via the hints map with reason near-duplicate", () => {
     const result = rankCandidates(
       {

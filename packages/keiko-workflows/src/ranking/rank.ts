@@ -67,6 +67,9 @@ function resolveFilterOptions(
     ...(base.minScoreExemptPaths === undefined
       ? {}
       : { minScoreExemptPaths: base.minScoreExemptPaths }),
+    ...(base.generatedExemptPaths === undefined
+      ? {}
+      : { generatedExemptPaths: base.generatedExemptPaths }),
     maxKept: base.maxKept,
     omitGenerated: base.omitGenerated,
     omitNearDuplicates: base.omitNearDuplicates,
