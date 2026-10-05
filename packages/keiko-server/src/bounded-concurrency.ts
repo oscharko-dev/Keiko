@@ -24,8 +24,8 @@ export const mapWithConcurrency = async <T, R>(
       const index = next;
       next += 1;
       if (index >= items.length) return;
-      const item = items[index];
-      if (item === undefined) continue;
+      // The index is in range; undefined is a legitimate value when T includes it.
+      const item = items[index] as T;
       try {
         results[index] = await worker(item, index);
       } catch (error) {

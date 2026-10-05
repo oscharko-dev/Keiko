@@ -43,7 +43,7 @@ export {
   type FigmaRetryPolicy,
   type FigmaRetrySleep,
 } from "./figmaRetry.js";
-export { mapWithConcurrency } from "./figmaConcurrency.js";
+export { mapWithConcurrency } from "../../bounded-concurrency.js";
 export {
   paginateScopedDocument,
   discoverScreenNodes,
