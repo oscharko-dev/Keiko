@@ -10,8 +10,12 @@ import {
 
 /** Young real claims cannot be rolled out before their publishing process settles. */
 export function occupySupportIncidentRetentionForTests(stateDir: string): number {
-  ensureSupportIncidentDirectory(stateDir);
   const { capacity } = supportIncidentRetentionPolicy(stateDir);
+  if (capacity > 16)
+    throw new RangeError(
+      "Set a small KEIKO_LOG_RETENTION_BYTES fixture policy before reserving slots",
+    );
+  ensureSupportIncidentDirectory(stateDir);
   for (let slot = 0; slot < capacity; slot += 1) {
     const incidentId = slot.toString(16).padStart(32, "0");
     if (!claimSupportIncidentSlot(stateDir, slot, incidentId)) {
