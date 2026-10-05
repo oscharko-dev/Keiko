@@ -579,6 +579,24 @@ A registration never declares `frames` or `causeChain` required. Redaction omits
 a required one would reject the ordinary failure without Keiko frames or a cause. The generator
 reports that declaration as `registration-omitted-field-required`.
 
+Grounded diagnostics use the same registry and request correlation. `search.citations.reconciled`
+covers numeric references and file locations for Knowledge Pod, folder, multi-source and hybrid
+answers. `citationKind` identifies `numeric` or `file`; hybrid may emit one of each. Required
+reference, attached and dangling counts share the closed reconciliation outcome. File lines add
+`ambiguousMarkerCount` and `droppedImplicitCount`; optional weak-overlap/grouped counts describe
+only measurements actually made. Omitted metrics must not be interpreted as measured zeroes.
+
+The `grounded-pack-validation` diagnostic carries closed `validationReasons`, `violationCount`,
+`validatorThrew`, sanitized `originalCode`, optional `sourceIndex`, and `diagnosticOutcome`.
+`source-skipped` is a warning preserving independent healthy sources; `request-failed` retains the
+failure status. `search.connected-context.completion-details` separates scope-context state,
+observed/retained files and charged/capacity bytes; excerpt omitted ranges, truncated windows,
+unread files and stop reasons; and metadata observed, retained and discarded counts. These are
+phase measurements, not a claim that every discovered file reached the model.
+`workspace.root.denied` records the actual safe errno or error class as `failureKind`, preserving
+the underlying recognized cause of `WorkspaceNotFoundError`, with error kind, frames and cause
+chain when available. It no longer substitutes a constant root-not-found label for every cause.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which

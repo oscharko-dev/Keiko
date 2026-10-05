@@ -584,9 +584,13 @@ to fit the model (`trimmed`) or could not fit a single one (`refused`), with the
 the prompt size and the input budget.
 `client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
 no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
-`search.citations.reconciled` records how a Knowledge Pod answer's markers met its sent references
-(`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) with the reference,
-attached, weak-overlap, grouped and dangling counts. `gateway.discovery.alias-intersection` carries
+`search.citations.reconciled` records numeric-reference and file-location reconciliation for
+Knowledge Pod, connected-folder, multi-source and hybrid answers under the request correlation.
+`citationKind` distinguishes `numeric` from `file`; hybrid answers may emit one line of each kind.
+The closed outcome (`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) and
+reference, attached and dangling counts describe the actual reconciliation. File lines also carry
+ambiguous-marker and dropped-implicit counts. Weak-overlap and grouped-marker counts are optional:
+absence means they were not measured on that path, not zero. `gateway.discovery.alias-intersection` carries
 the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
 `gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
 `wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe

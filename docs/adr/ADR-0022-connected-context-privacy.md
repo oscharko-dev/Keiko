@@ -387,7 +387,11 @@ selected-file read replaces an earlier omission for that exact file; invalid par
 still fail validation. Read refusals retain their existing closed policy or budget reason.
 Invalid assembly metadata raises a bounded typed validation failure: ordinary Chat fails closed,
 while multi-source and hybrid retrieval can retain healthy independent sources and register the
-failed source through the existing pack-validation diagnostic. The compatibility match-only mode
+failed source through the existing pack-validation diagnostic. That diagnostic records closed
+`validationReasons`, `violationCount`, `validatorThrew`, the sanitized `originalCode`, optional
+`sourceIndex`, and `diagnosticOutcome`. A recovered independent source is `source-skipped` at warn;
+a failed request is `request-failed` with its HTTP failure status. These fields contain no pack
+body, source path, or unbounded validator message. The compatibility match-only mode
 remains opt-in; connected-folder production uses surrounding windows. Empty-evidence abstention
 retains a single `no-evidence` marker, and budget clipping remains `budget-clipped`.
 

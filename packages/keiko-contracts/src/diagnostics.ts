@@ -1674,8 +1674,9 @@ export interface ActivityLogReadinessSnapshot {
   readonly writer: ActivityLogWriterKind;
   // Events this process counted as lost since it started (bounded, see the loss ledger).
   readonly lostEvents: number;
-  /** Retained diagnostic candidates, never a count of confirmed or open defects. */
+  /** @deprecated Accepted for wire compatibility only; current servers never produce this count. */
   readonly retainedDiagnosticCount?: number | undefined;
+  /** @deprecated Accepted for wire compatibility only; readiness does not measure store capacity. */
   readonly diagnosticCapacity?: number | undefined;
 }
 
@@ -1955,8 +1956,6 @@ function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): bool
     FILES_SCOPE_DECISION_EXCLUSIVE_KEYS.every((key) => value[key] === undefined)
   );
 }
-
-/** Transport bound for diagnostic counters, independent of folder search/file-count policies. */
 
 /** Citation attribution and the actual navigation decision, without paths or fingerprints. */
 export interface ClientDiagnosticCitationActivation {

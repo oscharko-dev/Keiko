@@ -752,9 +752,10 @@ or window not resolvable, `2` usage error.
   stolen. Manual exports use an unretained descriptor when no slot can be reclaimed. Unreported
   candidates expire after twenty-four hours. Shared Activity Log pin pressure can retire an eligible
   pinned candidate earlier, so byte headroom is not a promise of protected pins.
-  `/api/health` exposes `retainedDiagnosticCount` (readable, unexpired records) and
-  `diagnosticCapacity` (byte-derived record reservation capacity). These are internal storage
-  facts, not a customer defect counter or a measurement of remaining pin capacity.
+  `/api/health` reports writer readiness, closed reasons and `lostEvents`; it does not scan or
+  measure candidate storage. The retired optional `retainedDiagnosticCount` and
+  `diagnosticCapacity` fields are accepted only for wire compatibility and are never produced by
+  current servers. Neither readiness nor the compatibility fields represent open customer defects.
 - **Cross-process dedup and quotas.** The store also holds `fingerprint-<64 hex>.claim` and
   `slot-<nonnegative safe integer>.claim` files: exclusive-create claims that make "one open automatic candidate per
   defectFingerprint" and the count quotas hold even when two processes hit the identical failure at
