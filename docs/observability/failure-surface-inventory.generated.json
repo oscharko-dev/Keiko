@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "863f072bc7ddeadb4e5f5da8bce65794d6b252a2eebb7efc2e18a8d54b3c1df2"
+    "catalogDigest": "39f62957947e78d252e45418aac6ec3c833cb4f00a2d27ecc5c2a59587683bc8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 516,
-    "proofCount": 523,
-    "resolvedProofCount": 523,
+    "operationCount": 518,
+    "proofCount": 525,
+    "resolvedProofCount": 525,
     "failureClassCount": 336,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -463,6 +463,8 @@
         "search.connected-context.completed",
         "search.connected-context.completion-details",
         "search.connected-context.failed",
+        "search.connected-context.metadata-unavailable",
+        "search.connected-context.source-details",
         "search.connected-context.started",
         "search.entailment.judged",
         "search.index-invalidated-for-capsule",
@@ -2145,7 +2147,10 @@
       "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts"
     ],
     "search.answer.assessed.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
-    "search.citations.reconciled.line": ["packages/keiko-server/src/grounded-citation-log.test.ts"],
+    "search.citations.reconciled.line": [
+      "packages/keiko-server/src/grounded-citation-log.test.ts",
+      "packages/keiko-server/src/grounded-qa-hybrid.test.ts"
+    ],
     "search.citations.support-settled.line": [
       "packages/keiko-server/src/grounded-citation-log.test.ts"
     ],
@@ -2159,6 +2164,14 @@
     "search.connected-context.failed.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
       "packages/keiko-server/src/grounded-parallel-cleanup.test.ts"
+    ],
+    "search.connected-context.metadata-unavailable.line": [
+      "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
+    ],
+    "search.connected-context.source-details.line": [
+      "packages/keiko-server/src/grounded-omission-totals.activity-log.test.ts",
+      "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
+      "packages/keiko-server/src/grounded-source-decisions.activity-log.test.ts"
     ],
     "search.connected-context.started.line": [
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts"

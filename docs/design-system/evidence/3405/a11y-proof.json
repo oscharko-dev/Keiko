@@ -11,8 +11,8 @@
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
     "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
     "packages/keiko-ui/src/lib/api.ts": "0c25d52c35f89081486b23d078ea34beb06913def02e0e1dbb9c94045a068f23",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "e77c08d6d80b946f11e10ce06064eefb754eef435d007936a938d531e7fd041e",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "6a912952afd97e73be424c8aeef00a4cbfd9c2e54ddd6f9e406d1093538b2f83"
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "6d700e6a0593ffad6bcee48b06b191f5413d2c988f8c3ebb70e354c52836c0b1",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "cca1be3592f150b438b5942925b1b06b399628b1b33cc46294b1ea16b8013f5d"
   },
   "harnessProvenanceSha256": {
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
