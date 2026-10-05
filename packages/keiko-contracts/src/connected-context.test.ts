@@ -1404,6 +1404,37 @@ describe("validateConnectedContextPack", () => {
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 
+  it.each([0, 1, 100_000])("accepts the additive unsupported-entry count %s", (count) => {
+    const pack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({
+          reasons: ["unrepresentable-path"],
+          unrepresentablePathsByDiscovery: count,
+        }),
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
+    "rejects an invalid unsupported-entry count %s",
+    (count) => {
+      const pack = {
+        ...happyPack(),
+        diagnostics: {
+          rankedCandidates: [],
+          coverage: coverageDiagnostics({ unrepresentablePathsByDiscovery: count }),
+        },
+      };
+      expectInvalidWithReason(
+        validateConnectedContextPack(pack),
+        "coverage.unrepresentablePathsByDiscovery invalid",
+      );
+    },
+  );
+
   it.each(["maxFilesScanned", "elapsedMsMax"] as const)(
     "rejects missing and invalid nullable coverage %s",
     (field) => {

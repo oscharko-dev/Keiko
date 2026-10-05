@@ -418,7 +418,13 @@ export interface RankedCandidateExplanation {
 }
 
 export type ContextCoverageTruncationReason =
-  "aborted" | "file-cap" | "match-cap" | "timeout" | "depth-pruned" | "io-error";
+  | "aborted"
+  | "file-cap"
+  | "match-cap"
+  | "timeout"
+  | "depth-pruned"
+  | "io-error"
+  | "unrepresentable-path";
 
 export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTruncationReason[] = [
   "aborted",
@@ -427,6 +433,7 @@ export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTrunca
   "timeout",
   "depth-pruned",
   "io-error",
+  "unrepresentable-path",
 ] as const;
 
 export interface ContextCoverageLimits {
@@ -438,6 +445,8 @@ export interface ContextCoverageLimits {
 // Path-free coverage summary for repository search. Counts and closed reason enums are safe for
 // prompts, BFF summaries, and evidence manifests; raw paths, query text, and excerpts stay elsewhere.
 export interface ContextCoverageDiagnostics {
+  // Rejected directory entries, not the unknown number of files in their subtrees.
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
@@ -1476,6 +1485,7 @@ const REQUIRED_COVERAGE_FIELDS = [
 ] as const;
 
 const OPTIONAL_COVERAGE_FIELDS = [
+  "unrepresentablePathsByDiscovery",
   "oversizedFilesScanned",
   "lowValueRescueFilesDiscovered",
   "lowValueRescueFilesScanned",

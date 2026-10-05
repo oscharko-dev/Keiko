@@ -187,6 +187,7 @@ function collectFromDirectory(
   readonly truncated: boolean;
   readonly ignored: number;
   readonly denied: number;
+  readonly unrepresentablePaths?: number | undefined;
   readonly depthPruned: number;
   readonly maxFilesPruned: number;
 } {
@@ -216,6 +217,7 @@ function collectFromDirectory(
     truncated: result.stats.maxFilesPruned > 0,
     ignored: result.stats.ignored,
     denied: result.stats.denied,
+    unrepresentablePaths: result.stats.unrepresentablePaths,
     depthPruned: result.stats.depthPruned,
     maxFilesPruned: result.stats.maxFilesPruned,
   };
@@ -323,6 +325,7 @@ export function deriveCandidateSetFromInventory(
       skippedSymbolicLinks: inventory.skippedSymbolicLinks,
       filesDiscovered: inventory.diagnostics.filesDiscovered,
       truncated: inventory.truncated,
+      unrepresentablePaths: inventory.diagnostics.unrepresentablePathsByDiscovery,
       depthPruned: inventory.diagnostics.depthPrunedByDiscovery,
       maxFilesPruned: inventory.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -515,6 +518,7 @@ function resolveGatherInputs(
 }
 
 interface CollectedCandidates {
+  readonly unrepresentablePaths?: number | undefined;
   readonly files: readonly DiscoveredFile[];
   readonly directories: readonly string[];
   readonly directorySnapshots?: readonly WorkspaceDirectorySnapshot[] | undefined;
@@ -658,6 +662,7 @@ function orderCollectedCandidates(
     policy: inputs.policy,
     ignoredByDiscovery,
     deniedByDiscovery,
+    unrepresentablePathsByDiscovery: result.unrepresentablePaths,
     depthPrunedByDiscovery: result.depthPruned,
     maxFilesPrunedByDiscovery: result.maxFilesPruned,
     contentScores,

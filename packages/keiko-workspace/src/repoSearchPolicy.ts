@@ -87,6 +87,7 @@ export interface RankedCandidateDiagnostic {
 }
 
 export interface SearchDiagnostics {
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
   readonly filesDiscovered: number;
@@ -121,6 +122,7 @@ export interface CandidateOrderingResult {
 }
 
 export interface OrderCandidatesForSearchOptions {
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly files: readonly DiscoveredFile[];
   readonly query: RetrievalQuery;
   readonly policy: SearchPolicy;
@@ -1098,6 +1100,7 @@ export function orderCandidatesForSearch(
     policy,
     ignoredByDiscovery,
     deniedByDiscovery,
+    unrepresentablePathsByDiscovery = 0,
     depthPrunedByDiscovery = 0,
     maxFilesPrunedByDiscovery = 0,
     contentScores,
@@ -1121,6 +1124,7 @@ export function orderCandidatesForSearch(
       filesAfterPolicy: ranked.length,
       ignoredByDiscovery,
       deniedByDiscovery,
+      ...(unrepresentablePathsByDiscovery > 0 ? { unrepresentablePathsByDiscovery } : {}),
       depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery,
       candidateBuckets: bucketCounts(ranked),

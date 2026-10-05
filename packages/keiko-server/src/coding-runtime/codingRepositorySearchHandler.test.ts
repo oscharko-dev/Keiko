@@ -93,6 +93,37 @@ const request = {
 };
 
 describe("production coding repository handler composition", () => {
+  it("preserves portable entry loss in the shared search consumer", async () => {
+    const { root, handler, events } = fixture();
+    mkdirSync(join(root, "~archive"));
+    writeFileSync(join(root, "~archive", "hidden.ts"), "parseConfig = UNSEARCHED");
+    const result = await handler.invoke(request, context());
+    expect(result).toMatchObject({
+      ok: true,
+      truncationReasons: ["unrepresentable-path"],
+    });
+    expect(events[1]?.extra).toMatchObject({
+      coverageIncomplete: true,
+      coverageReasons: ["unrepresentable-path"],
+    });
+  });
+
+  it("persists canonical unsupported-entry coverage from the real producer", async () => {
+    const { root, handler, events } = fixture();
+    mkdirSync(join(root, "~archive"));
+    writeFileSync(join(root, "~archive", "hidden.ts"), "parseConfig = UNSEARCHED");
+    await handler.invoke(request, context());
+    const line = settledProof(events);
+    expect(line).toMatchObject({
+      correlationId: context().correlationId,
+      coverageIncomplete: true,
+      coverageReasons: ["unrepresentable-path"],
+      truncationReasons: ["unrepresentable-path"],
+    });
+    expect(JSON.stringify(line)).not.toContain("~archive");
+    expect(JSON.stringify(line)).not.toContain("UNSEARCHED");
+  });
+
   it.each(["invalid-request", "authority-stale", "backend-unavailable", "failed"] as const)(
     "records unavailable progress rather than zero work for %s",
     async (reason) => {

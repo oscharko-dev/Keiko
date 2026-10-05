@@ -50,6 +50,7 @@ interface EntryWalk {
   maxFilesPruned: number;
   truncated: boolean;
   entriesVisited: number;
+  unrepresentablePaths: number;
 }
 
 const EXPLICIT_SCOPE_MAX_DEPTH = DEFAULT_DISCOVERY_OPTIONS.maxDepth;
@@ -175,6 +176,10 @@ function handleDirectoryEntry(
   }
   const root = walk.realRoot;
   const childRel = dirRel.length === 0 ? entry.name : `${dirRel}/${entry.name}`;
+  if (!isValidScopePath(childRel, { mustBeRelative: true })) {
+    walk.unrepresentablePaths += 1;
+    return;
+  }
   if (!allowedByFilters(childRel)) {
     return;
   }
@@ -316,6 +321,7 @@ function createEntryWalk(
     maxFilesPruned: 0,
     truncated: false,
     entriesVisited: 0,
+    unrepresentablePaths: 0,
   };
 }
 
@@ -339,6 +345,7 @@ export function collectFromEntries(
   files: readonly DiscoveredFile[];
   directories: readonly string[];
   directorySnapshots: readonly WorkspaceDirectorySnapshot[];
+  unrepresentablePaths: number;
   filesDiscovered: number;
   truncated: boolean;
   depthPruned: number;
@@ -361,6 +368,7 @@ export function collectFromEntries(
     directorySnapshots: [...walk.directorySnapshots.values()].sort((a, b) =>
       compareStrings(a.scopePath, b.scopePath),
     ),
+    unrepresentablePaths: walk.unrepresentablePaths,
     filesDiscovered: walk.files.length,
     truncated: walk.truncated,
     depthPruned: walk.depthPruned,

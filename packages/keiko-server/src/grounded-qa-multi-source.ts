@@ -301,6 +301,7 @@ type SummableCoverageField =
   | "filesSkipped"
   | "ignoredByDiscovery"
   | "deniedByDiscovery"
+  | "unrepresentablePathsByDiscovery"
   | "depthPrunedByDiscovery"
   | "maxFilesPrunedByDiscovery"
   | "matchesReturned"
@@ -313,7 +314,7 @@ function isCoverageSummary(
 }
 
 function sumCoverage(summaries: readonly CoverageSummary[], field: SummableCoverageField): number {
-  return summaries.reduce((sum, coverage) => sum + coverage[field], 0);
+  return summaries.reduce((sum, coverage) => sum + (coverage[field] ?? 0), 0);
 }
 
 function mergeCoverageLimits(summaries: readonly CoverageSummary[]): CoverageSummary["limits"] {
@@ -349,6 +350,14 @@ function mergeCoverageSummaries(
     truncated: coverageSummaries.some((coverage) => coverage.truncated),
     ignoredByDiscovery: sumCoverage(coverageSummaries, "ignoredByDiscovery"),
     deniedByDiscovery: sumCoverage(coverageSummaries, "deniedByDiscovery"),
+    ...(sumCoverage(coverageSummaries, "unrepresentablePathsByDiscovery") > 0
+      ? {
+          unrepresentablePathsByDiscovery: sumCoverage(
+            coverageSummaries,
+            "unrepresentablePathsByDiscovery",
+          ),
+        }
+      : {}),
     depthPrunedByDiscovery: sumCoverage(coverageSummaries, "depthPrunedByDiscovery"),
     maxFilesPrunedByDiscovery: sumCoverage(coverageSummaries, "maxFilesPrunedByDiscovery"),
     matchesReturned: sumCoverage(coverageSummaries, "matchesReturned"),

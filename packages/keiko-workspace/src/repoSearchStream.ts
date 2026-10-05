@@ -1,6 +1,6 @@
 import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
-import { visitWorkspaceFiles } from "./discovery.js";
+import { visitWorkspaceFiles, type StreamingDiscoveryStats } from "./discovery.js";
 import { WorkspaceError } from "./errors.js";
 import type { CompiledFilenameGlob } from "./repoSearchMatchers.js";
 import { RetainedAtomHeap } from "./repoSearchRetention.js";
@@ -142,6 +142,7 @@ class StreamingSearchCollector {
   private readonly best: RetainedAtomHeap<RankedStreamAtom>;
   private readonly omissions: RetainedAtomHeap<CandidateFile>;
   private matchesFound = 0;
+  public unrepresentablePaths = 0;
   private readonly pending = new Set<Promise<void>>();
   private readonly failures: Error[] = [];
   private emittedFailure: Error | undefined;
@@ -316,6 +317,18 @@ class StreamingSearchCollector {
     return entry.score;
   }
 
+  public recordDiscoveryStats(stats: StreamingDiscoveryStats): void {
+    this.unrepresentablePaths = stats.unrepresentablePaths ?? 0;
+    if (this.unrepresentablePaths > 0) {
+      this.state.truncated = true;
+      this.state.truncationReasons?.add("unrepresentable-path");
+    }
+    if (stats.ioErrors > 0) {
+      this.state.truncated = true;
+      this.state.truncationReasons?.add("io-error");
+    }
+  }
+
   public diagnostics(ignored: number, denied: number): SearchDiagnostics {
     return {
       policyMode: this.runner.policy.mode,
@@ -324,6 +337,9 @@ class StreamingSearchCollector {
       filesAfterPolicy: this.filesAfterPolicy,
       ignoredByDiscovery: ignored,
       deniedByDiscovery: denied,
+      ...(this.unrepresentablePaths > 0
+        ? { unrepresentablePathsByDiscovery: this.unrepresentablePaths }
+        : {}),
       depthPrunedByDiscovery: 0,
       maxFilesPrunedByDiscovery: 0,
       candidateBuckets: this.bucketCounts,
@@ -411,12 +427,7 @@ async function collectPrimaryStream(
       (stats): void => {
         ignored = stats.ignored;
         denied = stats.denied;
-        if (stats.ioErrors > 0) {
-          for (const collector of collectors) {
-            collector.state.truncated = true;
-            collector.state.truncationReasons?.add("io-error");
-          }
-        }
+        for (const collector of collectors) collector.recordDiscoveryStats(stats);
       },
     );
     await Promise.all(collectors.map((collector) => collector.settle()));
@@ -462,10 +473,7 @@ async function collectRescueStream(
           await rescue.enqueue(file);
       },
       (stats): void => {
-        if (stats.ioErrors > 0) {
-          rescue.state.truncated = true;
-          rescue.state.truncationReasons?.add("io-error");
-        }
+        rescue.recordDiscoveryStats(stats);
       },
     );
     await rescue.settle();
@@ -502,6 +510,14 @@ function rescuedResult(
     filesSkipped: primary.filesSkipped + rescue.filesSkipped,
     diagnostics: {
       ...primary.diagnostics,
+      ...((primary.diagnostics.unrepresentablePathsByDiscovery ?? 0) + rescue.unrepresentablePaths >
+      0
+        ? {
+            unrepresentablePathsByDiscovery:
+              (primary.diagnostics.unrepresentablePathsByDiscovery ?? 0) +
+              rescue.unrepresentablePaths,
+          }
+        : {}),
       lowValueRescueFilesDiscovered: rescue.filesDiscovered,
       lowValueRescueFilesScanned: rescue.state.filesScanned,
       fileExclusionCounts: combinedExclusionCounts(primary.diagnostics, rescue.diagnostics(0, 0)),

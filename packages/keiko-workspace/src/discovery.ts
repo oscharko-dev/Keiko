@@ -76,6 +76,7 @@ interface Walk {
   readonly executionControl?: StructuralExecutionControl | undefined;
   entriesVisited: number;
   denied: number;
+  unrepresentablePaths: number;
   ignored: number;
   depthPruned: number;
   maxFilesPruned: number;
@@ -122,7 +123,11 @@ function toRelative(root: string, absolutePath: string): string {
 // Returns false when the entry must be skipped for any security or noise reason, recording
 // which tier rejected it for the discovery stats.
 function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
-  if (!isValidScopePath(relPath, { mustBeRelative: true }) || isDenied(relPath)) {
+  if (!isValidScopePath(relPath, { mustBeRelative: true })) {
+    walk.unrepresentablePaths += 1;
+    return false;
+  }
+  if (isDenied(relPath)) {
     walk.denied += 1;
     return false;
   }
@@ -529,6 +534,7 @@ function createWalk(
     ...(executionControl === undefined ? {} : { executionControl }),
     entriesVisited: 0,
     denied: 0,
+    unrepresentablePaths: 0,
     ignored: 0,
     depthPruned: 0,
     maxFilesPruned: 0,
@@ -570,6 +576,7 @@ function discoveryResult(walk: Walk): DiscoveryResult {
     stats: {
       discovered: walk.out.length,
       denied: walk.denied,
+      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
       ignored: walk.ignored,
       depthPruned: walk.depthPruned,
       maxFilesPruned: walk.maxFilesPruned,
@@ -627,6 +634,7 @@ export async function discoverCandidateInventoryAsync(
 }
 
 export interface StreamingDiscoveryStats {
+  readonly unrepresentablePaths?: number | undefined;
   readonly filesDiscovered: number;
   readonly ignored: number;
   readonly denied: number;
@@ -799,6 +807,7 @@ export async function visitWorkspaceFiles(
       filesDiscovered: state.filesDiscovered,
       ignored: walk.ignored,
       denied: walk.denied,
+      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
       ioErrors: walk.ioErrors ?? 0,
     };
   } finally {
@@ -806,6 +815,7 @@ export async function visitWorkspaceFiles(
       filesDiscovered: state.filesDiscovered,
       ignored: walk.ignored,
       denied: walk.denied,
+      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
       ioErrors: walk.ioErrors ?? 0,
     });
   }

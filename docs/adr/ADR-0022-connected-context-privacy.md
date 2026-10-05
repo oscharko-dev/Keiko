@@ -215,6 +215,18 @@ bounds. An unlimited default lookup uses the live traversal rather than treating
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Raw directory entries must also satisfy the shared portable scope-path contract before resolution;
+unsupported names are never normalized into a different file or traversed. Unlike a sensitive-path
+policy denial, this exclusion means the requested tree could not be fully examined. Search reports
+`unrepresentable-path` incomplete coverage and a separate `unrepresentablePathsByDiscovery` count.
+The count measures observed rejected entries, not the unknown files below a rejected directory.
+It survives finite index reuse and is refreshed with live membership; overview and multi-source
+summaries add search-work counts, so overlapping passes can count the same entry more than once.
+The existing scope-incomplete warning and correlated completion/source-details Activity Log events
+preserve this uncertainty even when valid siblings match or no eligible file matches.
+The unchanged admission contract rejects relative paths over 4096 UTF-8 bytes, backslashes, NUL,
+absolute or drive-prefixed paths, an initial `~`, and empty, `.` or `..` segments. The initial-tilde
+rule is positional: root `~notes.md` is excluded, while `src/~notes.md` is eligible.
 Optional structural and Git-history enrichment are separate from lexical coverage. Their planner
 slices retain finite scan counts (currently 614 and 307 files respectively) and finite returned
 matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced

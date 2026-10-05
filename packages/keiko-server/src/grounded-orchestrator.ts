@@ -391,8 +391,16 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 6,
-      values: ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned", "io-error"],
+      maxItems: 7,
+      values: [
+        "aborted",
+        "file-cap",
+        "match-cap",
+        "timeout",
+        "depth-pruned",
+        "io-error",
+        "unrepresentable-path",
+      ],
     },
     coverageFilesDiscovered: { type: "integer", dataClass: "count", required: false },
     coverageFilesScanned: { type: "integer", dataClass: "count", required: false },
@@ -545,6 +553,7 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
       values: ["complete", "unavailable"],
     },
     directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
+    unrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
     semanticProviderDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -1419,6 +1428,7 @@ function coverageUncertainty(
           `low-value-rescue-scanned ${String(coverage.lowValueRescueFilesScanned ?? 0)}`,
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
+          `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -7542,6 +7552,8 @@ function sourceDetailsActivityExtra(
       ...shared,
       activityDetailStatus: "complete",
       directEvidenceLookup: execution.output.plan.directEvidenceLookup,
+      unrepresentablePathCount:
+        execution.output.pack.diagnostics?.coverage?.unrepresentablePathsByDiscovery ?? 0,
       ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
       ...metadataRetentionActivityExtra(execution.status),
       ...omissionTotalsActivityExtra(execution.output.pack),

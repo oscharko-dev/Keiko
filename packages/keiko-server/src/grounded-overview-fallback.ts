@@ -3,6 +3,17 @@ import type { SearchResult } from "@oscharko-dev/keiko-workspace";
 
 type Diagnostics = NonNullable<SearchResult["diagnostics"]>;
 
+type UnsupportedPaths = Pick<ContextCoverageDiagnostics, "unrepresentablePathsByDiscovery">;
+
+function combinedUnsupportedPaths(
+  first: UnsupportedPaths,
+  second: UnsupportedPaths,
+): UnsupportedPaths {
+  const count =
+    (first.unrepresentablePathsByDiscovery ?? 0) + (second.unrepresentablePathsByDiscovery ?? 0);
+  return count > 0 ? { unrepresentablePathsByDiscovery: count } : {};
+}
+
 function combinedExclusions(
   first: Diagnostics,
   second: Diagnostics,
@@ -37,6 +48,7 @@ function combinedCoverage(
       (first.lowValueRescueFilesScanned ?? 0) + (second.lowValueRescueFilesScanned ?? 0),
     ignoredByDiscovery: first.ignoredByDiscovery + second.ignoredByDiscovery,
     deniedByDiscovery: first.deniedByDiscovery + second.deniedByDiscovery,
+    ...combinedUnsupportedPaths(first, second),
     depthPrunedByDiscovery: first.depthPrunedByDiscovery + second.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: first.maxFilesPrunedByDiscovery + second.maxFilesPrunedByDiscovery,
     matchesReturned: first.matchesReturned + second.matchesReturned,
@@ -69,6 +81,7 @@ function combinedDiagnostics(first: Diagnostics, second: Diagnostics): Diagnosti
       (first.lowValueRescueFilesScanned ?? 0) + (second.lowValueRescueFilesScanned ?? 0),
     ignoredByDiscovery: first.ignoredByDiscovery + second.ignoredByDiscovery,
     deniedByDiscovery: first.deniedByDiscovery + second.deniedByDiscovery,
+    ...combinedUnsupportedPaths(first, second),
     depthPrunedByDiscovery: first.depthPrunedByDiscovery + second.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: first.maxFilesPrunedByDiscovery + second.maxFilesPrunedByDiscovery,
     candidateBuckets,

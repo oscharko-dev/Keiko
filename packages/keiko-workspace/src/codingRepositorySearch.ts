@@ -201,6 +201,8 @@ function searchTruncationReasons(
     truncationReasons.push("io-error");
   if (observation.diagnostics.coverageReasons.includes("timeout"))
     truncationReasons.push("time-limit");
+  if (observation.diagnostics.coverageReasons.includes("unrepresentable-path"))
+    truncationReasons.push("unrepresentable-path");
   return truncationReasons;
 }
 

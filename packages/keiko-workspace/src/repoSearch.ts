@@ -306,6 +306,7 @@ function coverageReasons(
     "timeout",
     "depth-pruned",
     "io-error",
+    "unrepresentable-path",
   ] as const) {
     if (reasons.has(reason)) {
       ordered.push(reason);
@@ -327,6 +328,7 @@ interface CoverageInputs {
 }
 
 interface CoverageStats {
+  readonly unrepresentablePathsByDiscovery: number;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
@@ -338,6 +340,7 @@ interface CoverageStats {
 }
 
 const EMPTY_COVERAGE_STATS: CoverageStats = {
+  unrepresentablePathsByDiscovery: 0,
   filesDiscovered: 0,
   filesAfterPolicy: 0,
   ignoredByDiscovery: 0,
@@ -357,6 +360,7 @@ function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStat
     filesAfterPolicy: diagnostics.filesAfterPolicy,
     ignoredByDiscovery: diagnostics.ignoredByDiscovery,
     deniedByDiscovery: diagnostics.deniedByDiscovery,
+    unrepresentablePathsByDiscovery: diagnostics.unrepresentablePathsByDiscovery ?? 0,
     depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
     lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
@@ -369,6 +373,7 @@ function inferredCoverageReasons(
   stats: CoverageStats,
 ): Set<ContextCoverageTruncationReason> {
   const reasons = new Set(inputs.truncationReasons);
+  if (stats.unrepresentablePathsByDiscovery > 0) reasons.add("unrepresentable-path");
   if (stats.depthPrunedByDiscovery > 0) {
     reasons.add("depth-pruned");
   }
@@ -424,6 +429,9 @@ function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagno
     truncated: orderedReasons.length > 0,
     ignoredByDiscovery: stats.ignoredByDiscovery,
     deniedByDiscovery: stats.deniedByDiscovery,
+    ...(stats.unrepresentablePathsByDiscovery > 0
+      ? { unrepresentablePathsByDiscovery: stats.unrepresentablePathsByDiscovery }
+      : {}),
     depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: stats.maxFilesPrunedByDiscovery,
     matchesReturned: inputs.matchesReturned,
@@ -716,6 +724,11 @@ function candidateSetDiscoverySnapshot(
     filesDiscovered: candidateSet.diagnostics.filesDiscovered,
     ignoredByDiscovery: candidateSet.diagnostics.ignoredByDiscovery,
     deniedByDiscovery: candidateSet.diagnostics.deniedByDiscovery,
+    ...(candidateSet.diagnostics.unrepresentablePathsByDiscovery === undefined
+      ? {}
+      : {
+          unrepresentablePathsByDiscovery: candidateSet.diagnostics.unrepresentablePathsByDiscovery,
+        }),
     depthPrunedByDiscovery: candidateSet.diagnostics.depthPrunedByDiscovery,
     truncated: candidateSet.truncated,
   };
@@ -2120,7 +2133,7 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
     filesScanned: inputs.filesScanned,
     oversizedFilesScanned: inputs.oversizedFilesScanned,
     elapsedMs: inputs.elapsedMs,
-    truncated: inputs.truncated,
+    truncated: inputs.truncated || (inputs.diagnostics.unrepresentablePathsByDiscovery ?? 0) > 0,
     diagnostics: inputs.diagnostics,
     coverage: buildCoverageDiagnostics({
       diagnostics: inputs.diagnostics,
@@ -2283,6 +2296,7 @@ function preserveCandidateMembership(ranked: CandidateSet, membership: Candidate
       filesAfterPolicy: files.length,
       ignoredByDiscovery: membership.diagnostics.ignoredByDiscovery,
       deniedByDiscovery: membership.diagnostics.deniedByDiscovery,
+      unrepresentablePathsByDiscovery: membership.diagnostics.unrepresentablePathsByDiscovery,
       depthPrunedByDiscovery: membership.diagnostics.depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery: membership.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -2579,6 +2593,9 @@ function streamedCoverage(
     truncated: reasons.length > 0,
     ignoredByDiscovery: collected.ignored,
     deniedByDiscovery: collected.denied,
+    ...(collected.diagnostics.unrepresentablePathsByDiscovery === undefined
+      ? {}
+      : { unrepresentablePathsByDiscovery: collected.diagnostics.unrepresentablePathsByDiscovery }),
     depthPrunedByDiscovery: 0,
     maxFilesPrunedByDiscovery: 0,
     matchesReturned: matchesReturned,

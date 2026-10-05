@@ -94,6 +94,7 @@ export interface WorkspaceIndexDirectorySnapshot {
 }
 
 export interface WorkspaceIndexDiscoverySnapshot {
+  readonly unrepresentablePathsByDiscovery?: number | undefined;
   readonly files: readonly WorkspaceIndexDiscoveredFile[];
   readonly directories: readonly WorkspaceIndexDirectorySnapshot[];
   readonly filesDiscovered: number;
@@ -578,11 +579,15 @@ function normalizeDiscoverySnapshot(
   const filesDiscovered = normalizeWholeNumber(discovery.filesDiscovered);
   const ignoredByDiscovery = normalizeWholeNumber(discovery.ignoredByDiscovery);
   const deniedByDiscovery = normalizeWholeNumber(discovery.deniedByDiscovery);
+  const unrepresentablePathsByDiscovery = normalizeWholeNumber(
+    discovery.unrepresentablePathsByDiscovery ?? 0,
+  );
   const depthPrunedByDiscovery = normalizeWholeNumber(discovery.depthPrunedByDiscovery);
   if (
     filesDiscovered === undefined ||
     ignoredByDiscovery === undefined ||
     deniedByDiscovery === undefined ||
+    unrepresentablePathsByDiscovery === undefined ||
     depthPrunedByDiscovery === undefined ||
     typeof discovery.truncated !== "boolean"
   ) {
@@ -594,6 +599,7 @@ function normalizeDiscoverySnapshot(
     filesDiscovered: Math.max(files.length, filesDiscovered),
     ignoredByDiscovery,
     deniedByDiscovery,
+    ...(unrepresentablePathsByDiscovery > 0 ? { unrepresentablePathsByDiscovery } : {}),
     depthPrunedByDiscovery,
     truncated: discovery.truncated,
   };
@@ -2918,6 +2924,9 @@ function preparedDiscoverySnapshot(
       : files.length,
     ignoredByDiscovery: normalized.discovery.ignoredByDiscovery,
     deniedByDiscovery: normalized.discovery.deniedByDiscovery,
+    ...(normalized.discovery.unrepresentablePathsByDiscovery === undefined
+      ? {}
+      : { unrepresentablePathsByDiscovery: normalized.discovery.unrepresentablePathsByDiscovery }),
     depthPrunedByDiscovery: normalized.discovery.depthPrunedByDiscovery,
     truncated: normalized.discovery.truncated,
   };
@@ -3067,6 +3076,7 @@ export function workspaceIndexCandidateSet(
     policy,
     ignoredByDiscovery: prepared.discovery.ignoredByDiscovery,
     deniedByDiscovery: prepared.discovery.deniedByDiscovery,
+    unrepresentablePathsByDiscovery: prepared.discovery.unrepresentablePathsByDiscovery,
     depthPrunedByDiscovery: prepared.discovery.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: 0,
     contentScores,
