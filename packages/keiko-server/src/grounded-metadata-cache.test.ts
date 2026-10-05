@@ -135,25 +135,28 @@ describe("metadata retention and pre-read cache identity", () => {
     ).rejects.toBeInstanceOf(CancelledError);
     expect(microIndex.size()).toBe(0);
   });
-  it("accounts for manifest candidates discarded by retained-output capacity", async () => {
-    const root = physicalRoot();
-    manifestCorpus(root, 80);
-    const result = await retrieveConnectedContextPack(
-      request(root, "Which package manifests define this workspace?", 8),
-      dependencies(root),
-    );
-    expect(result.pack.files).toHaveLength(9);
-    expect(result.pack.diagnostics?.coverage?.filesDiscovered).toBe(81);
-    expect(result.pack.diagnostics?.coverage?.incomplete).toBe(false);
-    expect(result.pack.omitted).toHaveLength(72);
-    expect(result.pack.omitted.every((entry) => entry.reason === "budget-exhausted")).toBe(true);
-    expect(result.pack.uncertainty).toContainEqual(
-      expect.objectContaining({ kind: "budget-clipped" }),
-    );
-    expect(result.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(
-      false,
-    );
-  });
+  it.each([80, 2_048])(
+    "accounts for all %i manifest candidates beyond retained-output capacity",
+    async (count) => {
+      const root = physicalRoot();
+      manifestCorpus(root, count);
+      const result = await retrieveConnectedContextPack(
+        request(root, "Which package manifests define this workspace?", 8),
+        dependencies(root),
+      );
+      expect(result.pack.files).toHaveLength(9);
+      expect(result.pack.diagnostics?.coverage?.filesDiscovered).toBe(count + 1);
+      expect(result.pack.diagnostics?.coverage?.incomplete).toBe(false);
+      expect(result.pack.omitted).toHaveLength(count - 8);
+      expect(result.pack.omitted.every((entry) => entry.reason === "budget-exhausted")).toBe(true);
+      expect(result.pack.uncertainty).toContainEqual(
+        expect.objectContaining({ kind: "budget-clipped" }),
+      );
+      expect(result.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(
+        false,
+      );
+    },
+  );
 
   it("retains primary roots and does not count overlapping workspace patterns twice", async () => {
     const root = physicalRoot();
