@@ -4576,11 +4576,9 @@ const LOCAL_STRUCTURAL_FILESYSTEM_FAILURES: ReadonlySet<string> = new Set([
 ]);
 
 function unavailableStructuralEvidence(
-  error: unknown,
+  error: WorkspaceReadError,
   inputs: StructuralEvidenceRecoveryInputs,
 ): DeterministicContextEvidence {
-  throwIfCancelled(inputs.signal);
-  if (!(error instanceof WorkspaceReadError)) throw error;
   const path = error.requestedPath;
   const cause = safeProperty(error, "cause");
   const kind = errorKindOf(cause);
@@ -4622,6 +4620,8 @@ async function availableStructuralEvidence(
   try {
     return await work();
   } catch (error) {
+    throwIfCancelled(inputs.signal);
+    if (!(error instanceof WorkspaceReadError)) throw error;
     return unavailableStructuralEvidence(error, inputs);
   }
 }
@@ -4633,6 +4633,8 @@ async function symbolFileAtoms(
   try {
     return await collectSymbolFileAtoms(inputs, requestContext);
   } catch (error) {
+    throwIfCancelled(inputs.signal);
+    if (!(error instanceof WorkspaceReadError)) throw error;
     return unavailableStructuralEvidence(error, inputs);
   }
 }
