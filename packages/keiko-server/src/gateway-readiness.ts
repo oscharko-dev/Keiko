@@ -173,6 +173,7 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
     // status). They decide the short re-probe cooldown, so the decision is reconstructable.
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
+  diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -235,6 +236,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
     probeCount: { type: "integer", dataClass: "count", required: true },
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
+  diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

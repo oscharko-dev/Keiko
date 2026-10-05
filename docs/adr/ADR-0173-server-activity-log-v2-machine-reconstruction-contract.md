@@ -2006,7 +2006,13 @@ or aborted flag is optional context under the existing 256-event cap; unknown or
 remains mandatory. Other independently correlated, registered non-diagnostic activity is also
 optional only when it is informational or debug, explicitly complete and loss-free, has no failure
 lifecycle, failure facts or uncertain status, and names no causal parent. Diagnostic, warning,
-error, partial and loss evidence remains mandatory. A registered causal start without a later matching
+error, partial and loss evidence remains mandatory. An operation may declare `diagnosticWhen` in its
+existing registration: an exact closed enum/boolean value match or a positive count makes the event
+mandatory even when its level is informational. Conditions reference existing scalar fields, are
+validated against their declared types and closed values, and are preserved by the canonical registry;
+there is no expression language or reader-side operation list. Unrelated metadata and successful
+values remain optional. These conditions govern retention, not a fabricated severity or failure kind.
+Registrations without this optional metadata retain their existing selection semantics. A registered causal start without a later matching
 end or failure in the pinned logical-log window also makes its correlation mandatory. Matching follows the
 existing analyzer's correlation and registered failure class; a terminal from another class does
 not settle it, and a later restart or unmatched concurrent start remains open. The streaming scan

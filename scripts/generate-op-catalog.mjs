@@ -80,6 +80,7 @@ import {
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  isActivityLogDiagnosticWhen,
 } from "../packages/keiko-contracts/dist/observability.js";
 import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
@@ -116,6 +117,7 @@ const REGISTRATION_KEYS = new Set([
   "failureClasses",
   "proofIds",
   "releaseImpact",
+  "diagnosticWhen",
 ]);
 const REGISTRATION_CATEGORIES = new Set(ACTIVITY_LOG_CATEGORIES);
 const REGISTRATION_CAUSAL = new Set(["none", "correlation", "parent-correlation"]);
@@ -924,6 +926,10 @@ function invalidRegistrationField(value) {
     { field: "failureClasses", valid: !invalidClosedStringArray(value.failureClasses) },
     { field: "proofIds", valid: !invalidClosedStringArray(value.proofIds) },
     { field: "releaseImpact", valid: REGISTRATION_RELEASE_IMPACTS.has(value.releaseImpact) },
+    {
+      field: "diagnosticWhen",
+      valid: isActivityLogDiagnosticWhen(value.fields, value.diagnosticWhen),
+    },
   ];
   return checks.find(({ valid }) => !valid)?.field;
 }
@@ -1627,6 +1633,7 @@ function runtimeOperationContract(operation) {
     failureClasses: operation.failureClasses,
     proofIds: operation.proofIds,
     releaseImpact: operation.releaseImpact,
+    ...(operation.diagnosticWhen === undefined ? {} : { diagnosticWhen: operation.diagnosticWhen }),
   };
 }
 

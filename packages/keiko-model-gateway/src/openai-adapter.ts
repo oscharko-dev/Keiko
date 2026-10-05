@@ -295,6 +295,10 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
       required: false,
     },
   },
+  diagnosticWhen: [
+    { field: "outcome", values: ["stalled", "failed"] },
+    { field: "outputExhausted", values: [true] },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

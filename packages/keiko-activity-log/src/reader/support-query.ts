@@ -44,6 +44,7 @@ import {
   parseActivityLogSegmentId,
   type ActivityLogCompletenessState,
   type ActivityLogLossState,
+  type ActivityLogOperationRegistration,
   type DiagnosticSufficiencyReason,
   type DiagnosticSufficiencyStatus,
   type SupportLifetimeProvenance,
@@ -544,6 +545,10 @@ function successfulHttpStatus(status: unknown): boolean {
   return typeof status === "number" && status >= 200 && status < 400;
 }
 
+function informationalLevel(level: string | undefined): boolean {
+  return level === "info" || level === "debug";
+}
+
 /** Independent successful transport is optional context, never a mandatory diagnostic root. */
 function routineHttpSuccess(accepted: AcceptedLine): boolean {
   const view = accepted.parsed.view;
@@ -551,12 +556,12 @@ function routineHttpSuccess(accepted: AcceptedLine): boolean {
   return (
     schema?.category === "http" &&
     schema.lifecycle !== "failure" &&
-    view.level !== "warn" &&
-    view.level !== "error" &&
+    informationalLevel(view.level) &&
     view.errorKind === undefined &&
     !knownCorrelation(view.parentCorrelationId) &&
     successfulHttpStatus(view.status) &&
-    view.extra?.aborted !== true
+    view.extra?.aborted !== true &&
+    !declaredDiagnosticFacts(schema, view.extra)
   );
 }
 
@@ -570,8 +575,24 @@ function routineWindowActivity(accepted: AcceptedLine): boolean {
   return (
     schema.lifecycle !== "failure" &&
     schema.lifecycle !== "loss" &&
-    (view.level === "info" || view.level === "debug") &&
-    !hasFailureFacts(accepted)
+    informationalLevel(view.level) &&
+    !hasFailureFacts(accepted) &&
+    !declaredDiagnosticFacts(schema, view.extra)
+  );
+}
+
+function declaredDiagnosticFacts(
+  schema: ActivityLogOperationRegistration,
+  fields: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  if (fields === undefined) return false;
+  return (
+    schema.diagnosticWhen?.some((condition) => {
+      const value = fields[condition.field];
+      if ("positive" in condition)
+        return typeof value === "number" && Number.isFinite(value) && value > 0;
+      return condition.values.some((expected) => value === expected);
+    }) ?? false
   );
 }
 

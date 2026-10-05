@@ -595,6 +595,7 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
+  diagnosticWhen: [{ field: "outcome", values: ["cancelled", "failed", "output-limit"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

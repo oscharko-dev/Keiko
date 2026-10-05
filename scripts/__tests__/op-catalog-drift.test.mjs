@@ -22,6 +22,7 @@ import {
   generateOpCatalog,
   generateTypedActivityLogRegistry,
   isTypedRegistrySourceFile,
+  runtimeOperationsModule,
   validateActivityLogFailureClassContracts,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
@@ -114,6 +115,38 @@ const EXEMPTION_OPERATION_FIXTURE = {
   owner: "keiko-contracts",
   failureClasses: ["fixture-failure"],
 };
+
+function diagnosticRegistrationSource(conditions) {
+  const registration = {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "fixture.registry.diagnostic",
+    category: "gateway",
+    owner: "zzz-fixture-diagnostic",
+    emitter: "fixture",
+    fields: {
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["ready", "failed"],
+      },
+      aborted: { type: "boolean", dataClass: "closed-enum", required: false },
+      errorCount: { type: "integer", dataClass: "count", required: true },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["fixture-failure"],
+    proofIds: ["fixture-proof"],
+    releaseImpact: "patch",
+    ...(conditions === undefined ? {} : { diagnosticWhen: conditions }),
+  };
+  return [
+    'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+    `defineActivityLogOperation(${JSON.stringify(registration)});`,
+  ].join("\n");
+}
 
 function validExemption(overrides = {}) {
   return {
@@ -819,6 +852,60 @@ describe("op catalog drift", () => {
             correctiveAction: expect.stringContaining("defineActivityLogOperation"),
           }),
         ]);
+      },
+    );
+  });
+
+  it("preserves validated diagnostic conditions in the generated runtime registry", () => {
+    const conditions = [
+      { field: "outcome", values: ["failed"] },
+      { field: "aborted", values: [true] },
+      { field: "errorCount", positive: true },
+    ];
+    withTypedRegistryFixture(
+      "zzz-fixture-diagnostic",
+      diagnosticRegistrationSource(conditions),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root, []);
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].diagnosticWhen).toEqual(conditions);
+        const module = runtimeOperationsModule(registry);
+        const operations = JSON.parse(
+          module.slice(module.indexOf("=") + 1, module.lastIndexOf("as const")),
+        );
+        expect(operations[0].diagnosticWhen).toEqual(conditions);
+      },
+    );
+  });
+
+  it.each([
+    [{ field: "missing", values: ["failed"] }],
+    [{ field: "outcome", values: ["invented"] }],
+    [{ field: "aborted", values: ["true"] }],
+    [{ field: "outcome", positive: true }],
+  ])("rejects invalid diagnostic conditions through the canonical contract: %j", (condition) => {
+    withTypedRegistryFixture(
+      "zzz-fixture-diagnostic",
+      diagnosticRegistrationSource([condition]),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root, []);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-invalid", detail: "diagnosticWhen" }),
+        );
+      },
+    );
+  });
+
+  it("preserves legacy registration semantics when diagnostic conditions are absent", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-diagnostic",
+      diagnosticRegistrationSource(undefined),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root, []);
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0]).not.toHaveProperty("diagnosticWhen");
+        expect(runtimeOperationsModule(registry)).not.toContain("diagnosticWhen");
       },
     );
   });

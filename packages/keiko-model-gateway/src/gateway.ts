@@ -418,6 +418,7 @@ const GATEWAY_STREAM_ABANDONED_OPERATION = defineActivityLogOperation({
       values: ["consumer-stopped-iterating"],
     },
   },
+  diagnosticWhen: [{ field: "reason", values: ["consumer-stopped-iterating"] }],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
