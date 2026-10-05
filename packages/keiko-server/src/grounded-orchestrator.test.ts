@@ -3502,6 +3502,72 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it.each([
+    ["Config", "AppConfig"],
+    ["PaymentService", "SuperPaymentService"],
+  ])(
+    "prioritizes the exact %s basename over %s in grouped symbol discovery",
+    async (term, decoy) => {
+      writeFileSync(join(ROOT, `src/${term}.ts`), `export class ${term} {}\n`);
+      writeFileSync(
+        join(ROOT, `src/${decoy}.ts`),
+        `import { ${term} } from './${term}';\nexport class ${decoy} extends ${term} {}\n`,
+      );
+      const activityLog = createBufferedServerLogSink();
+      const symbolReads: string[] = [];
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readFileUtf8SameDescriptor: (path, maxBytes, hardLinkPolicy, expected) => {
+          if (path.endsWith(`/${term}.ts`) || path.endsWith(`/${decoy}.ts`)) {
+            symbolReads.push(relative(realpathSync(ROOT), path));
+          }
+          const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+          if (read === undefined) throw new Error("bounded descriptor port missing");
+          return read(path, maxBytes, hardLinkPolicy, expected);
+        },
+      };
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({ text: `Where are \`${term}\` and ${decoy} defined?` }),
+        }),
+        {
+          correlationId: "symbol-basename",
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          activityLog,
+          fs,
+        },
+      );
+      expect(symbolReads).toEqual([`src/${term}.ts`, `src/${decoy}.ts`]);
+      expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+        expect.arrayContaining([`src/${term}.ts`, `src/${decoy}.ts`]),
+      );
+      expect(
+        out.pack.files
+          .find((file) => file.scopePath === `src/${term}.ts`)
+          ?.excerpts.some((excerpt) => excerpt.content.includes(`class ${term}`)),
+      ).toBe(true);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+      const details = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completion-details",
+      );
+      expect(details?.correlationId).toBe("symbol-basename");
+      expect(
+        numericEventExtra(recordEventExtra(details?.extra, "structural"), "fileSearchCount"),
+      ).toBe(1);
+      const line = activityLog.lines().find((entry) => entry.includes("completion-details"));
+      expect(line).toContain('"correlationId":"symbol-basename"');
+      expect(line).toContain('"structuralFileSearchCount":1');
+      expect(line).not.toContain(`src/${term}.ts`);
+      expect(line).not.toContain(`src/${decoy}.ts`);
+    },
+  );
+
   it("reads symbol definitions through the bounded same-descriptor port", async () => {
     writeFileSync(
       join(ROOT, "src/DescriptorProbe.ts"),
@@ -6224,6 +6290,15 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
 });
 
 describe("isSymbolDefinitionPath", () => {
+  it.each([
+    ["src/AppConfig.ts", "config"],
+    ["src/SuperPaymentService.ts", "PaymentService"],
+    ["nested/UserService.java", "Service"],
+    ["nested/ErrorHandler.cs", "Handler"],
+  ])("rejects basename suffix collision %s for %s", (scopePath, term) => {
+    expect(isSymbolDefinitionPath(scopePath, term)).toBe(false);
+  });
+
   it("accepts a code definition file matching term.<ext> at any depth, case-insensitively", () => {
     expect(isSymbolDefinitionPath("packages/core/src/PaymentService.tsx", "PaymentService")).toBe(
       true,

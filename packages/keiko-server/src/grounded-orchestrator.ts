@@ -3729,13 +3729,13 @@ function scopePathExtension(scopePath: string): string {
 
 // True when `scopePath` is a `<term>.<code-extension>` definition file. The single-walk symbol glob
 // `**/term.*` also matches multi-dot names like `term.test.tsx` (which the prior per-extension globs
-// did not), so this restores the exact contract: keep only paths ending in `term.<ext>` for a code
+// did not), so this restores the exact contract: keep only basenames equal to `term.<ext>` for a code
 // extension — the implementation file, not its co-named spec/story. Exported for direct testing.
 export function isSymbolDefinitionPath(scopePath: string, term: string): boolean {
   const extension = scopePathExtension(scopePath);
   return (
     (SYMBOL_FILE_EXTENSION_SET.has(extension) || isEcosystemSourceFile(scopePath)) &&
-    scopePath.toLowerCase().endsWith(`${term.toLowerCase()}.${extension}`)
+    basename(scopePath).toLowerCase() === `${term.toLowerCase()}.${extension}`
   );
 }
 
