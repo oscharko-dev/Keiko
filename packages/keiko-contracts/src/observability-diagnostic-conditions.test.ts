@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ActivityLogEventValidationError,
   defineActivityLogOperation,
+  isActivityLogDiagnosticWhen,
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
   validateRegisteredActivityLogEvent,
@@ -45,6 +46,32 @@ function withConditions(conditions: unknown): ActivityLogOperationRegistration {
 }
 
 describe("registered diagnostic conditions", () => {
+  it.each([
+    { inherited: { field: "outcome" }, own: { values: ["failed"], unexpected: true } },
+    { inherited: { positive: true }, own: { field: "errorCount", unexpected: true } },
+    { inherited: { values: ["failed"] }, own: { field: "outcome", unexpected: true } },
+  ])("rejects inherited predicate members %j", ({ inherited, own }) => {
+    const condition = {};
+    Object.setPrototypeOf(condition, inherited);
+    Object.assign(condition, own);
+    expect(() => defineActivityLogOperation(withConditions([condition]))).toThrow(
+      new ActivityLogEventValidationError("registration-mismatch"),
+    );
+  });
+
+  it.each(["string", "string-array", "boolean"] as const)(
+    "rejects a positive predicate over a nonnumeric %s count contract",
+    (type) => {
+      const fields = fixtureRegistration().fields;
+      const count = fields.errorCount;
+      if (count === undefined) throw new TypeError("Fixture lacks its count field");
+      Reflect.set(count, "type", type);
+      expect(isActivityLogDiagnosticWhen(fields, [{ field: "errorCount", positive: true }])).toBe(
+        false,
+      );
+    },
+  );
+
   it.each(
     [
       null,

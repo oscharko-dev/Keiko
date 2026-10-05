@@ -1345,8 +1345,19 @@ function diagnosticConditionMatchesContract(
   contract: ActivityLogFieldContract,
   candidate: object,
 ): boolean {
-  if ("positive" in candidate) return candidate.positive === true && contract.dataClass === "count";
-  return "values" in candidate && validDiagnosticValues(contract, candidate.values);
+  const fieldType = runtimeProperty(contract, "type");
+  if ("positive" in candidate)
+    return (
+      hasExactOwnKeys(candidate, { field: true, positive: true }) &&
+      candidate.positive === true &&
+      contract.dataClass === "count" &&
+      (fieldType === "integer" || fieldType === "number")
+    );
+  return (
+    "values" in candidate &&
+    hasExactOwnKeys(candidate, { field: true, values: true }) &&
+    validDiagnosticValues(contract, candidate.values)
+  );
 }
 
 function validDiagnosticCondition(
@@ -1355,8 +1366,7 @@ function validDiagnosticCondition(
 ): candidate is ActivityLogDiagnosticCondition {
   if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return false;
   if (!("field" in candidate) || typeof candidate.field !== "string") return false;
-  if (!Object.hasOwn(fields, candidate.field) || Reflect.ownKeys(candidate).length !== 2)
-    return false;
+  if (!Object.hasOwn(fields, candidate.field)) return false;
   const contract = fields[candidate.field];
   return contract !== undefined && diagnosticConditionMatchesContract(contract, candidate);
 }
