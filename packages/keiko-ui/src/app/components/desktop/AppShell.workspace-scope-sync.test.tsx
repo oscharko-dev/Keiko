@@ -643,6 +643,10 @@ describe("AppShell canonical workspace scope synchronization", () => {
     persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
     render(<AppShell />);
     await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Scale"));
+    const restoreCorrelation = vi
+      .mocked(reportFilesScopeDecision)
+      .mock.calls.find(([, decision]) => decision.decision === "restored")?.[0];
+    expect(restoreCorrelation).toEqual(expect.any(String));
     vi.mocked(reportFilesScopeDecision).mockClear();
     mocks.serverChat = chat([scope("/manuals/Changed")], 2);
     const changed = fixture(["/manuals/Changed"]);
@@ -654,11 +658,15 @@ describe("AppShell canonical workspace scope synchronization", () => {
     await act(async (): Promise<void> => mocks.workspace?.api.removeConn("edge-0"));
     await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
     expect(mocks.serverChat?.connectedScopes).toEqual([]);
-    expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
-      decision: "ack-invalidated",
-      candidateCount: 1,
-      bindingFingerprint: connectedScopeFingerprint(scope("/manuals/Changed")),
-    });
+    expect(reportFilesScopeDecision).toHaveBeenCalledWith(
+      expect.any(String),
+      {
+        decision: "ack-invalidated",
+        candidateCount: 1,
+        bindingFingerprint: connectedScopeFingerprint(scope("/manuals/Changed")),
+      },
+      restoreCorrelation,
+    );
   });
   it("adopts a changed persisted ownership digest without deleting the former manual source", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale"]);
