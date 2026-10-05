@@ -31,6 +31,8 @@ import type { WorkspaceInfo } from "./types.js";
 import { codingRepositoryExcerpt } from "./codingRepositorySearchProjection.js";
 import { boundCodingRepositoryResult } from "./codingRepositorySearchResult.js";
 import { buildMatcher } from "./repoSearchMatchers.js";
+import { repositoryPhysicalLines } from "./repoSearchLineSelection.js";
+import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 import { decodeTextFileBytes } from "./binaryDetect.js";
 import {
   CodingRepositorySearchError,
@@ -372,11 +374,12 @@ async function projectSearchHit(
   const text = await readCodingText(context, atom.scopePath);
   const range = atom.lineRange;
   const matcher = buildMatcher(query, literal ? { kind: "literal" } : undefined);
+  const sourceLines =
+    query.kind === "natural-language" ? repositorySourceLines(text, atom.scopePath) : undefined;
   if (
-    !text
-      .split("\n")
+    !repositoryPhysicalLines(text)
       .slice(range.startLine - 1, range.endLine)
-      .some((line) => matcher.match(line) > 0)
+      .some((line, index) => matcher.match(line, sourceLines?.[range.startLine - 1 + index]) > 0)
   ) {
     throw new WorkspaceReadError("search source changed", atom.scopePath);
   }

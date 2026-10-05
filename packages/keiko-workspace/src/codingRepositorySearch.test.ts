@@ -95,6 +95,45 @@ describe("workspace-owned coding repository handler", () => {
     expect(result.hits[0]?.path).toBe("src/example.ts");
     expect(JSON.stringify(result)).not.toContain(secret[1]);
   });
+  it.each(["\n", "\r\n"])(
+    "revalidates end-anchored regex hits on %j source lines",
+    async (newline) => {
+      const text = ["// unrelated", "export const parseConfig = true;", ""].join(newline);
+      const result = await executeCodingRepositoryRequest(
+        workspace(),
+        request("^export .*;$", "regex"),
+        { fs: memFs("/ws", { "src/example.ts": text }) },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok || result.kind !== "search") throw new Error("search result missing");
+      expect(result.hits).toEqual([
+        {
+          path: "src/example.ts",
+          startLine: 2,
+          endLine: 2,
+          snippet: `export const parseConfig = true;${newline === "\r\n" ? "\r" : ""}`,
+          redacted: false,
+          snippetTruncated: false,
+        },
+      ]);
+      expect(result.diagnostics).toMatchObject({ coverageIncomplete: false, coverageReasons: [] });
+    },
+  );
+
+  it("revalidates natural-language hits with their full-source comment context", async () => {
+    const text = "/*\nimport { RareHandler } from 'module';\n*/\n";
+    const result = await executeCodingRepositoryRequest(
+      workspace(),
+      request("Find definition RareHandler Alpha Beta Gamma Delta Epsilon Zeta", "lexical"),
+      { fs: memFs("/ws", { "src/example.ts": text }) },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.kind !== "search") throw new Error("search result missing");
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]?.snippet).toContain("RareHandler");
+    expect(result.diagnostics).toMatchObject({ coverageIncomplete: false, coverageReasons: [] });
+  });
+
   it("keeps raw source coordinates after multiline-secret redaction", async () => {
     const result = await executeCodingRepositoryRequest(workspace(), request("parseConfig"), {
       fs: memFs("/ws", { "src/example.ts": source }),

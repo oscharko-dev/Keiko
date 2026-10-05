@@ -722,7 +722,7 @@ export function enclosingLineRangesForIndices(
   text: string,
   lineIndices: readonly number[],
 ): ReadonlyMap<number, EnclosingLineRange> {
-  const lines = physicalLines(text);
+  const lines = repositoryPhysicalLines(text);
   const cache = createBraceScanCache(lines);
   const ranges = new Map<number, EnclosingLineRange>();
   const ordered = [...new Set(lineIndices)].sort((a, b) => a - b);
@@ -757,7 +757,7 @@ function lineSelectionStopped(
     : false;
 }
 
-function physicalLines(text: string): string[] {
+export function repositoryPhysicalLines(text: string): string[] {
   const lines = text.split(/\r?\n/u);
   if (text.endsWith("\n")) {
     lines.pop();
@@ -794,7 +794,7 @@ export function collectBestLines(
   scopePath?: string,
 ): readonly ScoredLine[] {
   const best = new ScoredLineCollector(runner.limits.maxMatchesReturned, state);
-  const lines = physicalLines(text);
+  const lines = repositoryPhysicalLines(text);
   const sourceLines = repositorySourceLines(text, scopePath);
   const braceScanCache = createBraceScanCache(lines);
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {

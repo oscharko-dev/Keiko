@@ -363,6 +363,43 @@ describe("production coding repository handler composition", () => {
     });
   });
 
+  it("persists a completed CRLF end-anchored search through the real native producer", async () => {
+    const { root, handler, events } = fixture();
+    writeFileSync(
+      join(root, "src", "example.ts"),
+      "// unrelated\r\nexport const parseConfig = true;\r\n",
+    );
+    const result = await handler.invoke(
+      { ...request, mode: "regex", query: "^export .*;$" },
+      context(),
+    );
+    expect(result.ok && result.kind === "search" && result.hits).toMatchObject([
+      {
+        path: "src/example.ts",
+        startLine: 2,
+        endLine: 2,
+        snippet: "export const parseConfig = true;\r",
+      },
+    ]);
+    const expected = {
+      state: "completed",
+      reason: "none",
+      filesScanned: 1,
+      resultCount: 1,
+      coverageIncomplete: false,
+      coverageReasons: [],
+      truncationReasons: [],
+    };
+    expect(events[1]).toMatchObject({ correlationId: context().correlationId, extra: expected });
+    const serialized = JSON.stringify(events);
+    for (const privateValue of [root, "example.ts", "parseConfig", "^export .*;$"])
+      expect(serialized).not.toContain(privateValue);
+    expect(settledProof(events)).toMatchObject({
+      correlationId: context().correlationId,
+      ...expected,
+    });
+  });
+
   it("uses the real workspace producer and records a reconstructable body-free operation", async () => {
     const { root, handler, events } = fixture();
     expect(handler.readiness()).toBe("ready");

@@ -493,6 +493,11 @@ Transient UI/child event sinks and a sink persisting only run terminals do not s
 
 ### D8 — Raw-coordinate lane and delivery dependency
 
+Search-hit revalidation reuses the scan's physical-line normalization, including CRLF stripping
+for matching, and supplies the same source classification to natural-language matchers. Excerpt
+coordinates and redacted output remain tied to the unchanged raw source; line-ending differences
+alone cannot turn a verified hit into a source-change failure.
+
 ADR-0165 D2/D3 define the prerequisite lane: only workspace code computes coding-search raw
 coordinates through its existing guarded reads; snippets are separately redacted afterward. A
 coding server handler cannot select `contentLane`, import the raw reader, or publish raw text into
