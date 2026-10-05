@@ -3025,7 +3025,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["git-sync", "git-history"],
+        values: ["git-sync", "git-history", "git-read", "widget-locale"],
       },
       renderFailure: {
         type: "string",
@@ -12833,6 +12833,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-chat-call"],
     proofIds: ["gateway.chat.completed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "finishReason",
+        values: ["length", "content_filter", "error", "cancelled"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -13208,6 +13214,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-circuit-breaker"],
     proofIds: ["gateway.circuit.wait.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["cancelled", "failed", "budget-refused"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -21993,6 +22005,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["source-discovery-incomplete"],
     proofIds: ["indexing.source.completed.counts"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "failedCount",
+        positive: true,
+      },
+      {
+        field: "walkCompleted",
+        values: [false],
+      },
+      {
+        field: "cancelled",
+        values: [true],
+      },
+      {
+        field: "sawScopeError",
+        values: [true],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -27779,7 +27809,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["request-failed", "source-skipped"],
+        values: ["request-failed", "source-skipped", "request-refused"],
       },
       validationReasons: {
         type: "string-array",

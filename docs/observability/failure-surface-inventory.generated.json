@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3f63f381dd6c92117b9e324997c09d4edea0dfa4718217eacc65bab408edf78d"
+    "catalogDigest": "51a24ac3f78d1d7d12cbb4c2d5dee74269726eeb3c3610023bfbe86e5500f79f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2181,6 +2181,7 @@
       "packages/keiko-server/src/grounded-metadata-failure.activity-log.test.ts"
     ],
     "search.connected-context.source-details.line": [
+      "packages/keiko-server/src/grounded-binary-probe.activity-log.test.ts",
       "packages/keiko-server/src/grounded-definition-provenance.test.ts",
       "packages/keiko-server/src/grounded-omission-totals.activity-log.test.ts",
       "packages/keiko-server/src/grounded-orchestrator.activity-log-proof.test.ts",
