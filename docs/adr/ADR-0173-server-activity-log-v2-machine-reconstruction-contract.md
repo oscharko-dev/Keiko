@@ -1730,14 +1730,14 @@ and claims, and retains truthful partial evidence if any cleanup fails. Sweeps a
 pressure retain their distinct `expired` and `retention` reasons.
 On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
 Generated reports remain only in the existing transient download cache, without a disk archive.
-The health projection reports actual retained stock and the governing admission capacity separately;
-stock can exceed a reduced capacity until retention removes older candidates. An absent bootstrap
-policy permits the existing environment fallback, while a present unreadable or corrupt governing
-policy refuses diagnostic admission. Health exposes `storage-check-failed` without inventing counts
-or event loss. `support.diagnostics.capacity` timestamps a changed pair when a health request observes
-it, under that request's correlation; candidate lifecycle events retain the actual creation or
-retirement timing. A failed inspection emits one diagnostic per failure streak, and a successful
-inspection resets the streak and records the recovered observation.
+Health exposes the existing Activity Log readiness, closed reasons and lost-event count without
+scanning the incident store. The unused candidate-count/capacity projection and its
+`support.diagnostics.capacity` operation are retired: the metadata reservation and shared pin
+pool are different constraints, so a combined headroom figure was misleading. Legacy optional
+count fields remain accepted for wire compatibility but are no longer produced. Candidate
+creation, rejection and retirement continue to carry their actual counts and lifecycle evidence.
+An absent bootstrap policy permits the existing environment fallback; a present unreadable or
+corrupt governing policy still refuses diagnostic admission and is evidenced by that owner.
 The existing Activity Log pin ceiling remains unchanged. After durable publication, pressure at
 that ceiling retires one older eligible diagnostic candidate with an exact owned `incident` window
 pin, preserving one free pin slot inside the existing ceiling for the next publication. Its own

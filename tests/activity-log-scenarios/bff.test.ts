@@ -47,7 +47,6 @@ import {
   listSupportIncidents,
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-activity-log";
-import { supportDiagnosticCapacity } from "../../packages/keiko-server/src/support-diagnostic-capacity.js";
 
 function parseLine(line: string | undefined): Record<string, unknown> {
   return JSON.parse(line ?? "") as Record<string, unknown>;
@@ -335,7 +334,7 @@ describe("Activity Log scenario: bff", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("keeps bounded diagnostic storage visible after candidate quota rejection", async () => {
+  it("records candidate quota rejection and later admission after reservation release", async () => {
     const startedAtMs = Date.now();
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     const prior = recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" });
@@ -351,15 +350,6 @@ describe("Activity Log scenario: bff", () => {
       status: "rejected",
       reason: "quota-exhausted",
     });
-    expect(
-      supportDiagnosticCapacity(
-        { correlationId: "bff-retained-0" },
-        { env: { KEIKO_STATE_DIR: stateDir } },
-      ),
-    ).toEqual({
-      retainedDiagnosticCount: 0,
-      diagnosticCapacity: capacity,
-    });
     expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
     releaseSupportIncidentReservationForTests(stateDir, capacity - 1);
     releaseSupportIncidentReservationForTests(stateDir, capacity - 2);
@@ -370,11 +360,7 @@ describe("Activity Log scenario: bff", () => {
     const trace = await expectActivityLogScenario("bff.loss", {
       stateDir,
       startedAtMs,
-      expectedOps: [
-        "support.incident.rejected",
-        "support.diagnostics.capacity",
-        "support.incident.created",
-      ],
+      expectedOps: ["support.incident.rejected", "support.incident.created"],
     });
     expect(trace.failureClasses).toContain("support-incident");
   });

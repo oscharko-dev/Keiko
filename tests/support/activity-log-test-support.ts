@@ -8,7 +8,7 @@ import {
   releaseSupportIncidentSlot,
 } from "../../packages/keiko-activity-log/src/support-incident-store.js";
 
-/** Young real claims cannot be rolled out before their publishing process settles. */
+/** Reserve every ordinary slot and the publication reserve with young, non-evictable claims. */
 export function occupySupportIncidentRetentionForTests(stateDir: string): number {
   const { capacity } = supportIncidentRetentionPolicy(stateDir);
   if (capacity > 16)
@@ -16,7 +16,7 @@ export function occupySupportIncidentRetentionForTests(stateDir: string): number
       "Set a small KEIKO_LOG_RETENTION_BYTES fixture policy before reserving slots",
     );
   ensureSupportIncidentDirectory(stateDir);
-  for (let slot = 0; slot < capacity; slot += 1) {
+  for (let slot = 0; slot <= capacity; slot += 1) {
     const incidentId = slot.toString(16).padStart(32, "0");
     if (!claimSupportIncidentSlot(stateDir, slot, incidentId)) {
       throw new TypeError("Fixture could not reserve diagnostic retention bytes");

@@ -7842,16 +7842,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
     failureClass: "support-incident",
-    requiredProductSurfaces: ["keiko-activity-log", "keiko-server"],
+    requiredProductSurfaces: ["keiko-activity-log"],
     requiredLifecycleOperations: {
       start: ["support.incident.created", "support.incident.retirement-started"],
-      state: ["support.diagnostics.capacity", "support.incident.deduplicated"],
+      state: ["support.incident.deduplicated"],
       end: ["support.incident.dismissed", "support.incident.expired"],
       failure: ["support.incident.retirement-failed"],
       loss: ["support.incident.rejected"],
     },
     requiredCausalOperations: [
-      "support.diagnostics.capacity",
       "support.incident.created",
       "support.incident.deduplicated",
       "support.incident.dismissed",
@@ -7862,7 +7861,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: ["support.incident.rejected"],
     requiredProofOperations: [
-      "support.diagnostics.capacity",
       "support.incident.created",
       "support.incident.deduplicated",
       "support.incident.dismissed",
@@ -7873,7 +7871,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
-      "support.diagnostics.capacity",
       "support.incident.created",
       "support.incident.deduplicated",
       "support.incident.dismissed",

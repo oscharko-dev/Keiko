@@ -69,7 +69,6 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "atlassian", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "bounded-request-body", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "support-report-evidence", surface: "bff" },
-  { owner: "keiko-server", emitterPrefix: "support-diagnostic-capacity", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-activity", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-scope-update-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-compaction-model-summary", surface: "bff" },

@@ -74,9 +74,11 @@ Under byte pressure, the oldest eligible candidate rolls out and its owned pin a
 released. Successfully preparing an export completes the selected candidate and releases its owned
 artifacts. The retained Activity Log remains subject to its existing byte and age policy. These
 control records support causal reconstruction; they are not a customer-facing count of unresolved
-product defects. Read-only health inspection counts readable, unexpired candidates without
-expiring files or claiming writer ownership. Capacity changes emit body-free
-`support.diagnostics.capacity` evidence with counts only.
+product defects. Health reports the existing Activity Log readiness and lost-event count. It does
+not enumerate diagnostic records or present candidate-count/capacity figures: those would conflate
+the metadata byte reservation with the separately shared pin pool. Older optional count fields
+remain accepted by the compatibility validator, but current servers do not emit them. Creation,
+rejection and retirement remain recorded by the existing incident lifecycle events.
 
 If the report action says to open Keiko from the launcher, the local application session was refused.
 Open Keiko through its trusted launcher and retry the **same** error's report. Refreshing an old tab
