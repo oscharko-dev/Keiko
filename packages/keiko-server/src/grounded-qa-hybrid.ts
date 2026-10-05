@@ -732,7 +732,7 @@ function defaultConnectorRetrieve(
     if ("status" in embeddingAdapter) {
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
-    return runLocalKnowledgeRetrieval(
+    return await runLocalKnowledgeRetrieval(
       { store, embeddingAdapter, signal, vectorIndex },
       connectorQuery(scope, ctx.retrievalContent ?? ctx.content, connectorScopeCount),
     );

@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { performance } from "node:perf_hooks";
+import * as timers from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 import {
@@ -414,6 +416,37 @@ describe("customer-shape LiteLLM twin", () => {
 });
 
 describe("closed gateway twin transports", () => {
+  it.each([Number.NaN, Number.NEGATIVE_INFINITY, 0])(
+    "does not retain a timer or listener for a non-positive or NaN duration %s",
+    async (milliseconds) => {
+      const response = Object.assign(new EventEmitter(), { destroyed: false });
+      await expect(transportWait(response, milliseconds)).resolves.toBe(true);
+      expect(response.listenerCount("close")).toBe(0);
+    },
+  );
+
+  it("keeps an early timer pending until the monotonic deadline", async () => {
+    const response = Object.assign(new EventEmitter(), { destroyed: false });
+    const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+    let settled = false;
+    const result = transportWait(response, 10).then((completed) => {
+      settled = true;
+      return completed;
+    });
+    try {
+      await timers.setTimeout(15);
+      expect(settled).toBe(false);
+      expect(response.listenerCount("close")).toBe(1);
+      clock.mockReturnValue(110);
+      await expect(result).resolves.toBe(true);
+      expect(response.listenerCount("close")).toBe(0);
+    } finally {
+      clock.mockRestore();
+      response.emit("close");
+      await result;
+    }
+  });
+
   it("does not install a delay or close listener after a transport was already destroyed", async () => {
     const response = Object.assign(new EventEmitter(), { destroyed: true });
     const result = transportWait(response, 35_000);

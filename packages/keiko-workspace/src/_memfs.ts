@@ -347,7 +347,8 @@ async function* memoryDirectoryEntries(
   this: WorkspaceFs,
   absolutePath: string,
 ): AsyncIterable<WorkspaceDirEntry> {
-  for (const item of this.readDir(absolutePath)) yield await Promise.resolve(item);
+  const entries = await Promise.resolve(this.readDir(absolutePath));
+  yield* entries;
 }
 
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {

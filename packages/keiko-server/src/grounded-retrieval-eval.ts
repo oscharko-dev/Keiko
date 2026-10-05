@@ -348,8 +348,8 @@ function evalWorkspaceFs(): WorkspaceFs {
     readDir: (absolutePath): readonly WorkspaceDirEntry[] =>
       evalDirectoryEntries(files, absolutePath),
     iterateDirectory: async function* (absolutePath): AsyncIterable<WorkspaceDirEntry> {
-      for (const item of evalDirectoryEntries(files, absolutePath))
-        yield await Promise.resolve(item);
+      const entries = await Promise.resolve(evalDirectoryEntries(files, absolutePath));
+      yield* entries;
     },
     realPath: (absolutePath): string => absolutePath,
     exists: (absolutePath): boolean =>

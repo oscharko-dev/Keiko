@@ -613,54 +613,101 @@ function rethrowTerminalAdmission(error: unknown): void {
     throw error.originalError ?? error;
 }
 
-export async function executeWithRetry<T>(
+type RetryOperation<T> = (
+  attemptTimeoutMs?: number,
+  remainingBudgetMs?: number,
+  previousError?: Error,
+) => Promise<T>;
+
+interface RetryState {
+  readonly config: RetryConfig;
+  readonly clock: Clock;
+  readonly signal: AbortSignal | undefined;
+  readonly random: () => number;
+  readonly context: RetryLogContext;
+  readonly sink: ModelGatewayLogSink;
+  readonly elapsed: () => number;
+  readonly start: number;
+  attempt: number;
+  lastError: Error | undefined;
+}
+
+type RetryAttemptResult<T> = { readonly done: true; readonly value: T } | { readonly done: false };
+
+async function executeRetryAttempt<T>(
+  operation: RetryOperation<T>,
+  state: RetryState,
+): Promise<RetryAttemptResult<T>> {
+  const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
+  const maxAttempts = config.maxRetries + 1;
+  if (Number.isNaN(maxAttempts) || attempt > maxAttempts)
+    throw state.lastError ?? new CancelledError("request timeout budget exhausted after retries");
+  assertNotAborted(signal);
+  const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
+  if (remaining <= 0)
+    throw budgetExhaustedError(state.lastError, sink, context, attempt, elapsed());
+  try {
+    const value = await operation(attemptTimeoutFor(config, remaining), remaining, state.lastError);
+    return { done: true, value };
+  } catch (error) {
+    rethrowTerminalAdmission(error);
+    state.lastError = asError(error);
+    const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
+    const decision = retryDecision(state.lastError, attempt, config, remainingMs, random);
+    const failureLog: RetryFailureLogInput = {
+      sink,
+      context,
+      attempt,
+      maxRetries: config.maxRetries,
+      error: state.lastError,
+      durationMs: elapsed(),
+    };
+    if (!("sleepMs" in decision)) {
+      logRetryExhausted(failureLog, decision);
+      throw state.lastError;
+    }
+    logRetryScheduled(failureLog, decision);
+    await sleepWithCancellation(clock, decision.sleepMs, signal);
+    return { done: false };
+  }
+}
+
+export function executeWithRetry<T>(
   // Each attempt gets its own bound and what is left of the call's budget, which a streamed read
   // may spend while the provider keeps producing (ADR-0003).
-  operation: (
-    attemptTimeoutMs?: number,
-    remainingBudgetMs?: number,
-    previousError?: Error,
-  ) => Promise<T>,
+  operation: RetryOperation<T>,
   config: RetryConfig,
   clock: Clock,
   signal?: AbortSignal,
   random: () => number = Math.random,
   logContext: RetryLogContext = {},
 ): Promise<T> {
-  const sink = resolveLogSink(logContext.sink);
-  const elapsed = logTimer();
-  let lastError: Error | undefined;
-  const start = clock.now();
-  for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
-    assertNotAborted(signal);
-    const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
-    if (remaining <= 0) {
-      throw budgetExhaustedError(lastError, sink, logContext, attempt, elapsed());
-    }
-    try {
-      return await operation(attemptTimeoutFor(config, remaining), remaining, lastError);
-    } catch (error) {
-      rethrowTerminalAdmission(error);
-      lastError = asError(error);
-      const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
-      const decision = retryDecision(lastError, attempt, config, remainingMs, random);
-      const failureLog: RetryFailureLogInput = {
-        sink,
-        context: logContext,
-        attempt,
-        maxRetries: config.maxRetries,
-        error: lastError,
-        durationMs: elapsed(),
-      };
-      if (!("sleepMs" in decision)) {
-        logRetryExhausted(failureLog, decision);
-        throw lastError;
-      }
-      logRetryScheduled(failureLog, decision);
-      await sleepWithCancellation(clock, decision.sleepMs, signal);
-    }
-  }
-  throw lastError ?? new CancelledError("request timeout budget exhausted after retries");
+  return new Promise<T>((resolve, reject) => {
+    const state: RetryState = {
+      config,
+      clock,
+      signal,
+      random,
+      context: logContext,
+      sink: resolveLogSink(logContext.sink),
+      elapsed: logTimer(),
+      start: clock.now(),
+      attempt: 1,
+      lastError: undefined,
+    };
+    const advance = (): void => {
+      // Return no successor promise: completed attempts are released rather than retained in a
+      // recursive promise chain. Only the current provider attempt or its backoff is pending.
+      void executeRetryAttempt(operation, state).then((result) => {
+        if (result.done) resolve(result.value);
+        else {
+          state.attempt += 1;
+          advance();
+        }
+      }, reject);
+    };
+    advance();
+  });
 }
 
 // The provider settings a retry policy is made of.
@@ -843,27 +890,35 @@ export class CircuitBreaker {
     return this.createAdmission(correlationId);
   }
 
-  async waitForAdmission(options: CircuitAdmissionWait): Promise<{
+  waitForAdmission(options: CircuitAdmissionWait): Promise<{
     readonly admission: CircuitBreakerAdmission;
     readonly remainingMs: number;
   }> {
-    const start = this.clock.now();
-    const announced = this.providerCooldownUntil > start;
-    const recovering =
-      announced ||
-      (options.previousError !== undefined &&
-        providerErrorDetail(options.previousError).retryAfterMs !== undefined);
-    for (;;) {
-      assertNotAborted(options.signal);
-      const remainingMs = Math.max(0, options.remainingMs - (this.clock.now() - start));
-      const blocked = this.blockedWait(recovering, options.jitterMs);
-      if (remainingMs <= 0) throw this.waitBudgetError(options, blocked, remainingMs);
-      if (blocked === undefined)
-        return { admission: this.assertAllowed(options.correlationId), remainingMs };
-      if (blocked.delayMs >= remainingMs && blocked.reason !== "probe-saturated")
-        throw this.waitBudgetError(options, blocked, remainingMs);
-      await this.waitForChange(Math.min(blocked.delayMs, remainingMs), blocked.reason, options);
-    }
+    return new Promise((resolve, reject) => {
+      const start = this.clock.now();
+      const announced = this.providerCooldownUntil > start;
+      const recovering =
+        announced ||
+        (options.previousError !== undefined &&
+          providerErrorDetail(options.previousError).retryAfterMs !== undefined);
+      const advance = async (): Promise<void> => {
+        assertNotAborted(options.signal);
+        const remainingMs = Math.max(0, options.remainingMs - (this.clock.now() - start));
+        const blocked = this.blockedWait(recovering, options.jitterMs);
+        if (remainingMs <= 0) throw this.waitBudgetError(options, blocked, remainingMs);
+        if (blocked === undefined) {
+          resolve({ admission: this.assertAllowed(options.correlationId), remainingMs });
+          return;
+        }
+        if (blocked.delayMs >= remainingMs && blocked.reason !== "probe-saturated")
+          throw this.waitBudgetError(options, blocked, remainingMs);
+        await this.waitForChange(Math.min(blocked.delayMs, remainingMs), blocked.reason, options);
+        // Rearm only after this wait has disposed its listener and timer; do not retain it by
+        // awaiting or returning the next admission attempt.
+        void advance().catch(reject);
+      };
+      void advance().catch(reject);
+    });
   }
 
   private waitBudgetError(

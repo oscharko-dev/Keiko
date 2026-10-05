@@ -120,7 +120,7 @@ function encodedContent(contentByAbs, encoder, abs) {
 async function* iterateFixtureDirectory(children) {
   if (children === undefined) return;
   for (const [name, isDirectory] of children) {
-    yield await Promise.resolve(dirEntry(name, isDirectory));
+    yield dirEntry(name, isDirectory);
   }
 }
 

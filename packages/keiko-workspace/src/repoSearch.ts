@@ -3999,6 +3999,60 @@ function excerptBatchCapacity(
   return { bytes, windows: Math.min(request.maxWindows ?? rangeCount, Math.max(1, bytes)) };
 }
 
+interface ExcerptBatchState {
+  readonly scope: SearchScope;
+  readonly request: ReadExcerptRequest;
+  readonly lines: readonly string[];
+  readonly nowMs: () => number;
+  readonly control: StructuralExecutionControl;
+  readonly encoder: TextEncoder;
+  remainingBytes: number;
+  remainingWindows: number;
+  processed: number;
+  emptyRanges: number;
+}
+
+async function readBatchedExcerptRange(
+  batch: ExcerptBatchState,
+  range: NonNullable<ReadExcerptRequest["ranges"]>[number],
+): Promise<readonly ReadExcerptWindowResult[]> {
+  if (batch.processed > 0 && batch.processed % SCAN_YIELD_INTERVAL === 0)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  assertStructuralExecutionActive(batch.control);
+  const bounded = {
+    ...batch.request,
+    startLine: range.startLine,
+    endLine: range.endLine,
+    maxBytes: Math.min(batch.request.maxBytes, batch.remainingBytes),
+    maxTotalBytes: batch.remainingBytes,
+    maxWindows: Math.max(1, batch.remainingWindows),
+  };
+  assertExcerptStartWithinLines(bounded, batch.lines);
+  const windows = excerptWindows(bounded, batch.lines).filter(
+    (window) => window.content.length > 0 || !window.truncated,
+  );
+  if (windows.length === 0) batch.emptyRanges += 1;
+  const results = windows.map((window) => {
+    const result = excerptResultForWindow(batch.scope, bounded, window, batch.nowMs);
+    batch.remainingBytes -= batch.encoder.encode(window.content).byteLength;
+    batch.remainingWindows -= 1;
+    return result;
+  });
+  batch.processed += 1;
+  return results;
+}
+
+// Each completed range determines the remaining grant before another operation is requested.
+async function* excerptBatchRanges(
+  batch: ExcerptBatchState,
+  ranges: NonNullable<ReadExcerptRequest["ranges"]>,
+): AsyncIterable<readonly ReadExcerptWindowResult[]> {
+  for (const range of ranges) {
+    if (batch.processed > 0 && (batch.remainingBytes <= 0 || batch.remainingWindows <= 0)) break;
+    yield readBatchedExcerptRange(batch, range);
+  }
+}
+
 async function batchedExcerptResults(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -4013,40 +4067,26 @@ async function batchedExcerptResults(
       ),
       omittedRangeCount: 0,
     };
-  const ranges = request.ranges;
+  const capacity = excerptBatchCapacity(request, request.ranges.length);
+  const batch: ExcerptBatchState = {
+    scope,
+    request,
+    lines,
+    nowMs,
+    control,
+    encoder: new TextEncoder(),
+    remainingBytes: capacity.bytes,
+    remainingWindows: capacity.windows,
+    processed: 0,
+    emptyRanges: 0,
+  };
   const results: ReadExcerptWindowResult[] = [];
-  const capacity = excerptBatchCapacity(request, ranges.length);
-  const encoder = new TextEncoder();
-  let remainingBytes = capacity.bytes;
-  let remainingWindows = capacity.windows;
-  let processed = 0;
-  let emptyRanges = 0;
-  for (const range of ranges) {
-    if (processed > 0 && (remainingBytes <= 0 || remainingWindows <= 0)) break;
-    if (processed > 0 && processed % SCAN_YIELD_INTERVAL === 0)
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    assertStructuralExecutionActive(control);
-    const bounded = {
-      ...request,
-      startLine: range.startLine,
-      endLine: range.endLine,
-      maxBytes: Math.min(request.maxBytes, remainingBytes),
-      maxTotalBytes: remainingBytes,
-      maxWindows: Math.max(1, remainingWindows),
-    };
-    assertExcerptStartWithinLines(bounded, lines);
-    const windows = excerptWindows(bounded, lines).filter(
-      (window) => window.content.length > 0 || !window.truncated,
-    );
-    if (windows.length === 0) emptyRanges += 1;
-    for (const window of windows) {
-      results.push(excerptResultForWindow(scope, bounded, window, nowMs));
-      remainingBytes -= encoder.encode(window.content).byteLength;
-      remainingWindows -= 1;
-    }
-    processed += 1;
-  }
-  return { results, omittedRangeCount: ranges.length - processed + emptyRanges };
+  for await (const windows of excerptBatchRanges(batch, request.ranges))
+    for (const window of windows) results.push(window);
+  return {
+    results,
+    omittedRangeCount: request.ranges.length - batch.processed + batch.emptyRanges,
+  };
 }
 
 async function readExcerptWithControl(

@@ -402,6 +402,13 @@ async function settleCollectorFailures(
   return failures.length === 1 ? first : combinedCollectorFailure(failures);
 }
 
+async function* collectorAdmissions(
+  collectors: readonly StreamingSearchCollector[],
+  file: DiscoveredFile,
+): AsyncIterable<void> {
+  for (const collector of collectors) yield collector.enqueue(file);
+}
+
 async function collectPrimaryStream(
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
@@ -422,7 +429,9 @@ async function collectPrimaryStream(
       runner.fs,
       control,
       async (file): Promise<void> => {
-        for (const collector of collectors) await collector.enqueue(file);
+        for await (const _admission of collectorAdmissions(collectors, file)) {
+          // Admission backpressure completes before discovery advances to another file.
+        }
       },
       (stats): void => {
         ignored = stats.ignored;
@@ -593,18 +602,26 @@ export async function collectStreamedFilenameSearches(
   );
   const primary = await collectPrimaryStream(first.runner, control, collectors);
   const results: StreamedSearchCollection[] = [];
+  for await (const result of rescuedFilenameSearches(searches, primary, control))
+    results.push(result);
+  return results;
+}
+
+// Rescue traversals settle in query order without prefetching another workspace traversal.
+async function* rescuedFilenameSearches(
+  searches: readonly StreamedFilenameSearch[],
+  primary: readonly StreamedSearchCollection[],
+  control: StructuralExecutionControl,
+): AsyncIterable<StreamedSearchCollection> {
   for (const [index, search] of searches.entries()) {
     const result = primary[index];
     if (result === undefined) throw new TypeError("Missing batched search collection.");
-    results.push(
-      await rescueStreamedSearch(
-        result,
-        search.runner,
-        control,
-        search.pathPattern,
-        search.filePatternGroups,
-      ),
+    yield rescueStreamedSearch(
+      result,
+      search.runner,
+      control,
+      search.pathPattern,
+      search.filePatternGroups,
     );
   }
-  return results;
 }

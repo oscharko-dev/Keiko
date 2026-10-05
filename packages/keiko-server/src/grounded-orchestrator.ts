@@ -133,7 +133,7 @@ import {
   testSourcePairingAdapter,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
-import { mapWithConcurrency } from "./bounded-concurrency.js";
+import { iterateSequentialResults, mapWithConcurrency } from "./bounded-concurrency.js";
 import {
   BoundedMetadataPaths,
   MetadataRetention,
@@ -3847,17 +3847,15 @@ async function workspacePackageManifestPaths(
   );
   for (const dir of WORKSPACE_PACKAGE_DIRS) patterns.add(`${dir}/*`);
   const paths = new BoundedMetadataPaths(maxResults);
-  for (const pattern of [...patterns].sort(compareStrings)) {
+  for await (const expanded of iterateSequentialResults(
+    [...patterns].sort(compareStrings),
+    (pattern) =>
+      metadataTraversalCanContinue(control)
+        ? expandWorkspacePattern(pattern, searchScope, fs, control, maxResults, existsCache)
+        : Promise.resolve([]),
+  )) {
+    for (const path of expanded) paths.retain(path);
     if (!metadataTraversalCanContinue(control)) break;
-    for (const path of await expandWorkspacePattern(
-      pattern,
-      searchScope,
-      fs,
-      control,
-      maxResults,
-      existsCache,
-    ))
-      paths.retain(path);
   }
   return paths.sorted();
 }
@@ -4421,6 +4419,19 @@ function withLexicalSymbolCandidates(
   return [...combined.values()];
 }
 
+function scheduledSymbolMatches(
+  inputs: PrioritizedSymbolInputs,
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+  lookups: ReadonlyMap<string, ReadonlyMap<string, SymbolLineLookupResult>>,
+): AsyncGenerator<SymbolDefinitionMatch> {
+  return iterateSequentialResults(orderSymbolMatchesForTerms(matches, terms), (candidate) =>
+    lookups.has(candidate.atom.scopePath)
+      ? Promise.resolve(candidate)
+      : groundedSchedulingYield(inputs.signal).then(() => candidate),
+  );
+}
+
 async function collectPrioritizedSymbolAtoms(
   inputs: PrioritizedSymbolInputs,
   matches: readonly SymbolDefinitionMatch[],
@@ -4439,8 +4450,7 @@ async function collectPrioritizedSymbolAtoms(
     nowMs: inputs.nowMs,
     deadlineMs: inputs.deadlineAtMs,
   };
-  for (const match of orderSymbolMatchesForTerms(matches, terms)) {
-    if (!lookups.has(match.atom.scopePath)) await groundedSchedulingYield(inputs.signal);
+  for await (const match of scheduledSymbolMatches(inputs, matches, terms, lookups)) {
     throwIfCancelled(inputs.signal);
     pushUniqueAtom(atoms, seen, match.atom);
     if (lineDeadlineReached) {
@@ -4944,9 +4954,12 @@ async function projectMetadataAtoms(
     PROJECT_METADATA_FILENAMES,
   );
   inputs.existsCache.metadataRetention = retained;
-  for (const root of metadataRootsForScope(input.scope)) {
+  for await (const _atoms of iterateSequentialResults(metadataRootsForScope(input.scope), (root) =>
+    metadataTraversalCanContinue(control)
+      ? projectMetadataRootAtoms(root, context)
+      : Promise.resolve([]),
+  )) {
     if (!metadataTraversalCanContinue(control)) break;
-    await projectMetadataRootAtoms(root, context);
   }
   await workspacePackageMetadataAtoms(context);
   return retained
@@ -6029,11 +6042,13 @@ function appendExcerptWave(
   }
 }
 
-async function readExcerptWaves(
+// The next wave depends on the bytes and deadline left after the preceding reads settle.
+// A lazy iterator retains one wave and lets the asynchronous consumer apply backpressure.
+function* pendingExcerptWaves(
   paths: readonly string[],
   inputs: ExcerptInputs,
   state: ExcerptWaveState,
-): Promise<void> {
+): Generator<readonly string[]> {
   let next = 0;
   while (next < paths.length && state.remainingBytes > 0 && !state.elapsedBudgetBlocked) {
     throwIfCancelled(inputs.signal);
@@ -6047,18 +6062,31 @@ async function readExcerptWaves(
       Math.max(1, Math.floor(state.remainingBytes / MAX_EXCERPT_WINDOW_BYTES)),
     );
     const wave = paths.slice(next, next + slots);
-    const grants = excerptWaveGrants(wave, state.remainingBytes, inputs);
-    const results = await mapWithConcurrency(wave, 8, (scopePath, index) => {
-      throwIfCancelled(inputs.signal);
-      return readPathExcerptTask(scopePath, inputs, grants[index] ?? 0);
-    });
-    appendExcerptWave(results, inputs, state);
+    yield wave;
     next += wave.length;
   }
   if (next < paths.length && state.remainingBytes <= 0) {
     state.byteBudgetOmittedPaths = paths.slice(next);
     state.uncertainty.push(budgetClipped("budget-exhausted on excerptBytes", inputs.nowMs()));
   }
+}
+
+async function readExcerptWaves(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): Promise<void> {
+  for await (const results of iterateSequentialResults(
+    pendingExcerptWaves(paths, inputs, state),
+    (wave) => {
+      const grants = excerptWaveGrants(wave, state.remainingBytes, inputs);
+      return mapWithConcurrency(wave, 8, (scopePath, index) => {
+        throwIfCancelled(inputs.signal);
+        return readPathExcerptTask(scopePath, inputs, grants[index] ?? 0);
+      });
+    },
+  ))
+    appendExcerptWave(results, inputs, state);
 }
 
 function excerptWaveGrants(
@@ -6137,19 +6165,24 @@ async function fileStateCacheIdentity(
 ): Promise<PackCacheIdentity | undefined> {
   const identity: string[] = [];
   const guardedFs = cancellationGuardedWorkspaceFs(fs, signal);
+  const readIdentity = (scopePath: string): Promise<string | undefined> => {
+    throwIfCancelled(signal);
+    if (nowMs() >= deadlineAtMs) return Promise.resolve(undefined);
+    const target = canonicalContainedSearchPath(searchScope, guardedFs, scopePath);
+    if (target === undefined) return Promise.resolve(undefined);
+    throwIfCancelled(signal);
+    if (nowMs() >= deadlineAtMs) return Promise.resolve(undefined);
+    const stat = guardedFs.stat(target.path);
+    const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+    if (strongIdentity === undefined) return Promise.resolve(undefined);
+    return (identity.length + 1) % 64 === 0
+      ? groundedSchedulingYield(signal).then(() => strongIdentity)
+      : Promise.resolve(strongIdentity);
+  };
   try {
-    for (const scopePath of keptPaths) {
-      throwIfCancelled(signal);
-      if (nowMs() >= deadlineAtMs) return undefined;
-      const target = canonicalContainedSearchPath(searchScope, guardedFs, scopePath);
-      if (target === undefined) return undefined;
-      throwIfCancelled(signal);
-      if (nowMs() >= deadlineAtMs) return undefined;
-      const stat = guardedFs.stat(target.path);
-      const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
+    for await (const strongIdentity of iterateSequentialResults(keptPaths, readIdentity)) {
       if (strongIdentity === undefined) return undefined;
       identity.push(strongIdentity);
-      if (identity.length % 64 === 0) await groundedSchedulingYield(signal);
     }
   } catch (error) {
     rethrowMetadataCancellation(error);

@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { mapWithConcurrency } from "./bounded-concurrency.js";
+import { iterateSequentialResults, mapWithConcurrency } from "./bounded-concurrency.js";
 
 const deferred = (): { promise: Promise<void>; resolve: () => void } => {
   let resolve: () => void = () => undefined;
@@ -220,4 +220,76 @@ it("retires owned child signals after success without aborting the caller", asyn
   ).toEqual([1]);
   expect(observed?.aborted).toBe(true);
   expect(parent.signal.aborted).toBe(false);
+});
+
+it("starts ordered operations lazily and closes their source when the consumer exits", async () => {
+  const gate = deferred();
+  const started: number[] = [];
+  let closed = false;
+  function* source(): Generator<number> {
+    try {
+      yield 1;
+      yield 2;
+    } finally {
+      closed = true;
+    }
+  }
+  const stream = iterateSequentialResults(source(), async (item) => {
+    started.push(item);
+    await gate.promise;
+    return item;
+  });
+  expect(started).toEqual([]);
+  const first = stream.next();
+  expect(started).toEqual([1]);
+  gate.resolve();
+  expect(await first).toEqual({ value: 1, done: false });
+  await stream.return(undefined);
+  expect(closed).toBe(true);
+  expect(started).toEqual([1]);
+});
+
+it("preserves ordered-operation rejection and closes the source before further work", async () => {
+  const failure = new TypeError("ordered source failed");
+  let closed = false;
+  let started = 0;
+  function* source(): Generator<number> {
+    try {
+      yield 1;
+      yield 2;
+    } finally {
+      closed = true;
+    }
+  }
+  const stream = iterateSequentialResults(source(), () => {
+    started += 1;
+    return Promise.reject(failure);
+  });
+  await expect(stream.next()).rejects.toBe(failure);
+  expect(closed).toBe(true);
+  expect(started).toBe(1);
+});
+
+it("preserves a worker's original non-Error failure without starting queued work", async () => {
+  const failure: unknown = { reason: "fixture failure" };
+  const started: number[] = [];
+  const result = mapWithConcurrency([0, 1, 2], 1, (item) => {
+    started.push(item);
+    return new Promise<number>(() => {
+      throw failure;
+    });
+  });
+  await expect(result).rejects.toBe(failure);
+  expect(started).toEqual([0]);
+});
+
+it("stops all initial lanes immediately when the first worker throws synchronously", async () => {
+  const failure = new TypeError("synchronous worker failure");
+  const started: number[] = [];
+  const result = mapWithConcurrency([0, 1, 2], 3, (item): Promise<number> => {
+    started.push(item);
+    throw failure;
+  });
+  await expect(result).rejects.toBe(failure);
+  expect(started).toEqual([0]);
 });

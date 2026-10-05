@@ -765,17 +765,31 @@ async function collectStreamingDirectory(
   }
 }
 
+// Each result is produced only after the directory descriptor has closed.
+async function* streamingDirectoryChildren(
+  state: StreamingWalk,
+  pending: PendingStreamingDirectory[],
+): AsyncIterable<PendingStreamingDirectory[]> {
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) break;
+    const children: PendingStreamingDirectory[] = [];
+    yield collectStreamingDirectory(
+      state,
+      directory.absolute,
+      directory.relativeDir,
+      children,
+    ).then(() => children);
+  }
+}
+
 async function visitStreamingDirectory(
   state: StreamingWalk,
   absolute: string,
   relativeDir: string,
 ): Promise<void> {
   const pending: PendingStreamingDirectory[] = [{ absolute, relativeDir }];
-  while (pending.length > 0) {
-    const directory = pending.pop();
-    if (directory === undefined) break;
-    const children: PendingStreamingDirectory[] = [];
-    await collectStreamingDirectory(state, directory.absolute, directory.relativeDir, children);
+  for await (const children of streamingDirectoryChildren(state, pending)) {
     // Finish and close the current descriptor before descending. Only directory paths are queued;
     // file contents and file inventories are never retained by discovery.
     children.reverse();
@@ -821,6 +835,17 @@ async function visitSelectedStreamingPath(state: StreamingWalk, path: string): P
   }
 }
 
+async function* selectedStreamingVisits(
+  state: StreamingWalk,
+  selected: readonly string[],
+): AsyncIterable<void> {
+  for (const path of selected) {
+    if (selected.some((other) => other !== path && (other === "" || path.startsWith(`${other}/`))))
+      continue;
+    yield visitSelectedStreamingPath(state, path);
+  }
+}
+
 /** Visit an admitted scope without retaining a path inventory or imposing a file-count ceiling. */
 export async function visitWorkspaceFiles(
   workspace: WorkspaceInfo,
@@ -836,12 +861,8 @@ export async function visitWorkspaceFiles(
   const selected =
     relativePaths.length === 0 ? [""] : canonicalSearchScopeRelativePaths(relativePaths);
   try {
-    for (const path of selected) {
-      if (
-        selected.some((other) => other !== path && (other === "" || path.startsWith(`${other}/`)))
-      )
-        continue;
-      await visitSelectedStreamingPath(state, path);
+    for await (const _visit of selectedStreamingVisits(state, selected)) {
+      // Drain one selected root at a time; traversal records its counts in state.
     }
     return {
       filesDiscovered: state.filesDiscovered,

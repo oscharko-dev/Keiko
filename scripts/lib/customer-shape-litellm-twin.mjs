@@ -241,16 +241,29 @@ function transportReply(response, stream, text = "Synthetic gateway transport te
   response.end("data: [DONE]\n\n");
 }
 
+function waitForTransportDeadline(deadline, signal) {
+  return new Promise((resolve, reject) => {
+    const rearm = () => {
+      const remaining = deadline - performance.now();
+      if (Number.isNaN(remaining) || remaining <= 0) {
+        resolve();
+        return;
+      }
+      // Early timer wakeups rearm one wait against the same monotonic deadline. The callback
+      // returns no successor promise, so completed timers do not form a retained chain.
+      void delay(Math.ceil(remaining), undefined, { signal }).then(rearm, reject);
+    };
+    rearm();
+  });
+}
+
 export async function transportWait(response, milliseconds) {
   if (response.destroyed) return false;
   const controller = new globalThis.AbortController();
   const cancel = () => controller.abort();
   response.once("close", cancel);
   try {
-    const deadline = performance.now() + milliseconds;
-    for (let remaining = milliseconds; remaining > 0; remaining = deadline - performance.now()) {
-      await delay(Math.ceil(remaining), undefined, { signal: controller.signal });
-    }
+    await waitForTransportDeadline(performance.now() + milliseconds, controller.signal);
     return !response.destroyed;
   } catch (error) {
     if (error?.name === "AbortError") return false;
