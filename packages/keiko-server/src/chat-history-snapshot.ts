@@ -1,3 +1,5 @@
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -22,6 +24,37 @@ export interface GatewayHistorySnapshot {
   readonly historyRevision?: number | undefined;
   readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly rehydratedContext?: string | undefined;
+}
+
+/** Load the unfiltered checkpoint so every caller retains its actual capture disposition. */
+export function captureChatHistoryWithCheckpoint(
+  store: UiStore,
+  evidenceStore: EvidenceStore,
+  chatId: string,
+  currentUserMessageId: string,
+  profile: ContextProfile,
+  redactionSecrets: readonly string[],
+  correlationId?: string,
+): GatewayHistorySnapshot {
+  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
+  const checkpoint = loadChatContinuityCheckpoint(
+    evidenceStore,
+    chatId,
+    store.chatHistoryRevision(chatId),
+    correlationId,
+    (disposition) => {
+      checkpointDisposition = disposition;
+    },
+  );
+  return captureChatHistory(
+    store,
+    chatId,
+    currentUserMessageId,
+    profile,
+    redactionSecrets,
+    checkpoint,
+    { correlationId, checkpointDisposition },
+  );
 }
 
 interface HistoryAccumulator {

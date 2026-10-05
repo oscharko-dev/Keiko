@@ -11,11 +11,10 @@ import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 
 import type { IncomingMessage } from "node:http";
 import {
-  captureChatHistory,
+  captureChatHistoryWithCheckpoint,
   stampHistoryRevision,
   type GatewayHistorySnapshot,
 } from "./chat-history-snapshot.js";
-import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
@@ -1805,24 +1804,14 @@ export function captureGatewayTurnSnapshot(
   correlationId?: string,
   rehydrate = true,
 ): GatewayTurnSnapshot {
-  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
-  const checkpoint = loadChatContinuityCheckpoint(
-    deps.evidenceStore,
-    request.chatId,
-    deps.store.chatHistoryRevision(request.chatId),
-    correlationId,
-    (disposition) => {
-      checkpointDisposition = disposition;
-    },
-  );
-  const snapshot = captureChatHistory(
+  const snapshot = captureChatHistoryWithCheckpoint(
     deps.store,
+    deps.evidenceStore,
     request.chatId,
     userMessage.id,
     currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
     currentRedactionSecrets(deps),
-    checkpoint,
-    { correlationId, checkpointDisposition },
+    correlationId,
   );
   return snapshot.earlierCompaction === undefined || !rehydrate
     ? snapshot

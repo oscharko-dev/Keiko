@@ -604,8 +604,6 @@ describe("composer context status and manual maintenance", () => {
         ?.lines.some((entry) => entry.op === "chat.context.management"),
     ).toBe(true);
   });
-  // PR #3678 review: the inspected line must let an agent rebuild the meter reading: the trigger,
-  // the last knowledge request, the reference trim, the known shares and a pending probe.
   it("records the declared input ceiling and unavailable window share from the actual meter producer", () => {
     const { deps, chatId } = fixture();
     const sink = createBufferedServerLogSink();
@@ -639,6 +637,8 @@ describe("composer context status and manual maintenance", () => {
     });
   });
 
+  // PR #3678 review: the inspected line must let an agent rebuild the meter reading: the trigger,
+  // the last knowledge request, the reference trim, the known shares and a pending probe.
   it("records the meter reading's trigger, knowledge request and shares on the inspected line", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));

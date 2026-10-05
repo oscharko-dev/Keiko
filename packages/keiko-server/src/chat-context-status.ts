@@ -20,7 +20,7 @@ import {
   type ConversationCompactionOutcome,
 } from "./conversation-compaction.js";
 import {
-  captureChatHistory,
+  captureChatHistoryWithCheckpoint,
   checkpointFitsProfile,
   stampHistoryRevision,
 } from "./chat-history-snapshot.js";
@@ -39,7 +39,7 @@ import {
 } from "./chat-compaction-thresholds.js";
 import { hasGroundingScope } from "./chat-grounding.js";
 import {
-  groundedConversationLaneProfile,
+  conversationProfileFor,
   groundedHistoryLaneTokens,
 } from "./grounded-conversation-continuity.js";
 
@@ -57,37 +57,6 @@ function checkpointForProfile(
   );
   if (checkpoint?.conversationCoverage?.contextWindowTokens === undefined) return undefined;
   return checkpointFitsProfile(checkpoint, profile) ? checkpoint : undefined;
-}
-
-// The stored history exactly as the send path captures it (chat-handlers, grounded continuity): the
-// checkpoint unfiltered, with its load disposition, so a checkpoint the window outgrew is logged as
-// `window-expanded` and a projection restores the same checkpoint the next send restores (PR #3678
-// review: the meter filtered it first and logged `none`).
-function capturedStoredHistory(
-  deps: UiHandlerDeps,
-  chatId: string,
-  profile: ContextProfile,
-  correlationId: string | undefined,
-): ReturnType<typeof captureChatHistory> {
-  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
-  const checkpoint = loadChatContinuityCheckpoint(
-    deps.evidenceStore,
-    chatId,
-    deps.store.chatHistoryRevision(chatId),
-    correlationId,
-    (disposition) => {
-      checkpointDisposition = disposition;
-    },
-  );
-  return captureChatHistory(
-    deps.store,
-    chatId,
-    "",
-    profile,
-    currentRedactionSecrets(deps),
-    checkpoint,
-    { correlationId, checkpointDisposition },
-  );
 }
 
 interface CountedHistory {
@@ -252,16 +221,17 @@ function storedConversation(
   };
 }
 
+type GroundedLane = Pick<NonNullable<ContextBreakdownInput["grounded"]>, "historyLaneTokens">;
+
 // While the chat is grounded, its next question carries sources beside the conversation lane.
 function groundedShare(
   deps: UiHandlerDeps,
   chatId: string,
   profile: ContextProfile,
-  lastPrompt: GroundedPromptContextWire | undefined,
-): ContextBreakdownInput["grounded"] {
+): GroundedLane | undefined {
   const chat = deps.store.findChatById(chatId);
   if (chat === undefined || !hasGroundingScope(chat)) return undefined;
-  return { historyLaneTokens: groundedHistoryLaneTokens(profile), lastPrompt };
+  return { historyLaneTokens: groundedHistoryLaneTokens(profile) };
 }
 
 // The latest grounded request describes the current request's shape only while the chat is still
@@ -284,7 +254,7 @@ function currentGroundedRequest(
 }
 
 function groundedSourceEstimate(
-  grounding: ContextBreakdownInput["grounded"],
+  grounding: GroundedLane | undefined,
   observed: GroundedPromptContextWire | undefined,
   current: GroundedPromptContextWire | undefined,
 ): ContextBreakdownInput["grounded"] {
@@ -323,12 +293,11 @@ export function readChatContextStatus(
   correlationId?: string,
 ): ChatContextStatusWire {
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const currentGrounding = groundedShare(deps, chatId, profile, undefined);
+  const currentGrounding = groundedShare(deps, chatId, profile);
   // Checkpoint validity, counting and pending compaction use the same conversation profile as
   // the grounded send path. Comparing its 8,000-token checkpoint against a full model window
   // would discard a valid checkpoint as though that lane had expanded.
-  const conversationProfile =
-    currentGrounding === undefined ? profile : groundedConversationLaneProfile(profile);
+  const conversationProfile = conversationProfileFor(profile, currentGrounding !== undefined);
   const checkpoint = checkpointForProfile(deps, chatId, conversationProfile, correlationId);
   const counted = countHistory(deps, chatId, conversationProfile, checkpoint);
   const currentPrompt = currentGroundedRequest(
@@ -376,7 +345,15 @@ function compactionProjection(
   budget: number,
   correlationId: string | undefined,
 ): ConversationCompactionOutcome | undefined {
-  const snapshot = capturedStoredHistory(deps, chatId, profile, correlationId);
+  const snapshot = captureChatHistoryWithCheckpoint(
+    deps.store,
+    deps.evidenceStore,
+    chatId,
+    "",
+    profile,
+    currentRedactionSecrets(deps),
+    correlationId,
+  );
   try {
     return conversationForGatewayWithCompaction(snapshot.history, {
       contextProfile: profile,
@@ -400,11 +377,19 @@ function manualCompactionCandidate(
   correlationId: string,
 ): ContextCompactionRecord | undefined {
   const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const profile =
-    groundedShare(deps, chatId, modelProfile, undefined) === undefined
-      ? modelProfile
-      : groundedConversationLaneProfile(modelProfile);
-  const snapshot = capturedStoredHistory(deps, chatId, profile, correlationId);
+  const profile = conversationProfileFor(
+    modelProfile,
+    groundedShare(deps, chatId, modelProfile) !== undefined,
+  );
+  const snapshot = captureChatHistoryWithCheckpoint(
+    deps.store,
+    deps.evidenceStore,
+    chatId,
+    "",
+    profile,
+    currentRedactionSecrets(deps),
+    correlationId,
+  );
   // The conversation's own stored size: in a grounded chat the reading also carries the sources,
   // which compaction never touches (PR #3678 review).
   const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);

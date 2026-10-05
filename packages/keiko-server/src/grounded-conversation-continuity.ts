@@ -11,8 +11,7 @@ import {
   currentRedactionSecrets,
   type UiHandlerDeps,
 } from "./deps.js";
-import { captureChatHistory, stampHistoryRevision } from "./chat-history-snapshot.js";
-import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { captureChatHistoryWithCheckpoint, stampHistoryRevision } from "./chat-history-snapshot.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import type { ChatMessage } from "./store/index.js";
@@ -31,7 +30,15 @@ export function groundedConversationContinuity(
   originalQuery = user.content,
 ): GroundedConversationContinuity {
   const profile = continuityProfile(deps, modelId);
-  const snapshot = captureContinuityHistory(deps, user, profile, correlationId);
+  const snapshot = captureChatHistoryWithCheckpoint(
+    deps.store,
+    deps.evidenceStore,
+    user.chatId,
+    user.id,
+    profile,
+    currentRedactionSecrets(deps),
+    correlationId,
+  );
   const historyPrefix = snapshot.history.filter((message) => message.id !== user.id);
   if (historyPrefix.length === 0 && snapshot.earlierCompaction === undefined) {
     return { answerContext: "", retrievalContent: user.content, compaction: undefined };
@@ -65,33 +72,6 @@ export function groundedConversationContinuity(
   };
 }
 
-function captureContinuityHistory(
-  deps: UiHandlerDeps,
-  user: ChatMessage,
-  profile: ContextProfile,
-  correlationId: string | undefined,
-): ReturnType<typeof captureChatHistory> {
-  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
-  const checkpoint = loadChatContinuityCheckpoint(
-    deps.evidenceStore,
-    user.chatId,
-    deps.store.chatHistoryRevision(user.chatId),
-    correlationId,
-    (disposition) => {
-      checkpointDisposition = disposition;
-    },
-  );
-  return captureChatHistory(
-    deps.store,
-    user.chatId,
-    user.id,
-    profile,
-    currentRedactionSecrets(deps),
-    checkpoint,
-    { correlationId, checkpointDisposition },
-  );
-}
-
 function previousUserQuestion(history: readonly ChatMessage[]): string | undefined {
   return [...history].reverse().find((message) => message.role === "user")?.content;
 }
@@ -99,7 +79,7 @@ function previousUserQuestion(history: readonly ChatMessage[]): string | undefin
 function assembleContinuity(
   deps: UiHandlerDeps,
   user: ChatMessage,
-  snapshot: ReturnType<typeof captureChatHistory>,
+  snapshot: ReturnType<typeof captureChatHistoryWithCheckpoint>,
   profile: ContextProfile,
   historyPrefix: readonly ChatMessage[],
   query: { readonly originalQuery: string; readonly correlationId: string | undefined },
@@ -150,9 +130,18 @@ export function groundedConversationLaneProfile(modelProfile: ContextProfile): C
   });
 }
 
+/** Select the same conversation geometry for sending, inspecting and manual compaction. */
+export function conversationProfileFor(
+  modelProfile: ContextProfile,
+  grounded: boolean,
+): ContextProfile {
+  return grounded ? groundedConversationLaneProfile(modelProfile) : modelProfile;
+}
+
 function continuityProfile(deps: UiHandlerDeps, modelId: string): ContextProfile {
-  return groundedConversationLaneProfile(
+  return conversationProfileFor(
     currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    true,
   );
 }
 
