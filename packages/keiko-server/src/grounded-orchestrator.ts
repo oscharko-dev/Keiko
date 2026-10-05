@@ -89,6 +89,7 @@ import {
   PathEscapeError,
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
+  WorkspaceReadError,
   detectWorkspaceAt,
   decodeTextFileBytes,
   endpointContractAdapter,
@@ -2178,7 +2179,8 @@ function isKnownFitSourceAnchor(anchor: SearchAnchor): boolean {
 }
 
 function hasKnownFitSourceTarget(inputs: SearchInputs): boolean {
-  if (inputs.targetDecision.definitionRequested) return true;
+  if (inputs.targetDecision.definitionRequested && inputs.targetDecision.kind !== "contextual")
+    return true;
   // Preserve source spelling: plain technical routing hints are not independently selected
   // source symbols. Explicit paths, quotes and typed identifiers still refuse folder enrichment.
   const requested = extractAnchors({
@@ -2186,7 +2188,13 @@ function hasKnownFitSourceTarget(inputs: SearchInputs): boolean {
     maxAnchors: inputs.query.text.length,
     caseSensitive: true,
   });
-  return requested.anchors.some(isKnownFitSourceAnchor);
+  return requested.anchors.some((anchor) => {
+    if (anchor.kind !== "identifier" || anchor.weight >= 0.9 || /\s/u.test(anchor.term))
+      return isKnownFitSourceAnchor(anchor);
+    // Definition-pattern captures can be ordinary prose, not original technical selectors.
+    const original = extractAnchors({ text: anchor.term, maxAnchors: 1 }).anchors[0];
+    return original !== undefined && isKnownFitSourceAnchor(original);
+  });
 }
 
 function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
@@ -4529,7 +4537,7 @@ function deterministicEvidenceObservers(
   };
 }
 
-async function symbolFileAtoms(
+async function collectSymbolFileAtoms(
   inputs: DeterministicContextInputs,
   requestContext: StructuralAdapterRequestContext,
 ): Promise<SymbolDiscoveryResult> {
@@ -4547,6 +4555,86 @@ async function symbolFileAtoms(
     atoms: [...prioritized.atoms, ...documents.atoms],
     uncertainty: [...symbols.uncertainty, ...prioritized.uncertainty, ...documents.uncertainty],
   };
+}
+
+interface StructuralEvidenceRecoveryInputs {
+  readonly searchScope: SearchScope;
+  readonly metadataFs: WorkspaceFs;
+  readonly deadlineAtMs: number;
+  readonly signal: AbortSignal | undefined;
+  readonly nowMs: () => number;
+  readonly recordMetadataUnavailable: MetadataFailureObserver;
+}
+
+const LOCAL_STRUCTURAL_FILESYSTEM_FAILURES: ReadonlySet<string> = new Set([
+  "EACCES",
+  "EPERM",
+  "ENOENT",
+  "ENOTDIR",
+  "EIO",
+  "ESTALE",
+]);
+
+function unavailableStructuralEvidence(
+  error: unknown,
+  inputs: StructuralEvidenceRecoveryInputs,
+): DeterministicContextEvidence {
+  throwIfCancelled(inputs.signal);
+  if (!(error instanceof WorkspaceReadError)) throw error;
+  const path = error.requestedPath;
+  const cause = safeProperty(error, "cause");
+  const kind = errorKindOf(cause);
+  if (
+    path === "." ||
+    !isAdmittedMetadataPath(path, inputs.searchScope, undefined) ||
+    !LOCAL_STRUCTURAL_FILESYSTEM_FAILURES.has(kind)
+  )
+    throw error;
+  const root = inputs.searchScope.workspace.root;
+  const currentFs = metadataTraversalFs(inputs.metadataFs, inputs);
+  const contained = canonicalContainedSearchPath(inputs.searchScope, currentFs, "");
+  if (contained?.path !== root) throw new PathDeniedError("Workspace root changed.", ".");
+  // Root access remains mandatory; only a known unavailable descendant can be secondary evidence.
+  currentFs.readDir(root, 1);
+  inputs.recordMetadataUnavailable(cause, path);
+  const emittedAtMs = inputs.nowMs();
+  return {
+    atoms: [],
+    uncertainty: [
+      toolUnavailable(
+        "Supplementary structural evidence is unavailable for a subtree.",
+        emittedAtMs,
+      ),
+      {
+        kind: "scope-incomplete",
+        claim: "Supplementary structural discovery could not inspect an unavailable subtree.",
+        impactedAtomIds: [],
+        emittedAtMs,
+      },
+    ],
+  };
+}
+
+async function availableStructuralEvidence(
+  inputs: StructuralEvidenceRecoveryInputs,
+  work: () => Promise<DeterministicContextEvidence>,
+): Promise<DeterministicContextEvidence> {
+  try {
+    return await work();
+  } catch (error) {
+    return unavailableStructuralEvidence(error, inputs);
+  }
+}
+
+async function symbolFileAtoms(
+  inputs: DeterministicContextInputs,
+  requestContext: StructuralAdapterRequestContext,
+): Promise<SymbolDiscoveryResult> {
+  try {
+    return await collectSymbolFileAtoms(inputs, requestContext);
+  } catch (error) {
+    return unavailableStructuralEvidence(error, inputs);
+  }
 }
 
 interface DefinitionDiscoveryExecution {
@@ -4871,6 +4959,7 @@ async function rootGlobManifestPaths(
 // the guarded fs, the traversal control and the shared existence cache stay in lockstep across
 // them instead of being re-threaded positionally into each pass.
 interface MetadataDiscoveryInputs {
+  readonly readableScopeManifest?: boolean;
   readonly input: OrchestratorInput;
   readonly intent: RetrievalIntent;
   readonly searchScope: SearchScope;
@@ -4968,7 +5057,10 @@ async function projectMetadataAtoms(
   inputs: MetadataDiscoveryInputs,
 ): Promise<readonly EvidenceAtom[]> {
   const { input, intent, control } = inputs;
-  if (!wantsProjectMetadata(input, intent) || !metadataTraversalCanContinue(control)) {
+  if (
+    (!wantsProjectMetadata(input, intent) && inputs.readableScopeManifest !== true) ||
+    !metadataTraversalCanContinue(control)
+  ) {
     return [];
   }
   const context: MetadataAtomCollectionContext = { ...inputs, seen: new Set<string>() };
@@ -5090,6 +5182,7 @@ async function deterministicMetadataEvidence(
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
   const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
+    ...(inputs.readableScopeManifest === true ? { readableScopeManifest: true } : {}),
     input,
     intent: plan.retrievalIntent,
     searchScope,
@@ -5153,6 +5246,7 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
+  readonly readableScopeManifest?: boolean;
   readonly recordSymbolReadFailure: SymbolReadFailureObserver;
   readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly lexicalAtoms?: readonly EvidenceAtom[];
@@ -5184,19 +5278,21 @@ async function collectParallelDeterministicEvidence(
   const pending = [
     inputs.skipOptionalTrace === true
       ? Promise.resolve({ atoms: [], uncertainty: [] })
-      : collectFollowSymbolTraceEvidence({
-          scope: input.scope,
-          query: input.query,
-          anchors: plan.anchors,
-          retrievalIntent: plan.retrievalIntent,
-          searchScope,
-          fs,
-          nowMs,
-          signal,
-          requestContext: traceContext,
-          deadlineAtMs,
-          tryReserveSearchCall: budget.tryReserveSearchCall,
-        }),
+      : availableStructuralEvidence({ ...inputs, signal }, () =>
+          collectFollowSymbolTraceEvidence({
+            scope: input.scope,
+            query: input.query,
+            anchors: plan.anchors,
+            retrievalIntent: plan.retrievalIntent,
+            searchScope,
+            fs,
+            nowMs,
+            signal,
+            requestContext: traceContext,
+            deadlineAtMs,
+            tryReserveSearchCall: budget.tryReserveSearchCall,
+          }),
+        ),
     inputs.symbolDiscovery === undefined
       ? symbolFileAtoms({ ...inputs, signal }, fileSearchContext)
       : Promise.resolve({ atoms: [], uncertainty: [] }),
@@ -6772,21 +6868,32 @@ async function discoveredTraceForAugmentation(
     workspaceIndex,
     deadlineAtMs,
   } = args;
-  return collectDiscoveredSymbolTraceEvidence({
-    scope: input.scope,
-    query: input.query,
-    anchors: plan.anchors,
-    retrievalIntent: plan.retrievalIntent,
-    searchScope,
-    fs,
-    nowMs,
-    atoms: rings.atoms,
-    signal: deps.signal,
-    workspaceIndex,
-    requestContext: structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
-    deadlineAtMs,
-    tryReserveSearchCall: budget.tryReserveSearchCall,
-  });
+  return availableStructuralEvidence(
+    {
+      ...deterministicEvidenceObservers(args),
+      searchScope,
+      metadataFs: args.metadataFs,
+      deadlineAtMs,
+      nowMs,
+      signal: deps.signal,
+    },
+    () =>
+      collectDiscoveredSymbolTraceEvidence({
+        scope: input.scope,
+        query: input.query,
+        anchors: plan.anchors,
+        retrievalIntent: plan.retrievalIntent,
+        searchScope,
+        fs,
+        nowMs,
+        atoms: rings.atoms,
+        signal: deps.signal,
+        workspaceIndex,
+        requestContext: structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS),
+        deadlineAtMs,
+        tryReserveSearchCall: budget.tryReserveSearchCall,
+      }),
+  );
 }
 
 function markAugmentationSkipped(
@@ -6822,20 +6929,14 @@ function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRun
   return true;
 }
 
+function hasReadableScopeManifest(rings: RingRunSummary): boolean {
+  return [...(rings.knownFitFileBytes?.keys() ?? [])].some(isCanonicalMetadataFile);
+}
+
 async function augmentRingsWithDeterministicAtoms(
   args: AssembleGroundedPackInputs,
 ): Promise<RingRunSummary> {
-  const {
-    deps,
-    plan,
-    rings,
-    searchScope,
-    fs,
-    metadataFs,
-    nowMs,
-    structuralContexts,
-    deadlineAtMs,
-  } = args;
+  const { deps, plan, rings, searchScope, fs, nowMs, structuralContexts, deadlineAtMs } = args;
   const budget = createAugmentationBudgetMeter(plan, rings.governor, nowMs, deadlineAtMs);
   // Explicitly selected files are direct user scope, not another search. Preserve healthy files
   // when a planned ring consumed the search-call share (notably multi-source splits), while the
@@ -6852,13 +6953,14 @@ async function augmentRingsWithDeterministicAtoms(
     return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
     ...deterministicEvidenceObservers(args),
+    readableScopeManifest: hasReadableScopeManifest(scopedRings),
     symbolDiscovery: scopedRings.symbolDiscovery,
     skipOptionalTrace: scopedRings.verifiedDefinitionContext === true,
     input: args.input,
     plan,
     searchScope,
     fs,
-    metadataFs,
+    metadataFs: args.metadataFs,
     nowMs,
     signal: deps.signal,
     structuralContexts,

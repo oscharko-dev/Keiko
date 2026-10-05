@@ -31,7 +31,7 @@ function workspaceManifestFixture(): string {
   mkdirSync(join(root, "services", "api"), { recursive: true });
   writeFileSync(
     join(root, "package.json"),
-    JSON.stringify({ workspaces: ["services/*", "services/api"] }),
+    JSON.stringify({ name: "recoverable-workspace", workspaces: ["services/*", "services/api"] }),
   );
   writeFileSync(join(root, "services", "api", "package.json"), '{"name":"recoverable-api"}');
   return root;
@@ -292,3 +292,191 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     }
   },
 );
+
+const manifestQuestions = [
+  "Welche Paketmanifeste definieren diesen verbundenen Workspace? Nenne den Paketnamen aus jedem tatsächlich gelesenen Manifest und belege ihn mit Datei und Zeile.",
+  "Which package manifests define this connected workspace? Name the package in each actually read manifest and cite its file and line.",
+];
+function productionDeps(
+  activityLog: ReturnType<typeof createBufferedServerLogSink>,
+): OrchestratorDeps {
+  return {
+    correlationId: undefined,
+    nowMs: () => 0,
+    activityLog,
+    answerer: { answer: () => Promise.reject(new TypeError("No model call permitted")) },
+  };
+}
+
+async function retrieveManifestQuestion(
+  root: string,
+  text: string,
+  unavailable: boolean,
+): Promise<void> {
+  const activityLog = createBufferedServerLogSink();
+  const request = input(root, 20);
+  const result = await retrieveConnectedContextPack(
+    { ...request, query: { ...request.query, text } },
+    productionDeps(activityLog),
+  );
+  expect(result.pack.files.map((file) => file.scopePath)).toEqual([
+    "package.json",
+    "services/api/package.json",
+  ]);
+  const content = result.pack.files
+    .flatMap((file) => file.excerpts.map((excerpt) => excerpt.content))
+    .join("\n");
+  expect(content).toContain("recoverable-workspace");
+  expect(content).toContain("recoverable-api");
+  expect(result.pack.usage.filesRead).toBe(2);
+  expect(result.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(
+    unavailable,
+  );
+  if (text === manifestQuestions[0])
+    expect(result.pack.uncertainty.some((marker) => marker.kind === "tool-unavailable")).toBe(
+      unavailable,
+    );
+  expect(activityLog.events.some((event) => event.op === "search.connected-context.failed")).toBe(
+    false,
+  );
+  if (unavailable)
+    expect(
+      activityLog.events.some(
+        (event) =>
+          event.op === "search.connected-context.metadata-unavailable" &&
+          event.extra?.reason === "permission-denied",
+      ),
+    ).toBe(true);
+  expect(activityLog.lines().join("\n")).not.toContain(root);
+  expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+}
+
+it.each(manifestQuestions)(
+  "reads declared manifests through the healthy default pipeline: %s",
+  async (text) => {
+    await retrieveManifestQuestion(workspaceManifestFixture(), text, false);
+  },
+);
+it.runIf(process.platform !== "win32" && process.getuid?.() !== 0).each(manifestQuestions)(
+  "reads declared manifests through the default pipeline with an execute-only subtree: %s",
+  async (text) => {
+    const root = workspaceManifestFixture();
+    const parent = join(root, "services");
+    chmodSync(parent, 0o111);
+    try {
+      await retrieveManifestQuestion(root, text, true);
+    } finally {
+      chmodSync(parent, 0o755);
+    }
+  },
+);
+
+it.each([
+  "Where is normalize implemented?",
+  "Where is normalizeEmail implemented?",
+  'Where is "normalize" implemented?',
+  "Why does normalizeEmail fail?",
+  'Find the exact literal "Missing failure".',
+  "Find isolated/missing.ts",
+])("preserves explicit source selectors instead of manifest fallback: %s", async (text) => {
+  const root = workspaceManifestFixture();
+  const activityLog = createBufferedServerLogSink();
+  const request = input(root, 20);
+  const result = await retrieveConnectedContextPack(
+    { ...request, query: { ...request.query, text } },
+    productionDeps(activityLog),
+  );
+  expect(result.pack.files).toEqual([]);
+  expect(
+    activityLog.events.find((event) => event.op === "search.connected-context.completion-details")
+      ?.extra?.scopeContextState,
+  ).toBe("gate-refused");
+});
+
+it("retains a real lower-case declaration without admitting unrelated manifest context", async () => {
+  const root = workspaceManifestFixture();
+  writeFileSync(join(root, "worker.ts"), "export function normalize() { return 31; }\n");
+  const activityLog = createBufferedServerLogSink();
+  const request = input(root, 20);
+  const result = await retrieveConnectedContextPack(
+    { ...request, query: { ...request.query, text: "Where is normalize implemented?" } },
+    productionDeps(activityLog),
+  );
+  expect(result.pack.files.map((file) => file.scopePath)).toEqual(["worker.ts"]);
+  expect(result.pack.files[0]?.excerpts[0]?.content).toContain("return 31");
+  expect(
+    activityLog.events.find((event) => event.op === "search.connected-context.completion-details")
+      ?.extra?.scopeContextState,
+  ).toBe("gate-refused");
+});
+
+it.each([
+  { path: ".", code: "EACCES" },
+  { path: "../outside", code: "EACCES" },
+  { path: ".ssh", code: "EACCES" },
+  { path: "other", code: "EACCES" },
+  { path: "services", code: "EMFILE" },
+  { path: "services", code: "UNKNOWN_FAILURE" },
+])(
+  "propagates structural failures outside the recoverable subtree boundary: $path/$code",
+  async ({ path, code }) => {
+    const root = workspaceManifestFixture();
+    const activityLog = createBufferedServerLogSink();
+    const request = input(root, 20);
+    const failure = new WorkspaceReadError("Controlled structural failure", path);
+    failure.cause = Object.assign(new Error("Controlled filesystem failure"), { code });
+    await expect(
+      retrieveConnectedContextPack(
+        {
+          ...request,
+          scope:
+            path === "other"
+              ? { ...request.scope, kind: "directory", relativePaths: ["services"] }
+              : request.scope,
+          query: { ...request.query, text: manifestQuestions[0] ?? "" },
+        },
+        {
+          ...productionDeps(activityLog),
+          fs: {
+            ...nodeWorkspaceFs,
+            readDir: (absolutePath, limit) => {
+              if (absolutePath.endsWith("/services")) throw failure;
+              return nodeWorkspaceFs.readDir(absolutePath, limit);
+            },
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "WORKSPACE_READ_FAILED" });
+    expect(activityLog.events.some((event) => event.op === "search.connected-context.failed")).toBe(
+      true,
+    );
+    expect(activityLog.lines().join("\n")).not.toContain(root);
+  },
+);
+
+it("does not recover descendant availability when current root access is lost", async () => {
+  const root = workspaceManifestFixture();
+  const activityLog = createBufferedServerLogSink();
+  const request = input(root, 20);
+  let rootUnavailable = false;
+  const unavailable = Object.assign(new Error("Controlled root refusal"), { code: "EACCES" });
+  await expect(
+    retrieveConnectedContextPack(
+      { ...request, query: { ...request.query, text: manifestQuestions[0] ?? "" } },
+      {
+        ...productionDeps(activityLog),
+        fs: {
+          ...nodeWorkspaceFs,
+          readDir: (path, limit) => {
+            if (path.endsWith("/services")) rootUnavailable = true;
+            if (rootUnavailable) throw unavailable;
+            return nodeWorkspaceFs.readDir(path, limit);
+          },
+        },
+      },
+    ),
+  ).rejects.toBe(unavailable);
+  expect(activityLog.events.some((event) => event.op === "search.connected-context.failed")).toBe(
+    true,
+  );
+});

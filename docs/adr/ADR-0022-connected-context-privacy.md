@@ -395,6 +395,12 @@ and file-grant, byte-grant, or deadline stops from the excerpt reader. Cancellat
 terminal event, never a successful completion with an invented stop reason. Workspace
 manifests share the inclusive 2 MiB eligibility ceiling. Explicit deadlines, cancellation, unavailable
 streaming ports, and failed enumeration remain visible; iterators close on interruption.
+A failed wildcard-parent listing is not cached as successful coverage: directly readable explicitly
+declared manifests are still probed. Recoverable availability failures in optional structural discovery
+do not discard those retained manifests. Recovery is limited to admitted descendants and known local
+filesystem failures after fresh root validation; unavailable roots, cancellation, containment
+violations and unexpected failures still propagate. The existing metadata-unavailable diagnostic and
+scope-incomplete uncertainty remain visible.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared
 legacy HTML charsets supported by the platform's fatal `TextDecoder`, including Shift-JIS, Big5,
 and ISO-2022-JP. HTML declarations are inspected within the first 1,024 bytes; `http-equiv` charset
