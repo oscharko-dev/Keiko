@@ -1,6 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  analyzeSupportReport,
   createClientOnlySupportReport,
   parseSupportReport,
 } from "@oscharko-dev/keiko-activity-log/reader";
@@ -42,6 +43,9 @@ it.each([undefined, "actual-browser-report-request"])(
       );
       expect(text).toBe(prepared.report.reportJson);
       expect(actual.incident.correlation).toEqual(expected.incident.correlation);
+      expect(actual.incident.defectFingerprint).toBe(expected.incident.defectFingerprint);
+      expect(actual.incident.platformClass).toBe("other-other");
+      expect(analyzeSupportReport(text).selection).toEqual(expected.selection);
       expect(actual.incident.clientReport).toEqual(expected.incident.clientReport);
       expect(actual.selection).toEqual(expected.selection);
       expect(actual.evidence).toEqual(expected.evidence);
