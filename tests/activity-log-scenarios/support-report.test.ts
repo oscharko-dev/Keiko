@@ -29,7 +29,11 @@ import {
   closeUiTestServer,
   startUiTestServerWithFactory,
 } from "../../packages/keiko-server/src/ui-test-server/_support.js";
-import { resetServerLogger } from "../support/activity-log-test-support.js";
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+  resetServerLogger,
+} from "../support/activity-log-test-support.js";
 import {
   persistedActivityLogLines,
   readPersistedActivityLog,
@@ -370,5 +374,70 @@ describe("Activity Log scenario: support report HTTP delivery", () => {
       ],
     });
     expect(trace.failureClasses).toContain("support-report");
+  });
+});
+
+function expectTransientExportJoins(report: CreatedReport): void {
+  const digest = report.parsed.integrity.reportDigest;
+  expect(events("support.incident.rejected")).toEqual([
+    expect.objectContaining({
+      correlationId: FAILURE_ID,
+      rejectionReason: "quota-exhausted",
+      errorKind: "rate-limited",
+      completeness: "partial",
+      loss: "event-dropped",
+    }),
+  ]);
+  const completed = events("support.report.ui.completed").at(-1);
+  expect(completed).toMatchObject({
+    correlationId: "wire-capacity-preparation",
+    selectedCorrelationId: FAILURE_ID,
+    incidentId: report.parsed.incident.incidentId,
+    reportDigest: digest,
+    retentionDisposition: "transient",
+  });
+  // No pin was attempted for a transient descriptor. Do not invent a rejected pin operation.
+  expect(completed).not.toHaveProperty("pinDisposition");
+  expect(events("support.report.ui.delivered")).toEqual([
+    expect.objectContaining({
+      correlationId: "wire-capacity-download",
+      parentCorrelationId: "wire-capacity-preparation",
+      reportDigest: digest,
+      evidenceScope: "server",
+      deliveryAuthority: "session-bound",
+    }),
+  ]);
+}
+
+describe("mounted support report at candidate capacity", () => {
+  it("joins the quota refusal to the actual transient export and downloaded gzip", async () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const cookie = sessionCookie();
+    expectError(
+      await postReport(FAILURE_ID, { correlationId: "wire-not-retained-selector" }, cookie),
+      503,
+      "SUPPORT_REPORT_SELECTION_UNAVAILABLE",
+    );
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
+    const report = created(
+      await postReport("wire-capacity-preparation", { correlationId: FAILURE_ID }, cookie),
+    );
+    expect(report.parsed.incident.trigger).toBe("registered-failure");
+    expect(report.parsed.incident.op).toBe("support.report.ui.failed");
+    const failure = analyzeSupportReport(report.reportJson)
+      .analysis.timelines.flatMap((timeline) => timeline.lines)
+      .find((line) => line.op === "support.report.ui.failed");
+    expect(failure?.extra).toMatchObject({ reason: "selection-unavailable" });
+    verifySavedAttachment(
+      await wire(report.downloadPath, "GET", {
+        Cookie: cookie,
+        "X-Keiko-Correlation-Id": "wire-capacity-download",
+      }),
+      report,
+    );
+    expectTransientExportJoins(report);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
   });
 });

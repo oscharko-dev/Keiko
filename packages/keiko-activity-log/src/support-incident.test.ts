@@ -717,8 +717,27 @@ describe("SupportIncident candidates", () => {
 
     it("keeps a reserve so a failure flood never blocks an explicit report", () => {
       fillAutomaticQuota();
-      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+      const automatic = listSupportIncidents(stateDir, { readOnly: true });
+      const { automaticCapacity } = supportIncidentRetentionPolicy(stateDir);
+      expect(automatic).toHaveLength(automaticCapacity);
+      const { record } = created(recordUserReportedIncident(stateDir));
+      expect(record.slotIndex).toBeGreaterThanOrEqual(automaticCapacity);
+      const retained = listSupportIncidents(stateDir, { readOnly: true });
+      expect(retained).toHaveLength(automatic.length + 1);
+      for (const owner of automatic) expect(retained).toContainEqual(owner);
+      expect(lines("support.incident.expired")).toEqual([]);
     }, 60_000);
+
+    it.each([
+      { retentionBytes: 65536, capacity: 14, automaticCapacity: 10, browserCapacity: 3 },
+      { retentionBytes: 131072, capacity: 30, automaticCapacity: 22, browserCapacity: 7 },
+    ])("reserves manual and browser shares at $retentionBytes bytes", (expected) => {
+      expect(
+        supportIncidentRetentionPolicy(stateDir, {
+          KEIKO_LOG_RETENTION_BYTES: String(expected.retentionBytes),
+        }),
+      ).toEqual(expected);
+    });
   });
 
   describe("expiry, recovery, and dismissal", () => {

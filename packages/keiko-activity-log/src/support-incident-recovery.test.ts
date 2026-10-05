@@ -182,9 +182,15 @@ describe("durable class publication reserve recovery", () => {
       expect(
         expectActivityLogProof("support.incident.rejected.emitted-line", rejected.at(-1) ?? ""),
       ).toMatchObject({
+        level: "warn",
         correlationId: "protected-class-share",
         rejectionReason: "quota-exhausted",
+        trigger: "registered-failure",
         openIncidentCount: records.length,
+        errorKind: "rate-limited",
+        completeness: "partial",
+        loss: "event-dropped",
+        fingerprintAlgorithm: kind === "browser" ? 2 : 1,
       });
     },
   );
