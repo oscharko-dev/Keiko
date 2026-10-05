@@ -85,9 +85,7 @@ async function assertDecision(test: DecisionCase): Promise<void> {
   );
   expect(providerCalls).toBe(test.calls);
   if (test.rejected > 0) expect(output.pack.files).toEqual([]);
-  const event = log.events.find(
-    (event) => event.op === "search.connected-context.completion-details",
-  );
+  const event = log.events.find((event) => event.op === "search.connected-context.source-details");
   expect(event?.extra).toMatchObject({
     semanticProviderDisposition: test.disposition,
     semanticProviderCallCount: test.calls,
@@ -95,7 +93,7 @@ async function assertDecision(test: DecisionCase): Promise<void> {
     primaryContentPathCount: test.primary,
   });
   const line = expectActivityLogProof(
-    "search.connected-context.completion-details.line",
+    "search.connected-context.source-details.line",
     formatActivityLogProofLine(event ?? {}),
   );
   expect(line).toHaveProperty("correlationId", CORRELATION);

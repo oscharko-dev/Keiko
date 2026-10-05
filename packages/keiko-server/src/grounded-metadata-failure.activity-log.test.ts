@@ -109,7 +109,7 @@ async function runMetadataFailure(test: FailureCase): Promise<void> {
     );
     expect(events.length).toBeGreaterThan(0);
     const details = log.events.find(
-      (event) => event.op === "search.connected-context.completion-details",
+      (event) => event.op === "search.connected-context.source-details",
     );
     expect(details?.extra?.metadataUnavailableInspectionCount).toBe(events.length);
     expect(

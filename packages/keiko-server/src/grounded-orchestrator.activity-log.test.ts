@@ -300,7 +300,7 @@ function lifecycleEvents(
   terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
 ): readonly [ServerLogEvent, ServerLogEvent] {
   expect(activityLog.events).toHaveLength(
-    terminalOp === "search.connected-context.completed" ? 3 : 2,
+    terminalOp === "search.connected-context.completed" ? 4 : 2,
   );
   const started = activityLog.events[0];
   const terminal = activityLog.events.at(-1);
@@ -314,6 +314,14 @@ function lifecycleEvents(
     const details = activityLog.events[1];
     expect(details?.op).toBe("search.connected-context.completion-details");
     expect(details?.correlationId).toBe(started.correlationId);
+    const sourceDetails = activityLog.events[2];
+    expect(sourceDetails?.op).toBe("search.connected-context.source-details");
+    expect(sourceDetails?.correlationId).toBe(started.correlationId);
+    expect(
+      activityLogEventRegistration(
+        sourceDetails as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
     expect(
       activityLogEventRegistration(details as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
@@ -535,8 +543,8 @@ describe("retrieveConnectedContextPack activity log", () => {
 
       const raw = readPersistedActivityLog(stateDir);
       const persisted = producerLogLines(raw);
-      expect(persisted).toHaveLength(3);
-      const [started, details, completed] = persisted;
+      expect(persisted).toHaveLength(4);
+      const [started, details, sourceDetails, completed] = persisted;
       if (started === undefined || details === undefined || completed === undefined) {
         throw new Error("expected persisted connected-context lifecycle lines");
       }
@@ -568,6 +576,15 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(details).toMatchObject({
         category: "search",
         op: "search.connected-context.completion-details",
+        correlationId: CORRELATION_ID,
+        scopeIdentitySha256: started.scopeIdentitySha256,
+        queryIdentitySha256: started.queryIdentitySha256,
+        activityDetailStatus: "complete",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(sourceDetails).toMatchObject({
+        op: "search.connected-context.source-details",
         correlationId: CORRELATION_ID,
         scopeIdentitySha256: started.scopeIdentitySha256,
         queryIdentitySha256: started.queryIdentitySha256,

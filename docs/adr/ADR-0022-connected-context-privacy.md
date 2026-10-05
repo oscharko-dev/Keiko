@@ -184,6 +184,16 @@ budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt win
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no
 collector byte-counting or line-counting work. Gateway fitting still enforces the model input
 budget independently. Named targets, exact absence checks, diagnostic questions, and relationship/history requests retain their existing routes.
+The existing connected-context Activity Log owner separates completion evidence into correlated
+state events to retain the registry's 48-context-field bound. `completion-details` records the
+read, workspace-index, structural and known-fit observations; `source-details` records actual
+semantic-provider decisions, metadata inspection/retention counts and omission totals. The latter
+reports each closed omission reason's exact aggregate count, the number of retained omission
+details and whether details were clipped. These are omission entries, not distinct files or confirmed
+errors; a path may have more than one reason. Legacy packs derive totals from their complete detail
+list. These events carry the same request correlation and scope/query digests and precede the
+single `completed` terminal event. They contain no paths or source bodies.
+
 #### Traversal and explicit caller budgets
 
 Recursive lexical search and file discovery visit the accepted scope without a default file-count

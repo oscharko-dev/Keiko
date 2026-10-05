@@ -37,7 +37,8 @@ function completedLine(raw: string): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || !("op" in value)) continue;
     if (
       value.op === "search.connected-context.completed" ||
-      value.op === "search.connected-context.completion-details"
+      value.op === "search.connected-context.completion-details" ||
+      value.op === "search.connected-context.source-details"
     ) {
       expect(value).toHaveProperty("correlationId", CORRELATION);
       Object.assign(joined, value);

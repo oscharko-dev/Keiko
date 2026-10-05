@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
   connectedContextOmittedCount,
+  connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   MAX_OMITTED_CONTEXT_ENTRIES,
@@ -429,21 +430,6 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       maxItems: 3,
       values: ["file-grant", "byte-grant", "deadline"],
     },
-    semanticProviderDisposition: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"],
-    },
-    semanticProviderCallCount: { type: "integer", dataClass: "count", required: false },
-    semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
-    primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
-    metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
-    metadataObservedCount: { type: "integer", dataClass: "count", required: false },
-    metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
-    metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
-    metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
-    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
     scopeContextState: {
       type: "string",
       dataClass: "closed-enum",
@@ -525,6 +511,64 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
   proofIds: ["search.connected-context.completion-details.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.source-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.sourceDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    semanticProviderDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"],
+    },
+    semanticProviderCallCount: { type: "integer", dataClass: "count", required: false },
+    semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
+    primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
+    metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
+    metadataObservedCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
+    metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
+    metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
+    omittedDetailRetainedCount: { type: "integer", dataClass: "count", required: false },
+    omittedDetailsClipped: { type: "boolean", dataClass: "closed-enum", required: false },
+    omittedOutsideScopeCount: { type: "integer", dataClass: "count", required: false },
+    omittedBinaryCount: { type: "integer", dataClass: "count", required: false },
+    omittedGeneratedCount: { type: "integer", dataClass: "count", required: false },
+    omittedIgnoredCount: { type: "integer", dataClass: "count", required: false },
+    omittedSizeExceededCount: { type: "integer", dataClass: "count", required: false },
+    omittedNearDuplicateCount: { type: "integer", dataClass: "count", required: false },
+    omittedLowRelevanceCount: { type: "integer", dataClass: "count", required: false },
+    omittedRedactedOnlyCount: { type: "integer", dataClass: "count", required: false },
+    omittedBudgetExhaustedCount: { type: "integer", dataClass: "count", required: false },
+    omittedToolUnavailableCount: { type: "integer", dataClass: "count", required: false },
+    omittedUnsupportedFormatCount: { type: "integer", dataClass: "count", required: false },
+    omittedNoTextLayerCount: { type: "integer", dataClass: "count", required: false },
+    omittedMalformedDocumentCount: { type: "integer", dataClass: "count", required: false },
+    omittedEncryptedDocumentCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.source-details.line"],
   releaseImpact: "patch",
 });
 
@@ -7107,6 +7151,9 @@ type ConnectedContextCompletedActivityFields = ActivityLogFields<
 type ConnectedContextCompletionDetailsActivityFields = ActivityLogFields<
   typeof SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION
 >;
+type ConnectedContextSourceDetailsActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION
+>;
 type ConnectedContextFailedActivityFields = ActivityLogFields<
   typeof SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION
 >;
@@ -7234,7 +7281,7 @@ function contextObservationActivityExtra(
 function retrievalLossActivityExtra(
   status: ConnectedContextCompletionStatus,
 ): Partial<ConnectedContextCompletionDetailsActivityFields> {
-  const { excerptObservation: excerpt, metadataRetention: metadata } = status;
+  const { excerptObservation: excerpt } = status;
   return {
     ...scopeContextActivityExtra(status.scopeContextObservation),
     ...(excerpt === undefined
@@ -7245,6 +7292,14 @@ function retrievalLossActivityExtra(
           excerptUnreadFileCount: excerpt.unreadFileCount,
           excerptStopReasons: excerpt.stopReasons,
         }),
+  };
+}
+
+function metadataRetentionActivityExtra(
+  status: ConnectedContextCompletionStatus,
+): Partial<ConnectedContextSourceDetailsActivityFields> {
+  const { metadataRetention: metadata } = status;
+  return {
     ...(metadata === undefined
       ? {}
       : {
@@ -7321,6 +7376,30 @@ function completionActivityExtra(
   };
 }
 
+function omissionTotalsActivityExtra(
+  pack: ConnectedContextPack,
+): Partial<ConnectedContextSourceDetailsActivityFields> {
+  const counts = connectedContextOmittedCounts(pack);
+  return {
+    omittedDetailRetainedCount: pack.omitted.length,
+    omittedDetailsClipped: connectedContextOmittedCount(pack) > pack.omitted.length,
+    omittedOutsideScopeCount: counts["outside-scope"],
+    omittedBinaryCount: counts.binary,
+    omittedGeneratedCount: counts.generated,
+    omittedIgnoredCount: counts.ignored,
+    omittedSizeExceededCount: counts["size-exceeded"],
+    omittedNearDuplicateCount: counts["near-duplicate"],
+    omittedLowRelevanceCount: counts["low-relevance"],
+    omittedRedactedOnlyCount: counts["redacted-only"],
+    omittedBudgetExhaustedCount: counts["budget-exhausted"],
+    omittedToolUnavailableCount: counts["tool-unavailable"],
+    omittedUnsupportedFormatCount: counts["unsupported-format"],
+    omittedNoTextLayerCount: counts["no-text-layer"],
+    omittedMalformedDocumentCount: counts["malformed-document"],
+    omittedEncryptedDocumentCount: counts["encrypted-document"],
+  };
+}
+
 function completionDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -7329,7 +7408,6 @@ function completionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
-    ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
     ...retrievalLossActivityExtra(execution.status),
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),
@@ -7337,6 +7415,31 @@ function completionDetailsActivityExtra(
     completeness: "complete",
     loss: "none",
   };
+}
+
+function sourceDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+): ConnectedContextSourceDetailsActivityFields {
+  const shared = {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    completeness: "complete" as const,
+    loss: "none" as const,
+  };
+  try {
+    return {
+      ...shared,
+      activityDetailStatus: "complete",
+      ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
+      ...metadataRetentionActivityExtra(execution.status),
+      ...omissionTotalsActivityExtra(execution.output.pack),
+    };
+  } catch (error) {
+    reportServerLogFailure(error, { op: "search.connected-context.source-details", correlationId });
+    return { ...shared, activityDetailStatus: "unavailable" };
+  }
 }
 
 function originalSearchFailure(error: unknown): unknown {
@@ -7534,8 +7637,15 @@ function logConnectedContextCompletion(
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION,
       { correlationId },
+      safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+    ),
+  );
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION,
+      { correlationId },
       {
-        ...safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+        ...sourceDetailsActivityExtra(identity, execution, correlationId),
         metadataUnavailableInspectionCount,
       },
     ),

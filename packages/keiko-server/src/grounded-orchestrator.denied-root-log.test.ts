@@ -50,6 +50,7 @@ function expectSearchLifecycle(
       ? [
           "search.connected-context.started",
           "search.connected-context.completion-details",
+          "search.connected-context.source-details",
           terminalOp,
         ]
       : ["search.connected-context.started", terminalOp],
