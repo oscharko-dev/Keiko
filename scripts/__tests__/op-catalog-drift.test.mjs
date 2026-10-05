@@ -1097,14 +1097,19 @@ describe("op catalog drift", () => {
     expect(JSON.parse(readFileSync(INVENTORY_PATH, "utf8")).violations).toEqual([]);
   });
 
-  it("does not recursively rediscover the generated runtime registry", () => {
-    const catalog = generateCurrentOpCatalog();
-    expect(
-      catalog.entries.some((entry) =>
-        entry.site.startsWith("packages/keiko-contracts/src/activity-log-registry.generated.ts:"),
-      ),
-    ).toBe(false);
-  });
+  it.each([
+    "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+    "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+  ])(
+    "does not recursively rediscover the generated module %s",
+    (generatedPath) => {
+      const catalog = generateCurrentOpCatalog();
+      expect(catalog.entries.some((entry) => entry.site.startsWith(`${generatedPath}:`))).toBe(
+        false,
+      );
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
 
   // The generator's own audit is expected to be empty today (verified in the generator's
   // docstring against every current literal) — this is the assertion AGENTS.md's addenda calls
