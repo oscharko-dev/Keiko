@@ -7,30 +7,41 @@ import {
   repositoryReferenceTextParts,
 } from "./repositoryReferences";
 
-it("gives identically labelled roots distinct accessible choices and restores focus on Escape", () => {
-  render(
-    <RepositoryReferenceInline
-      reference={{ path: "src/a.ts", label: "src/a.ts" }}
-      roots={[
-        { root: "/alpha/shared/app", label: "app" },
-        { root: "/beta/shared/app", label: "app" },
-      ]}
-      openReference={vi.fn(() => ({ ok: true as const, windowId: "editor" }))}
-    />,
-  );
-  const trigger = screen.getByRole("button", { name: "Open src/a.ts in editor" });
-  fireEvent.click(trigger);
-  const second = screen.getByRole("button", {
-    name: "Select repository source: app · /beta/shared/app",
+describe("repository reference picker keyboard", () => {
+  it("gives identically labelled roots distinct accessible choices and restores focus on Escape", () => {
+    const { container } = render(
+      <RepositoryReferenceInline
+        reference={{ path: "src/a.ts", label: "src/a.ts" }}
+        roots={[
+          { root: "/alpha/shared/app", label: "app" },
+          { root: "/beta/shared/app", label: "app" },
+        ]}
+        openReference={vi.fn(() => ({ ok: true as const, windowId: "editor" }))}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Open src/a.ts in editor" });
+    fireEvent.click(trigger);
+    const second = screen.getByRole("button", {
+      name: "Select repository source: app · /beta/shared/app",
+    });
+    expect(
+      screen.getByRole("button", { name: "Select repository source: app · /alpha/shared/app" }),
+    ).toBeVisible();
+    expect(trigger.getAttribute("aria-controls")).toBe(second.parentElement?.id);
+    second.focus();
+    const parent = container.parentElement;
+    expect(parent).not.toBeNull();
+    const onParentKeyDown = vi.fn();
+    parent?.addEventListener("keydown", onParentKeyDown);
+    try {
+      fireEvent.keyDown(second, { key: "Escape" });
+      expect(onParentKeyDown).not.toHaveBeenCalled();
+    } finally {
+      parent?.removeEventListener("keydown", onParentKeyDown);
+    }
+    expect(second).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
-  expect(
-    screen.getByRole("button", { name: "Select repository source: app · /alpha/shared/app" }),
-  ).toBeVisible();
-  expect(trigger.getAttribute("aria-controls")).toBe(second.parentElement?.id);
-  second.focus();
-  fireEvent.keyDown(second, { key: "Escape" });
-  expect(second).not.toBeInTheDocument();
-  expect(trigger).toHaveFocus();
 });
 
 describe("repository reference prose boundaries", () => {

@@ -68,10 +68,13 @@ export interface RepositoryReferenceTextPart {
 const REPOSITORY_REFERENCE_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
 const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGMENT}\/){0,1000}${REPOSITORY_REFERENCE_SEGMENT}\.[A-Za-z0-9][A-Za-z0-9]{0,15}`;
 const REFERENCE_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
-function referenceLineRange(capture: boolean): string {
+function referenceLineRange(
+  capture: boolean,
+  afterColon = String.raw`[\u00a0\u202f]{0,64}`,
+): string {
   const digits = capture ? String.raw`(\d{1,7})` : String.raw`\d{1,7}`;
   // Nonbreaking typographic spacing belongs to a citation; ordinary ': 5 files' is prose.
-  return String.raw`${REFERENCE_HORIZONTAL_SPACE}:[\u00a0\u202f]{0,64}${digits}(?:${REFERENCE_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${REFERENCE_HORIZONTAL_SPACE}${digits})?`;
+  return String.raw`${REFERENCE_HORIZONTAL_SPACE}:${afterColon}${digits}(?:${REFERENCE_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${REFERENCE_HORIZONTAL_SPACE}${digits})?`;
 }
 const REFERENCE_LINE_RANGE = referenceLineRange(true);
 const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
@@ -82,7 +85,7 @@ const REPOSITORY_REFERENCE_PATTERN = new RegExp(
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
 // other Unicode characters. The shared portable-path contract still owns path validity.
 const EXACT_REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`^@?([^:[\]\r\n]{1,4096}?)(?:${REFERENCE_LINE_RANGE})?$`,
+  String.raw`^@?([^:[\]\r\n]{1,4096}?)(?:${referenceLineRange(true, REFERENCE_HORIZONTAL_SPACE)})?$`,
   "u",
 );
 const REPOSITORY_REFERENCE_SOURCE = `@?${REPOSITORY_REFERENCE_PATH_CORE}(?:${referenceLineRange(false)})?`;
@@ -268,7 +271,7 @@ function isSafeRawReferencePath(path: string): boolean {
 
 function validRepositoryPath(path: string): boolean {
   if (!isSafeRawReferencePath(path)) return false;
-  if (/[*?{}<>|"$^~]/u.test(path)) return false;
+  if (/[*?{}<>|"]|^\$[^/]*$/u.test(path)) return false;
   if (path.startsWith(".") || path.includes("..")) return false;
   if (!path.includes(".")) return false;
   const filename = path.split("/").at(-1) ?? "";
@@ -291,7 +294,14 @@ function validMatchedLineRange(
   return start !== undefined && (match[3] === undefined || (end !== undefined && end >= start));
 }
 
+function hasExplanatoryReferenceSuffix(source: string, offset: number): boolean {
+  return /^[:\u2010-\u2014\u2212-][ \t\u00a0\u202f]{1,64}[^\d\s]/u.test(
+    source.slice(offset, offset + 131),
+  );
+}
+
 function incompleteReferenceLineSuffix(source: string, offset: number): boolean {
+  if (hasExplanatoryReferenceSuffix(source, offset)) return false;
   const tail = source.slice(offset, offset + 131);
   return (
     /^[:\u2010-\u2014\u2212-]/u.test(tail) ||
@@ -303,7 +313,8 @@ function validReferenceMatchBoundary(match: RegExpExecArray, source: string): bo
   const end = match.index + match[0].length;
   return (
     boundaryBefore(source, match.index) &&
-    boundaryAfter(source, end) &&
+    (boundaryAfter(source, end) ||
+      (match[2] !== undefined && hasExplanatoryReferenceSuffix(source, end))) &&
     (match[2] === undefined || !incompleteReferenceLineSuffix(source, end))
   );
 }
@@ -414,7 +425,12 @@ export function consumeRepositoryReferenceLineSuffix(
   followingText: string,
 ): { readonly reference: RepositoryReference; readonly length: number } | undefined {
   const match = FOLLOWING_REFERENCE_LINE_RANGE.exec(followingText);
-  if (match === null || !boundaryAfter(followingText, match[0].length)) return undefined;
+  if (match === null) return undefined;
+  if (
+    !boundaryAfter(followingText, match[0].length) &&
+    !hasExplanatoryReferenceSuffix(followingText, match[0].length)
+  )
+    return undefined;
   if (incompleteReferenceLineSuffix(followingText, match[0].length)) return undefined;
   const reference = parseExactRepositoryReference(`${path}${match[0]}`, true);
   if (reference?.lineStart === undefined) return undefined;
@@ -683,7 +699,8 @@ function referenceAccessiblePath(
   let displayPath = repositoryReferenceDisplayPath(path);
   if (stripUnsafeFormatChars(path) !== path && visibleLabel !== undefined) {
     const safeLabel = repositoryReferenceDisplayPath(visibleLabel);
-    if (safeLabel !== displayPath) displayPath += ` · ${safeLabel}`;
+    if (safeLabel !== displayPath && !displayPath.endsWith(`/${safeLabel}`))
+      displayPath += ` · ${safeLabel}`;
   }
   return sourceLabel === undefined
     ? displayPath
@@ -889,8 +906,14 @@ export function RepositoryReferenceInline({
               onKeyDown={dismissOnEscape}
             >
               <span>{root.label}</span>
-              {repositoryRootSuffix(root.root) === root.label ? null : (
-                <span className="repo-ref-root-path">{repositoryRootSuffix(root.root)}</span>
+              {sourceChoiceLabel(root, bestRootOptions) === root.label ? (
+                repositoryRootSuffix(root.root) === root.label ? null : (
+                  <span className="repo-ref-root-path">{repositoryRootSuffix(root.root)}</span>
+                )
+              ) : (
+                <span className="repo-ref-root-path">
+                  {repositoryReferenceDisplayPath(root.root)}
+                </span>
               )}
             </button>
           ))}

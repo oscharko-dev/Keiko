@@ -503,6 +503,22 @@ function citationRootOptions(
   };
 }
 
+function useCitationReference(
+  citation: GroundedEvidenceCitation,
+  roots: readonly RepositoryReferenceRoot[],
+): {
+  readonly options: ReturnType<typeof citationRootOptions>;
+  readonly reference: RepositoryReference;
+} {
+  return useMemo(
+    () => ({
+      options: citationRootOptions(citation, roots),
+      reference: citationRepositoryReference(citation),
+    }),
+    [citation, roots],
+  );
+}
+
 function CitationReference({
   citation,
   repositoryRoots,
@@ -518,7 +534,7 @@ function CitationReference({
 }): ReactNode {
   const t = useTranslate();
   const documentFormat = citation.documentFormat?.toUpperCase();
-  const options = citationRootOptions(citation, repositoryRoots);
+  const { options, reference } = useCitationReference(citation, repositoryRoots);
   const canOpenRepositoryCitation =
     documentFormat === undefined &&
     openRepositoryReference !== undefined &&
@@ -534,7 +550,7 @@ function CitationReference({
       <span className="grounded-citation-range">
         {canOpenRepositoryCitation ? (
           <RepositoryReferenceInline
-            reference={citationRepositoryReference(citation)}
+            reference={reference}
             {...options}
             rootRelative
             sourceLabel={sourceLabel}

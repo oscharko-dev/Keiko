@@ -1083,9 +1083,16 @@ describe("GroundedAnswer", () => {
         screen.getByRole("button", { name: "Open src/foo.ts at lines 10-25 in editor" }),
       );
       expect(openReference).not.toHaveBeenCalled();
-      expect(
-        screen.getAllByRole("button", { name: /^Select repository source: manual/u }),
-      ).toHaveLength(roots.length);
+      const expectedNames =
+        kind === "ambiguous"
+          ? [
+              "Select repository source: manual · /alias/manual",
+              "Select repository source: manual · /old/manual",
+            ]
+          : ["Select repository source: manual"];
+      const choices = screen.getAllByRole("button", { name: /^Select repository source:/u });
+      expect(choices).toHaveLength(expectedNames.length);
+      for (const name of expectedNames) expect(screen.getByRole("button", { name })).toBeVisible();
     },
   );
 

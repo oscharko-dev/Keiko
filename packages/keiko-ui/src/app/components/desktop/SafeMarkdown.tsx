@@ -46,6 +46,8 @@ import {
   sanitizeRepositoryEvidenceText,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
+  type RepositoryReference,
+  type RepositoryReferenceTextPart,
 } from "./repositoryReferences";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -308,13 +310,20 @@ function adjacentRepositoryCodeLocations(
   return adjusted ?? children;
 }
 
+function tableRepositoryReference(text: string): RepositoryReference | null {
+  const reference = parseExactRepositoryReference(text.trim(), true);
+  if (reference?.lineStart === undefined || /\s/u.test(reference.path.split("/")[0] ?? ""))
+    return null;
+  return reference;
+}
+
 function tableRepositoryLocationChildren(node: SafeMarkdownNode): readonly SafeMarkdownNode[] {
   const children = node.children ?? [];
   if (node.kind !== "td" && node.kind !== "th") return children;
   const text = children.length === 1 && children[0]?.kind === "text" ? children[0].text : undefined;
   if (text === undefined) return children;
-  const reference = parseExactRepositoryReference(text.trim(), true);
-  if (reference?.lineStart === undefined) return children;
+  const reference = tableRepositoryReference(text);
+  if (reference === null) return children;
   return [{ ...children[0], kind: "inline-code", text: reference.label }];
 }
 
@@ -635,16 +644,20 @@ function renderCitationText(
 }
 
 function renderRepositoryText(
-  text: string,
+  node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
   trailing?: ReactNode | undefined,
 ): ReactNode {
-  const sanitizedText = sanitizeRepositoryEvidenceText(text);
   if (options.openRepositoryReference === undefined) {
-    return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
+    return renderCitationText(
+      sanitizeRepositoryEvidenceText(node.text ?? ""),
+      key,
+      options.citationPreview,
+      trailing,
+    );
   }
-  const parts = repositoryReferenceTextParts(sanitizedText);
+  const { text: sanitizedText, parts } = parsedRepositoryText(node);
   if (parts.length === 1 && parts[0]?.kind === "text")
     return renderCitationText(sanitizedText, key, options.citationPreview, trailing);
   return (
@@ -679,9 +692,7 @@ function renderInlineCode(
 ): ReactNode {
   const text = node.text ?? "";
   const reference =
-    options.openRepositoryReference === undefined
-      ? null
-      : parseExactRepositoryReference(text, true);
+    options.openRepositoryReference === undefined ? null : inlineRepositoryReference(node);
   return (
     <code key={key} className="sm-inline-code">
       {reference === null ? (
@@ -715,7 +726,7 @@ function renderInlineNode(
             {trailing}
           </span>
         );
-      return renderRepositoryText(node.text ?? "", key, options, trailing);
+      return renderRepositoryText(node, key, options, trailing);
 
     case "inline-code":
       return renderInlineCode(node, key, options, trailing);
@@ -826,24 +837,56 @@ function useMarkdownListEvidence(
   }, [tree, streaming, correlationId, messageId]);
 }
 
+interface ParsedRepositoryText {
+  readonly text: string;
+  readonly parts: readonly RepositoryReferenceTextPart[];
+}
+
+// AST nodes are immutable and disappear with their message; WeakMaps never retain old messages.
+const textReferences = new WeakMap<SafeMarkdownNode, ParsedRepositoryText>();
+const inlineReferences = new WeakMap<SafeMarkdownNode, RepositoryReference | null>();
+const EMPTY_PATH_LABELS: ReadonlyMap<string, string> = new Map();
+
+function parsedRepositoryText(node: SafeMarkdownNode): ParsedRepositoryText {
+  const cached = textReferences.get(node);
+  if (cached !== undefined) return cached;
+  const text = sanitizeRepositoryEvidenceText(node.text ?? "");
+  const parsed = { text, parts: repositoryReferenceTextParts(text) };
+  textReferences.set(node, parsed);
+  return parsed;
+}
+
+function inlineRepositoryReference(node: SafeMarkdownNode): RepositoryReference | null {
+  if (inlineReferences.has(node)) return inlineReferences.get(node) ?? null;
+  const reference = parseExactRepositoryReference(node.text ?? "", true);
+  // A line-less code span may be a command. An explicit location can own filename spaces.
+  const parsed =
+    reference?.lineStart === undefined && /\s/u.test(reference?.path ?? "") ? null : reference;
+  inlineReferences.set(node, parsed);
+  return parsed;
+}
+
 function referencePathsInNode(node: SafeMarkdownNode): readonly string[] {
-  const text = node.text ?? "";
   if (node.kind === "inline-code") {
-    const reference = parseExactRepositoryReference(text, true);
+    const reference = inlineRepositoryReference(node);
     return reference === null ? [] : [reference.path];
   }
   if (node.kind !== "text") return [];
-  return repositoryReferenceTextParts(sanitizeRepositoryEvidenceText(text)).flatMap((part) =>
+  return parsedRepositoryText(node).parts.flatMap((part) =>
     part.reference === undefined ? [] : [part.reference.path],
   );
 }
 
 function referencePathsInTree(tree: readonly SafeMarkdownNode[]): readonly string[] {
   const paths: string[] = [];
-  for (const node of tree) {
-    paths.push(...referencePathsInNode(node));
-    if (node.children !== undefined) paths.push(...referencePathsInTree(node.children));
-  }
+  const visit = (nodes: readonly SafeMarkdownNode[]): void => {
+    for (const node of nodes) {
+      for (const path of referencePathsInNode(node)) paths.push(path);
+      if (node.children !== undefined)
+        visit(adjacentRepositoryCodeLocations(tableRepositoryLocationChildren(node)));
+    }
+  };
+  visit(tree);
   return paths;
 }
 
@@ -864,8 +907,11 @@ function SafeMarkdownImpl({
   );
   useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const repositoryPathLabels = useMemo(
-    () => repositoryReferencePathLabels(referencePathsInTree(tree)),
-    [tree],
+    () =>
+      literalUserInput || openRepositoryReference === undefined
+        ? EMPTY_PATH_LABELS
+        : repositoryReferencePathLabels(referencePathsInTree(tree)),
+    [tree, literalUserInput, openRepositoryReference],
   );
   const options = useMemo<RenderOptions>(
     () => ({
