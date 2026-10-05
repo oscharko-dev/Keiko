@@ -369,7 +369,7 @@ function ensureLocalSession(
   cookieToken: string | undefined,
 ): CodingAppSessionEnsureResult {
   const remainingMs = registry.verifyForCookieRepair(cookieToken);
-  return remainingMs === undefined
+  return remainingMs === undefined || remainingMs < 1_000
     ? { status: "unavailable" }
     : { status: "active", maxAgeSeconds: Math.floor(remainingMs / 1000) };
 }

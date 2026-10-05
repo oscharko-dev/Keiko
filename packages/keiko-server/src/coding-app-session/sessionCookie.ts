@@ -50,6 +50,9 @@ const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
 ] as const;
 
+/** Count of live route projections; retired cookies are not successful session repairs. */
+export const APP_SESSION_ACTIVE_COOKIE_COUNT = APP_SESSION_ACTIVE_COOKIE_PATHS.length;
+
 export interface SessionCookieOptions {
   readonly secure: boolean;
   readonly maxAgeSeconds: number;

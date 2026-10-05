@@ -58,6 +58,10 @@ describe("createSessionRegistry", () => {
     const expired = registry.mint("expired");
     clock.advance(101);
     const replacement = registry.mint("replacement");
+    expect(replacement.capacityDecision).toEqual({
+      expiredSessionCount: 1,
+      evictedSessionClass: "none",
+    });
     expect(registry.inspect(active.cookieToken)).toBeDefined();
     expect(registry.inspect(expired.cookieToken)).toBeUndefined();
     expect(registry.inspect(replacement.cookieToken)).toBeDefined();
@@ -74,6 +78,10 @@ describe("createSessionRegistry", () => {
     const idle = registry.mint("idle");
     clock.advance(1);
     const replacement = registry.mint("replacement");
+    expect(replacement.capacityDecision).toEqual({
+      expiredSessionCount: 0,
+      evictedSessionClass: "inactive",
+    });
     expect(registry.inspect(active.cookieToken)).toBeDefined();
     expect(registry.inspect(idle.cookieToken)).toBeUndefined();
     expect(registry.inspect(replacement.cookieToken)).toBeDefined();
@@ -88,6 +96,10 @@ describe("createSessionRegistry", () => {
     const release = registry.beginOperation(first.cookieToken);
     clock.advance(1);
     const replacement = registry.mint("replacement");
+    expect(replacement.capacityDecision).toEqual({
+      expiredSessionCount: 0,
+      evictedSessionClass: "active",
+    });
     clock.advance(10);
     release?.();
     expect(registry.inspect(first.cookieToken)).toBeUndefined();

@@ -98,7 +98,10 @@ complete and independently testable through the port here.
 The local-session restore route only confirms an existing valid bearer and refreshes its exact
 scoped cookie projections. Their browser Max-Age is bounded by the verified registry lifetime
 remaining on its own clock and the existing cookie lifetime ceiling. The registered confirmation
-records the actual Max-Age and projection count, without bearer material. It neither mints a session
+records the actual Max-Age and projection count, without bearer material. Less than one full second
+of remaining lifetime cannot repair a cookie: the route returns its content-free acknowledgement
+without cookie headers or a confirmed event. The projection count comes from the serializer's active
+path inventory, excluding retired-cookie deletions. It neither mints a session
 nor extends the server-owned absolute lifetime. This repairs
 missing projections after an upgrade, including the authenticated support-report route. Composing a launcher
 pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot

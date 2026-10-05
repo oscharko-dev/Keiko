@@ -36,6 +36,7 @@ import { SSE_HEADERS } from "../sse.js";
 import { createSessionStreamWriter, createSessionStreamTransport } from "./sessionStreamWriter.js";
 import { resolveCodingAppSessionDenialWindows } from "./denialWindows.js";
 import {
+  APP_SESSION_ACTIVE_COOKIE_COUNT,
   APP_SESSION_COOKIE_MAX_AGE_SECONDS,
   clearSessionCookies,
   readSessionCookie,
@@ -317,13 +318,11 @@ export function handleCodingAppSessionLocalSession(
   if (result?.status !== "active" || cookieToken === undefined) return ackResult();
   const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
   const headers = issuedCookie(ctx.req, cookieToken, maxAgeSeconds);
-  const projectionCount =
-    headers["Set-Cookie"]?.filter((cookie) => !cookie.includes("Max-Age=0")).length ?? 0;
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      { cookieMaxAgeSeconds: maxAgeSeconds, projectionCount },
+      { cookieMaxAgeSeconds: maxAgeSeconds, projectionCount: APP_SESSION_ACTIVE_COOKIE_COUNT },
     ),
   );
   return ackResult(headers);
