@@ -89,6 +89,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
@@ -736,6 +737,58 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it.each([false, true])(
+    "persists and replays the exact hybrid compaction flag: %s",
+    async (compacted) => {
+      const { capsuleId } = await seedReadyCapsule("Compacted History Docs");
+      const chatId = makeHybridChat(
+        [
+          {
+            kind: "directory",
+            relativePaths: ["src/alpha.ts"],
+            root: tempRoot("compaction-repo"),
+            connectedAtMs: NOW,
+          },
+        ],
+        [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+      );
+      if (compacted) seedGermanContinuity(chatId);
+      const profile = deriveContextProfile({
+        maxInputTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        safetyMarginTokens: 4_000,
+      });
+      const owner = hybridDeps({
+        contextProfile: profile,
+        evidenceStore: createInMemoryEvidenceStore(),
+      });
+      const pack = attachContextBudgetDiagnostics(
+        folderPack("src/alpha.ts", 0.9, "compacted-alpha"),
+        profile,
+      );
+      const answerer = vi.fn(sentinelAnswerer());
+      const seam: HybridSeam = {
+        folderRetriever: folderRetrieverFor(new Map([["src/alpha.ts", pack]])),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: answerer,
+      };
+      const request = JSON.stringify({
+        chatId,
+        content: "Explain alpha.",
+        clientTurnId: "compacted-hybrid-replay",
+      });
+      const first = await handleGroundedAsk(routeCtx(request), owner, undefined, undefined, seam);
+      expect(first.status, JSON.stringify(first.body)).toBe(200);
+      const answer = asHybrid(first.body as GroundedAnswer);
+      expect(answer.memory).toBeUndefined();
+      expect(answer.contextPack.folder.contextSummary?.compactionActive).toBe(compacted);
+      expect(store.findMessageById(answer.assistantMessageId)?.groundedAnswer).toEqual(answer);
+      const replay = await handleGroundedAsk(routeCtx(request), owner, undefined, undefined, seam);
+      expect(replay).toEqual(first);
+      expect(answerer).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("joins a hybrid root refusal to its request with the actual filesystem cause", async () => {
     const { capsuleId } = await seedReadyCapsule("Root Failure Docs");
     const scope: ChatConnectedScope = {

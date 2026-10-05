@@ -2773,7 +2773,11 @@ function settleGroundedChatTurn(
       ),
     };
   }
-  if (result.body.memory !== undefined || hasAnswerOnlyContext(prepared)) {
+  if (
+    result.body.memory !== undefined ||
+    hasAnswerOnlyContext(prepared) ||
+    prepared.continuity?.compaction !== undefined
+  ) {
     deps.store.attachGroundedAnswer(result.body.assistantMessageId, result.body);
   }
   let completion;

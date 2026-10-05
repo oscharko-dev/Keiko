@@ -76,6 +76,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import {
   CancelledError,
   ContextOverflowError,
@@ -880,15 +881,27 @@ describe("grounded continuity evidence lifecycle", () => {
     );
     const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
     try {
-      const result = await handleGroundedAsk(
-        ctx(JSON.stringify({ chatId, projectPath, content: "Explain MyClass" })),
-        handlerDeps,
-        (input) => {
-          clock.mockReturnValue(NOW + 1000);
-          return runner(emptyPack())(input);
-        },
-      );
+      const request = JSON.stringify({
+        chatId,
+        projectPath,
+        content: "Explain MyClass",
+        clientTurnId: "compacted-folder-replay",
+      });
+      const profile = handlerDeps.contextProfile;
+      if (profile === undefined) throw new TypeError("Missing context profile");
+      const execute = vi.fn((input: OrchestratorInput) => {
+        clock.mockReturnValue(NOW + 1000);
+        return runner(attachContextBudgetDiagnostics(emptyPack(), profile))(input);
+      });
+      const result = await handleGroundedAsk(ctx(request), handlerDeps, execute);
       expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.memory).toBeUndefined();
+      expect(answer.contextPack.contextSummary?.compactionActive).toBe(true);
+      expect(store.findMessageById(answer.assistantMessageId)?.groundedAnswer).toEqual(answer);
+      const replay = await handleGroundedAsk(ctx(request), handlerDeps, execute);
+      expect(replay).toEqual(result);
+      expect(execute).toHaveBeenCalledTimes(1);
       const id = evidenceStore.list().find((entry) => entry.startsWith("chat-"));
       expect(id).toBeDefined();
       if (id === undefined) throw new TypeError("Missing continuity evidence");
