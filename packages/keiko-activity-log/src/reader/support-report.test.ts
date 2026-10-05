@@ -224,6 +224,9 @@ describe("canonical body-free offline report", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  // This checks the complete 20,000-record report boundary, not a latency budget.
+  // Linux V8 coverage takes 26.5 s with 0.5 CPU/4 GiB; hosted workers exceeded the global
+  // 15 s watchdog. Keep every record and assertion while allowing slower workers to finish.
   it("round trips the largest admitted closure with its anchor and fitting optional context", () => {
     const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS - 2, true);
     // The public analyzer validates the received bytes itself. Check its actual admitted records
@@ -238,7 +241,7 @@ describe("canonical body-free offline report", () => {
       reasons: expect.arrayContaining(["context-truncated"]) as unknown,
     });
     expect(analyzed.selection.reasons).not.toContain("report-budget-exceeded");
-  });
+  }, 45_000);
 
   it("exports a count requirement separately from bytes for an oversized required closure", () => {
     const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS + 1);
