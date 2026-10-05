@@ -10012,9 +10012,11 @@ select.dlg-input {
   align-items: flex-start;
   gap: 8px;
 }
-.ui-error-notice-title {
+.ui-error-notice-text {
   flex: 1 1 auto;
   min-width: 0;
+}
+.ui-error-notice-title {
   font-weight: 650;
   color: var(--feedback-danger);
 }

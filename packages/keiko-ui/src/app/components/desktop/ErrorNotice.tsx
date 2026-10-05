@@ -81,7 +81,7 @@ function noticeFailure(
 function NoticeText({ notice }: { readonly notice: UserErrorNotice }): ReactNode {
   const t = useTranslate();
   return (
-    <div role="alert" aria-live="assertive">
+    <div className="ui-error-notice-text" role="alert" aria-live="assertive">
       <div className="ui-error-notice-title">{notice.title}</div>
       <div className="ui-error-notice-message">{notice.message}</div>
       {notice.remediation !== undefined ? (

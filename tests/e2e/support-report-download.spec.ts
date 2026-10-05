@@ -90,12 +90,30 @@ async function failChat(
   const window = await openChat(page, await createChat(request));
   await window.getByRole("textbox", { name: "Chat message" }).fill("KEIKO_E2E_SUPPORT_FAILURE");
   await window.getByRole("button", { name: "Send message" }).click();
-  const notice = window.getByRole("alert").filter({ hasText: "Support ID:" });
-  await expect(notice).toBeVisible();
-  const supportId = /Support ID: ([a-zA-Z0-9_-]+)/u.exec(await notice.innerText())?.[1];
+  const alert = window.getByRole("alert").filter({ hasText: "Support ID:" });
+  await expect(alert).toBeVisible();
+  await expect(alert.getByRole("button")).toHaveCount(0);
+  await expect(alert.getByRole("link")).toHaveCount(0);
+  const notice = window.locator(".ui-error-notice").filter({ has: alert });
+  await expect(notice).toHaveCount(1);
+  await assertNoticeDismissAlignment(notice);
+  const supportId = /Support ID: ([a-zA-Z0-9_-]+)/u.exec(await alert.innerText())?.[1];
   expect(supportId).toBeDefined();
   if (supportId === undefined) throw new TypeError("Missing actual Chat support identity");
   return { notice, supportId };
+}
+
+async function assertNoticeDismissAlignment(notice: Locator): Promise<void> {
+  const row = notice.locator(".ui-error-notice-title-row");
+  const bounds = await row.boundingBox();
+  const dismiss = await notice.getByRole("button", { name: "Dismiss error" }).boundingBox();
+  if (bounds === null || dismiss === null) throw new Error("Missing notice layout bounds");
+  // The existing close-control margin extends five pixels beyond the row's content edge.
+  expect(Math.abs(dismiss.x + dismiss.width - (bounds.x + bounds.width + 5))).toBeLessThanOrEqual(
+    1,
+  );
+  await expect(row.getByRole("alert")).toHaveCSS("flex-grow", "1");
+  await expect(row.getByRole("alert")).toHaveCSS("min-width", "0px");
 }
 
 async function saveClickedReport(
@@ -303,8 +321,12 @@ test("keeps stacked workspace error reports reachable on a short narrow viewport
       new ErrorEvent("error", { error: new Error("Synthetic viewport failure") }),
     );
   });
-  const failure = page.getByRole("alert").filter({ hasText: "Keiko encountered an error." });
-  await expect(failure).toBeVisible();
+  const failureAlert = page.getByRole("alert").filter({ hasText: "Keiko encountered an error." });
+  await expect(failureAlert).toBeVisible();
+  await expect(failureAlert.getByRole("button")).toHaveCount(0);
+  await expect(failureAlert.getByRole("link")).toHaveCount(0);
+  const failure = page.locator(".source-limit-alert").filter({ has: failureAlert });
+  await expect(failure).toHaveCount(1);
   const stack = page.locator(".stage > div").filter({ has: readiness }).filter({ has: failure });
   await expect(stack).toHaveCount(1);
   await expect(readiness.locator("..")).toHaveCSS("position", "static");

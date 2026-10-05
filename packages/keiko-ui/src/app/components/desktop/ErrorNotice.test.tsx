@@ -2,6 +2,8 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +33,21 @@ function renderInLocale(error: unknown, locale: "en" | "de"): ReturnType<typeof 
       <ErrorNoticeFromError error={error} fallback="Could not send message." />
     </I18nProvider>,
   );
+}
+
+function errorNoticeLayoutStyle(): HTMLStyleElement {
+  const path = ["src/app/globals.css", "packages/keiko-ui/src/app/globals.css"]
+    .map((candidate) => resolve(process.cwd(), candidate))
+    .find((candidate) => existsSync(candidate));
+  if (path === undefined) throw new Error("Missing production stylesheet");
+  const css = readFileSync(path, "utf8");
+  const start = css.indexOf(".ui-error-notice-title-row {");
+  const end = css.indexOf(".ui-error-notice-close:hover", start);
+  if (start < 0 || end < 0) throw new Error("Missing production notice layout rules");
+  const style = document.createElement("style");
+  style.textContent = css.slice(start, end);
+  document.head.append(style);
+  return style;
 }
 
 describe("ErrorNoticeFromError — correlation support id", () => {
@@ -242,4 +259,24 @@ it("announces error text separately from report and dismissal controls", async (
   expect(alert.querySelector("button, a, output")).toBeNull();
   expect(screen.getByRole("button", { name: "Create error report" })).toBeVisible();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+it("gives the text-only alert remaining row width before its sibling dismiss control", () => {
+  const style = errorNoticeLayoutStyle();
+  try {
+    renderInLocale(new ApiError("BAD_REQUEST", "Invalid request", 400), "en");
+    const alert = screen.getByRole("alert");
+    const dismiss = screen.getByRole("button", { name: "Dismiss error" });
+    const row = alert.parentElement;
+    if (row === null) throw new Error("Missing notice row");
+    expect(row).toHaveClass("ui-error-notice-title-row");
+    expect(dismiss.parentElement).toBe(row);
+    expect(window.getComputedStyle(row).display).toBe("flex");
+    expect(window.getComputedStyle(alert).flexGrow).toBe("1");
+    expect(window.getComputedStyle(alert).minWidth).toBe("0px");
+    expect(alert.querySelector("button, a, output")).toBeNull();
+    expect(row).not.toContainElement(screen.getByRole("button", { name: "Create error report" }));
+  } finally {
+    style.remove();
+  }
 });
