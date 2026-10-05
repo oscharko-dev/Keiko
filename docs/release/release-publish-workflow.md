@@ -106,7 +106,11 @@ Once release-only fixes land on a live `RELEASE_BASE_BRANCH`, pass that branch a
 instead; a `dev` build would then either fail the containment check below or build the wrong
 commit. It refuses before minting anything unless the checkout is the built commit and clean, the
 commit is contained in that same resolved release source branch, every required check has passed
-on that exact commit, and the release owner's approval verifies live. It then publishes the four downloads plus
+on that exact commit, and the structured review metadata names a release owner from the resolved
+allowlist. This evaluation command does not validate a GitHub approval comment or require the
+stable workflow's owner dispatch. The normal stable workflow follows signed delivery into protected
+`dev` and an allowlisted owner's release-button request. The evaluation command then publishes the
+four downloads plus
 `keiko-portable-evaluation-manifest.json` at `v<version>` as the Latest release, with both the
 first-launch instructions and the governed catalog notes in its body.
 
