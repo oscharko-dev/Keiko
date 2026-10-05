@@ -585,6 +585,50 @@ function hasFailureFacts({ parsed: { view } }: AcceptedLine): boolean {
   );
 }
 
+type OpenWindowLifecycles = Map<string, Map<string, number>>;
+
+function advanceWindowLifecycle(
+  pending: OpenWindowLifecycles,
+  correlationId: string,
+  failureClass: string,
+  starts: boolean,
+): void {
+  const classes = pending.get(correlationId) ?? new Map<string, number>();
+  const previous = classes.get(failureClass) ?? 0;
+  if (starts) {
+    classes.set(failureClass, previous + 1);
+    pending.set(correlationId, classes);
+  } else {
+    if (previous > 1) classes.set(failureClass, previous - 1);
+    else classes.delete(failureClass);
+    if (classes.size === 0) pending.delete(correlationId);
+  }
+}
+
+// A start is not routine success. Match the same registered class and correlation, as the existing
+// sufficiency analyzer does. Only open correlations occupy the existing closure budget; class keys
+// come from the finite registry rather than arbitrary event data.
+function noteWindowLifecycle(pending: OpenWindowLifecycles, accepted: AcceptedLine): void {
+  const id = accepted.parsed.correlationId;
+  const schema = activityLogOperationSchema(accepted.parsed.view.op);
+  if (!knownCorrelation(id) || schema === undefined || schema.causal === "none") return;
+  const closing = schema.lifecycle === "end" || schema.lifecycle === "failure";
+  if (schema.lifecycle !== "start" && !closing) return;
+  const classes = schema.failureClasses.length === 0 ? [schema.op] : schema.failureClasses;
+  for (const failureClass of classes) {
+    advanceWindowLifecycle(pending, id, failureClass, !closing);
+  }
+}
+
+function windowRootResult(
+  roots: ReadonlySet<string>,
+  pending: ReadonlyMap<string, ReadonlyMap<string, number>>,
+  limit: number,
+): { readonly roots: readonly string[]; readonly exceeded: boolean } {
+  const selected = new Set([...roots, ...pending.keys()]);
+  return { roots: [...selected], exceeded: selected.size > limit };
+}
+
 /** Every diagnostic correlation inside the windows, in first-seen order (bounded). */
 function windowRoots(
   state: EngineState,
@@ -592,21 +636,17 @@ function windowRoots(
 ): { readonly roots: readonly string[]; readonly exceeded: boolean } {
   const roots = new Set<string>();
   if (windows.length === 0) return { roots: [], exceeded: false };
+  const pending: OpenWindowLifecycles = new Map();
+  const limit = state.input.limits.maxClosureCorrelations;
   const files = candidateFiles(state, (loaded, file) => windowCandidate(windows, loaded, file));
   for (const accepted of acceptedLines(state, files, true)) {
+    if (!windows.some((window) => lineInWindow(window, accepted))) continue;
+    noteWindowLifecycle(pending, accepted);
     const id = accepted.parsed.correlationId;
-    if (
-      !knownCorrelation(id) ||
-      routineWindowActivity(accepted) ||
-      !windows.some((window) => lineInWindow(window, accepted))
-    )
-      continue;
-    roots.add(id);
-    if (roots.size > state.input.limits.maxClosureCorrelations) {
-      return { roots: [...roots], exceeded: true };
-    }
+    if (knownCorrelation(id) && !routineWindowActivity(accepted)) roots.add(id);
+    if (roots.size > limit || pending.size > limit) return windowRootResult(roots, pending, limit);
   }
-  return { roots: [...roots], exceeded: false };
+  return windowRootResult(roots, pending, limit);
 }
 
 // ─── Closure events and context ────────────────────────────────────────────────────────────────

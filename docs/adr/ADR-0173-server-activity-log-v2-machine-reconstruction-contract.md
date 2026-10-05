@@ -2001,7 +2001,14 @@ or aborted flag is optional context under the existing 256-event cap; unknown or
 remains mandatory. Other independently correlated, registered non-diagnostic activity is also
 optional only when it is informational or debug, explicitly complete and loss-free, has no failure
 lifecycle, failure facts or uncertain status, and names no causal parent. Diagnostic, warning,
-error, partial and loss evidence remains mandatory. Successful ancestors and descendants of a
+error, partial and loss evidence remains mandatory. A registered causal start without a later matching
+end or failure in the pinned logical-log window also makes its correlation mandatory. Matching follows the
+existing analyzer's correlation and registered failure class; a terminal from another class does
+not settle it, and a later restart or unmatched concurrent start remains open. The streaming scan
+retains only open correlations under the existing closure bound, with finite registered class keys;
+completed lifecycles release that bookkeeping. Crossing the bound reports explicit insufficiency,
+never a silently omitted start. An open lifecycle is retained evidence, not an invented error or
+timeout; out-of-order evidence is retained conservatively rather than guessed complete. Successful ancestors and descendants of a
 selected diagnostic root remain part of its complete causal closure. The incident header evaluates the evidence actually exported,
 including declared selection loss and budget reasons, rather than a separate unexported window.
 

@@ -105,6 +105,25 @@ function manualSelection(toMs = T0 + 1000): SupportQuerySelection {
   };
 }
 
+function streamLifecycle(
+  process: FixtureProcess,
+  atMs: number,
+  correlationId: string,
+  phase: "started" | "completed",
+): string {
+  return fixtureLine(process, atMs, {
+    op: `gateway.stream.${phase}`,
+    correlationId,
+    fields: {
+      modelId: "test-model",
+      costClass: "low",
+      ...(phase === "started"
+        ? { timeoutMs: 0, maxRetries: 0, streaming: true }
+        : { chunkCount: 1 }),
+    },
+  });
+}
+
 function writeGraph(stateDir: string): GraphFixture {
   const a = fixtureProcess(4101, "aaaaaaa1");
   const b = fixtureProcess(4202, "bbbbbbb2");
@@ -927,6 +946,118 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
   });
 
+  it.each(["never finished", "restarted"] as const)(
+    "keeps a %s stream mandatory among 4097 completed lifecycles",
+    (state) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      const lines = [streamLifecycle(process, T0, IDS.root, "started")];
+      if (state === "restarted")
+        lines.push(
+          streamLifecycle(process, T0 + 1, IDS.root, "completed"),
+          streamLifecycle(process, T0 + 2, IDS.root, "started"),
+        );
+      for (let index = 0; index < 4097; index += 1) {
+        const id = `completed-stream-${String(index)}`;
+        lines.push(
+          streamLifecycle(process, T0 + 100, id, "started"),
+          streamLifecycle(process, T0 + 101, id, "completed"),
+        );
+      }
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), lines);
+      const { result } = query(stateDir, manualSelection());
+      const owned = result.events.filter((event) => event.parsed.correlationId === IDS.root);
+      expect(owned).toHaveLength(state === "restarted" ? 3 : 1);
+      expect(owned.every((event) => event.role === "closure")).toBe(true);
+      expect(result.closure?.rootCount).toBe(1);
+      expect(result.events.length).toBeLessThanOrEqual(259);
+      expect(result.truncation.state).toBe("context-truncated");
+      expect(result.truncation.omittedContextEventCount).toBeGreaterThan(7900);
+      expect(result.metrics.selectedBytes).toBe(
+        result.events.reduce((sum, event) => sum + event.bytes, 0),
+      );
+      expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+    },
+  );
+
+  it.each(["other class", "outside window"] as const)(
+    "does not close an open lifecycle with a terminal from %s",
+    (source) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+        streamLifecycle(process, T0, IDS.root, "started"),
+        ...(source === "other class"
+          ? [
+              fixtureLine(process, T0 + 1, {
+                op: "gateway.readiness.completed",
+                correlationId: IDS.root,
+                fields: { trigger: "settings", overallStatus: "ready", probeCount: 1 },
+              }),
+            ]
+          : []),
+        ...(source === "outside window"
+          ? [streamLifecycle(process, T0 + 2000, IDS.root, "completed")]
+          : []),
+      ]);
+      const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+      expect(result.closure?.rootCount).toBe(1);
+      expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+      expect(result.events[0]?.parsed.view.op).toBe("gateway.stream.started");
+    },
+  );
+
+  it("matches a terminal across writers under the same correlation and registered class", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const peer = fixtureProcess(4202, "bbbbbbb2");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      streamLifecycle(process, T0, IDS.root, "started"),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(peer, T0 + 1, 1), [
+      streamLifecycle(peer, T0 + 1, IDS.root, "completed"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(0);
+    expect(result.events).toEqual([]);
+  });
+
+  it("retains out-of-order matching terminals conservatively", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const peer = fixtureProcess(4202, "bbbbbbb2");
+    writeFixtureSegment(stateDir, segmentIdentity(peer, T0, 1), [
+      streamLifecycle(peer, T0 + 2, IDS.root, "completed"),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 + 1, 1), [
+      streamLifecycle(process, T0 + 1, IDS.root, "started"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+  });
+
+  it("retains unmatched concurrent starts after only one terminal", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      streamLifecycle(process, T0, IDS.root, "started"),
+      streamLifecycle(process, T0 + 1, IDS.root, "started"),
+      streamLifecycle(process, T0 + 2, IDS.root, "completed"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure", "closure"]);
+  });
+
+  it("reports the existing closure budget when open lifecycle tracking exceeds it", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      streamLifecycle(process, T0, IDS.root, "started"),
+      streamLifecycle(process, T0 + 1, IDS.child, "started"),
+    ]);
+    const { result } = query(stateDir, manualSelection(), { maxClosureCorrelations: 1 });
+    expect(result.events).toEqual([]);
+    expect(result.closure?.rootCount).toBe(2);
+    expect(result.truncation.state).toBe("budget-exceeded");
+    expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+  });
+
   it.each([
     { level: "warn" as const },
     { level: "error" as const },
@@ -947,6 +1078,62 @@ describe("support query causal closure (#3531)", () => {
     expect(result.events).toHaveLength(1);
     expect(result.events[0]?.role).toBe("closure");
   });
+
+  // These pre-v2 records deliberately lack a current writer envelope. They exercise the reader's
+  // retained legacy boundary, including shapes a current registered producer refuses to write.
+  it.each([
+    ["status", { status: 500 }],
+    ["frames", { frames: ["packages/keiko-server/dist/routes.js:1:1"] }],
+    ["cause chain", { causeChain: ["TypeError"] }],
+    ["failure kind", { failureKind: "TypeError" }],
+    ["error class", { errorClass: "TypeError" }],
+    ["known parent", { parentCorrelationId: IDS.parent }],
+    ["unregistered operation", { op: "legacy.unregistered.operation" }],
+    ["diagnostic category", { op: "client.stage.settled" }],
+    ["failure lifecycle at info", { op: "gateway.stream.failed" }],
+    ["loss lifecycle at info", { op: "gateway.log.sink-failed" }],
+    ["missing completeness", { completeness: undefined }],
+    ["missing loss", { loss: undefined }],
+    ["no extra fields", { completeness: undefined, loss: undefined }],
+  ])("keeps the %s guard mandatory for retained non-HTTP evidence", (_label, fields) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const text = JSON.stringify({
+      ts: new Date(T0 + 100).toISOString(),
+      level: "info",
+      category: "gateway",
+      op: "chat.response.message",
+      correlationId: IDS.root,
+      completeness: "complete",
+      loss: "none",
+      ...fields,
+    });
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [text]);
+    const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+    expect(result.closure?.rootCount).toBe(1);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({ role: "closure", text });
+    expect(result.integrity.legacyLineCount).toBe(1);
+  });
+
+  it.each(["info", "debug"] as const)(
+    "keeps positively complete independent %s activity optional",
+    (level) => {
+      const process = fixtureProcess(4101, "aaaaaaa1");
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+        fixtureLine(process, T0 + 100, {
+          op: "chat.response.message",
+          correlationId: IDS.unrelated,
+          level,
+        }),
+        diagnostic(process, T0 + 101, IDS.root),
+      ]);
+      const { result } = query(stateDir, manualSelection(), { maxContextEvents: 0 });
+      expect(result.closure?.rootCount).toBe(1);
+      expect(eventCorrelations(result)).toEqual(new Set([IDS.root]));
+      expect(result.truncation.omittedContextEventCount).toBe(1);
+      expect(result.truncation.state).toBe("context-truncated");
+    },
+  );
 
   it("still rejects an explicit causal closure exceeding 4096 request children", () => {
     const process = fixtureProcess(4101, "aaaaaaa1");
