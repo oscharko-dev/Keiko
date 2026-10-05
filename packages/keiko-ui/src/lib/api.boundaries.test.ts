@@ -449,21 +449,22 @@ describe("fetchHealth diagnostic readiness", () => {
   });
 
   it.each([
-    ["an unknown state", { ...degraded, readiness: "fine" }],
-    ["an unknown reason", { ...degraded, reasons: ["disk-on-fire"] }],
-    ["a degraded state without a reason", { ...degraded, reasons: [] }],
-    ["a ready state that names a reason", { ...degraded, readiness: "ready" }],
-    ["a negative lost-event count", { ...degraded, lostEvents: -1 }],
-    ["a string", "degraded"],
+    ["an unknown state", { ...degraded, readiness: "fine" }, "readiness-value"],
+    ["an unknown reason", { ...degraded, reasons: ["disk-on-fire"] }, "snapshot-shape"],
+    ["a degraded state without a reason", { ...degraded, reasons: [] }, "snapshot-shape"],
+    ["a ready state that names a reason", { ...degraded, readiness: "ready" }, "snapshot-shape"],
+    ["a negative lost-event count", { ...degraded, lostEvents: -1 }, "snapshot-shape"],
+    ["a string", "degraded", "snapshot-shape"],
   ])(
     "drops %s, keeps the version, and exposes unavailable diagnostics",
-    async (_label, diagnostics) => {
+    async (_label, diagnostics, diagnosticsInvalidReason) => {
       stubHealth(diagnostics);
 
       await expect(fetchHealth()).resolves.toEqual({
         status: "ok",
         version: "1.0.0",
         diagnosticsInvalid: true,
+        diagnosticsInvalidReason,
       });
     },
   );
