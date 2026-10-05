@@ -1680,6 +1680,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-stream-read"],
     proofIds: ["chat.response.streamed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["stalled", "failed"],
+      },
+      {
+        field: "outputExhausted",
+        values: [true],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -9001,6 +9011,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["coding-sidecar-gateway-request"],
     proofIds: ["coding-sidecar.gateway.outcome.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["cancelled", "failed", "output-limit"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -10106,6 +10122,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["editor-producer-turn"],
     proofIds: ["editor.producer-turn.completed.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["cancelled", "failed", "limit-exceeded"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -10687,6 +10709,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["embedding-partial-failure"],
     proofIds: ["embedding.batch.completed.counts"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "errorCount",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -13958,6 +13986,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-readiness"],
     proofIds: ["gateway.readiness.automatic.completed.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "overallStatus",
+        values: ["partial", "failed"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -14273,6 +14307,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-readiness"],
     proofIds: ["gateway.readiness.completed.line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "overallStatus",
+        values: ["partial", "failed"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
@@ -14992,6 +15032,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-stream-call"],
     proofIds: ["gateway.stream.abandoned.emitted-line"],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "reason",
+        values: ["consumer-stopped-iterating"],
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",
