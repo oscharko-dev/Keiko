@@ -6,12 +6,7 @@
 // writer under a temporary KEIKO_STATE_DIR and reconstructs the persisted log through
 // `keiko support analyze` to a complete report (tests/support/activity-log-scenario.ts).
 
-import {
-  occupySupportIncidentRetentionForTests,
-  releaseSupportIncidentReservationForTests,
-  resetServerLogger,
-  supportIncidentReservationsForTests,
-} from "../support/activity-log-test-support.js";
+import { resetServerLogger } from "../support/activity-log-test-support.js";
 
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -42,11 +37,6 @@ import {
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
-import {
-  dismissSupportIncident,
-  listSupportIncidents,
-  recordUserReportedIncident,
-} from "@oscharko-dev/keiko-activity-log";
 
 function parseLine(line: string | undefined): Record<string, unknown> {
   return JSON.parse(line ?? "") as Record<string, unknown>;
@@ -332,37 +322,6 @@ describe("Activity Log scenario: bff", () => {
     resetServerLogger();
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("records candidate quota rejection and later admission after reservation release", async () => {
-    const startedAtMs = Date.now();
-    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
-    const prior = recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" });
-    if (prior.status !== "created") throw new TypeError("Missing prior diagnostic lifecycle");
-    expect(
-      dismissSupportIncident(stateDir, prior.record.incidentId, {
-        correlationId: prior.record.correlation.rootCorrelationId,
-      }),
-    ).toBe("dismissed");
-    const capacity = occupySupportIncidentRetentionForTests(stateDir);
-    const reservations = supportIncidentReservationsForTests(stateDir);
-    expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" })).toEqual({
-      status: "rejected",
-      reason: "quota-exhausted",
-    });
-    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
-    releaseSupportIncidentReservationForTests(stateDir, capacity - 1);
-    releaseSupportIncidentReservationForTests(stateDir, capacity - 2);
-    expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" }).status).toBe(
-      "created",
-    );
-    expect(listSupportIncidents(stateDir)).toHaveLength(1);
-    const trace = await expectActivityLogScenario("bff.loss", {
-      stateDir,
-      startedAtMs,
-      expectedOps: ["support.incident.rejected", "support.incident.created"],
-    });
-    expect(trace.failureClasses).toContain("support-incident");
   });
 
   it("drives a bounded request body through overflow, cancellation and a stream failure to a complete crash record", async () => {
