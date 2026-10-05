@@ -239,6 +239,27 @@ const HTTP_STATUS_ERROR_KINDS: Readonly<Record<number, ActivityLogErrorKind>> = 
   500: "internal",
 };
 
+const BFF_CODE_ERROR_KINDS: ReadonlyMap<string, ActivityLogErrorKind> = new Map([
+  ["BAD_REQUEST", "invalid-request"],
+  ["CLARIFICATION_NEEDED", "invalid-request"],
+  ["NOT_FOUND", "invalid-request"],
+  ["DENIED", "authority-denied"],
+  ["FORBIDDEN", "authority-denied"],
+  ["UNAUTHORIZED", "authority-denied"],
+  ["CONFLICT", "conflict"],
+  ["RATE_LIMITED", "rate-limited"],
+  ["CANCELLED", "cancelled"],
+  ["TIMEOUT", "timeout"],
+  ["INTERNAL", "internal"],
+  ["UNAVAILABLE", "unavailable"],
+  ["GATEWAY_UNAVAILABLE", "unavailable"],
+]);
+
+/** Classifies serialized BFF notices without guessing from their human-readable message. */
+export function bffCodeErrorKind(code: string | undefined): ActivityLogErrorKind {
+  return code === undefined ? "unknown" : (BFF_CODE_ERROR_KINDS.get(code) ?? "unknown");
+}
+
 /**
  * The closed error kind of a failed BFF request, for evidence (#3557 review): an HTTP refusal by its
  * status, a cancellation, a transport failure. Never the error's message.

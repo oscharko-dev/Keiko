@@ -7,7 +7,7 @@ import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
 import { SupportReportButton } from "./SupportReportButton";
 import { useTranslate } from "@/lib/i18n";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { bffRequestErrorKind } from "@/lib/http";
+import { bffCodeErrorKind, bffRequestErrorKind } from "@/lib/http";
 import type { ClientOnlySupportReportInput } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import styles from "./ErrorNotice.module.css";
 
@@ -74,7 +74,7 @@ function noticeFailure(
   const kind = bffRequestErrorKind(error);
   return {
     errorEvidence: clientErrorEvidence(error),
-    errorKind: kind === "unknown" && notice.code === "BAD_REQUEST" ? "invalid-request" : kind,
+    errorKind: kind === "unknown" ? bffCodeErrorKind(notice.code) : kind,
     context: [],
   };
 }

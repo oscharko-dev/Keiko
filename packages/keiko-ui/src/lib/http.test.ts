@@ -5,7 +5,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, fetchGitBranches } from "./api";
-import { bffFetchJson, bffRequestErrorKind, responseCorrelationIdOf } from "./http";
+import {
+  bffFetchJson,
+  bffCodeErrorKind,
+  bffRequestErrorKind,
+  responseCorrelationIdOf,
+} from "./http";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 // bffFetchJson loads this primitive through a dynamic import() (http.ts documents why: a static
@@ -596,4 +601,29 @@ describe("bffRequestErrorKind", () => {
   ] as const)("classifies %s as %s", (error, kind) => {
     expect(bffRequestErrorKind(error)).toBe(kind);
   });
+});
+
+describe("bffCodeErrorKind", () => {
+  it.each([
+    ["BAD_REQUEST", 400],
+    ["CLARIFICATION_NEEDED", 400],
+    ["NOT_FOUND", 404],
+    ["DENIED", 403],
+    ["FORBIDDEN", 403],
+    ["UNAUTHORIZED", 401],
+    ["CONFLICT", 409],
+    ["RATE_LIMITED", 429],
+    ["CANCELLED", 499],
+    ["TIMEOUT", 408],
+    ["INTERNAL", 500],
+    ["UNAVAILABLE", 503],
+    ["GATEWAY_UNAVAILABLE", 503],
+  ] as const)("matches the typed %s response classification", (code, status) => {
+    expect(bffCodeErrorKind(code)).toBe(bffRequestErrorKind(new ApiError(code, "private", status)));
+  });
+
+  it.each([undefined, "", "__proto__", "toString", "PRIVATE_CODE", "unavailable"])(
+    "does not infer a class for unknown code %s",
+    (code) => expect(bffCodeErrorKind(code)).toBe("unknown"),
+  );
 });

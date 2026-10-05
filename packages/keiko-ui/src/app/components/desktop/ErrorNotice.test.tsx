@@ -333,3 +333,32 @@ it("collects stack and cause evidence only when the user requests a report", asy
   expect(create).toHaveBeenCalledOnce();
   expect(loss).toHaveBeenCalledExactlyOnceWith("errorsSuppressed");
 });
+
+it.each([
+  ["RATE_LIMITED", "rate-limited"],
+  ["UNAVAILABLE", "unavailable"],
+  ["GATEWAY_UNAVAILABLE", "unavailable"],
+  ["FORBIDDEN", "authority-denied"],
+  ["NOT_FOUND", "invalid-request"],
+  ["CONFLICT", "conflict"],
+  ["INTERNAL", "internal"],
+  ["PRIVATE_CUSTOM_CODE", "unknown"],
+])(
+  "classifies the closed %s code in a serialized notice when creating its report",
+  async (code, kind) => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:serialized-failure",
+      dispose: vi.fn(),
+    });
+    renderInLocale(`Request failed (${code}) [correlationId:serialized-failure-123]`, "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(
+      "serialized-failure-123",
+      expect.any(AbortSignal),
+      expect.objectContaining({ errorKind: kind }),
+    );
+  },
+);
