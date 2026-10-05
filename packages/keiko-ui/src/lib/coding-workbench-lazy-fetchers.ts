@@ -3,6 +3,8 @@
  * preview (#3385), governed draft-delivery journey refresh (#3389), and governed PR-description
  * application (#3399, ADR-0086), and governed Git fetch/pull (#1573).
  *
+ * Ordinary status, summary, remotes and diff reads share this boundary and validation port.
+ *
  * `./api.ts` is first-load-reachable from the desktop shell (imported synchronously for unrelated
  * routes such as `fetchConfig`/`fetchModels`), so a top-level import of these routes' contract
  * validators there ships their weight on every page load. Their validators together pull in
@@ -24,6 +26,11 @@
 
 import type {
   GitHistoryResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
+  GitRepositoryStatusResponse,
+  GitRepositorySummary,
+  GitRemotesResponse,
   GitSyncOperation,
   GitSyncPreview,
   GitSyncExecuteResponse,
@@ -34,6 +41,14 @@ import {
   validateGitSyncPreview,
   validateGitSyncExecuteResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+import {
+  validateGitRemotesResponse,
+  validateGitRepositorySummary,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
+import {
+  validateGitRepositoryDiffResponse,
+  validateGitRepositoryStatusResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
@@ -530,4 +545,63 @@ export async function fetchGitHistory(
   if (input.limit !== undefined) params.set("limit", input.limit.toString());
   if (input.skip !== undefined) params.set("skip", input.skip.toString());
   return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
+}
+
+export async function fetchGitStatus(
+  fetchJson: ApiFetchJson,
+  root: string,
+  options?: Parameters<typeof import("./api").fetchGitStatus>[1],
+): Promise<GitRepositoryStatusResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  if (options?.includeIgnored === true) params.set("includeIgnored", "true");
+  return fetchJson(
+    `/api/git/status?${params.toString()}`,
+    undefined,
+    validateGitRepositoryStatusResponse,
+    options?.correlationId,
+  );
+}
+
+export async function fetchGitSummary(
+  fetchJson: ApiFetchJson,
+  root: string,
+  options?: Parameters<typeof import("./api").fetchGitSummary>[1],
+): Promise<GitRepositorySummary> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(
+    `/api/git/summary?${params.toString()}`,
+    undefined,
+    validateGitRepositorySummary,
+    options?.correlationId,
+  );
+}
+
+export async function fetchGitRemotes(
+  fetchJson: ApiFetchJson,
+  root: string,
+): Promise<GitRemotesResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/remotes?${params.toString()}`, undefined, validateGitRemotesResponse);
+}
+
+export async function fetchGitDiff(
+  fetchJson: ApiFetchJson,
+  input: {
+    readonly root: string;
+    readonly path?: string;
+    readonly scope?: GitDiffScope;
+  },
+): Promise<GitRepositoryDiffResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
+  if (input.scope !== undefined) params.set("scope", input.scope);
+  return fetchJson(
+    `/api/git/diff?${params.toString()}`,
+    undefined,
+    validateGitRepositoryDiffResponse,
+  );
 }

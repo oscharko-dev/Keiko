@@ -160,14 +160,6 @@ import {
   isActivityLogReadinessSnapshot,
   type HealthResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import {
-  validateGitRemotesResponse,
-  validateGitRepositorySummary,
-} from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
-import {
-  validateGitRepositoryDiffResponse,
-  validateGitRepositoryStatusResponse,
-} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { PrDescriptionLanguage } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type {
@@ -1985,7 +1977,7 @@ export async function copyFilesEntry(input: {
   return fetchJson("/api/files/copy", { method: "POST", body: JSON.stringify(input) });
 }
 
-// The three Git reads accept the caller's correlation id: a manual Retry sends the id its attempt
+// The Git reads accept the caller's correlation id: a manual Retry sends the id its attempt
 // line already carries, so the server's lines for that request join the retry's attempt and
 // settlement lines on one timeline (PR #3625 review).
 interface GitReadRequestOptions {
@@ -1996,15 +1988,8 @@ export async function fetchGitStatus(
   root: string,
   options?: GitReadRequestOptions & { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  if (options?.includeIgnored === true) params.set("includeIgnored", "true");
-  return fetchJson(
-    `/api/git/status?${params.toString()}`,
-    undefined,
-    validateGitRepositoryStatusResponse,
-    options?.correlationId,
-  );
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitStatus(fetchJson, root, options);
 }
 
 // #2906 review (comment 3865167732): KEIKO-0897 threaded an AbortSignal through
@@ -2096,14 +2081,8 @@ export async function fetchGitSummary(
   root: string,
   options?: GitReadRequestOptions,
 ): Promise<GitRepositorySummary> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  return fetchJson(
-    `/api/git/summary?${params.toString()}`,
-    undefined,
-    validateGitRepositorySummary,
-    options?.correlationId,
-  );
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitSummary(fetchJson, root, options);
 }
 
 export async function fetchGitHistory(input: {
@@ -2116,9 +2095,8 @@ export async function fetchGitHistory(input: {
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  return fetchJson(`/api/git/remotes?${params.toString()}`, undefined, validateGitRemotesResponse);
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitRemotes(fetchJson, root);
 }
 
 export async function fetchGitDiff(input: {
@@ -2126,15 +2104,8 @@ export async function fetchGitDiff(input: {
   readonly path?: string;
   readonly scope?: GitDiffScope;
 }): Promise<GitRepositoryDiffResponse> {
-  const params = new URLSearchParams();
-  params.set("root", input.root);
-  if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
-  if (input.scope !== undefined) params.set("scope", input.scope);
-  return fetchJson(
-    `/api/git/diff?${params.toString()}`,
-    undefined,
-    validateGitRepositoryDiffResponse,
-  );
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitDiff(fetchJson, input);
 }
 
 // Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,

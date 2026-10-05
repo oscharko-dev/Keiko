@@ -5,6 +5,10 @@ import {
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncApprove,
   fetchGitHistory,
+  fetchGitStatus,
+  fetchGitSummary,
+  fetchGitRemotes,
+  fetchGitDiff,
 } from "./api";
 
 vi.mock("./coding-workbench-lazy-fetchers", () => {
@@ -52,5 +56,30 @@ it("records history module failure with its own operation identity", async () =>
       moduleLoadFailure: "git-history",
       errorEvidence: expect.objectContaining({ causeChain: ["TypeError"] }),
     }),
+  );
+});
+
+it.each([
+  (): Promise<unknown> => fetchGitStatus("/private/repo"),
+  (): Promise<unknown> => fetchGitSummary("/private/repo"),
+  (): Promise<unknown> => fetchGitRemotes("/private/repo"),
+  (): Promise<unknown> => fetchGitDiff({ root: "/private/repo", path: "private.ts" }),
+])("refuses an ordinary Git read if its validator chunk cannot load", async (read) => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  await expect(read()).rejects.toMatchObject({ code: "MODULE_LOAD_FAILED" });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(writer).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({
+      moduleLoadFailure: "git-sync",
+      correlationId: expect.any(String),
+      errorEvidence: expect.objectContaining({ causeChain: ["TypeError"] }),
+    }),
+  );
+  expect(JSON.stringify(writer.mock.calls)).not.toMatch(
+    /private chunk URL|private\/repo|private.ts/,
   );
 });
