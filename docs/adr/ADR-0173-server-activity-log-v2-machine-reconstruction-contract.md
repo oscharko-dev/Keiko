@@ -822,7 +822,11 @@ Process-local delivery caching is bounded by twice the canonical per-report cap 
 and a 15-minute lifetime. The aggregate byte allowance retains one ready maximum-size artifact while
 its replacement is prepared, also admitting a small canonical limited report beside one full report.
 Each artifact remains capped at 10 MiB. This is a payload-byte retention bound, not an exact resident-memory measurement: JavaScript object overhead and temporary compression buffers are additional. Only the retained raw or compressed representation is charged;
-gzip replaces its raw ownership after compression. Limited entries are removed before protected
+gzip replaces its raw ownership after successful compression. Concurrent downloads share one
+compression attempt; a failed attempt releases only its memoized promise so a later user retry can
+recompress the same retained canonical bytes. After compression, delivery rechecks the original
+authority, expiry and exact live cache entry before writing an attachment. A disposed entry cannot
+later emit a delivered result. Limited entries are removed before protected
 entries under byte or count pressure; unauthenticated limited creation cannot evict a protected
 artifact. Before admitting a limited replacement, the cache checks the existing protected byte and
 entry reservations. If protected artifacts leave insufficient capacity, refusal preserves already

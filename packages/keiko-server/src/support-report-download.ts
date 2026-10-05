@@ -140,6 +140,14 @@ export function cacheSupportReportDownload(
   };
 }
 
+function deliveryIsCurrent(
+  ctx: RouteContext,
+  entry: Delivery,
+  cache: Map<string, Delivery> | undefined,
+): boolean {
+  return cache?.get(ctx.params.downloadId ?? "") === entry && Date.now() < entry.expiresAtMs;
+}
+
 export async function handleDownloadSupportReport(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -153,7 +161,7 @@ export async function handleDownloadSupportReport(
     const bytes = await compressedReport(entry, cache);
     const currentAuthorization = authorizeDelivery(ctx, deps, entry);
     if (currentAuthorization.kind === "denied") return currentAuthorization.response;
-    if (Date.now() >= entry.expiresAtMs)
+    if (!deliveryIsCurrent(ctx, entry, cache))
       return refusedDelivery(ctx, 404, "expired-or-unknown", entry.creationCorrelationId);
     if (ctx.res.destroyed) {
       reportFailedDelivery(ctx, entry, "cancelled");
@@ -235,6 +243,10 @@ function compressedReport(
         resolve(bytes);
       },
     );
+  }).catch((error: unknown) => {
+    // The shared attempt failed; a later user retry may compress the retained canonical bytes.
+    delete entry.compressed;
+    throw error;
   });
   return entry.compressed;
 }
