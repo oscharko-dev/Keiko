@@ -41,7 +41,7 @@ export const NO_EVIDENCE_ANSWER_MAX_CHARS = 240;
 // identifier, cannot determine the question language by themselves.
 const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
   /\b(?:bitte|wie|warum|welche|welcher|welches|wieviel|wieso|wo)\b/iu,
-  /\b(?:erkläre|erklaere|zeige|gibt|ist|sind|bedeutet|suche|finde)\b/iu,
+  /\b(?:erkläre|erklaere|prüfe|pruefe|zeige|gibt|ist|sind|bedeutet|suche|finde)\b/iu,
   /\b(?:und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu,
 ];
 
