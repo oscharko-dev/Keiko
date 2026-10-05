@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./repoSearchScan.js";
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt, searchText } from "./index.js";
 
 const roots: string[] = [];

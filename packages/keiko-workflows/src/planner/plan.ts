@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Exploration plan factory and retrieval-ring composition (Epic #177, Issue #181).
 // Consumes #178 contracts and #179 search-limits surface. Produces a JSON-safe ExplorationPlan
 // BEFORE any retrieval work runs. Deterministic planId via node:crypto SHA-256. No IO, no
@@ -103,13 +104,6 @@ const STRUCTURAL_SCAN_FILE_CEILING = 2048;
 // Structural/history enrichment retains its existing bounded output. Lexical retained metadata
 // is derived from the accepted byte/token capacity below, independently of corpus traversal.
 const MATCH_RETURN_CEILING = 256;
-// Per-file scan read cap (2 MiB). A connected file up to this size is fully read and matched so it
-// is never skipped as size-exceeded regardless of format; only files larger than this are omitted.
-// This bounds the transient per-file read during line matching, NOT the excerpt content that enters
-// the pack (Epic #177 retrieval fix — the prior excerpt-byte-derived cap of ~18 KiB silently dropped
-// larger files from the search entirely).
-const SCAN_BYTES_PER_FILE = 2_097_152;
-
 const RING_LABELS: Readonly<Record<RetrievalRingKind, string>> = {
   lexical: "Lexical scan across the selected scope",
   structural: "Structural lookups around identifier and path anchors",
@@ -179,7 +173,7 @@ function sliceLimits(
   return {
     maxFilesScanned: kind === "lexical" ? null : atLeastOne(STRUCTURAL_SCAN_FILE_CEILING * weight),
     maxMatchesReturned: ringMatchReturnLimit(kind, budget),
-    maxBytesPerFileScanned: SCAN_BYTES_PER_FILE,
+    maxBytesPerFileScanned: MAX_RECURSIVE_TEXT_FILE_BYTES,
     elapsedMsMax: budget.elapsedMsMax === null ? null : atLeastOne(budget.elapsedMsMax * weight),
   };
 }

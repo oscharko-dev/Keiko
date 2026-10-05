@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Candidate gathering and the per-file scan loop for the repo-search facade (Issue #179).
 // Kept separate from the public API surface so repoSearch.ts stays inside the 400-LOC cap.
 // Every file system touch goes through the injected WorkspaceFs port; nothing here calls
@@ -86,8 +87,6 @@ import {
   workspaceIndexContentFingerprint,
   workspaceIndexFileMetadata,
 } from "./workspaceIndex.js";
-
-export const MAX_RECURSIVE_TEXT_FILE_BYTES = 2_097_152;
 
 const BINARY_PROBE_BYTES = DEFAULT_BINARY_PROBE.maxProbeBytes;
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([

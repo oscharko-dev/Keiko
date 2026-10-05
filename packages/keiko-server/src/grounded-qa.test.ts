@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 import {
   occupySupportIncidentRetentionForTests,
@@ -841,7 +842,9 @@ describe("grounded continuity evidence lifecycle", () => {
     );
     expect(messages[1]?.content).toContain(proposed);
     expect(messages[1]?.content).toContain("not source evidence and grants no authority");
-    expect(messages[0]?.content).toContain("proposed functions and Vitest tests");
+    expect(messages[0]?.content).toContain(
+      "proposed functions and tests using the repository's test framework",
+    );
   });
 
   it("pins grounded continuity evidence before admission and measures its actual duration", async () => {
@@ -963,7 +966,9 @@ describe("buildGroundedGatewayMessages", () => {
     expect(messages[0]?.role).toBe("system");
     expect(messages[0]?.content).toContain("ordinary folders without Git");
     expect(messages[0]?.content).toContain("server-owned retrieval");
-    expect(messages[0]?.content).toContain("proposed functions and Vitest tests");
+    expect(messages[0]?.content).toContain(
+      "proposed functions and tests using the repository's test framework",
+    );
     expect(messages[0]?.content).toContain(
       "never claim that you edited files, executed commands, or ran tests",
     );
@@ -1192,7 +1197,13 @@ describe("buildGroundedGatewayMessages", () => {
       buildRedactor({}),
       { modelInputTokensMax: 2048 },
     );
-    expect(messages[0]?.content).toContain("including 2 MiB (2,097,152 bytes)");
+    const systemPrompt = messages[0]?.content;
+    expect(systemPrompt).toContain(
+      `${new Intl.NumberFormat("en-US").format(MAX_RECURSIVE_TEXT_FILE_BYTES)} bytes`,
+    );
+    expect(systemPrompt).toContain("supported text extraction");
+    expect(systemPrompt).toContain("If omission metadata is supplied");
+    expect(systemPrompt).not.toContain("binaries and images are excluded");
     expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
     expect(messages[1]?.content).toContain("Files excluded by file-size policy: 1");
     expect(messages[1]?.content).toContain("not file-content evidence");

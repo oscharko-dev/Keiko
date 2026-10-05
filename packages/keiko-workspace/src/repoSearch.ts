@@ -1,3 +1,4 @@
+import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Governed, deterministic, audit-friendly repository search facade (Epic #177, Issue #179).
 // Composes the existing workspace primitives — discovery, deny policy, realpath gate,
 // readWorkspaceFile, plus the new binaryDetect and stableId modules — into three public
@@ -52,7 +53,6 @@ import {
 } from "./repoSearchCachedLexical.js";
 import { validateSearchScopeRelativePaths } from "./repoSearchEntries.js";
 import {
-  MAX_RECURSIVE_TEXT_FILE_BYTES,
   buildAtom,
   buildCandidate,
   candidateDiscoveryFileLimit,

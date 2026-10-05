@@ -193,8 +193,8 @@ caller read budgets remain independently enforced. Source reads use at most eigh
 reads, so a broad answer cannot materialize all 2 MiB buffers at once. `null` limits express that policy on the wire; internal execution controls
 still honor an explicit caller deadline or cancellation. Directory entries stream in bounded batches,
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
-summaries survive the scan. These shared defaults also apply to manual Editor find-in-files/replace
-preview, coding context lookups, and grounded symbol trace; explicit finite callers retain their
+summaries survive the scan. These shared defaults also apply to manual Editor find-in-files, replace
+preview and symbol lookup, coding context lookups, and grounded symbol trace; explicit finite callers retain their
 bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
@@ -204,6 +204,16 @@ slices retain finite scan counts (currently 614 and 307 files respectively) and 
 matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced
 across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
 bounded by accepted context capacity independently of corpus traversal.
+
+The inclusive file-byte ceiling is owned once by `MAX_RECURSIVE_TEXT_FILE_BYTES` in the pure
+workspace contract primitives. Recursive matching, planner limits, document input admission and
+the grounded prompt use that same value. The prompt distinguishes supported document text
+extraction from excluded binary formats and describes omission metadata conditionally. Proposed
+tests follow the connected repository's framework rather than assuming Vitest.
+
+Text preview's optional `sourceTextBytesRead` records the raw source buffer supplied to decoding
+before redaction, not the stat size or decoded UTF-8 size. It excludes duplicated classifier reads
+and descriptor lookahead. A legacy response without that observation does not fabricate a count.
 
 #### Filesystem consistency and redaction
 
