@@ -36,7 +36,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
-  failureClasses: ["chat-scope-precondition"],
+  failureClasses: ["chat-admission"],
   proofIds: ["chat.scope.update.outcome"],
   releaseImpact: "patch",
 });
