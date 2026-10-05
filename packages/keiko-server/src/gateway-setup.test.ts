@@ -12047,7 +12047,159 @@ function metadataAbortTimers(): void {
   });
 }
 
+function selectedMetadataResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      data: [
+        {
+          model_name: "selected-small",
+          model_info: {
+            mode: "chat",
+            max_input_tokens: 32_768,
+            max_output_tokens: 4_096,
+          },
+        },
+      ],
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+function slowMetadataResponse(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      clearTimeout(timer);
+      const cause: unknown = signal?.reason;
+      reject(cause instanceof Error ? cause : new Error("Metadata request aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve(selectedMetadataResponse());
+    }, 14_000);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 describe("selected metadata responsiveness", () => {
+  it("retains declared geometry from a management route responding after fourteen seconds", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, { gatewayModelDiscovery: undefined });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const fetcher = vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) =>
+      fetchInputUrl(url).endsWith("/model/info")
+        ? slowMetadataResponse(init?.signal)
+        : Promise.resolve(new Response(null, { status: 404 })),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const setup = handleGatewaySetup(selectedMetadataContext(), deps);
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect((await setup).status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "selected-small")).toMatchObject({
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+    expect(event?.extra).toMatchObject({
+      outcome: "available",
+      discoverySource: "model-info",
+      modelInfoOutcome: "available",
+      modelGroupInfoOutcome: "not-attempted",
+      modelListOutcome: "not-attempted",
+    });
+    expectActivityLogProof(
+      "gateway.setup.metadata.resolved.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  });
+
+  it.each(["http-error", "transport-error", "unusable", "invalid-json"] as const)(
+    "retains the %s management outcome when a fallback supplies metadata",
+    async (outcome) => {
+      const deps = await metadataResponsivenessDeps();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: Parameters<typeof fetch>[0]) => {
+          if (!fetchInputUrl(url).endsWith("/model/info"))
+            return Promise.resolve(selectedMetadataResponse());
+          if (outcome === "transport-error")
+            return Promise.reject(new TypeError("Private transport cause"));
+          return Promise.resolve(
+            outcome === "http-error"
+              ? new Response(null, { status: 503 })
+              : new Response(JSON.stringify({ data: [] }), {
+                  headers: { "content-type": "application/json" },
+                }),
+          );
+        }),
+      );
+      const context = { ...selectedMetadataContext(), correlationId: "metadata-fallback" };
+      expect((await handleGatewaySetup(context, deps)).status).toBe(200);
+      const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+      expect(event).toMatchObject({
+        correlationId: "metadata-fallback",
+        extra: {
+          outcome: "available",
+          discoverySource: "model-group-info",
+          modelInfoOutcome: outcome,
+          modelGroupInfoOutcome: "available",
+          modelListOutcome: "not-attempted",
+        },
+      });
+      expectActivityLogProof(
+        "gateway.setup.metadata.resolved.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(JSON.stringify(event)).not.toContain("Private transport cause");
+    },
+  );
+
+  it.each(["empty", "unsupported"] as const)(
+    "classifies an answered but %s discovery as validation failure",
+    async (failure) => {
+      const deps = await metadataResponsivenessDeps();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const data =
+        failure === "empty"
+          ? []
+          : [{ model_name: "private-image-model", model_info: { mode: "image_generation" } }];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(JSON.stringify({ data }), {
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        ),
+      );
+      const context = selectedMetadataContext();
+      expect(
+        (await handleGatewaySetup({ ...context, correlationId: "metadata-unusable" }, deps)).status,
+      ).toBe(200);
+      const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+      expect(event).toMatchObject({
+        correlationId: "metadata-unusable",
+        errorKind: "validation-failed",
+        extra: { outcome: "unavailable", selectedModelCount: 1 },
+      });
+      expectFailureMetadataCounts(sink, 1);
+      expect(event?.status).toBeUndefined();
+      expect(event?.extra).not.toHaveProperty("httpStatus");
+      expect(JSON.stringify(event)).not.toMatch(
+        /private-image-model|synthetic-selected-key|selected\.example\.invalid/,
+      );
+    },
+  );
+
   it.each(["timeout", "transport"] as const)(
     "records closed metadata failure context for %s",
     async (failure) => {
@@ -12098,9 +12250,9 @@ describe("selected metadata responsiveness", () => {
         const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
         expect(event).toMatchObject({
           errorKind,
-          status: httpStatus,
-          extra: { outcome: "unavailable", selectedModelCount: 1 },
+          extra: { outcome: "unavailable", selectedModelCount: 1, httpStatus },
         });
+        expect(event?.status).toBeUndefined();
         expectFailureMetadataCounts(sink, 1);
         expectActivityLogProof(
           "gateway.setup.metadata.resolved.line",
@@ -12122,6 +12274,8 @@ describe("selected metadata responsiveness", () => {
 
   it("falls back to the healthy model list within the shared budget after management routes hang", async () => {
     const deps = await metadataResponsivenessDeps();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     Object.assign(deps, { gatewayModelDiscovery: undefined });
     vi.useFakeTimers();
     metadataAbortTimers();
@@ -12159,6 +12313,18 @@ describe("selected metadata responsiveness", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect((await setup).status).toBe(200);
     expect(requests.some((endpoint) => endpoint.endsWith("/models"))).toBe(true);
+    const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+    expect(event?.extra).toMatchObject({
+      outcome: "available",
+      discoverySource: "model-list",
+      modelInfoOutcome: "timeout",
+      modelGroupInfoOutcome: "timeout",
+      modelListOutcome: "available",
+    });
+    expectActivityLogProof(
+      "gateway.setup.metadata.resolved.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
     expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
       "selected-small",
     ]);
@@ -12207,7 +12373,12 @@ describe("selected metadata responsiveness", () => {
       const sink = createBufferedServerLogSink();
       setServerLogger(createServerLogger({ sink, level: "info" }));
       Object.assign(deps, {
-        gatewayModelDiscovery: () => Promise.reject(new TypeError("Synthetic defect")),
+        gatewayModelDiscovery: () =>
+          Promise.reject(
+            new TypeError("Synthetic defect", {
+              cause: new RangeError("Private nested cause"),
+            }),
+          ),
       });
       const context = metadataContextForSelection(explicitSelection);
       expect((await handleGatewaySetup(context, deps)).status).toBe(502);
@@ -12217,8 +12388,18 @@ describe("selected metadata responsiveness", () => {
         sink.events.find((event) => event.op === "gateway.setup.metadata.resolved"),
       ).toMatchObject({
         errorKind: "internal",
-        extra: { outcome: "failed" },
+        extra: {
+          outcome: "failed",
+          causeChain: ["RangeError"],
+        },
       });
+      const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+      expect(event?.extra?.frames).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^packages\/keiko-server\/src\/gateway-setup\.test\.ts:\d+:\d+$/),
+        ]),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("Private nested cause");
       expect(JSON.stringify(sink.events)).not.toContain("Synthetic defect");
       expect(JSON.stringify(sink.events)).not.toContain("synthetic-selected-key");
       expect(JSON.stringify(sink.events)).not.toContain("selected.example.invalid");

@@ -60,7 +60,15 @@ Successful discovery additionally reports `metadataEnrichedModelCount`, `roleMis
 and `notDiscoveredModelCount`. Compatible selections with no metadata are outside those three
 subsets; the counts are not guaranteed to sum to the selection count. Unknown result counts are
 omitted after failure or cancellation, and discovery without explicit selections omits selection
-counts entirely. These counts do not establish a model's context window or expose model names.
+counts entirely. These counts do not establish a model's context window or expose model names. The
+closed `discoverySource` and per-route outcomes distinguish management metadata, model-list
+fallback and injected discovery. Unattempted routes stay `not-attempted`; a successful fallback
+retains earlier timeout, HTTP, transport or unusable-answer outcomes. The existing 30-second
+setup discovery budget reserves five seconds for each remaining fallback, rather than dividing
+it equally before the first management request. Answered but unusable discovery is classified as
+`validation-failed`; upstream HTTP status is `extra.httpStatus`, separate from the local envelope.
+Failure evidence retains the original reduced Keiko frames and cause classes without messages,
+credentials or endpoint addresses.
 
 ## File location, segments, and retention
 

@@ -11,6 +11,7 @@ import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gatew
 // updates the in-memory runtime config without exposing credentials back to the browser.
 
 import { randomUUID } from "node:crypto";
+import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { createRequestCancellation } from "./request-cancellation.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
@@ -152,6 +153,8 @@ const MISTRAL_TOOL_CALLING_LIMITATION =
 // exact value instead of restating it (Issue #144 precedent — see `MAX_DISCOVERED_MODELS`).
 export const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 120_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+const DISCOVERY_TIMEOUT_MS = 30_000;
+const DISCOVERY_FALLBACK_RESERVE_MS = 5_000;
 // The whole discovery smoke ROUND's own patience budget — distinct from the per-candidate ceiling
 // above. Past this deadline no further candidate probe is even started: the remaining candidates
 // are retained unverified without being called, so a large discovery batch of temporarily-transient
@@ -213,6 +216,39 @@ const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
   proofIds: ["gateway.voice.setup.resolved.line"],
   releaseImpact: "minor",
 });
+const DISCOVERY_ROUTE_OUTCOME_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: [
+    "not-attempted",
+    "available",
+    "timeout",
+    "http-error",
+    "unusable",
+    "transport-error",
+    "cancelled",
+    "failed",
+  ],
+} as const;
+
+type DiscoveryRouteOutcome = (typeof DISCOVERY_ROUTE_OUTCOME_FIELD.values)[number];
+interface SetupDiscoveryTrace {
+  discoverySource: "custom" | "model-info" | "model-group-info" | "model-list";
+  modelInfoOutcome: DiscoveryRouteOutcome;
+  modelGroupInfoOutcome: DiscoveryRouteOutcome;
+  modelListOutcome: DiscoveryRouteOutcome;
+}
+
+function createSetupDiscoveryTrace(): SetupDiscoveryTrace {
+  return {
+    discoverySource: "custom",
+    modelInfoOutcome: "not-attempted",
+    modelGroupInfoOutcome: "not-attempted",
+    modelListOutcome: "not-attempted",
+  };
+}
+
 const GATEWAY_SETUP_METADATA_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -227,11 +263,35 @@ const GATEWAY_SETUP_METADATA_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["available", "unavailable", "cancelled", "failed"],
     },
+    discoverySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["custom", "model-info", "model-group-info", "model-list"],
+    },
+    modelInfoOutcome: DISCOVERY_ROUTE_OUTCOME_FIELD,
+    modelGroupInfoOutcome: DISCOVERY_ROUTE_OUTCOME_FIELD,
+    modelListOutcome: DISCOVERY_ROUTE_OUTCOME_FIELD,
     elapsedMs: { type: "integer", dataClass: "duration", required: true },
     selectedModelCount: { type: "integer", dataClass: "count", required: false },
     metadataEnrichedModelCount: { type: "integer", dataClass: "count", required: false },
     roleMismatchModelCount: { type: "integer", dataClass: "count", required: false },
     notDiscoveredModelCount: { type: "integer", dataClass: "count", required: false },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+      maxLength: 512,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+      maxLength: 128,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -250,24 +310,45 @@ interface SetupMetadataSelectionCounts {
   readonly notDiscoveredModelCount: number;
 }
 
+interface SetupMetadataFailure {
+  readonly errorKind: ActivityLogErrorKind;
+  readonly evidence: {
+    readonly httpStatus?: number;
+    readonly frames: readonly string[];
+    readonly causeChain: readonly string[];
+  };
+}
+
+type SetupMetadataOutcome =
+  | { readonly outcome: "available"; readonly selectionCounts?: SetupMetadataSelectionCounts }
+  | {
+      readonly outcome: "unavailable" | "cancelled" | "failed";
+      readonly selectionCounts?: Pick<SetupMetadataSelectionCounts, "selectedModelCount">;
+      readonly failure: SetupMetadataFailure;
+    };
+
 function logSetupMetadataOutcome(
-  outcome: "available" | "unavailable" | "cancelled" | "failed",
+  input: SetupMetadataOutcome,
+  trace: SetupDiscoveryTrace,
   startedAt: number,
   correlationId: string | undefined,
-  selectionCounts?: Pick<SetupMetadataSelectionCounts, "selectedModelCount"> &
-    Partial<SetupMetadataSelectionCounts>,
-  failure?: { readonly errorKind: ActivityLogErrorKind; readonly status?: number },
 ): void {
+  const failure = input.outcome === "available" ? undefined : input.failure;
   processServerLogSink().write(
     activityLogEvent(
       GATEWAY_SETUP_METADATA_OPERATION,
-      { correlationId: correlationIdOrUnknown(correlationId), ...failure },
       {
-        outcome,
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(failure === undefined ? {} : { errorKind: failure.errorKind }),
+      },
+      {
+        outcome: input.outcome,
+        ...trace,
         elapsedMs: Math.max(0, Date.now() - startedAt),
         completeness: "complete",
         loss: "none",
-        ...selectionCounts,
+        ...input.selectionCounts,
+        ...failure?.evidence,
       },
     ),
   );
@@ -292,7 +373,10 @@ type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayEmbeddingProbe = NonNullable<UiHandlerDeps["gatewayEmbeddingProbe"]>;
 /** Runs the live two-document rerank probe against the reranker the given config names. */
 type GatewayRerankerProbe = (config: GatewayConfig) => Promise<boolean>;
-type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type InjectedGatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type GatewayModelDiscovery = (
+  ...args: [...Parameters<InjectedGatewayModelDiscovery>, trace: SetupDiscoveryTrace]
+) => ReturnType<InjectedGatewayModelDiscovery>;
 type FigmaCredentialTester = NonNullable<UiHandlerDeps["figmaCredentialTester"]>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 type SetupParseResult<T> =
@@ -660,17 +744,16 @@ function workflowCapabilityFields(
   };
 }
 
+function declaresContextWindow(discovered: GatewayDiscoveredModelMetadata | undefined): boolean {
+  return discovered?.contextWindow !== undefined && discovered.contextWindowUndeclared !== true;
+}
+
 // Only declared context geometry replaces a stored optional input ceiling; a degraded list preserves it.
 function refreshedSetupCapability(
   existing: ModelCapability | undefined,
   discovered: GatewayDiscoveredModelMetadata | undefined,
 ): ModelCapability | undefined {
-  if (
-    existing === undefined ||
-    discovered?.contextWindow === undefined ||
-    discovered.contextWindowUndeclared === true
-  )
-    return existing;
+  if (existing === undefined || !declaresContextWindow(discovered)) return existing;
   const { maxInputTokens, ...retained } = existing;
   return retained;
 }
@@ -741,9 +824,7 @@ function withContextWindowProvenance(
   capability: ModelCapability,
 ): ModelCapability {
   const measured = withoutAssumedContextWindow(capability);
-  const declared =
-    discovered?.contextWindow !== undefined && discovered.contextWindowUndeclared !== true;
-  if (capability.kind !== "chat" || declared) return measured;
+  if (capability.kind !== "chat" || declaresContextWindow(discovered)) return measured;
   if (existing === undefined || existing.contextWindowAssumed === true) {
     return { ...measured, contextWindowAssumed: true };
   }
@@ -1896,7 +1977,7 @@ async function fetchDiscoveryJson(
   apiKey: string,
   apiKeyHeaderName: string,
   egress?: GatewayEgressConfig,
-  signal: AbortSignal = AbortSignal.timeout(30_000),
+  signal: AbortSignal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
 ): Promise<unknown> {
   signal.throwIfAborted();
   const response = await fetchDiscoveryResponse(url, apiKey, apiKeyHeaderName, egress, signal);
@@ -1909,7 +1990,10 @@ async function fetchDiscoveryJson(
     return await readJsonCapped(response);
   } catch {
     signal.throwIfAborted();
-    throw new Error("model discovery response was not readable JSON");
+    throw discoveryTerminal(
+      "model discovery response was not readable JSON",
+      "DISCOVERY_INVALID_RESPONSE",
+    );
   }
 }
 
@@ -1960,9 +2044,12 @@ async function discoverLiteLlmModelInfo(
   correlationId: string | undefined,
   signal: AbortSignal,
   deadlineAt: number,
+  trace: SetupDiscoveryTrace,
 ): Promise<GatewayDiscoveredModels | undefined> {
   const endpoints = modelInfoEndpointCandidates(baseUrl);
   for (const [index, endpoint] of endpoints.entries()) {
+    trace.discoverySource = index === 0 ? "model-info" : "model-group-info";
+    const outcomeKey = index === 0 ? "modelInfoOutcome" : "modelGroupInfoOutcome";
     try {
       const discovered = parseModelDiscovery(
         await fetchDiscoveryJson(
@@ -1974,6 +2061,7 @@ async function discoverLiteLlmModelInfo(
         ),
         correlationId,
       );
+      trace[outcomeKey] = "available";
       return {
         ...discovered,
         modelMetadata: Object.fromEntries(
@@ -1984,6 +2072,7 @@ async function discoverLiteLlmModelInfo(
         ),
       };
     } catch (cause) {
+      trace[outcomeKey] = discoveryRouteOutcome(cause, signal);
       signal.throwIfAborted();
       if (discoveryProgrammingFailure(cause)) throw cause;
       if (modelInfoAnswerIsUnusable(cause) && cause instanceof Error) throw cause;
@@ -1992,7 +2081,7 @@ async function discoverLiteLlmModelInfo(
   return undefined;
 }
 
-// Reserve an equal share of the remaining discovery budget for each fallback, including /models.
+// Let the primary management route use the shared budget while retaining a short fallback window.
 function discoveryManagementSignal(
   signal: AbortSignal,
   deadlineAt: number,
@@ -2002,7 +2091,7 @@ function discoveryManagementSignal(
   const remaining = Math.max(1, deadlineAt - Date.now());
   return AbortSignal.any([
     signal,
-    AbortSignal.timeout(Math.max(1, Math.floor(remaining / (routesLeft + 1)))),
+    AbortSignal.timeout(Math.max(1, remaining - routesLeft * DISCOVERY_FALLBACK_RESERVE_MS)),
   ]);
 }
 
@@ -2010,14 +2099,15 @@ async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
-  egress?: GatewayEgressConfig,
-  correlationId?: string,
+  egress: GatewayEgressConfig | undefined,
+  correlationId: string | undefined,
+  trace: SetupDiscoveryTrace,
   callerSignal?: AbortSignal,
 ): Promise<GatewayDiscoveredModels> {
   // One existing discovery budget covers the management fallbacks and model list together.
-  const deadlineAt = Date.now() + 30_000;
+  const deadlineAt = Date.now() + DISCOVERY_TIMEOUT_MS;
   const signal = AbortSignal.any([
-    AbortSignal.timeout(30_000),
+    AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     ...(callerSignal === undefined ? [] : [callerSignal]),
   ]);
   const litellmModels = await discoverLiteLlmModelInfo(
@@ -2028,14 +2118,23 @@ async function defaultGatewayModelDiscovery(
     correlationId,
     signal,
     deadlineAt,
+    trace,
   );
   if (litellmModels !== undefined) {
     return litellmModels;
   }
-  return parseModelDiscovery(
-    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress, signal),
-    correlationId,
-  );
+  trace.discoverySource = "model-list";
+  try {
+    const discovered = parseModelDiscovery(
+      await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress, signal),
+      correlationId,
+    );
+    trace.modelListOutcome = "available";
+    return discovered;
+  } catch (cause) {
+    trace.modelListOutcome = discoveryRouteOutcome(cause, signal);
+    throw cause;
+  }
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
@@ -5567,21 +5666,40 @@ function discoveryTimedOut(cause: unknown): boolean {
   );
 }
 
+function discoveryAnswerIsUnusable(cause: unknown): boolean {
+  if (cause === null || typeof cause !== "object" || !("discoveryCode" in cause)) return false;
+  return (
+    cause.discoveryCode === "DISCOVERY_EMPTY" ||
+    cause.discoveryCode === "DISCOVERY_ALL_ENTRIES_UNSUPPORTED" ||
+    cause.discoveryCode === "DISCOVERY_INVALID_RESPONSE"
+  );
+}
+
+function discoveryRouteOutcome(cause: unknown, signal: AbortSignal): DiscoveryRouteOutcome {
+  if (discoveryTimedOut(cause)) return "timeout";
+  if (signal.aborted) return "cancelled";
+  if (discoveryHttpStatus(cause) !== undefined) return "http-error";
+  if (discoveryAnswerIsUnusable(cause)) return "unusable";
+  return discoveryProgrammingFailure(cause) ? "failed" : "transport-error";
+}
+
 function discoveryFailureKind(cause: unknown, status: number | undefined): ActivityLogErrorKind {
+  if (discoveryAnswerIsUnusable(cause)) return "validation-failed";
   if (status === 401 || status === 403) return "permission-denied";
   if (status === 429) return "rate-limited";
   if (discoveryTimedOut(cause)) return "timeout";
   return discoveryProgrammingFailure(cause) ? "internal" : "unavailable";
 }
 
-function discoveryFailureDetail(cause: unknown): {
-  readonly errorKind: ActivityLogErrorKind;
-  readonly status?: number;
-} {
-  const status = discoveryHttpStatus(cause);
+function discoveryFailureDetail(cause: unknown, cancelled: boolean): SetupMetadataFailure {
+  const httpStatus = discoveryHttpStatus(cause);
   return {
-    errorKind: discoveryFailureKind(cause, status),
-    ...(status === undefined ? {} : { status }),
+    errorKind: cancelled ? "cancelled" : discoveryFailureKind(cause, httpStatus),
+    evidence: {
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+      frames: keikoStackFrames(cause),
+      causeChain: causeChain(cause),
+    },
   };
 }
 
@@ -5599,10 +5717,8 @@ async function discoverSetupModels(
   selected?: SetupCandidateModels,
 ): Promise<SetupCandidateModels> {
   const startedAt = Date.now();
-  const selectedModelCount =
-    selected === undefined
-      ? undefined
-      : selected.chatModelIds.length + selected.embeddingModelIds.length;
+  const trace = createSetupDiscoveryTrace();
+  const selectedModelCount = selectedModelCountOf(selected);
   try {
     input.signal?.throwIfAborted();
     const result = await awaitSetupOperation(
@@ -5612,28 +5728,35 @@ async function discoverSetupModels(
         input.apiKeyHeaderName,
         validationConfig.egress,
         input.correlationId,
+        trace,
       ),
       input.signal,
     );
     input.signal?.throwIfAborted();
     const normalized = normalizeDiscoveryResult(result);
     logSetupMetadataOutcome(
-      "available",
+      {
+        outcome: "available",
+        ...(selected === undefined
+          ? {}
+          : { selectionCounts: selectedMetadataCounts(selected, normalized) }),
+      },
+      trace,
       startedAt,
       input.correlationId,
-      selected === undefined || selectedModelCount === undefined
-        ? undefined
-        : selectedMetadataCounts(selected, normalized, selectedModelCount),
     );
     return normalized;
   } catch (cause) {
     const outcome = metadataFailureOutcome(cause, input.signal);
     logSetupMetadataOutcome(
-      outcome,
+      {
+        outcome,
+        ...(selectedModelCount === undefined ? {} : { selectionCounts: { selectedModelCount } }),
+        failure: discoveryFailureDetail(cause, outcome === "cancelled"),
+      },
+      trace,
       startedAt,
       input.correlationId,
-      selectedModelCount === undefined ? undefined : { selectedModelCount },
-      outcome === "cancelled" ? { errorKind: "cancelled" } : discoveryFailureDetail(cause),
     );
     throw cause;
   }
@@ -5657,10 +5780,17 @@ function selectedDeploymentMetadata(
   );
 }
 
+function selectedModelCountOf(selected: SetupCandidateModels): number;
+function selectedModelCountOf(selected: SetupCandidateModels | undefined): number | undefined;
+function selectedModelCountOf(selected: SetupCandidateModels | undefined): number | undefined {
+  return selected === undefined
+    ? undefined
+    : selected.chatModelIds.length + selected.embeddingModelIds.length;
+}
+
 function selectedMetadataCounts(
   selected: SetupCandidateModels,
   discovered: SetupCandidateModels,
-  selectedModelCount: number,
 ): SetupMetadataSelectionCounts {
   const allDiscovered = new Set(discovered.modelIds);
   let metadataEnrichedModelCount = 0;
@@ -5680,7 +5810,7 @@ function selectedMetadataCounts(
     }
   }
   return {
-    selectedModelCount,
+    selectedModelCount: selectedModelCountOf(selected),
     metadataEnrichedModelCount,
     roleMismatchModelCount,
     notDiscoveredModelCount,
