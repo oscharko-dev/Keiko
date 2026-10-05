@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { deflateSync, gunzipSync, inflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as reportContracts from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   supportIncidentPrivateProjection,
   type SupportReport,
@@ -55,6 +56,19 @@ import { createClientOnlySupportReport } from "./support-desktop-report.js";
 import { supportReportPrivacyProjection } from "./support-report-privacy.js";
 import { findSupportRegistry } from "./support-registry.js";
 import { SUPPORT_RELEASE_REGISTRY_SNAPSHOTS } from "./support-registry-history.generated.js";
+
+vi.mock("@oscharko-dev/keiko-contracts/runtime/observability", async (importOriginal) => {
+  const actual = await importOriginal<typeof reportContracts>();
+  return { ...actual, serializeSupportReport: vi.fn(actual.serializeSupportReport) };
+});
+const actualReportContracts = await vi.importActual<typeof reportContracts>(
+  "@oscharko-dev/keiko-contracts/runtime/observability",
+);
+afterEach(() => {
+  vi.mocked(reportContracts.serializeSupportReport)
+    .mockReset()
+    .mockImplementation(actualReportContracts.serializeSupportReport);
+});
 
 const T0 = Date.UTC(2026, 8, 30, 12);
 const CORRELATION = "support-report-fixture-0001";
@@ -531,6 +545,46 @@ describe("canonical body-free offline report", () => {
     expect(reduced.selection.status).toBe("insufficient");
     expect(reduced.selection.reasons).toContain("report-budget-exceeded");
     expect(() => buildSupportReport(incident, query, 1)).toThrow(SupportReportError);
+  });
+
+  it.each(["normal", "fallback"] as const)(
+    "serializes each actual sealed envelope once on the %s path without changing bytes",
+    (path) => {
+      const { report, incident, query } = fixture();
+      const fullText = serializeSupportReport(report);
+      const maxBytes =
+        path === "normal" ? MAX_SUPPORT_REPORT_BYTES : Buffer.byteLength(fullText) - 1;
+      const expected = serializeSupportReport(buildSupportReport(incident, query, maxBytes));
+      const serialize = vi.mocked(reportContracts.serializeSupportReport).mockClear();
+      const rebuilt = buildSupportReport(incident, query, maxBytes);
+      expect(serialize).toHaveBeenCalledTimes(path === "normal" ? 1 : 2);
+      expect(serialize.mock.results[0]).toMatchObject({ type: "return", value: fullText });
+      expect(serialize.mock.results.at(-1)).toMatchObject({ type: "return", value: expected });
+      expect(actualReportContracts.serializeSupportReport(rebuilt)).toBe(expected);
+      expect(parseSupportReport(expected)).toEqual(rebuilt);
+      expect(Buffer.byteLength(expected)).toBeLessThanOrEqual(maxBytes);
+      if (path === "fallback") {
+        expect(expected).not.toBe(fullText);
+        expect(rebuilt.selection.requiredBytes).toBe(Buffer.byteLength(fullText));
+        expect(rebuilt.selection.status).toBe("insufficient");
+        expect(rebuilt.evidence.recordCount).toBe(0);
+      }
+    },
+  );
+
+  it("self-validates the exact admitted serialized bytes and rejects tampering", () => {
+    const { report, incident, query } = fixture();
+    const tampered = serializeSupportReport(report).replace('"sha256"', '"sha512"');
+    vi.mocked(reportContracts.serializeSupportReport).mockReturnValueOnce(tampered);
+    expect(() => buildSupportReport(incident, query)).toThrow(SupportReportError);
+  });
+
+  it("rechecks the replacement envelope against the final byte limit", () => {
+    const { incident, query } = fixture();
+    const serialize = vi.mocked(reportContracts.serializeSupportReport).mockClear();
+    expect(() => buildSupportReport(incident, query, 1)).toThrow("report-budget-exceeded");
+    expect(serialize).toHaveBeenCalledTimes(2);
+    expect(serialize.mock.results[0]).not.toEqual(serialize.mock.results[1]);
   });
 });
 

@@ -343,8 +343,9 @@ export function buildSupportReport(
     lifetimes,
   };
   let report = sealSupportReport(privateIncident, selection, evidence);
-  const completeBytes = Buffer.byteLength(serializeSupportReport(report));
-  if (completeBytes > maxBytes) {
+  let serialized = serializeSupportReport(report);
+  let reportBytes = Buffer.byteLength(serialized);
+  if (reportBytes > maxBytes) {
     const budgetReasons = reasons([
       ...selectedReasons,
       "report-budget-exceeded",
@@ -357,16 +358,17 @@ export function buildSupportReport(
       {
         status: "insufficient",
         reasons: budgetReasons,
-        requiredBytes: completeBytes,
+        requiredBytes: reportBytes,
         ...recordCountRequirement(query.truncation.requiredRecordCount),
         lifetimes: [],
       },
       encodeSupportReportEvidence([]),
     );
+    serialized = serializeSupportReport(report);
+    reportBytes = Buffer.byteLength(serialized);
   }
-  if (Buffer.byteLength(serializeSupportReport(report)) > maxBytes)
-    throw new SupportReportError("report-budget-exceeded");
-  parseSupportReport(serializeSupportReport(report));
+  if (reportBytes > maxBytes) throw new SupportReportError("report-budget-exceeded");
+  parseSupportReport(serialized);
   return report;
 }
 
