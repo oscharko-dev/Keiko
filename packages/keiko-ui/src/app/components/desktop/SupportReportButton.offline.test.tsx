@@ -503,6 +503,30 @@ it("counts rejected supplied facts once across the request and local fallback", 
   expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(undefined, expect.any(AbortSignal));
 });
 
+it("discards an unsafe selected ID once before the request and local fallback", async () => {
+  clientDiagnostics.takeClientDiagnosticLoss();
+  vi.mocked(createSupportReport).mockRejectedValueOnce(
+    new ApiError("SUPPORT_REPORT_UNAVAILABLE", "offline", 503),
+  );
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  const failure = { errorKind: "unavailable", context: [] } as const;
+  render(<SupportReportButton correlationId="private@example.test" failure={failure} />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(
+    undefined,
+    expect.any(AbortSignal),
+    failure,
+  );
+  expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
+    correlationId: undefined,
+    failure,
+    availabilityReason: "service-unavailable",
+  });
+  expect(clientDiagnostics.takeClientDiagnosticLoss()?.errorsSuppressed).toBe(1);
+  expect(clientDiagnostics.takeClientDiagnosticLoss()).toBeUndefined();
+});
+
 it("settles a stalled local producer when its own timeout signal expires", async () => {
   const localDeadline = new AbortController();
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) =>

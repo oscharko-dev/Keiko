@@ -6,7 +6,6 @@ import {
   MAX_SUPPORT_REPORT_BYTES,
   SUPPORT_REPORT_DELIVERY_TTL_MS,
   isClientReportFailure,
-  normalizeSupportReportCorrelationId,
   sealSupportReportEnvelope,
   serializeSupportReport,
   supportIncidentBuild,
@@ -17,7 +16,10 @@ import {
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import { SupportReportBudgetExceeded } from "./support-report-errors";
+import {
+  SupportReportBudgetExceeded,
+  selectedSupportReportCorrelationId,
+} from "./support-report-errors";
 import type { SupportReportDownload } from "./support-report-api";
 import { retainedClientDiagnosticFailure, recordClientDiagnosticLoss } from "./client-diagnostics";
 
@@ -58,13 +60,6 @@ function validatedOriginalFailure(
   return undefined;
 }
 
-function validatedLocalCorrelationId(value: string | undefined): string | undefined {
-  const correlationId = normalizeSupportReportCorrelationId(value);
-  if (value !== undefined && correlationId === undefined)
-    recordClientDiagnosticLoss("errorsSuppressed");
-  return correlationId;
-}
-
 export function originalSupportReportFailure(
   context: LocalFailureContext,
 ): ClientOnlySupportReportInput["failure"] {
@@ -79,7 +74,7 @@ async function localReport(
   context: LocalFailureContext,
 ): Promise<DesktopSupportReportResponse> {
   signal.throwIfAborted();
-  const correlationId = validatedLocalCorrelationId(context.correlationId);
+  const correlationId = selectedSupportReportCorrelationId(context.correlationId);
   const failure = originalSupportReportFailure({ ...context, correlationId });
   const sections = clientOnlySupportReportSections({
     incidentId: crypto.randomUUID().replaceAll("-", ""),

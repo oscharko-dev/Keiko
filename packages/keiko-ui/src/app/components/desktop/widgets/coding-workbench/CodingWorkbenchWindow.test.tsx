@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type {
@@ -1191,40 +1192,37 @@ describe("CodingWorkbenchWindow", () => {
     expect(alert).toHaveTextContent("Workspace could not be refreshed.");
     expect(
       within(alert).queryByRole("button", { name: "Create error report" }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
   });
 
   it.each([
     "",
     "bad correlation id",
-    "unknown-correlation-id",
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
     "123-45-6789",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c2lnbmF0dXJl",
-  ])(
-    "keeps an unsafe or unattributed refresh id %s out of error-specific reporting",
-    (correlationId) => {
-      const base = liveState();
-      renderWorkbench(
-        liveState({
-          workspace: {
-            ...base.workspace,
-            status: "error",
-            error: {
-              code: "TASK_WORKSPACE_UNAVAILABLE",
-              message: "unavailable",
-              retryable: true,
-              correlationId,
-            },
+  ])("keeps unattributed reporting available for refresh id %s", (correlationId) => {
+    const base = liveState();
+    renderWorkbench(
+      liveState({
+        workspace: {
+          ...base.workspace,
+          status: "error",
+          error: {
+            code: "TASK_WORKSPACE_UNAVAILABLE",
+            message: "unavailable",
+            retryable: true,
+            correlationId,
           },
-        }),
-      );
-      const alert = screen.getByRole("alert");
-      expect(alert).toHaveTextContent("Workspace could not be refreshed.");
-      expect(
-        within(alert).queryByRole("button", { name: "Create error report" }),
-      ).not.toBeInTheDocument();
-    },
-  );
+        },
+      }),
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+    expect(
+      within(alert).queryByRole("button", { name: "Create error report" }),
+    ).toBeInTheDocument();
+  });
 
   it("keeps a safe originating support id available for error-specific reporting", () => {
     const base = liveState();
