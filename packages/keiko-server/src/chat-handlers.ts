@@ -1804,15 +1804,15 @@ export function captureGatewayTurnSnapshot(
   correlationId?: string,
   rehydrate = true,
 ): GatewayTurnSnapshot {
-  const snapshot = captureChatHistoryWithCheckpoint(
-    deps.store,
-    deps.evidenceStore,
-    request.chatId,
-    userMessage.id,
-    currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    currentRedactionSecrets(deps),
+  const snapshot = captureChatHistoryWithCheckpoint({
+    store: deps.store,
+    evidenceStore: deps.evidenceStore,
+    chatId: request.chatId,
+    currentUserMessageId: userMessage.id,
+    profile: currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    redactionSecrets: currentRedactionSecrets(deps),
     correlationId,
-  );
+  });
   return snapshot.earlierCompaction === undefined || !rehydrate
     ? snapshot
     : {

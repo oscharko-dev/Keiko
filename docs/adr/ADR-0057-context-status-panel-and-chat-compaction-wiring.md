@@ -163,6 +163,9 @@ without the budget stamp retain their window-based comparison. The shared captur
 both current and stamped input budgets when known. A failed checkpoint listing or manifest read
 has the explicit `read-failed` disposition and partial completeness; it never claims that no
 checkpoint existed. The correlated read diagnostic preserves the failure evidence.
+Each synchronous meter or manual-compaction read phase loads the checkpoint once and shares its
+unfiltered record and disposition between counting and capture. Manual compaction reloads after
+persistence so the returned status verifies the newly saved record. This reuse never spans requests.
 
 The meter refreshes when connected folder, knowledge or Git-change scopes change,
 without requiring another sent message to update its grounding posture. Body-free

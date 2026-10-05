@@ -30,15 +30,15 @@ export function groundedConversationContinuity(
   originalQuery = user.content,
 ): GroundedConversationContinuity {
   const profile = continuityProfile(deps, modelId);
-  const snapshot = captureChatHistoryWithCheckpoint(
-    deps.store,
-    deps.evidenceStore,
-    user.chatId,
-    user.id,
+  const snapshot = captureChatHistoryWithCheckpoint({
+    store: deps.store,
+    evidenceStore: deps.evidenceStore,
+    chatId: user.chatId,
+    currentUserMessageId: user.id,
     profile,
-    currentRedactionSecrets(deps),
+    redactionSecrets: currentRedactionSecrets(deps),
     correlationId,
-  );
+  });
   const historyPrefix = snapshot.history.filter((message) => message.id !== user.id);
   if (historyPrefix.length === 0 && snapshot.earlierCompaction === undefined) {
     return { answerContext: "", retrievalContent: user.content, compaction: undefined };

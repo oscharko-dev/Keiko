@@ -29,34 +29,53 @@ export interface GatewayHistorySnapshot {
   readonly rehydratedContext?: string | undefined;
 }
 
-/** Load the unfiltered checkpoint so every caller retains its actual capture disposition. */
-export function captureChatHistoryWithCheckpoint(
-  store: UiStore,
-  evidenceStore: EvidenceStore,
-  chatId: string,
-  currentUserMessageId: string,
-  profile: ContextProfile,
-  redactionSecrets: readonly string[],
-  correlationId?: string,
-): GatewayHistorySnapshot {
+export interface LoadedHistoryCheckpoint {
+  readonly record: ContextCompactionRecord | undefined;
+  readonly disposition: CheckpointLoadDisposition;
+}
+
+interface HistoryCheckpointInput {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly chatId: string;
+  readonly correlationId?: string | undefined;
+}
+
+interface CheckpointCaptureInput extends HistoryCheckpointInput {
+  readonly currentUserMessageId: string;
+  readonly profile: ContextProfile;
+  readonly redactionSecrets: readonly string[];
+  readonly loadedCheckpoint?: LoadedHistoryCheckpoint;
+}
+
+/** Reuse only within a synchronous read phase; reload after checkpoint persistence. */
+export function loadHistoryCheckpoint(input: HistoryCheckpointInput): LoadedHistoryCheckpoint {
   let checkpointDisposition: CheckpointLoadDisposition = "none";
   const checkpoint = loadChatContinuityCheckpoint(
-    evidenceStore,
-    chatId,
-    store.chatHistoryRevision(chatId),
-    correlationId,
+    input.evidenceStore,
+    input.chatId,
+    input.store.chatHistoryRevision(input.chatId),
+    input.correlationId,
     (disposition) => {
       checkpointDisposition = disposition;
     },
   );
+  return { record: checkpoint, disposition: checkpointDisposition };
+}
+
+/** Load the unfiltered checkpoint so every caller retains its actual capture disposition. */
+export function captureChatHistoryWithCheckpoint(
+  input: CheckpointCaptureInput,
+): GatewayHistorySnapshot {
+  const loaded = input.loadedCheckpoint ?? loadHistoryCheckpoint(input);
   return captureChatHistory(
-    store,
-    chatId,
-    currentUserMessageId,
-    profile,
-    redactionSecrets,
-    checkpoint,
-    { correlationId, checkpointDisposition },
+    input.store,
+    input.chatId,
+    input.currentUserMessageId,
+    input.profile,
+    input.redactionSecrets,
+    loaded.record,
+    { correlationId: input.correlationId, checkpointDisposition: loaded.disposition },
   );
 }
 

@@ -1226,6 +1226,44 @@ describe("composer context status and manual maintenance", () => {
 });
 
 describe("shared checkpoint capture", () => {
+  it("loads the checkpoint once when projecting an oversized context meter", () => {
+    const { deps, chatId } = fixture(80);
+    const listByPrefix = vi.fn((prefix: string) =>
+      deps.evidenceStore.list().filter((id) => id.startsWith(prefix)),
+    );
+    const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
+    const status = readChatContextStatus(measured, chatId, "fixture", "meter-read-once");
+    expect(status.pendingCompaction).toBeDefined();
+    expect(listByPrefix).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads checkpoints once before and once after manual persistence", () => {
+    const { deps, chatId } = fixture(80);
+    const listByPrefix = vi.fn((prefix: string) =>
+      deps.evidenceStore.list().filter((id) => id.startsWith(prefix)),
+    );
+    const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
+    const status = compactChatContext(measured, chatId, "fixture", "manual-read-once");
+    expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(listByPrefix).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a failed checkpoint read while projecting the context meter", () => {
+    const { deps, chatId } = fixture(80);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const listByPrefix = vi.fn((): never => {
+      throw new TypeError("private-checkpoint-read-canary");
+    });
+    const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
+    const status = readChatContextStatus(measured, chatId, "fixture", "failed-meter-read");
+    expect(status.pendingCompaction).toBeDefined();
+    expect(listByPrefix).toHaveBeenCalledTimes(1);
+    const event = sink.events.find((entry) => entry.op === "chat.continuity.capture");
+    expect(event?.extra?.checkpointDisposition).toBe("read-failed");
+    expect(JSON.stringify(sink.events)).not.toContain("private-checkpoint-read-canary");
+  });
+
   it.each(["listing", "manifest"])(
     "distinguishes failed %s storage reads from absent checkpoints",
     (failure) => {
@@ -1254,15 +1292,15 @@ describe("shared checkpoint capture", () => {
         ...deps.evidenceStore,
         ...(failure === "listing" ? { list: fail } : { get: fail }),
       };
-      captureChatHistoryWithCheckpoint(
-        deps.store,
+      captureChatHistoryWithCheckpoint({
+        store: deps.store,
         evidenceStore,
         chatId,
-        "",
+        currentUserMessageId: "",
         profile,
-        [],
-        "failed-capture",
-      );
+        redactionSecrets: [],
+        correlationId: "failed-capture",
+      });
       const event = sink.events.find((entry) => entry.correlationId === "failed-capture");
       expect(event?.extra?.checkpointDisposition).toBe("read-failed");
       expect(event?.extra?.completeness).toBe("partial");
@@ -1285,15 +1323,15 @@ describe("shared checkpoint capture", () => {
       safetyMarginTokens: 0,
     });
     const capture = (input = profile): ReturnType<typeof captureChatHistoryWithCheckpoint> =>
-      captureChatHistoryWithCheckpoint(
-        deps.store,
-        deps.evidenceStore,
+      captureChatHistoryWithCheckpoint({
+        store: deps.store,
+        evidenceStore: deps.evidenceStore,
         chatId,
-        "",
-        input,
-        [],
-        "helper-capture",
-      );
+        currentUserMessageId: "",
+        profile: input,
+        redactionSecrets: [],
+        correlationId: "helper-capture",
+      });
     const first = capture();
     persistChatCompactionEvidence(deps, {
       compaction: first.earlierCompaction,
