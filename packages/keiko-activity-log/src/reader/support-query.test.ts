@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAX_SUPPORT_REPORT_RECORDS } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
@@ -369,6 +370,88 @@ describe("support query causal closure (#3531)", () => {
     });
     expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
     expect(result.metrics.closureEventCount).toBe(6);
+  });
+
+  it("reserves the canonical record ceiling for the complete closure and its lifetime anchor", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      signal(process, T0 + 1),
+      signal(process, T0 + 2),
+      ...Array.from({ length: MAX_SUPPORT_REPORT_RECORDS - 3 }, () =>
+        diagnostic(process, T0 + 3, IDS.root),
+      ),
+      diagnostic(process, T0 + 4, IDS.child, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.events).toHaveLength(MAX_SUPPORT_REPORT_RECORDS);
+    expect(result.metrics.closureEventCount).toBe(MAX_SUPPORT_REPORT_RECORDS - 2);
+    expect(result.metrics.candidateEventCount).toBe(MAX_SUPPORT_REPORT_RECORDS + 1);
+    expect(result.query.limits.maxResultRecords).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(result.closure?.edges).toEqual([
+      { correlationId: IDS.child, parentCorrelationId: IDS.root },
+    ]);
+    expect(
+      result.events.filter((event) => event.parsed.view.op === "process.started"),
+    ).toHaveLength(1);
+    expect(result.truncation).toMatchObject({
+      state: "context-truncated",
+      omittedContextEventCount: 1,
+      requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS - 1,
+    });
+    expect(result.diagnosticSufficiency.reasons).not.toContain("report-budget-exceeded");
+    expect(result.lifetimes).toEqual([
+      { pid: process.pid, instanceId: process.instanceId, start: "selected" },
+    ]);
+  });
+
+  it("reports the exact required record count when 20001 small required events cannot fit", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, T0, 1),
+      Array.from({ length: MAX_SUPPORT_REPORT_RECORDS + 1 }, () =>
+        diagnostic(process, T0, IDS.root),
+      ),
+    );
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.truncation.requiredBytes).toBeLessThan(
+      DEFAULT_SUPPORT_QUERY_LIMITS.maxResultBytes,
+    );
+    expect(result.events).toEqual([]);
+    expect(result.truncation).toMatchObject({
+      state: "budget-exceeded",
+      requiredRecordCount: 20001,
+    });
+    expect(result.metrics.candidateEventCount).toBe(20001);
+    expect(result.closure).toMatchObject({ correlationCount: 1, missingCorrelationCount: 0 });
+    expect(result.diagnosticSufficiency.reasons).toEqual(["report-budget-exceeded"]);
+    const filtered = query(stateDir, {
+      kind: "events",
+      queryClass: "operation",
+      filter: { op: DIAGNOSTIC },
+    }).result;
+    expect(filtered.truncation).toMatchObject({
+      state: "budget-exceeded",
+      requiredRecordCount: 20001,
+    });
+    expect(filtered.events).toHaveLength(0);
+  });
+
+  it("retains fitting optional context when a later optional record exceeds its byte allowance", () => {
+    writeGraph(stateDir);
+    const required = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    const full = query(stateDir, correlationSelection(IDS.root)).result;
+    const firstContext = full.events.find((event) => event.role === "context");
+    expect(firstContext).toBeDefined();
+    const maxResultBytes = required.truncation.requiredBytes + (firstContext?.bytes ?? 0);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxResultBytes });
+    expect(result.metrics.closureEventCount).toBe(required.metrics.closureEventCount);
+    expect(result.metrics.contextEventCount).toBe(1);
+    expect(result.truncation).toMatchObject({
+      state: "context-truncated",
+      omittedContextEventCount: 1,
+    });
   });
 
   it("declares an unreadable candidate segment instead of omitting it silently", () => {

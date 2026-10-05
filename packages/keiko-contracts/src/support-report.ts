@@ -66,6 +66,8 @@ export interface SupportReportSelection {
   readonly status: DiagnosticSufficiencyStatus;
   readonly reasons: readonly DiagnosticSufficiencyReason[];
   readonly requiredBytes: number;
+  /** Required closure and lifetime records, independent of the byte requirement; absent in older reports. */
+  readonly requiredRecordCount?: number;
   // Exactly the lifetimes the evidence shows, in (pid, instanceId) order.
   readonly lifetimes: readonly SupportLifetimeProvenance[];
 }

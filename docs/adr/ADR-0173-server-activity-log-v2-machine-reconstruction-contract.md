@@ -1900,12 +1900,19 @@ including declared selection loss and budget reasons, rather than a separate une
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every
 start, beginning line and heartbeat proof it requires, measured even when the closure alone exceeds
-the budget, so the stated size is one that fits. The lifetimes measured are bounded like the
+the budget, independently of record capacity. The lifetimes measured are bounded like the
 closure's correlations; beyond that bound the requirement is unknown (0). Evidence retention removed
 is `evidence-not-retained`; an unreadable candidate segment is `segment-unreadable`. Only optional
 context may be dropped, declared as `context-truncated`. Every result carries its provenance,
 integrity, coverage, loss and truncation, and exactly one sufficiency status from the per-class
 projection `keiko support analyze` uses.
+
+The query applies the canonical 20,000-record parsing ceiling while streaming, before report
+encoding. Required causal and lifetime-anchor records take precedence; fitting optional context is
+retained and the rest is counted as omitted. Both byte and record requirements are reported
+separately. A required closure that cannot fit remains explicitly insufficient rather than being
+presented as a complete partial chain. The existing `support.query.completed` event carries the
+required record count alongside its byte count. Older reports without that count remain readable.
 
 **No database.** Manifests and streaming meet the measured need: a checked-in long-history test
 bounds peak memory and proves that manifest-pruned segment bodies are never opened. A database

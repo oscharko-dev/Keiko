@@ -333,6 +333,7 @@ export function buildSupportReport(
     status: diagnosticSufficiencyStatus(selectedReasons),
     reasons: selectedReasons,
     requiredBytes,
+    requiredRecordCount: query.truncation.requiredRecordCount,
     lifetimes,
   };
   let report = sealSupportReport(privateIncident, selection, evidence);
@@ -351,6 +352,7 @@ export function buildSupportReport(
         status: "insufficient",
         reasons: budgetReasons,
         requiredBytes: completeBytes,
+        requiredRecordCount: query.truncation.requiredRecordCount,
         lifetimes: [],
       },
       encodeSupportReportEvidence([]),
@@ -411,10 +413,20 @@ function validLifetimes(value: unknown): boolean {
   );
 }
 
+function selectionKeys(value: Record<string, unknown>): readonly string[] {
+  return [
+    "status",
+    "reasons",
+    "requiredBytes",
+    "lifetimes",
+    ...(Object.hasOwn(value, "requiredRecordCount") ? ["requiredRecordCount"] : []),
+  ];
+}
+
 function validSelection(value: unknown): value is SupportReportSelection {
   if (
     !reportObject(value) ||
-    !reportKeys(value, ["status", "reasons", "requiredBytes", "lifetimes"]) ||
+    !reportKeys(value, selectionKeys(value)) ||
     !validLifetimes(value.lifetimes)
   )
     return false;
@@ -430,7 +442,8 @@ function validSelection(value: unknown): value is SupportReportSelection {
   return (
     canonicalSupportJson(safe) === canonicalSupportJson(reasons(safe)) &&
     value.status === diagnosticSufficiencyStatus(safe) &&
-    reportCount(value.requiredBytes)
+    reportCount(value.requiredBytes) &&
+    (!Object.hasOwn(value, "requiredRecordCount") || reportCount(value.requiredRecordCount))
   );
 }
 
@@ -867,6 +880,9 @@ function effectiveSelection(
     status: diagnosticSufficiencyStatus(effective),
     reasons: effective,
     requiredBytes: report.selection.requiredBytes,
+    ...(report.selection.requiredRecordCount === undefined
+      ? {}
+      : { requiredRecordCount: report.selection.requiredRecordCount }),
     lifetimes: report.selection.lifetimes,
   };
 }

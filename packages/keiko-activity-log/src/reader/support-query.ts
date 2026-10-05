@@ -22,7 +22,9 @@
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
-// NEVER A SILENT TRUNCATION. A closure that does not fit the report budget (or exceeds the
+// NEVER A SILENT TRUNCATION. The canonical report record ceiling applies while streaming.
+// Required closure and lifetime records take precedence over optional context. A closure that
+// does not fit the report budget (or exceeds the
 // correlation bound, which also bounds its process lifetimes) returns no events and is
 // `insufficient` with `report-budget-exceeded`; a selection the log no longer holds (a closure
 // member, or a lifetime's start) is `insufficient` with `evidence-not-retained`; an unreadable
@@ -36,6 +38,7 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
+  MAX_SUPPORT_REPORT_RECORDS,
   activityLogOperationSchema,
   diagnosticSufficiencyStatus,
   parseActivityLogSegmentId,
@@ -192,7 +195,7 @@ export interface SupportQueryResult {
   };
   readonly query: {
     readonly class: SupportQueryClass;
-    readonly limits: SupportQueryLimits;
+    readonly limits: SupportQueryLimits & { readonly maxResultRecords: number };
   };
   readonly segments: {
     readonly total: number;
@@ -231,6 +234,7 @@ export interface SupportQueryResult {
     readonly state: SupportQueryTruncation;
     readonly omittedContextEventCount: number;
     readonly requiredBytes: number;
+    readonly requiredRecordCount: number;
   };
   readonly coverage: {
     readonly requiredClassCount: number;
@@ -341,17 +345,21 @@ class EventCollector {
   public candidateCount = 0;
   public exceeded = false;
 
-  public constructor(private readonly budgetBytes: number) {}
+  public constructor(
+    private readonly budgetBytes: number,
+    private readonly budgetRecords = MAX_SUPPORT_REPORT_RECORDS,
+    private readonly optional = false,
+  ) {}
 
   public add(accepted: AcceptedLine, role: SupportQueryEventRole): void {
     const bytes = accepted.line.byteLength + 1;
     this.candidateCount += 1;
     this.requiredBytes += bytes;
     if (this.exceeded) return;
-    if (this.requiredBytes > this.budgetBytes) {
-      // Never a partial selection: everything retained so far is released at once.
+    if (this.requiredBytes > this.budgetBytes || this.candidateCount > this.budgetRecords) {
+      // Required closure is all-or-nothing; optional context retains the fitting prefix.
       this.exceeded = true;
-      this.events.length = 0;
+      if (!this.optional) this.events.length = 0;
       return;
     }
     this.events.push({
@@ -865,16 +873,16 @@ function collectContext(
       manifestTimeOverlaps(loaded.manifest, scope.fromMs, scope.toMs) &&
       manifestMayHoldLifetimes(loaded.manifest, scope.lifetimes),
   );
-  const collector = new EventCollector(budgetBytes);
-  let omitted = 0;
+  const recordBudget = Math.min(
+    maxContextEvents,
+    MAX_SUPPORT_REPORT_RECORDS - selectedEvents.length,
+  );
+  const collector = new EventCollector(budgetBytes, recordBudget, true);
   for (const accepted of acceptedLines(state, files, true)) {
     if (!isContextLine(accepted, scope, windows)) continue;
-    if (collector.candidateCount < maxContextEvents) collector.add(accepted, "context");
-    else omitted += 1;
+    collector.add(accepted, "context");
   }
-  if (collector.exceeded) {
-    return { events: [], omitted: collector.candidateCount + omitted, truncated: true };
-  }
+  const omitted = collector.candidateCount - collector.events.length;
   return { events: collector.events, omitted, truncated: omitted > 0 };
 }
 
@@ -1166,6 +1174,7 @@ interface SelectionOutcome {
   readonly events: readonly SupportSelectedEvent[];
   readonly candidateEventCount: number;
   readonly requiredBytes: number;
+  readonly requiredRecordCount: number;
   readonly omittedContextEventCount: number;
   readonly truncation: SupportQueryTruncation;
   readonly reasons: readonly DiagnosticSufficiencyReason[];
@@ -1226,6 +1235,7 @@ function budgetExceededOutcome(
     events: [],
     candidateEventCount: collected?.collector.candidateCount ?? 0,
     requiredBytes,
+    requiredRecordCount: collected?.collector.candidateCount ?? 0,
     omittedContextEventCount: 0,
     truncation: "budget-exceeded",
     reasons: ["report-budget-exceeded"],
@@ -1288,8 +1298,10 @@ function runClosureSelection(
   );
   return {
     events,
-    candidateEventCount: collected.collector.candidateCount + context.events.length,
+    candidateEventCount:
+      collected.collector.candidateCount + context.events.length + context.omitted,
     requiredBytes: collected.collector.requiredBytes,
+    requiredRecordCount: collected.collector.candidateCount,
     omittedContextEventCount: context.omitted,
     truncation: context.truncated ? "context-truncated" : "none",
     reasons,
@@ -1305,6 +1317,7 @@ function runEventSelection(state: EngineState, selection: SupportEventSelection)
     events: collector.exceeded ? [] : collector.events,
     candidateEventCount: collector.candidateCount,
     requiredBytes: collector.requiredBytes,
+    requiredRecordCount: collector.candidateCount,
     omittedContextEventCount: 0,
     truncation: collector.exceeded ? "budget-exceeded" : "none",
     reasons: collector.exceeded ? ["report-budget-exceeded"] : [],
@@ -1351,6 +1364,15 @@ function withUnreadable(
   return unreadable ? [...reasons, "segment-unreadable"] : reasons;
 }
 
+function queryTruncation(outcome: SelectionOutcome): SupportQueryResult["truncation"] {
+  return {
+    state: outcome.truncation,
+    omittedContextEventCount: outcome.omittedContextEventCount,
+    requiredBytes: outcome.requiredBytes,
+    requiredRecordCount: outcome.requiredRecordCount,
+  };
+}
+
 function queryResult(
   state: EngineState,
   outcome: SelectionOutcome,
@@ -1374,17 +1396,16 @@ function queryResult(
       catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
       manifestSchemaVersion: SEGMENT_MANIFEST_SCHEMA_VERSION,
     },
-    query: { class: queryClass, limits: state.input.limits },
+    query: {
+      class: queryClass,
+      limits: { ...state.input.limits, maxResultRecords: MAX_SUPPORT_REPORT_RECORDS },
+    },
     segments: segmentSummary(state),
     closure: outcome.closure,
     lifetimes: outcome.lifetimes,
     integrity: integrity.summary,
     loss: { state: integrity.summary.loss, lossEventCount: lossEventCount(outcome.events) },
-    truncation: {
-      state: outcome.truncation,
-      omittedContextEventCount: outcome.omittedContextEventCount,
-      requiredBytes: outcome.requiredBytes,
-    },
+    truncation: queryTruncation(outcome),
     coverage: sufficiency.coverage,
     diagnosticSufficiency: sufficiency.diagnosticSufficiency,
     metrics: {
@@ -1464,7 +1485,8 @@ export function renderSupportQuery(result: SupportQueryResult): string {
   }
   lines.push(
     `Events: ${String(metrics.resultEventCount)} (${String(metrics.selectedBytes)} bytes), ` +
-      `truncation ${result.truncation.state}`,
+      `truncation ${result.truncation.state}; required ${String(result.truncation.requiredRecordCount)} records ` +
+      `(${String(result.truncation.requiredBytes)} bytes)`,
   );
   return `${[...lines, ...result.events.map(renderEvent)].join("\n")}\n`;
 }

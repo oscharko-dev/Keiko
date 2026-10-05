@@ -19,12 +19,13 @@ import {
   type SupportLifetimeProvenance,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  prepareUnretainedUserReportDescriptor,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
 } from "../support-incident.js";
 import { resolveSupportIncident } from "../../../keiko-cli/src/support-incident.js";
-import { executeSupportQuery } from "../../../keiko-cli/src/support-query-cli.js";
+import { executeLocalSupportQuery } from "./support-local-query.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -48,6 +49,7 @@ import {
   supportReportTimeline,
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
+import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
 import { createClientOnlySupportReport } from "./support-desktop-report.js";
 
 import { supportReportPrivacyProjection } from "./support-report-privacy.js";
@@ -86,7 +88,7 @@ function fixture(
   const incident = supportIncidentPrivateProjection(
     resolveSupportIncident(record, supportIncidentSegmentFiles(stateDir, record), stateDir),
   );
-  const { result: query } = executeSupportQuery(
+  const { result: query } = executeLocalSupportQuery(
     stateDir,
     {
       kind: "closure",
@@ -102,12 +104,104 @@ function fixture(
   return { report: buildSupportReport(incident, query), query, incident };
 }
 
+function countBoundedFixture(
+  count: number,
+  withContext = false,
+): {
+  report: SupportReport;
+  query: SupportQueryResult;
+} {
+  const process = fixtureProcess(4242, "aabbccdd");
+  const lines = withContext
+    ? [
+        fixtureLine(process, T0, { op: "process.started" }),
+        fixtureLine(process, T0 + 1, { op: "cli.lifecycle.stop-requested" }),
+        fixtureLine(process, T0 + 2, { op: "cli.lifecycle.stop-requested" }),
+      ]
+    : [];
+  lines.push(
+    ...Array.from({ length: count }, () =>
+      fixtureLine(process, T0 + 3, {
+        op: "client.diagnostic",
+        correlationId: CORRELATION,
+      }),
+    ),
+  );
+  writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), lines);
+  const { result: query } = executeLocalSupportQuery(
+    stateDir,
+    {
+      kind: "closure",
+      queryClass: "correlation",
+      roots: [CORRELATION],
+      windows: [],
+      requiredClasses: { kind: "observed" },
+      unresolved: false,
+    },
+    DEFAULT_SUPPORT_QUERY_LIMITS,
+    { trigger: "export" },
+  );
+  const incident = supportIncidentPrivateProjection(
+    resolveSelectedSupportIncident(prepareUnretainedUserReportDescriptor(CORRELATION), query),
+  );
+  return { report: buildSupportReport(incident, query), query };
+}
+
 describe("canonical body-free offline report", () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-"));
   });
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("round trips the largest admitted closure with its anchor and fitting optional context", () => {
+    const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS - 2, true);
+    const parsed = parseSupportReport(serializeSupportReport(report));
+    expect(parsed.evidence.recordCount).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(parsed.selection).toMatchObject({
+      requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS - 1,
+      requiredBytes: query.truncation.requiredBytes,
+      reasons: expect.arrayContaining(["context-truncated"]) as unknown,
+    });
+    expect(parsed.selection.reasons).not.toContain("report-budget-exceeded");
+    const analysis = analyzeSupportReport(serializeSupportReport(parsed));
+    expect(analysis.selection.requiredRecordCount).toBe(MAX_SUPPORT_REPORT_RECORDS - 1);
+  });
+
+  it("exports a count requirement separately from bytes for an oversized required closure", () => {
+    const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS + 1);
+    const parsed = parseSupportReport(serializeSupportReport(report));
+    expect(parsed.evidence.recordCount).toBe(0);
+    expect(parsed.selection).toMatchObject({
+      requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS + 1,
+      requiredBytes: query.truncation.requiredBytes,
+      reasons: expect.arrayContaining(["report-budget-exceeded"]) as unknown,
+    });
+    expect(parsed.selection.requiredBytes).toBeLessThan(MAX_SUPPORT_REPORT_EVENT_BYTES);
+  });
+
+  it.each([-1, 0.5, null, "20001"])(
+    "rejects an invalid required record count %s",
+    (requiredRecordCount) => {
+      const { report } = fixture();
+      const forged = sealSupportReport(
+        report.incident,
+        // @ts-expect-error Deliberately verify rejection of non-numeric wire values.
+        { ...report.selection, requiredRecordCount },
+        report.evidence,
+      );
+      expect(() => parseSupportReport(serializeSupportReport(forged))).toThrow(
+        expect.objectContaining({ reason: "unsafe-report" }),
+      );
+    },
+  );
+
+  it("accepts older reports whose selection predates the required record count", () => {
+    const { report } = fixture();
+    const { requiredRecordCount: _count, ...selection } = report.selection;
+    const legacy = sealSupportReport(report.incident, selection, report.evidence);
+    expect(parseSupportReport(serializeSupportReport(legacy)).selection).toEqual(selection);
   });
 
   it("refuses client-only availability headers attached to retained server evidence", () => {
@@ -810,7 +904,7 @@ function failureFixture(parent?: string): {
       stateDir,
     ),
   );
-  const { result: query } = executeSupportQuery(
+  const { result: query } = executeLocalSupportQuery(
     stateDir,
     {
       kind: "closure",
@@ -1362,7 +1456,7 @@ describe("received-report audit hardening (#3534)", () => {
         stateDir,
       ),
     );
-    const { result: query } = executeSupportQuery(
+    const { result: query } = executeLocalSupportQuery(
       stateDir,
       {
         kind: "closure",
@@ -1409,7 +1503,7 @@ describe("received-report audit hardening (#3534)", () => {
         stateDir,
       ),
     );
-    const { result: query } = executeSupportQuery(
+    const { result: query } = executeLocalSupportQuery(
       stateDir,
       {
         kind: "closure",
@@ -1497,7 +1591,7 @@ describe("received-report audit hardening (#3534)", () => {
         stateDir,
       ),
     );
-    const { result: query } = executeSupportQuery(
+    const { result: query } = executeLocalSupportQuery(
       stateDir,
       {
         kind: "closure",

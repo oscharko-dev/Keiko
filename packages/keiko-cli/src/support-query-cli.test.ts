@@ -399,6 +399,7 @@ describe("keiko support export with a selector (#3531)", () => {
       resultEventCount: selected.length,
       selectedBytes,
       requiredBytes: selectedBytes,
+      requiredRecordCount: selected.length,
       truncation: "none",
       sufficiency: "insufficient",
       sufficiencyReasons: ["evidence-not-retained"],
