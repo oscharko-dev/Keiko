@@ -21,7 +21,6 @@ import {
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
-  CLIENT_CITATION_ROOT_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
@@ -1809,8 +1808,8 @@ describe("citation activation diagnostic contract", () => {
     ).toBe(false);
   });
   it.each([
-    { rootCount: CLIENT_CITATION_ROOT_COUNT_MAX, accepted: true },
-    { rootCount: CLIENT_CITATION_ROOT_COUNT_MAX + 1, accepted: false },
+    { rootCount: CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX, accepted: true },
+    { rootCount: CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX + 1, accepted: false },
   ])("enforces the declared diagnostic bound $rootCount", ({ rootCount, accepted }) => {
     expect(
       isClientDiagnosticIngestRequest({
