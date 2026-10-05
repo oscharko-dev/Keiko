@@ -582,7 +582,7 @@ describe("createExplorationPlan", () => {
 
   it("decouples lexical scan breadth from the excerpt-byte budget so multi-file scopes are reachable", () => {
     // Epic #177 retrieval fix. Lexical/structural scanning is transient — each candidate file is
-    // read to match lines, then discarded — and is bounded by elapsedMsMax, NOT by the excerpt-byte
+    // read to match lines, then discarded — and honors explicit deadlines/cancellation, not the excerpt-byte
     // budget the model context is built from. The previous coupling
     // (maxFilesScanned * maxBytesPerFileScanned <= excerptBytesMax * weight) capped the lexical
     // ring at ~4 files, so the search never reached a file ranked later than the alphabetically

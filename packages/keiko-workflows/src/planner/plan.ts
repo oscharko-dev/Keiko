@@ -95,12 +95,10 @@ const RING_WEIGHTS: Readonly<Record<RetrievalRingKind, number>> = {
   "git-history": 0.15,
 };
 
-// Lexical/structural scanning is transient — each candidate file is read to match lines, then
-// discarded — so its breadth is bounded by elapsedMsMax, NOT by the excerpt-byte budget the model
-// context is built from. Deriving maxFilesScanned from the excerpt slice capped the scan at ~4
-// files and starved multi-file connected scopes (Epic #177 retrieval defect): the search could
-// never reach the file a question was actually about. These ceilings let a ring examine the
-// connected scope broadly while the excerpt READ phase keeps enforcing filesReadMax/excerptBytesMax.
+// Lexical corpus traversal has no default file-count or elapsed-time cap. Cancellation and
+// explicit caller deadlines remain authoritative; retained matches are bounded separately by the
+// accepted byte/token capacity. Optional structural/history enrichment keeps a finite file slice.
+// Scan breadth is independent of the excerpt budget that bounds evidence sent to the model.
 const STRUCTURAL_SCAN_FILE_CEILING = 2048;
 // Structural/history enrichment retains its existing bounded output. Lexical retained metadata
 // is derived from the accepted byte/token capacity below, independently of corpus traversal.
@@ -119,7 +117,8 @@ const RING_LABELS: Readonly<Record<RetrievalRingKind, string>> = {
 };
 
 const RING_RATIONALES: Readonly<Record<RetrievalRingKind, string>> = {
-  lexical: "Lexical anchors are always cheap to scan first and bound the working set.",
+  lexical:
+    "Lexical anchors scan the selected scope; retained evidence is bounded by the accepted context capacity.",
   structural:
     "Identifier or path anchors warrant structural lookups so callers are reached without a full text scan.",
   "git-history":
@@ -173,14 +172,10 @@ function sliceLimits(
   weight: number,
   kind: RetrievalRingKind,
 ): SearchLimits {
-  // Scanning is transient — each file is read to match lines, then discarded — and is bounded by
-  // an explicit elapsedMsMax when supplied and by human cancellation, not by the excerpt-byte
-  // budget the model context is built from. Default lexical traversal has no source count/time cap.
-  // Both the per-file
-  // read cap and the scan breadth are therefore decoupled from excerptBytesMax (Epic #177 retrieval
-  // fix); deriving them from the excerpt slice capped scanning at ~4 files of ~18 KiB and silently
-  // skipped any larger or later-sorted file. The excerpt READ phase still enforces filesReadMax /
-  // excerptBytesMax when it incorporates file content into the pack.
+  // Lexical traverses the entire eligible scope unless an explicit deadline or cancellation stops
+  // it. Structural/history enrichment has a weighted finite file count. All rings keep per-file
+  // byte eligibility and finite retained-match capacity; neither derives corpus breadth from the
+  // excerpt grant. Final source reads enforce the separate accepted file/byte/token budgets.
   return {
     maxFilesScanned: kind === "lexical" ? null : atLeastOne(STRUCTURAL_SCAN_FILE_CEILING * weight),
     maxMatchesReturned: ringMatchReturnLimit(kind, budget),

@@ -199,6 +199,12 @@ bounds. An unlimited default lookup uses the live traversal rather than treating
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Optional structural and Git-history enrichment are separate from lexical coverage. Their planner
+slices retain finite scan counts (currently 614 and 307 files respectively) and finite returned
+matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced
+across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
+bounded by accepted context capacity independently of corpus traversal.
+
 #### Filesystem consistency and redaction
 
 Streaming directory enumeration distinguishes membership changes from directory identity changes.
