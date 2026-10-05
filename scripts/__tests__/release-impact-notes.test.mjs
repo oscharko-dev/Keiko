@@ -248,7 +248,7 @@ describe("release-impact release notes", () => {
     expect(result.ok).toBe(true);
     expect(result.notes).toContain("### Normal · New Additions");
     expect(result.notes).toContain(
-      "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64",
+      "Keiko now ships first-class portable downloads for Windows x64, Linux x64, macOS arm64, and macOS x64",
     );
     expect(result.notes).toContain(
       "npm remains available for developer and compatibility workflows",
@@ -396,7 +396,7 @@ describe("release-impact release notes", () => {
     }
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64",
+      "Keiko now ships first-class portable downloads for Windows x64, Linux x64, macOS arm64, and macOS x64",
     );
     expect(output).toContain("npm remains available for developer and compatibility workflows");
     expect(output).toContain("release-publish: PLAN-ONLY complete.");

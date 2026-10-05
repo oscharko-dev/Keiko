@@ -58,6 +58,7 @@ import {
   applyUsage,
   assembleContextPack,
   canContinue,
+  classifyRetrievalIntent,
   complete,
   contextPackIndexKey,
   extractAnchors,
@@ -2163,12 +2164,36 @@ function recordScopeContextObservation(
   });
 }
 
+function isKnownFitSourceAnchor(anchor: SearchAnchor): boolean {
+  if (anchor.kind === "path" || anchor.kind === "quoted") return true;
+  if (anchor.kind !== "identifier") return false;
+  if (anchor.weight >= 0.9) return true;
+  const intent = classifyRetrievalIntent(anchor.term);
+  if (
+    intent.intent === "project-metadata" &&
+    intent.normalizedTerms.includes(anchor.term.toLowerCase())
+  )
+    return false;
+  return true;
+}
+
+function hasKnownFitSourceTarget(inputs: SearchInputs): boolean {
+  if (inputs.targetDecision.definitionRequested) return true;
+  // Preserve source spelling: plain technical routing hints are not independently selected
+  // source symbols. Explicit paths, quotes and typed identifiers still refuse folder enrichment.
+  const requested = extractAnchors({
+    text: inputs.query.text,
+    maxAnchors: inputs.query.text.length,
+    caseSensitive: true,
+  });
+  return requested.anchors.some(isKnownFitSourceAnchor);
+}
+
 function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
   return inputs.query.kind === "natural-language" &&
     inputs.targetDecision.kind !== "literal-search" &&
     inputs.retrievalIntent !== "diagnostic-search" &&
-    !requiresRelationshipOrHistoryRings(inputs.query) &&
-    !inputs.anchors.some((anchor) => anchor.kind !== "literal")
+    !hasKnownFitSourceTarget(inputs)
     ? new KnownFitScopeContext(
         inputs.scopeContextBytesMax,
         inputs.searchScope.scopeId,

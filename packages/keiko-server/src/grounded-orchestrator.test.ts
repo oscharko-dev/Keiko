@@ -2991,9 +2991,24 @@ describe("runGroundedExploration", () => {
       { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW },
     );
     expect(out.pack.files.some((file) => file.scopePath === "package.json")).toBe(false);
+    // Eligible recursive context remains readable independently of the oversized manifest;
+    // file-listing provenance does not assert that the root declares this child workspace.
+    const child = out.pack.files.find(
+      (file) => file.scopePath === "custom-services/payments/pom.xml",
+    );
+    expect(child).toBeDefined();
+    expect(child?.excerpts.length).toBeGreaterThan(0);
     expect(
-      out.pack.files.some((file) => file.scopePath === "custom-services/payments/pom.xml"),
-    ).toBe(false);
+      child?.excerpts.every(
+        (excerpt) =>
+          excerpt.atom.provenance.kind === "file-listing" &&
+          excerpt.atom.provenance.tool === "repo.findFiles",
+      ),
+    ).toBe(true);
+    expect(child?.excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(
+      "<java.version>21</java.version>",
+    );
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
     expect(
       out.pack.uncertainty.some((marker) => marker.claim.includes("workspace-manifest-byte-limit")),
     ).toBe(true);

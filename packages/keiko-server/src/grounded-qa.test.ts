@@ -5156,3 +5156,217 @@ describe("mappedGatewayError diagnostic symmetry", () => {
     expect(events).toHaveLength(0);
   });
 });
+
+const HANDBOOK_FOLLOW_UP =
+  "Schreibe hier im Chat einen kurzen Vitest-Test, der die beiden im Handbuch genannten Werte für Überweisungsgrenze und Bearbeitungsfrist prüft. Verwende die tatsächlichen Werte und nenne die Quelldateien.";
+
+function seedFollowUpHandbook(root: string, limit = 73142, days = 19): void {
+  mkdirSync(join(root, "manual/finance"), { recursive: true });
+  mkdirSync(join(root, "manual/claims"), { recursive: true });
+  writeFileSync(join(root, "manual/index.html"), "<h1>Handbook</h1>\n<p>Finance and claims.</p>\n");
+  writeFileSync(
+    join(root, "manual/finance/approval.html"),
+    `<h1>Transfer approval</h1>\n<p>TransferLimit is ${String(limit)} EUR.</p>\n`,
+  );
+  writeFileSync(
+    join(root, "manual/claims/processing.html"),
+    `<h1>Claims</h1>\n<p>ClaimsWindow is ${String(days)} days.</p>\n`,
+  );
+}
+
+async function prepareHandbookChat(): Promise<string> {
+  const { chatId, projectPath } = await setupChatWithoutScope();
+  seedFollowUpHandbook(projectPath);
+  store.updateChat(chatId, {
+    connectedScope: {
+      kind: "workspace-root",
+      root: projectPath,
+      relativePaths: [],
+      connectedAtMs: NOW,
+    },
+  });
+  const initial = await handleGroundedAsk(
+    ctx(JSON.stringify({ chatId, content: "Fasse dieses Handbuch zusammen." })),
+    deps(
+      fakeModel(
+        "73142 EUR [manual/finance/approval.html:2], 19 Tage [manual/claims/processing.html:2]",
+        [],
+      ),
+    ),
+  );
+  expect(initial.status).toBe(200);
+  expect(asConnectedAnswer(initial.body as GroundedAnswer).contextPack.usage.filesRead).toBe(3);
+  return chatId;
+}
+
+async function askFreshHandbook(
+  chatId: string,
+  content: string,
+): Promise<{
+  readonly answer: ConnectedAnswer;
+  readonly seen: readonly GatewayRequest[];
+  readonly log: ReturnType<typeof createBufferedServerLogSink>;
+}> {
+  const seen: GatewayRequest[] = [];
+  const log = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink: log, level: "debug" }));
+  try {
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content })),
+      deps(
+        fakeModel(
+          "Current values [manual/finance/approval.html:2] [manual/claims/processing.html:2]",
+          seen,
+        ),
+      ),
+    );
+    expect(result.status).toBe(200);
+    return { answer: asConnectedAnswer(result.body as GroundedAnswer), seen, log };
+  } finally {
+    resetServerLogger();
+  }
+}
+
+function freshSourcePrompt(request: GatewayRequest): string {
+  return (
+    request.messages
+      .map((message) => message.content)
+      .join("\n")
+      .split("Repository evidence excerpts:")[1]
+      ?.split("Known uncertainty from retrieval:")[0] ?? ""
+  );
+}
+
+describe("fresh handbook evidence for generated Chat artifacts", () => {
+  it.each([
+    HANDBOOK_FOLLOW_UP,
+    "Schreibe hier einen TypeScript-Test anhand der Werte im Handbuch.",
+    "Write a JavaScript test using the actual handbook values.",
+    "Write a Jest test here in Chat checking the documented transfer limit and claim processing period, and cite the source files.",
+    "Prüfe die dokumentierten Beträge und Fristen mit einem kurzen Playwright-Test im Chat und belege die verwendeten Werte.",
+  ])("reads current accepted HTML sources for a framework output request: %s", async (content) => {
+    const chatId = await prepareHandbookChat();
+    seedFollowUpHandbook(tmp, 81263, 23);
+    const { answer, seen, log } = await askFreshHandbook(chatId, content);
+    expect(seen).toHaveLength(1);
+    const prompt = firstGatewayRequest(seen)
+      .messages.map((message) => message.content)
+      .join("\n");
+    expect(prompt).toContain("2 | <p>TransferLimit is 81263 EUR.</p>");
+    expect(prompt).toContain("2 | <p>ClaimsWindow is 23 days.</p>");
+    expect(prompt).toContain("Earlier conversation reference data");
+    expect(answer.contextPack.usage.filesRead).toBe(3);
+    expect(answer.contextPack.coverage).toMatchObject({ filesScanned: 3, incomplete: false });
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completion-details")?.extra,
+    ).toMatchObject({ scopeContextRetainedFileCount: 3, scopeContextObservedFileCount: 3 });
+    expect(log.lines().join("\n")).not.toContain("TransferLimit");
+  });
+
+  it.each([
+    'Find the exact literal "AbsentPaymentProbe".',
+    "Find absent_payment_probe.",
+    "Find manual/missing.html.",
+    "Where is MissingPaymentProbe implemented?",
+    "Tell me about normalizeEmail.",
+    'Tell me about "TypeScript".',
+    "Describe `TypeScript`.",
+    "Where is TypeScript implemented?",
+    "Generate a test with cypress jest npm playwright pnpm react vite vitest yarn concerning ZMissingProbe.",
+  ])(
+    "does not use prior handbook evidence for an independent missing source selector: %s",
+    async (content) => {
+      const { answer, seen } = await askFreshHandbook(await prepareHandbookChat(), content);
+      expect(seen).toEqual([]);
+      expect(answer.contextPack.usage.filesRead).toBe(0);
+      expect(answer.citations).toEqual([]);
+    },
+  );
+
+  it("honors a new explicit topic without echoing the earlier handbook as current evidence", async () => {
+    const chatId = await prepareHandbookChat();
+    writeFileSync(join(tmp, "new-topic.txt"), "FreshTopicProbe is documented as MAGNOLIA.\n");
+    const { answer, seen } = await askFreshHandbook(
+      chatId,
+      'Find the exact literal "FreshTopicProbe".',
+    );
+    expect(seen).toHaveLength(1);
+    const source = freshSourcePrompt(firstGatewayRequest(seen));
+    expect(source).toContain("MAGNOLIA");
+    expect(source).not.toContain("TransferLimit");
+    expect(source).not.toContain("ClaimsWindow");
+    expect(answer.contextPack.usage.filesRead).toBe(1);
+  });
+
+  it("reads only the newly admitted root even when prior citations use identical relative paths", async () => {
+    const chatId = await prepareHandbookChat();
+    const root = join(tmp, "new-scope");
+    seedFollowUpHandbook(root, 56483, 31);
+    store.updateChat(chatId, {
+      connectedScope: { kind: "workspace-root", root, relativePaths: [], connectedAtMs: NOW + 1 },
+    });
+    const { answer, seen } = await askFreshHandbook(chatId, HANDBOOK_FOLLOW_UP);
+    expect(seen).toHaveLength(1);
+    const source = freshSourcePrompt(firstGatewayRequest(seen));
+    expect(source).toContain("TransferLimit is 56483 EUR");
+    expect(source).toContain("ClaimsWindow is 31 days");
+    expect(source).not.toContain("73142");
+    expect(source).not.toContain("19 days");
+    expect(answer.contextPack.usage.filesRead).toBe(3);
+    expect(answer.contextPack.coverage).toMatchObject({ filesScanned: 3, incomplete: false });
+  });
+
+  it("discards overflow instead of treating old history as freshly retained source evidence", async () => {
+    const chatId = await prepareHandbookChat();
+    writeFileSync(join(tmp, "large.txt"), "z".repeat(200_000));
+    const { answer, seen, log } = await askFreshHandbook(chatId, HANDBOOK_FOLLOW_UP);
+    expect(seen).toEqual([]);
+    expect(answer.contextPack.usage.filesRead).toBe(0);
+    expect(answer.contextPack.coverage).toMatchObject({ filesScanned: 4, incomplete: false });
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completion-details")?.extra,
+    ).toMatchObject({ scopeContextState: "overflow", scopeContextRetainedFileCount: 0 });
+  });
+
+  it.each([
+    "Describe how the handbook provisions relate to one another and produce a Vitest test using the documented limits.",
+    "Explain the handbook rules historically and produce a Jest test using the documented limits.",
+  ])(
+    "retains supplemental context without skipping requested relationship/history work: %s",
+    async (content) => {
+      const { seen, log } = await askFreshHandbook(await prepareHandbookChat(), content);
+      expect(seen).toHaveLength(1);
+      const source = freshSourcePrompt(firstGatewayRequest(seen));
+      expect(source).toContain("TransferLimit is 73142 EUR");
+      expect(source).toContain("file-listing; tool: repo.findFiles");
+      expect(source).not.toContain("repo.symbolFileDiscovery");
+      const completed = log.events.find(
+        (event) => event.op === "search.connected-context.completed",
+      );
+      expect(completed?.extra?.executedRingKinds).toEqual(
+        expect.arrayContaining(["lexical", "structural", "git-history"]),
+      );
+      expect(completed?.extra).toMatchObject({
+        augmentationDisposition: "used",
+        usageFilesRead: 3,
+        scopeContextSelectedFileCount: 3,
+      });
+      expect(completed?.extra?.ringSkipReasons).not.toContain("complete-exact-lookup");
+    },
+  );
+
+  it("does not supplement an actual diagnostic request with unrelated whole-folder sources", async () => {
+    const { answer, seen, log } = await askFreshHandbook(
+      await prepareHandbookChat(),
+      "Why does MissingPaymentProbe fail? Write a Vitest test.",
+    );
+    expect(seen).toEqual([]);
+    expect(answer.contextPack.usage.filesRead).toBe(0);
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completion-details")?.extra,
+    ).toMatchObject({ scopeContextState: "gate-refused", scopeContextObservedFileCount: 0 });
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.completed")?.extra,
+    ).toMatchObject({ retrievalIntent: "diagnostic-search" });
+  });
+});

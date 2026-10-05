@@ -153,8 +153,14 @@ Repository orientation retains the user's lexical terms and repository semantic 
 file discovery is a zero-evidence fallback after a complete term search, within the same search-call
 budget, alongside metadata and overview documents; a source-only folder must produce actual source
 evidence. A targeted module overview must not be replaced by an unrelated shallow file listing.
-Unanchored natural-language questions may additionally use the complete eligible folder text when
-the same lexical traversal proves that its actual decoded/redacted bytes and transient evidence
+Natural-language questions without an independently selected source target may additionally use
+the complete eligible folder text. Ordinary technical routing aliases (for example a requested
+output framework or language) do not alone select a source symbol. Explicit paths, quoted or
+typed identifiers, definition requests and literal-only queries retain their narrowing guards.
+Relationship/history requests may receive the same supplemental file-listing context while their
+requested retrieval rings continue unchanged; supplementation never certifies a definition,
+historical event or complete answer. The same lexical traversal must prove that its actual
+decoded/redacted bytes and transient evidence
 metadata fit the accepted excerpt-byte capacity. Empty or whitespace-only files do not consume
 contextual evidence capacity. A retained lexical
 match limit does not invalidate complete scope observation; the separately reported match-cap
@@ -183,7 +189,7 @@ Fresh reads reserve each qualified file's observed byte requirement within the a
 budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt window. The pack
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no
 collector byte-counting or line-counting work. Gateway fitting still enforces the model input
-budget independently. Named targets, exact absence checks, diagnostic questions, and relationship/history requests retain their existing routes.
+budget independently. Named targets, exact absence checks and diagnostic questions retain their existing routes.
 The existing connected-context Activity Log owner separates completion evidence into correlated
 state events to retain the registry's 48-context-field bound. `completion-details` records the
 read, workspace-index, structural and known-fit observations; `source-details` records actual
