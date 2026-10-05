@@ -3930,6 +3930,7 @@ async function batchedExcerptResults(
   let remainingBytes = capacity.bytes;
   let remainingWindows = capacity.windows;
   let processed = 0;
+  let emptyRanges = 0;
   for (const range of ranges) {
     if (processed > 0 && (remainingBytes <= 0 || remainingWindows <= 0)) break;
     if (processed > 0 && processed % SCAN_YIELD_INTERVAL === 0)
@@ -3937,20 +3938,25 @@ async function batchedExcerptResults(
     assertStructuralExecutionActive(control);
     const bounded = {
       ...request,
-      ...range,
+      startLine: range.startLine,
+      endLine: range.endLine,
       maxBytes: Math.min(request.maxBytes, remainingBytes),
       maxTotalBytes: remainingBytes,
       maxWindows: Math.max(1, remainingWindows),
     };
     assertExcerptStartWithinLines(bounded, lines);
-    for (const window of excerptWindows(bounded, lines)) {
+    const windows = excerptWindows(bounded, lines).filter(
+      (window) => window.content.length > 0 || !window.truncated,
+    );
+    if (windows.length === 0) emptyRanges += 1;
+    for (const window of windows) {
       results.push(excerptResultForWindow(scope, bounded, window, nowMs));
       remainingBytes -= encoder.encode(window.content).byteLength;
       remainingWindows -= 1;
     }
     processed += 1;
   }
-  return { results, omittedRangeCount: ranges.length - processed };
+  return { results, omittedRangeCount: ranges.length - processed + emptyRanges };
 }
 
 async function readExcerptWithControl(

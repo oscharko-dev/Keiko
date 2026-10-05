@@ -83,7 +83,7 @@ export class MetadataRetention {
     preferredNames: readonly string[],
   ) {
     const rootDirectories = new Set(roots);
-    const preferred = new Set(preferredNames);
+    const preferred = new Map(preferredNames.map((name, index) => [name, index]));
     this.preferredRootPaths = new Set(
       roots.flatMap((root) =>
         preferredNames.map((name) => (root === "" ? name : `${root}/${name}`)),
@@ -91,8 +91,8 @@ export class MetadataRetention {
     );
     const priority = (path: string): number => {
       const index = path.lastIndexOf("/");
-      if (!rootDirectories.has(path.slice(0, Math.max(0, index)))) return 2;
-      return preferred.has(path.slice(index + 1)) ? 0 : 1;
+      if (!rootDirectories.has(path.slice(0, Math.max(0, index)))) return preferred.size + 1;
+      return preferred.get(path.slice(index + 1)) ?? preferred.size;
     };
     this.kept = new BoundedMetadataPaths(
       limit,

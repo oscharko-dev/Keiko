@@ -3,6 +3,19 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import { BoundedMetadataPaths, MetadataRetention } from "./grounded-metadata-retention.js";
 
 describe("bounded deterministic metadata retention", () => {
+  it("retains the canonical root manifest before an alphabetically earlier lockfile", () => {
+    const retained = new MetadataRetention(
+      1,
+      2,
+      [""],
+      ["package.json", "package-lock.json", "yarn.lock"],
+    );
+    for (const path of ["yarn.lock", "package-lock.json", "package.json"]) retained.observe(path);
+    expect(retained.retainedPaths()).toEqual(["package.json"]);
+    expect(retained.omittedPaths()).toEqual(["package-lock.json", "yarn.lock"]);
+    expect(retained.discardedCount).toBe(2);
+  });
+
   it("retains late better paths with logarithmic comparison work and bounded membership", () => {
     let comparisons = 0;
     const heap = new BoundedMetadataPaths(128, (left, right) => {

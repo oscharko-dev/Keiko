@@ -100,6 +100,39 @@ function synchronousOperations(fs: WorkspaceFs): readonly (() => unknown)[] {
 }
 
 describe("executionControlledWorkspaceFs", () => {
+  it.each(["aborted", "timeout"] as const)(
+    "stops between directory entries and closes the underlying iterator on %s",
+    async (reason) => {
+      let closed = false;
+      let clock = 0;
+      const abort = new AbortController();
+      const fs: WorkspaceFs = {
+        ...memFs(ROOT, {}),
+        iterateDirectory: async function* () {
+          await Promise.resolve();
+          try {
+            for (const name of ["first", "second"])
+              yield { name, isDirectory: false, isFile: true, isSymbolicLink: false };
+          } finally {
+            closed = true;
+          }
+        },
+      };
+      const controlled = executionControlledWorkspaceFs(fs, {
+        nowMs: () => clock,
+        deadlineAtMs: 10,
+        signal: abort.signal,
+      });
+      const iterator = controlled.iterateDirectory?.(ROOT)[Symbol.asyncIterator]();
+      if (iterator === undefined) throw new Error("missing controlled iterator");
+      expect(await iterator.next()).toMatchObject({ done: false, value: { name: "first" } });
+      if (reason === "aborted") abort.abort();
+      else clock = 10;
+      await expect(iterator.next()).rejects.toMatchObject({ reason });
+      expect(closed).toBe(true);
+    },
+  );
+
   it("preserves the directory iterator receiver and closes it on early exit", async (): Promise<void> => {
     let closed = false;
     const fs: WorkspaceFs = {

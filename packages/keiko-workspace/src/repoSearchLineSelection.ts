@@ -10,7 +10,7 @@ const MAX_DECLARATION_LOOKBACK_LINES = 12;
 export interface LineSelectionRunner {
   readonly limits: {
     readonly elapsedMsMax: number | null;
-    readonly maxMatchesReturned?: number | undefined;
+    readonly maxMatchesReturned: number;
   };
   readonly matcher: LineMatcher;
   readonly nowMs: () => number;
@@ -793,7 +793,7 @@ export function collectBestLines(
   state: LineSelectionState,
   scopePath?: string,
 ): readonly ScoredLine[] {
-  const best = new ScoredLineCollector(runner.limits.maxMatchesReturned ?? Infinity, state);
+  const best = new ScoredLineCollector(runner.limits.maxMatchesReturned, state);
   const lines = physicalLines(text);
   const sourceLines = repositorySourceLines(text, scopePath);
   const braceScanCache = createBraceScanCache(lines);

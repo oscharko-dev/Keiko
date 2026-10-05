@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as decoder from "./binaryDetect.js";
+import { DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 import { detectWorkspaceAt } from "./detect.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { readExcerpt, type ReadExcerptRequest, type SearchScope } from "./repoSearch.js";
@@ -54,7 +55,7 @@ function observedReads(action?: () => void): { readonly fs: WorkspaceFs; readonl
       readFileBytes: async (...args): Promise<Uint8Array> => {
         const bytes = await read(...args);
         caps.push(args[1]);
-        if (args[1] > 4096) action?.();
+        if (args[1] > DEFAULT_BINARY_PROBE.maxProbeBytes) action?.();
         return bytes;
       },
     },
@@ -62,6 +63,34 @@ function observedReads(action?: () => void): { readonly fs: WorkspaceFs; readonl
 }
 
 describe("fresh multi-range excerpt projection", () => {
+  it("preserves admitted file identity when a range carries unrelated request properties", async () => {
+    const range = { startLine: 1, endLine: 1, scopePath: "forged.txt", anchors: ["forged"] };
+    const result = await readExcerpt(scope(), { ...request(), ranges: [range] });
+    expect(result.atom.scopePath).toBe("readings.txt");
+    expect(result.content).toBe("RangeReadingProbe value-10000");
+    expect(result.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(JSON.stringify(result)).not.toContain("forged");
+  });
+
+  it("omits an unrepresentable multibyte range without spending a returned-window slot", async () => {
+    writeFileSync(join(root, "readings.txt"), "1234567890\n中\nx");
+    const result = await readExcerpt(scope(), {
+      ...request(),
+      startLine: 1,
+      endLine: 3,
+      maxBytes: 10,
+      maxTotalBytes: 12,
+      maxWindows: 2,
+      ranges: [1, 2, 3].map((line) => ({ startLine: line, endLine: line })),
+    });
+    expect(result.windows?.map((window) => window.content)).toEqual(["1234567890", "x"]);
+    expect(result.windows?.map((window) => window.atom.lineRange)).toEqual([
+      { startLine: 1, endLine: 1 },
+      { startLine: 3, endLine: 3 },
+    ]);
+    expect(result.omittedRangeCount).toBe(1);
+  });
+
   it("classifies and decodes once rather than reopening once per requested range", async (): Promise<void> => {
     const reads = observedReads();
     const decode = vi.spyOn(decoder, "decodeTextFileBytes");
@@ -70,7 +99,7 @@ describe("fresh multi-range excerpt projection", () => {
     expect(result.omittedRangeCount).toBe(0);
     expect(decode).toHaveBeenCalledTimes(1);
     expect(reads.caps).toHaveLength(2);
-    expect(reads.caps.filter((cap) => cap > 4096)).toHaveLength(1);
+    expect(reads.caps.filter((cap) => cap > DEFAULT_BINARY_PROBE.maxProbeBytes)).toHaveLength(1);
     for (const [index, window] of (result.windows ?? []).entries()) {
       expect(window.content).toBe(`RangeReadingProbe value-${String(10000 + index)}`);
       expect(window.atom.lineRange).toEqual({ startLine: index * 12 + 1, endLine: index * 12 + 1 });
@@ -89,14 +118,27 @@ describe("fresh multi-range excerpt projection", () => {
     expect(result.windows?.at(-1)?.truncated).toBe(true);
   });
 
-  it("rejects malformed ranges before any file bytes are read", async (): Promise<void> => {
+  it.each([
+    [],
+    null,
+    "not-an-array",
+    [null],
+    [{ startLine: 0, endLine: 1 }],
+    [{ startLine: 1.5, endLine: 2 }],
+    [{ startLine: 1, endLine: Number.NaN }],
+    [{ startLine: 1, endLine: Infinity }],
+    [{ startLine: 2, endLine: 1 }],
+    [{ startLine: 1, endLine: 481 }],
+    [{ startLine: "1", endLine: 2 }],
+    [{ startLine: 1 }],
+  ])("rejects malformed ranges before any file bytes are read (%#)", async (ranges) => {
     const reads = observedReads();
     await expect(
       readExcerpt(
         scope(),
         {
           ...request(),
-          ranges: [{ startLine: 0, endLine: 1 }],
+          ranges: ranges as unknown as NonNullable<ReadExcerptRequest["ranges"]>,
         },
         { fs: reads.fs },
       ),
@@ -174,6 +216,6 @@ describe("fresh multi-range excerpt projection", () => {
     await expect(
       readExcerpt(scope(), request(), { fs: reads.fs, signal: abort.signal }),
     ).rejects.toMatchObject({ reason: "aborted" });
-    expect(reads.caps.filter((cap) => cap > 4096)).toHaveLength(1);
+    expect(reads.caps.filter((cap) => cap > DEFAULT_BINARY_PROBE.maxProbeBytes)).toHaveLength(1);
   });
 });
