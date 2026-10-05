@@ -111,7 +111,7 @@ async function runMetadataFailure(test: FailureCase): Promise<void> {
     const details = log.events.find(
       (event) => event.op === "search.connected-context.completion-details",
     );
-    expect(details?.extra?.metadataUnavailableDirectoryCount).toBe(events.length);
+    expect(details?.extra?.metadataUnavailableInspectionCount).toBe(events.length);
     expect(
       log.events.filter((event) => event.op === "search.connected-context.completed"),
     ).toHaveLength(1);

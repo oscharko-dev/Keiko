@@ -429,7 +429,16 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       maxItems: 3,
       values: ["file-grant", "byte-grant", "deadline"],
     },
-    metadataUnavailableDirectoryCount: { type: "integer", dataClass: "count", required: false },
+    semanticProviderDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "unavailable", "suppressed", "not-used", "used", "rejected"],
+    },
+    semanticProviderCallCount: { type: "integer", dataClass: "count", required: false },
+    semanticRejectedAtomCount: { type: "integer", dataClass: "count", required: false },
+    primaryContentPathCount: { type: "integer", dataClass: "count", required: false },
+    metadataUnavailableInspectionCount: { type: "integer", dataClass: "count", required: false },
     metadataObservedCount: { type: "integer", dataClass: "count", required: false },
     metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
     metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
@@ -842,7 +851,26 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+type SemanticProviderDisposition =
+  "not-evaluated" | "unavailable" | "suppressed" | "not-used" | "used" | "rejected";
+interface SourceDecisionObservation {
+  semanticProviderDisposition: SemanticProviderDisposition;
+  semanticProviderCallCount: number;
+  semanticRejectedAtomCount: number;
+  primaryContentPathCount: number;
+}
+
+function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
+  return {
+    semanticProviderDisposition: disposition,
+    semanticProviderCallCount: 0,
+    semanticRejectedAtomCount: 0,
+    primaryContentPathCount: 0,
+  };
+}
+
 interface SearchInputs {
+  readonly observeSourceDecision: (observation: SourceDecisionObservation) => void;
   readonly discoverDefinitions: (
     governor: GovernorState,
     evidence: RingEvidenceAccumulator,
@@ -1855,6 +1883,7 @@ function lexicalSearchOptions(inputs: SearchInputs): {
 }
 
 interface ContextSearchResult extends SearchResult {
+  readonly sourceDecision?: SourceDecisionObservation | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
 }
 
@@ -1870,6 +1899,26 @@ function lexicalQuery(inputs: SearchInputs, terms: readonly string[]): Retrieval
   };
 }
 
+function observedLexicalSemanticProvider(
+  inputs: SearchInputs,
+  observation: SourceDecisionObservation,
+): SemanticSearchProvider | undefined {
+  const provider = lexicalSemanticProvider(inputs);
+  if (provider === undefined) {
+    observation.semanticProviderDisposition =
+      inputs.repoSemanticSearchProvider === undefined ? "unavailable" : "suppressed";
+    return undefined;
+  }
+  return {
+    name: provider.name,
+    search: (request): ReturnType<SemanticSearchProvider["search"]> => {
+      observation.semanticProviderDisposition = "used";
+      observation.semanticProviderCallCount += 1;
+      return provider.search(request);
+    },
+  };
+}
+
 async function searchLexicalTerms(
   ring: RetrievalRing,
   inputs: SearchInputs,
@@ -1878,7 +1927,8 @@ async function searchLexicalTerms(
   const definitionSymbol = inputs.targetDecision.definitionSymbol;
   const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
   const query = lexicalQuery(inputs, terms);
-  const semanticSearchProvider = lexicalSemanticProvider(inputs);
+  const sourceDecision = emptySourceDecision("not-used");
+  const semanticSearchProvider = observedLexicalSemanticProvider(inputs, sourceDecision);
   const context = knownFitContextFor(inputs);
   const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
@@ -1889,9 +1939,10 @@ async function searchLexicalTerms(
   });
   const readable = allowsReadableScopeContext(result.coverage);
   recordScopeContextObservation(inputs, context, readable);
-  if (context === undefined || !readable) return result;
+  if (context === undefined || !readable) return { ...result, sourceDecision };
   return {
     ...result,
+    sourceDecision,
     knownFitFileBytes: context.fileBytes(),
     atoms: [...result.atoms, ...context.atoms()],
   };
@@ -1960,7 +2011,11 @@ async function lexicalRingSearch(
     ring.searchLimits,
     lexicalSearchOptions(inputs),
   );
-  return { ...listing, elapsedMs: result.elapsedMs + listing.elapsedMs };
+  return {
+    ...listing,
+    sourceDecision: result.sourceDecision,
+    elapsedMs: result.elapsedMs + listing.elapsedMs,
+  };
 }
 
 function withoutNamedSemanticSubstitution(
@@ -1975,6 +2030,13 @@ function withoutNamedSemanticSubstitution(
     result.atoms.length === 0
   )
     return result;
+  if (result.sourceDecision !== undefined) {
+    const rejected = result.atoms.filter((atom) =>
+      atom.provenance.tool.startsWith("repo.semanticSearch:"),
+    ).length;
+    result.sourceDecision.semanticRejectedAtomCount += rejected;
+    if (rejected > 0) result.sourceDecision.semanticProviderDisposition = "rejected";
+  }
   // An approximate concept match cannot stand in for a missing named literal. Corpus failures
   // and result truncation remain intact; only the unrelated semantic replacement is rejected.
   return {
@@ -1991,13 +2053,20 @@ function withoutNamedSemanticSubstitution(
 
 async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
   const result = withoutNamedSemanticSubstitution(await lexicalRingSearch(ring, inputs), inputs);
+  const primaryContentIdentities = certifiedLexicalContent(result, inputs);
+  const sourceDecision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
+  sourceDecision.primaryContentPathCount = certifiedContentPaths(
+    result.atoms,
+    primaryContentIdentities,
+  ).size;
+  inputs.observeSourceDecision(sourceDecision);
   inputs.workspaceIndexActivity.recordSearchResult(result);
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
     knownFitFileBytes: result.knownFitFileBytes,
     atoms: result.atoms,
-    primaryContentIdentities: certifiedLexicalContent(result, inputs),
+    primaryContentIdentities,
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
     uncertainty: [
       ...coverageUncertainty(result, inputs.nowMs()),
@@ -6650,6 +6719,7 @@ async function assembleGroundedPack(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly sourceDecision?: SourceDecisionObservation | undefined;
   readonly scopeContextObservation?: ScopeContextObservation | undefined;
   readonly excerptObservation?: ExcerptReadObservation | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
@@ -6689,6 +6759,7 @@ type ConnectedContextPhase =
   | "directory-cleanup";
 
 interface ConnectedContextProgress {
+  sourceDecision?: SourceDecisionObservation | undefined;
   scopeContextObservation?: ScopeContextObservation | undefined;
   phase: ConnectedContextPhase;
   plannedRingCount: number;
@@ -7258,6 +7329,7 @@ function completionDetailsActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
+    ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
     ...retrievalLossActivityExtra(execution.status),
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),
@@ -7454,7 +7526,7 @@ function logConnectedContextCompletion(
   execution: ConnectedContextExecution,
   correlationId: string,
   durationMs: number,
-  metadataUnavailableDirectoryCount: number,
+  metadataUnavailableInspectionCount: number,
 ): void {
   logger.info(() =>
     activityLogEvent(
@@ -7462,7 +7534,7 @@ function logConnectedContextCompletion(
       { correlationId },
       {
         ...safeCompletionDetailsActivityExtra(identity, execution, correlationId),
-        metadataUnavailableDirectoryCount,
+        metadataUnavailableInspectionCount,
       },
     ),
   );
@@ -7508,7 +7580,7 @@ function createConnectedContextActivity(
   const correlationId = correlationIdOrUnknown(deps.correlationId);
   const identity = connectedContextActivityIdentity(input);
   const logElapsed = startLogTimer();
-  let metadataUnavailableDirectoryCount = 0;
+  let metadataUnavailableInspectionCount = 0;
   return {
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
@@ -7527,11 +7599,11 @@ function createConnectedContextActivity(
         execution,
         correlationId,
         logElapsed(),
-        metadataUnavailableDirectoryCount,
+        metadataUnavailableInspectionCount,
       );
     },
     metadataUnavailable: (error, scopePath): void => {
-      metadataUnavailableDirectoryCount += 1;
+      metadataUnavailableInspectionCount += 1;
       logger.warn(() => metadataUnavailableEvent(error, scopePath, identity, correlationId));
     },
     failed: (error, progress): void => {
@@ -7603,6 +7675,9 @@ function connectedContextSearchInputs(
 ): SearchInputs {
   const { workspaceIndex } = context;
   return {
+    observeSourceDecision: (observation): void => {
+      runtime.progress.sourceDecision = observation;
+    },
     discoverDefinitions: (governor, evidence) =>
       discoverDefinitionsBeforeGraphs(
         liveGroundedPackInputs(input, deps, plan, runtime, context, { ...evidence, governor }),
@@ -8217,6 +8292,7 @@ async function retrieveLiveConnectedContext(
         rings.decisions,
       ),
       scopeContextObservation: runtime.progress.scopeContextObservation,
+      sourceDecision: runtime.progress.sourceDecision,
     },
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),
