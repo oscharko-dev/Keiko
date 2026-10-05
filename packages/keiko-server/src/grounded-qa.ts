@@ -53,6 +53,7 @@ import {
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
+  WorkspaceError,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -335,21 +336,30 @@ function pathDeniedResult(error: PathDeniedError): RouteResult {
   };
 }
 
+function primaryWorkspaceFailure(error: unknown): unknown {
+  if (!(error instanceof AggregateError)) return error;
+  const primary: unknown = error.cause;
+  if (primary instanceof WorkspaceError) return primary;
+  if (primary instanceof Error && primary.cause instanceof WorkspaceError) return primary.cause;
+  return error;
+}
+
 export function mappedWorkspaceError(
   error: unknown,
   context: WorkspaceRootDenialLogContext = {},
 ): RouteResult | undefined {
-  if (error instanceof PathDeniedError) return pathDeniedResult(error);
-  if (error instanceof WorkspaceNotFoundError) {
-    recordWorkspaceRootUnavailable(error, context);
+  const failure = primaryWorkspaceFailure(error);
+  if (failure instanceof PathDeniedError) return pathDeniedResult(failure);
+  if (failure instanceof WorkspaceNotFoundError) {
+    recordWorkspaceRootUnavailable(failure, context);
     return badRequest("Connected scope root is not accessible.");
   }
   if (
-    error instanceof RepoSearchInvalidQueryError ||
-    error instanceof RepoSearchInvalidRangeError ||
-    error instanceof RepoSearchUnsupportedFileError
+    failure instanceof RepoSearchInvalidQueryError ||
+    failure instanceof RepoSearchInvalidRangeError ||
+    failure instanceof RepoSearchUnsupportedFileError
   ) {
-    return badRequest(error.message);
+    return badRequest(failure.message);
   }
   return undefined;
 }
@@ -1797,14 +1807,12 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const query = buildQuery(workerCtx.retrievalContent ?? content, () => Date.now());
   const output = await runGroundedRunner(workerCtx, query);
   if (isRouteResult(output)) return output;
-  const validationFailure = inspectGroundedPack(output.pack);
+  const validationFailure = inspectGroundedPack(output.pack, {
+    deps,
+    correlationId: workerCtx.correlationId,
+    outcome: "request-failed",
+  });
   if (validationFailure !== undefined) {
-    recordGroundedPackValidation(
-      deps,
-      workerCtx.correlationId,
-      validationFailure,
-      "request-failed",
-    );
     return internalError(GROUNDED_PACK_VALIDATION_MESSAGE, workerCtx.correlationId);
   }
   const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps, workerCtx.correlationId);

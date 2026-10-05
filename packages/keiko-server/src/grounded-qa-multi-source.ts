@@ -863,6 +863,26 @@ function rememberSkippedSource(
   }
 }
 
+function classifyReturnedPack(
+  ctx: MultiSourceAskInput,
+  pack: ConnectedContextPack,
+  label: string,
+  sourceIndex: number,
+): ReturnType<typeof classifyPerSourceRetrieveError> {
+  const validationFailure = inspectGroundedPack(pack, {
+    deps: ctx.deps,
+    correlationId: ctx.correlationId,
+    outcome: "source-skipped",
+    sourceIndex,
+  });
+  if (validationFailure === undefined) return undefined;
+  return {
+    skipped: { label, message: "Pack validation failed." },
+    mapped: internalError(GROUNDED_PACK_VALIDATION_MESSAGE, ctx.correlationId),
+    validationFailure,
+  };
+}
+
 // Retrieve one source into the shared accumulator. GRD-006: a recoverable workspace error skips
 // just that source (preserving the all-bad 400 fallback in `firstError`); any other error
 // propagates to the outer handler.
@@ -897,12 +917,9 @@ async function retrieveOneSource(
     rememberSkippedSource(acc, classified, i);
     return;
   }
-  const failure = inspectGroundedPack(out.pack);
-  if (failure !== undefined) {
-    recordGroundedPackValidation(ctx.deps, ctx.correlationId, failure, "source-skipped", i);
-    acc.skipped.push({ label, message: "Pack validation failed." });
-    acc.firstError ??= internalError(GROUNDED_PACK_VALIDATION_MESSAGE, ctx.correlationId);
-    acc.firstValidationFailure ??= { failure, sourceIndex: i };
+  const classified = classifyReturnedPack(ctx, out.pack, label, i);
+  if (classified !== undefined) {
+    rememberSkippedSource(acc, classified, i);
     return;
   }
   acc.retrieved[i] = {
