@@ -18,8 +18,9 @@ export async function expectDiagnosticWireAccepted(
     await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(reports.length));
     for (const [url, init] of post.mock.calls) {
       expect(url).toBe("/api/diagnostics/client");
-      expect(typeof init?.body).toBe("string");
-      const body: unknown = JSON.parse(String(init?.body));
+      const payload = init?.body;
+      if (typeof payload !== "string") throw new TypeError("Expected a diagnostic JSON request");
+      const body: unknown = JSON.parse(payload);
       expect(isClientDiagnosticIngestRequest(body), JSON.stringify(body)).toBe(true);
     }
   } finally {

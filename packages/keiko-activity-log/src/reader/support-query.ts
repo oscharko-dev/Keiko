@@ -440,7 +440,7 @@ class ContextCollector {
       const left = this.queue[leftIndex];
       const right = this.queue[leftIndex + 1];
       if (left === undefined) break;
-      const useRight = right !== undefined && compareContext(right, left) > 0;
+      const useRight = right !== undefined && compareContext(left, right) < 0;
       const child = useRight ? right : left;
       if (compareContext(last, child) >= 0) break;
       this.queue[index] = child;
