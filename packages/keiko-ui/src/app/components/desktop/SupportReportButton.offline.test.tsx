@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as clientDiagnostics from "@/lib/client-diagnostics";
 import { ApiError } from "@/lib/api";
 import { I18nProvider } from "@/lib/i18n";
@@ -57,6 +57,13 @@ function expectReadyCopy(locale: "en" | "de", scope: "server" | "client-only"): 
     expect(screen.queryByText(forbidden)).toBeNull();
   }
 }
+
+beforeEach(() => {
+  vi.mocked(createSupportReport).mockReset();
+  vi.mocked(createSupportReportDownload).mockReset();
+  vi.mocked(prepareLocalSupportReport).mockReset();
+  vi.mocked(prepareCachedSupportReport).mockReset();
+});
 
 afterEach(() => {
   resetSupportReportOutcomesForTests();
@@ -371,7 +378,9 @@ it("records failed local preparation without replacing the original global failu
       correlationId: "original-recovery-failure",
       supportReportPreparation: {
         outcome: "failed",
-        errorKind: "unavailable",
+        errorKind: "internal",
+        originalErrorKind: "unavailable",
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
         durationMs: expect.any(Number),
       },
     });
@@ -442,4 +451,85 @@ it("retains a refused server evidence selection in the local report availability
     failure: undefined,
     availabilityReason: "diagnostic-delivery-unavailable",
   });
+});
+
+it("keeps local producer failure causal facts distinct from the failed manual server request", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockRejectedValueOnce(
+    Object.assign(new ApiError("SUPPORT_REPORT_UNAVAILABLE", "private server detail", 503), {
+      correlationId: "report-server-attempt",
+    }),
+  );
+  const cause = new RangeError("private cause");
+  vi.mocked(prepareLocalSupportReport).mockRejectedValueOnce(
+    new TypeError("private builder", { cause }),
+  );
+  render(<SupportReportButton />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await vi.waitFor(() =>
+    expect(diagnostic).toHaveBeenCalledWith("Keiko local support report preparation failed.", {
+      correlationId: "report-server-attempt",
+      supportReportPreparation: {
+        outcome: "failed",
+        errorKind: "internal",
+        originalErrorKind: "unavailable",
+        durationMs: expect.any(Number),
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: ["RangeError"] },
+      },
+    }),
+  );
+  expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("private");
+});
+
+it("counts rejected supplied facts once across the request and local fallback", async () => {
+  const producer = await vi.importActual<typeof import("@/lib/support-report-local")>(
+    "@/lib/support-report-local",
+  );
+  clientDiagnostics.takeClientDiagnosticLoss();
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockImplementationOnce(async (_signal, context = {}) => {
+    producer.originalSupportReportFailure(context);
+    return local;
+  });
+  render(
+    <SupportReportButton
+      failure={{ errorKind: "internal", context: ["private-invalid-context"] as never }}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(clientDiagnostics.takeClientDiagnosticLoss()?.errorsSuppressed).toBe(1);
+  expect(clientDiagnostics.takeClientDiagnosticLoss()).toBeUndefined();
+  expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(undefined, expect.any(AbortSignal));
+});
+
+it("settles a stalled local producer when its own timeout signal expires", async () => {
+  const localDeadline = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) =>
+    milliseconds === 5_000 ? localDeadline.signal : new AbortController().signal,
+  );
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockReturnValueOnce(new Promise(() => undefined));
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  render(<SupportReportButton correlationId="stalled-local-report" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await vi.waitFor(() => expect(prepareLocalSupportReport).toHaveBeenCalledOnce());
+  await act(async () => localDeadline.abort(new DOMException("Local deadline", "TimeoutError")));
+  await vi.waitFor(() =>
+    expect(screen.getByRole("button", { name: "Create error report" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
+  );
+  expect(diagnostic).toHaveBeenCalledWith(
+    "Keiko local support report preparation failed.",
+    expect.objectContaining({
+      correlationId: "stalled-local-report",
+      supportReportPreparation: expect.objectContaining({
+        errorKind: "timeout",
+        originalErrorKind: "unavailable",
+      }),
+    }),
+  );
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
 });

@@ -12,6 +12,7 @@ import {
   createSupportReportDownload,
   SupportReportEvidenceUnavailable,
 } from "@/lib/support-report-api";
+import { prepareLocalSupportReport, prepareCachedSupportReport } from "@/lib/support-report-local";
 import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
@@ -21,6 +22,14 @@ vi.mock("@/lib/support-report-api", async (importOriginal) => ({
   createSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
+vi.mock("@/lib/support-report-local", async (original) => {
+  const producer = await original<typeof import("@/lib/support-report-local")>();
+  return {
+    ...producer,
+    prepareLocalSupportReport: vi.fn(producer.prepareLocalSupportReport),
+    prepareCachedSupportReport: vi.fn(producer.prepareCachedSupportReport),
+  };
+});
 vi.mock("@/lib/client-diagnostics", () => ({
   reportClientDiagnostic: vi.fn(),
   retainedClientDiagnosticFailure: vi.fn(() => undefined),
@@ -260,6 +269,8 @@ describe("SupportReportButton", () => {
         supportReportPreparation: {
           outcome: "failed",
           errorKind: "timeout",
+          originalErrorKind: "timeout",
+          errorEvidence: { errorClass: "TimeoutError", frames: [], causeChain: [] },
           durationMs: expect.any(Number),
         },
       },
@@ -273,6 +284,9 @@ describe("SupportReportButton", () => {
   });
 
   it("keeps missing diagnostic delivery retryable without creating a reporting incident", async () => {
+    vi.mocked(prepareLocalSupportReport).mockRejectedValueOnce(
+      new TypeError("Controlled producer failure"),
+    );
     create.mockRejectedValueOnce(new SupportReportEvidenceUnavailable());
     render(<SupportReportButton correlationId="offline-original-error" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
@@ -286,7 +300,9 @@ describe("SupportReportButton", () => {
         correlationId: "offline-original-error",
         supportReportPreparation: {
           outcome: "failed",
-          errorKind: "unavailable",
+          errorKind: "internal",
+          originalErrorKind: "unknown",
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
           durationMs: expect.any(Number),
         },
       },
@@ -303,6 +319,10 @@ describe("SupportReportButton", () => {
     async (status, code, hint) => {
       const error = new ApiError(code, "private response body", status);
       error.correlationId = "report-request-refused";
+      if (status === 503)
+        vi.mocked(prepareLocalSupportReport).mockRejectedValueOnce(
+          new TypeError("Controlled producer failure"),
+        );
       create.mockRejectedValueOnce(error);
       const view = render(<SupportReportButton correlationId="original-failure" />);
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
@@ -313,10 +333,13 @@ describe("SupportReportButton", () => {
         expect(reportClientDiagnostic).toHaveBeenCalledWith(
           "Keiko local support report preparation failed.",
           {
-            correlationId: "original-failure",
+            correlationId: "report-request-refused",
+            parentCorrelationId: "original-failure",
             supportReportPreparation: {
               outcome: "failed",
-              errorKind: "unavailable",
+              errorKind: "internal",
+              originalErrorKind: "unavailable",
+              errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
               durationMs: expect.any(Number),
             },
           },
@@ -741,3 +764,22 @@ it.each([false, true])(
     expect(automaticClick).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  new ApiError("SUPPORT_REPORT_UNAVAILABLE", "Private", 503),
+  new SupportReportEvidenceUnavailable(),
+])("uses an explicit successful fallback for the report refusal %s", async (error) => {
+  create.mockRejectedValueOnce(error);
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce({
+    report: { ...report, evidenceScope: "client-only" },
+    download: { href: "blob:controlled-fallback", dispose: vi.fn() },
+  });
+  render(<SupportReportButton correlationId="controlled-fallback" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
+    "href",
+    "blob:controlled-fallback",
+  );
+  expect(prepareLocalSupportReport).toHaveBeenCalledOnce();
+  expect(prepareCachedSupportReport).not.toHaveBeenCalled();
+});

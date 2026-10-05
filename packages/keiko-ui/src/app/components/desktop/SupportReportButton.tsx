@@ -15,9 +15,17 @@ import {
   SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
   SUPPORT_REPORT_DELIVERY_TTL_MS,
   isActivityLogCorrelationId,
+  normalizeSupportReportCorrelationId,
+  type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { LocalFailureContext, PreparedLocalSupportReport } from "@/lib/support-report-local";
+import {
+  SupportReportBudgetExceeded,
+  localSupportReportErrorKind,
+} from "@/lib/support-report-errors";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import type { SupportReportDownload } from "@/lib/support-report-api";
 import { ApiError } from "@/lib/api";
 import {
@@ -27,6 +35,7 @@ import {
   subscribeGlobalClientFailure,
 } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { bffRequestErrorKind } from "@/lib/http";
 import styles from "./SupportReportButton.module.css";
 
@@ -122,7 +131,7 @@ function fulfillReport(
   const bytes = new TextEncoder().encode(report.reportJson).byteLength;
   if (bytes > MAX_SUPPORT_REPORT_BYTES) {
     download.dispose();
-    throw new TypeError("Support report cache budget exceeded");
+    throw new SupportReportBudgetExceeded();
   }
   const prior = outcomes.get(key);
   if (prior !== undefined && !(prior instanceof AbortController)) prior.download?.dispose();
@@ -268,9 +277,8 @@ function reportLocalPreparation(
 function localPreparationContext(
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
-  context: Pick<ClientOnlySupportReportInput, "correlationId" | "failure">,
-): Pick<ClientOnlySupportReportInput, "correlationId" | "failure"> &
-  Partial<Pick<ClientOnlySupportReportInput, "availabilityReason">> {
+  context: LocalFailureContext,
+): LocalFailureContext {
   return {
     ...context,
     ...(api !== undefined
@@ -288,7 +296,7 @@ async function recoverLocalReport(
   controller: AbortController,
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
-  context: Pick<ClientOnlySupportReportInput, "correlationId" | "failure">,
+  context: LocalFailureContext,
 ): Promise<boolean> {
   const previous = outcomes.get(key);
   if (
@@ -302,13 +310,14 @@ async function recoverLocalReport(
   try {
     const localSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]);
     const local = await loadLocalReport(localSignal);
-    const prepared =
+    const preparation =
       previous !== undefined && !(previous instanceof AbortController)
-        ? await local.prepareCachedSupportReport(previous.report, localSignal)
-        : await local.prepareLocalSupportReport(
+        ? local.prepareCachedSupportReport(previous.report, localSignal)
+        : local.prepareLocalSupportReport(
             localSignal,
             localPreparationContext(error, api, context),
           );
+    const prepared = await waitForPreparedReport(preparation, localSignal);
     if (controller.signal.aborted) {
       prepared.download.dispose();
       return false;
@@ -318,16 +327,57 @@ async function recoverLocalReport(
     return true;
   } catch (error_) {
     if (!controller.signal.aborted)
-      reportClientDiagnostic("Keiko local support report preparation failed.", {
-        correlationId: context.correlationId,
-        supportReportPreparation: {
-          outcome: "failed",
-          errorKind: bffRequestErrorKind(error_),
-          durationMs: Math.round(Math.max(0, performance.now() - startedAt)),
-        },
-      });
+      reportLocalPreparationFailure(error_, error, context.correlationId, startedAt);
     return false;
   }
+}
+
+function waitForPreparedReport(
+  work: Promise<PreparedLocalSupportReport>,
+  signal: AbortSignal,
+): Promise<PreparedLocalSupportReport> {
+  return waitForReportStep(
+    work.then((prepared) => {
+      if (signal.aborted) {
+        prepared.download.dispose();
+        signal.throwIfAborted();
+      }
+      return prepared;
+    }),
+    signal,
+  );
+}
+
+function preparationErrorKind(error: unknown): ActivityLogErrorKind {
+  return error instanceof ApiError
+    ? bffRequestErrorKind(error)
+    : localSupportReportErrorKind(error);
+}
+
+function reportLocalPreparationFailure(
+  error: unknown,
+  trigger: unknown,
+  selectedCorrelationId: string | undefined,
+  startedAt: number,
+): void {
+  const selected = normalizeSupportReportCorrelationId(selectedCorrelationId);
+  const correlationId =
+    normalizeSupportReportCorrelationId(correlationIdOf(trigger)) ??
+    selected ??
+    newClientCorrelationId();
+  reportClientDiagnostic("Keiko local support report preparation failed.", {
+    correlationId,
+    ...(selected !== undefined && selected !== correlationId
+      ? { parentCorrelationId: selected }
+      : {}),
+    supportReportPreparation: {
+      outcome: "failed",
+      errorKind: preparationErrorKind(error),
+      originalErrorKind: bffRequestErrorKind(trigger),
+      errorEvidence: clientErrorEvidence(error),
+      durationMs: Math.round(Math.max(0, performance.now() - startedAt)),
+    },
+  });
 }
 
 function useReportCancellation(key: string, disposeOnUnmount: boolean): ReportRequestRef {
@@ -499,9 +549,9 @@ async function runReport(
     api = await waitForReportStep(import("@/lib/support-report-api"), signal);
     const local = await loadLocalReport(signal);
     phase = "facts";
-    const original = local.originalSupportReportFailure({ correlationId, failure });
+    failure = local.originalSupportReportFailure({ correlationId, failure });
     phase = "request";
-    const creation = createReportForNotice(api, correlationId, signal, original, clientOnly);
+    const creation = createReportForNotice(api, correlationId, signal, failure, clientOnly);
     const report = await waitForReportStep(creation, signal);
     if (!reportRequestIsCurrent(request, pending)) return;
     signal.throwIfAborted();

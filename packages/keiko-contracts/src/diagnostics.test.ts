@@ -1602,6 +1602,21 @@ describe("bounded source-preview stage evidence", () => {
 });
 
 describe("browser support report preparation evidence", () => {
+  it("accepts bounded local cause evidence separately from the triggering transport kind", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: "internal",
+          originalErrorKind: "unavailable",
+          durationMs: 12,
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: ["RangeError"] },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a failed attempt without manufactured artifact metadata", () => {
     expect(
       isClientDiagnosticIngestRequest({
@@ -1615,6 +1630,29 @@ describe("browser support report preparation evidence", () => {
     ).toBe(true);
   });
   it.each([
+    { outcome: "failed", errorKind: "internal", durationMs: 12, originalErrorKind: "private" },
+    {
+      outcome: "failed",
+      errorKind: "internal",
+      durationMs: 12,
+      errorEvidence: { errorClass: "PrivateClass", frames: [], causeChain: [] },
+    },
+    {
+      outcome: "failed",
+      errorKind: "internal",
+      durationMs: 12,
+      errorEvidence: {
+        errorClass: "Error",
+        frames: ["/Users/customer/private.ts:1:2"],
+        causeChain: [],
+      },
+    },
+    {
+      outcome: "failed",
+      errorKind: "internal",
+      durationMs: 12,
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: ["secret"] },
+    },
     { outcome: "failed", errorKind: "invented", durationMs: 12 },
     { outcome: "failed", errorKind: "unavailable", durationMs: -1 },
     { outcome: "failed", errorKind: "unavailable", durationMs: 12, reportBytes: 1024 },

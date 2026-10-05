@@ -1231,6 +1231,27 @@ const CLIENT_SUPPORT_REPORT_PREPARATION_FAILED_OPERATION = defineActivityLogOper
       required: true,
       values: ACTIVITY_LOG_ERROR_KINDS,
     },
+    originalErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      values: ACTIVITY_LOG_ERROR_KINDS,
+    },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -1873,6 +1894,10 @@ function logClientSupportReportPreparationFailed(
       clientDiagnosticCorrelation(request, correlationId),
       {
         preparationErrorKind: prepared.errorKind,
+        ...(prepared.originalErrorKind === undefined
+          ? {}
+          : { originalErrorKind: prepared.originalErrorKind }),
+        ...(prepared.errorEvidence ?? {}),
         durationMs: prepared.durationMs,
         completeness: "complete",
         loss: "none",

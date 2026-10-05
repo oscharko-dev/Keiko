@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
+import { prepareLocalSupportReport } from "@/lib/support-report-local";
 import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
 import { createSupportReport, createSupportReportDownload } from "@/lib/support-report-api";
 import {
@@ -20,6 +21,14 @@ vi.mock("@/lib/support-report-api", async (original) => ({
   createSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
+vi.mock("@/lib/support-report-local", async (original) => {
+  const producer = await original<typeof import("@/lib/support-report-local")>();
+  return {
+    ...producer,
+    prepareLocalSupportReport: vi.fn(producer.prepareLocalSupportReport),
+    prepareCachedSupportReport: vi.fn(producer.prepareCachedSupportReport),
+  };
+});
 afterEach(() => {
   act(() => {
     resetClientDiagnosticWriter();
@@ -179,4 +188,18 @@ it("keeps ready global actions accessible and distinctly labeled", async () => {
   );
   expect(screen.getByRole("alert")).not.toContainElement(download);
   expect(await axe(container)).toHaveNoViolations();
+});
+
+it("keeps the global notice retryable after an explicitly failed local fallback", async () => {
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("Controlled offline"));
+  vi.mocked(prepareLocalSupportReport).mockRejectedValueOnce(
+    new TypeError("Controlled local failure"),
+  );
+  renderFailureNotice();
+  publishFailure("controlled-global-failure");
+  await userEvent.click(await screen.findByRole("button", { name: "Create error report" }));
+  expect(await screen.findByText(/Check that Keiko is running locally/u)).toBeVisible();
+  expect(prepareLocalSupportReport).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+  expect(currentGlobalClientFailure()?.correlationId).toBe("controlled-global-failure");
 });

@@ -17,10 +17,11 @@ import {
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { SupportReportBudgetExceeded } from "./support-report-errors";
 import type { SupportReportDownload } from "./support-report-api";
 import { retainedClientDiagnosticFailure, recordClientDiagnosticLoss } from "./client-diagnostics";
 
-type LocalFailureContext = Pick<ClientOnlySupportReportInput, "correlationId" | "failure"> &
+export type LocalFailureContext = Pick<ClientOnlySupportReportInput, "correlationId" | "failure"> &
   Partial<Pick<ClientOnlySupportReportInput, "availabilityReason">>;
 
 export interface PreparedLocalSupportReport {
@@ -145,12 +146,12 @@ export async function prepareCachedSupportReport(
 ): Promise<PreparedLocalSupportReport> {
   signal.throwIfAborted();
   const source = new Blob([report.reportJson], { type: "application/octet-stream" });
-  if (source.size > MAX_SUPPORT_REPORT_BYTES) throw new TypeError("Support report budget exceeded");
+  if (source.size > MAX_SUPPORT_REPORT_BYTES) throw new SupportReportBudgetExceeded();
   const blob = await new Response(source.stream().pipeThrough(new CompressionStream("gzip")), {
     headers: { "Content-Type": "application/gzip" },
   }).blob();
   signal.throwIfAborted();
-  if (blob.size > MAX_SUPPORT_REPORT_BYTES) throw new TypeError("Support report budget exceeded");
+  if (blob.size > MAX_SUPPORT_REPORT_BYTES) throw new SupportReportBudgetExceeded();
   const href = URL.createObjectURL(blob);
   return {
     report,

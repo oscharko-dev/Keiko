@@ -1487,6 +1487,50 @@ describe("POST /api/diagnostics/client", () => {
       "complete",
     );
   });
+  it("persists local producer cause evidence joined to the failed server request and selected error", async () => {
+    const sink = captureServerLog();
+    const frames = ["dist/ui/static/_next/static/chunks/customerapikey1234.js:1:2"];
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko local support report preparation failed.",
+            clientTs: CLIENT_TS,
+            correlationId: "report-server-attempt",
+            parentCorrelationId: "original-selected-error",
+            supportReportPreparation: {
+              outcome: "failed",
+              errorKind: "internal",
+              originalErrorKind: "unavailable",
+              durationMs: 12,
+              errorEvidence: { errorClass: "TypeError", frames, causeChain: ["RangeError"] },
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    const event = sink.events.find(
+      (item) => item.op === "client.support-report.preparation-failed",
+    );
+    const line = formatActivityLogProofLine(event ?? {});
+    expect(
+      expectActivityLogProof("client.support-report.preparation-failed.line", line),
+    ).toMatchObject({
+      correlationId: "report-server-attempt",
+      parentCorrelationId: "original-selected-error",
+      preparationErrorKind: "internal",
+      originalErrorKind: "unavailable",
+      durationMs: 12,
+      errorClass: "TypeError",
+      frames: redactLogFields({ frames })?.frames,
+      causeChain: ["RangeError"],
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(line).not.toContain("customerapikey");
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
+
   it("persists failed local preparation as routine causal evidence without inventing an artifact", async () => {
     const sink = captureServerLog();
     expect(

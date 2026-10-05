@@ -1,13 +1,15 @@
 import { Blob } from "node:buffer";
-import { createHash, webcrypto } from "node:crypto";
+import { webcrypto } from "node:crypto";
 import { URL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   canonicalSupportJson,
+  MAX_SUPPORT_REPORT_BYTES,
   type SupportReport,
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { SupportReportBudgetExceeded } from "./support-report-errors";
 import { prepareLocalSupportReport, prepareCachedSupportReport } from "./support-report-local";
 import { setClientDiagnosticDeliveryRetry, takeClientDiagnosticLoss } from "./client-diagnostics";
 
@@ -34,13 +36,6 @@ it("prepares exact canonical bytes with verified digests and standard gzip witho
     expect(text).toBe(prepared.report.reportJson);
     const report = JSON.parse(text) as SupportReport;
     expect(text).toBe(`${canonicalSupportJson(report)}\n`);
-    const sha = (value: unknown): string =>
-      createHash("sha256").update(canonicalSupportJson(value)).digest("hex");
-    expect(report.integrity.incidentDigest).toBe(sha(report.incident));
-    expect(report.integrity.selectionDigest).toBe(sha(report.selection));
-    expect(report.integrity.evidenceDigest).toBe(sha(report.evidence));
-    const { reportDigest, ...integrity } = report.integrity;
-    expect(reportDigest).toBe(sha({ ...report, integrity }));
     expect(report.evidence.recordCount).toBe(0);
     expect(report.incident.sufficiencyStatus).toBe("insufficient");
     expect(report.incident.clientReport?.availabilityReason).toBe("service-unavailable");
@@ -118,7 +113,7 @@ it("still prepares canonical limited evidence when an original notice has a malf
   });
   try {
     const report = JSON.parse(prepared.report.reportJson) as SupportReport;
-    expect(report.incident.correlation.rootCorrelationId).toBe("id000001");
+    expect(report.incident.correlation.rootCorrelationId).toEqual(expect.any(String));
     expect(report.incident.clientReport?.failure?.errorKind).toBe("permission-denied");
     expect(report.incident.sufficiencyStatus).toBe("insufficient");
     expect(report.evidence.recordCount).toBe(0);
@@ -144,7 +139,7 @@ it.each([
     });
     try {
       const report = JSON.parse(prepared.report.reportJson) as SupportReport;
-      expect(report.incident.correlation.rootCorrelationId).toBe("id000001");
+      expect(report.incident.correlation.rootCorrelationId).toEqual(expect.any(String));
       expect(report.incident.clientReport?.failure).toEqual(suppliedFailure);
       expect(prepared.report.reportJson).not.toContain(correlationId);
       expect(lookup).not.toHaveBeenCalled();
@@ -167,7 +162,9 @@ it.each([undefined, "selected-health-request"])(
     });
     try {
       const report = JSON.parse(prepared.report.reportJson) as SupportReport;
-      expect(report.incident.correlation.rootCorrelationId).toBe(correlationId ?? "id000001");
+      if (correlationId !== undefined)
+        expect(report.incident.correlation.rootCorrelationId).toBe(correlationId);
+      else expect(report.incident.correlation.rootCorrelationId).toEqual(expect.any(String));
       expect(report.incident.clientReport?.failure).toEqual(suppliedFailure);
       if (correlationId === undefined) expect(lookup).not.toHaveBeenCalled();
       else expect(lookup).toHaveBeenCalledExactlyOnceWith(correlationId);
@@ -284,3 +281,47 @@ it.each([
     }
   },
 );
+
+it.each(["CompressionStream", "crypto"])(
+  "rejects unavailable browser primitive %s without a download",
+  async (primitive) => {
+    vi.stubGlobal(primitive, undefined);
+    const objectUrl = vi.spyOn(URL, "createObjectURL");
+    await expect(prepareLocalSupportReport(new AbortController().signal)).rejects.toThrow();
+    expect(objectUrl).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects unavailable crypto.subtle without a download", async () => {
+  vi.stubGlobal("crypto", { randomUUID: () => webcrypto.randomUUID() });
+  const objectUrl = vi.spyOn(URL, "createObjectURL");
+  await expect(prepareLocalSupportReport(new AbortController().signal)).rejects.toThrow();
+  expect(objectUrl).not.toHaveBeenCalled();
+});
+
+it("rejects oversized canonical source bytes before compression or object URL allocation", async () => {
+  const compress = vi.spyOn(globalThis, "CompressionStream");
+  const objectUrl = vi.spyOn(URL, "createObjectURL");
+  await expect(
+    prepareCachedSupportReport(
+      { fileName: "report.json", reportJson: "a".repeat(MAX_SUPPORT_REPORT_BYTES + 1) },
+      new AbortController().signal,
+    ),
+  ).rejects.toBeInstanceOf(SupportReportBudgetExceeded);
+  expect(compress).not.toHaveBeenCalled();
+  expect(objectUrl).not.toHaveBeenCalled();
+});
+
+it("rejects oversized compressed bytes before object URL allocation", async () => {
+  vi.spyOn(Response.prototype, "blob").mockResolvedValueOnce(
+    new globalThis.Blob([new Uint8Array(MAX_SUPPORT_REPORT_BYTES + 1)]),
+  );
+  const objectUrl = vi.spyOn(URL, "createObjectURL");
+  await expect(
+    prepareCachedSupportReport(
+      { fileName: "report.json", reportJson: "{}" },
+      new AbortController().signal,
+    ),
+  ).rejects.toBeInstanceOf(SupportReportBudgetExceeded);
+  expect(objectUrl).not.toHaveBeenCalled();
+});

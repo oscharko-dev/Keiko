@@ -1783,8 +1783,16 @@ export type ClientSupportReportPreparation =
       readonly outcome: "failed";
       readonly errorKind: ActivityLogErrorKind;
       readonly durationMs: number;
+      readonly originalErrorKind?: ActivityLogErrorKind | undefined;
+      readonly errorEvidence?: ClientErrorEvidence | undefined;
     };
-const SUPPORT_REPORT_PREPARATION_FAILURE_KEYS = new Set(["outcome", "errorKind", "durationMs"]);
+const SUPPORT_REPORT_PREPARATION_FAILURE_KEYS = new Set([
+  "outcome",
+  "errorKind",
+  "durationMs",
+  "originalErrorKind",
+  "errorEvidence",
+]);
 
 const SUPPORT_REPORT_PREPARATION_KEYS = new Set([
   "reportBytes",
@@ -1820,6 +1828,8 @@ function isFailedSupportReportPreparation(value: Record<string, unknown>): boole
   return (
     Object.keys(value).every((key) => SUPPORT_REPORT_PREPARATION_FAILURE_KEYS.has(key)) &&
     isActivityLogErrorKind(value.errorKind) &&
+    isOptional(value.originalErrorKind, isActivityLogErrorKind) &&
+    isOptional(value.errorEvidence, isClientErrorEvidence) &&
     isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX)
   );
 }
