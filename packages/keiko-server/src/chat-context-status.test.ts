@@ -28,7 +28,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore, type ChatMessage } from "./store/index.js";
 import { compactChatContext, readChatContextStatus } from "./chat-context-status.js";
-import { captureChatHistory } from "./chat-history-snapshot.js";
+import { captureChatHistory, captureChatHistoryWithCheckpoint } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
@@ -1222,5 +1222,104 @@ describe("composer context status and manual maintenance", () => {
     );
     const before = readChatContextStatus(deps, emptyChat.id, "fixture");
     expect(compactChatContext(deps, emptyChat.id, "fixture", "corr-empty-context")).toEqual(before);
+  });
+});
+
+describe("shared checkpoint capture", () => {
+  it.each(["listing", "manifest"])(
+    "distinguishes failed %s storage reads from absent checkpoints",
+    (failure) => {
+      const { deps, chatId } = fixture(2);
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const profile = deriveContextProfile({
+        maxInputTokens: 100,
+        reservedOutputTokens: 0,
+        safetyMarginTokens: 0,
+      });
+      const checkpoint = captureChatHistory(deps.store, chatId, "", profile, []).earlierCompaction;
+      expect(checkpoint).toBeDefined();
+      persistChatCompactionEvidence(deps, {
+        compaction: checkpoint,
+        chatId,
+        modelId: "fixture",
+        messageCount: 4,
+        startedAt: 1,
+        finishedAt: 2,
+      });
+      const fail = (): never => {
+        throw new Error("private checkpoint failure");
+      };
+      const evidenceStore = {
+        ...deps.evidenceStore,
+        ...(failure === "listing" ? { list: fail } : { get: fail }),
+      };
+      captureChatHistoryWithCheckpoint(
+        deps.store,
+        evidenceStore,
+        chatId,
+        "",
+        profile,
+        [],
+        "failed-capture",
+      );
+      const event = sink.events.find((entry) => entry.correlationId === "failed-capture");
+      expect(event?.extra?.checkpointDisposition).toBe("read-failed");
+      expect(event?.extra?.completeness).toBe("partial");
+      expectActivityLogProof(
+        "chat.continuity.capture.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(JSON.stringify(sink.events)).not.toContain("private checkpoint failure");
+    },
+  );
+
+  it("retains actual checkpoint disposition and budgets through the shared capture helper", () => {
+    const { deps, chatId } = fixture(20);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const profile = deriveContextProfile({
+      maxInputTokens: 128_000,
+      inputTokenLimit: 200,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const capture = (input = profile): ReturnType<typeof captureChatHistoryWithCheckpoint> =>
+      captureChatHistoryWithCheckpoint(
+        deps.store,
+        deps.evidenceStore,
+        chatId,
+        "",
+        input,
+        [],
+        "helper-capture",
+      );
+    const first = capture();
+    persistChatCompactionEvidence(deps, {
+      compaction: first.earlierCompaction,
+      chatId,
+      modelId: "fixture",
+      messageCount: 40,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    capture();
+    const enlarged = deriveContextProfile({ ...profile, inputTokenLimit: 20_000 });
+    capture(enlarged);
+    const original = deps.store.listMessages(chatId)[0];
+    if (original === undefined) throw new TypeError("Missing original message");
+    deps.store.createMessage({ ...original, content: "Earlier inserted context", timestamp: 0 });
+    capture();
+    const events = sink.events.filter((entry) => entry.correlationId === "helper-capture");
+    expect(events.map((entry) => entry.extra?.checkpointDisposition)).toEqual([
+      "none",
+      "restored",
+      "input-budget-expanded",
+      "revision-mismatch",
+    ]);
+    expect(events[2]?.extra?.effectiveInputBudgetTokens).toBe(enlarged.effectiveInputBudget);
+    expect(events[2]?.extra?.checkpointInputBudgetTokens).toBe(profile.effectiveInputBudget);
+    for (const event of events)
+      expectActivityLogProof("chat.continuity.capture.line", formatActivityLogProofLine(event));
   });
 });

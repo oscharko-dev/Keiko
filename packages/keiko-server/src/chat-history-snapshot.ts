@@ -1,5 +1,8 @@
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import {
+  loadChatContinuityCheckpoint,
+  type CheckpointLoadDisposition,
+} from "./chat-compaction-resurfacing.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -36,7 +39,7 @@ export function captureChatHistoryWithCheckpoint(
   redactionSecrets: readonly string[],
   correlationId?: string,
 ): GatewayHistorySnapshot {
-  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
+  let checkpointDisposition: CheckpointLoadDisposition = "none";
   const checkpoint = loadChatContinuityCheckpoint(
     evidenceStore,
     chatId,
@@ -72,7 +75,7 @@ interface HistoryAccumulator {
 
 export interface HistoryCaptureOptions {
   readonly correlationId?: string | undefined;
-  readonly checkpointDisposition?: "none" | "revision-mismatch" | "available" | undefined;
+  readonly checkpointDisposition?: CheckpointLoadDisposition | undefined;
 }
 
 // The database visitor retains canonical turn eligibility and reads bounded pages. Keep a bounded
@@ -114,6 +117,8 @@ export function captureChatHistory(
       foldedItems: state.compactedCount,
       retainedItems: history.length,
       contextWindowTokens: profile.maxInputTokens,
+      effectiveInputBudgetTokens: profile.effectiveInputBudget,
+      ...checkpointBudgetEvidence(checkpoint),
     },
     options.correlationId,
   );
@@ -123,6 +128,13 @@ export function captureChatHistory(
     historyRevision,
     earlierCompaction: stampProfileBudget(earlierRecord(state, profile), historyRevision, profile),
   };
+}
+
+function checkpointBudgetEvidence(checkpoint: ContextCompactionRecord | undefined): {
+  readonly checkpointInputBudgetTokens?: number;
+} {
+  const tokens = checkpoint?.conversationCoverage?.effectiveInputBudget;
+  return tokens === undefined ? {} : { checkpointInputBudgetTokens: tokens };
 }
 
 function historyUnitVisitor(
@@ -165,7 +177,9 @@ function initialCheckpointDisposition(
 ): CheckpointDisposition {
   if (supplied !== undefined && checkpoint === undefined) return "revision-mismatch";
   if (checkpoint === undefined)
-    return options.checkpointDisposition === "revision-mismatch" ? "revision-mismatch" : "none";
+    return options.checkpointDisposition === "available"
+      ? "none"
+      : (options.checkpointDisposition ?? "none");
   return expandedCheckpointDisposition(checkpoint, profile);
 }
 
@@ -173,13 +187,13 @@ function expandedCheckpointDisposition(
   checkpoint: ContextCompactionRecord,
   profile: ContextProfile,
 ): CheckpointDisposition {
+  const originalBudget = checkpoint.conversationCoverage?.effectiveInputBudget;
+  if (originalBudget !== undefined && profile.effectiveInputBudget <= originalBudget)
+    return "boundary-missing";
   const originalWindow = checkpoint.conversationCoverage?.contextWindowTokens;
   if (originalWindow !== undefined && profile.maxInputTokens > originalWindow)
     return "window-expanded";
-  const originalBudget = checkpoint.conversationCoverage?.effectiveInputBudget;
-  return originalBudget !== undefined && profile.effectiveInputBudget > originalBudget
-    ? "input-budget-expanded"
-    : "boundary-missing";
+  return originalBudget === undefined ? "boundary-missing" : "input-budget-expanded";
 }
 
 function consumeHistoryUnit(
@@ -307,11 +321,9 @@ export function checkpointFitsProfile(
 ): boolean {
   const coverage = record.conversationCoverage;
   if (coverage?.contextWindowTokens === undefined) return false;
-  return (
-    profile.maxInputTokens <= coverage.contextWindowTokens &&
-    (coverage.effectiveInputBudget === undefined ||
-      profile.effectiveInputBudget <= coverage.effectiveInputBudget)
-  );
+  return coverage.effectiveInputBudget === undefined
+    ? profile.maxInputTokens <= coverage.contextWindowTokens
+    : profile.effectiveInputBudget <= coverage.effectiveInputBudget;
 }
 
 function stampProfileBudget(

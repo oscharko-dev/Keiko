@@ -217,6 +217,31 @@ describe("paged conversation continuity", () => {
     expect(expanded.earlierCompaction).toBeUndefined();
   });
 
+  it("restores a checkpoint after the window grows while the independent input ceiling stays fixed", () => {
+    const { store, chatId, add } = fixture();
+    for (let index = 0; index < 30; index += 1) {
+      add("user", "Original context. ".repeat(100));
+      add("assistant", "Understood.");
+    }
+    const current = add("user", "Continue.");
+    const restricted = deriveContextProfile({
+      maxInputTokens: 64_000,
+      inputTokenLimit: 2_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const first = captureChatHistory(store, chatId, current.id, restricted, []);
+    const checkpoint = first.earlierCompaction;
+    if (checkpoint === undefined) throw new TypeError("Missing checkpoint");
+    const expanded = deriveContextProfile({ ...restricted, maxInputTokens: 128_000 });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(checkpointFitsProfile(checkpoint, expanded)).toBe(true);
+    const resumed = captureChatHistory(store, chatId, current.id, expanded, [], checkpoint);
+    expect(resumed.history).toEqual(first.history);
+    expect(sink.events.at(-1)?.extra?.checkpointDisposition).toBe("restored");
+  });
+
   it("preserves legacy checkpoint fallback and invalidates only a larger stamped input budget", () => {
     const { store, chatId, add } = fixture();
     for (let index = 0; index < 30; index += 1) {

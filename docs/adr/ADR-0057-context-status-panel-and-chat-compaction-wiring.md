@@ -157,7 +157,14 @@ estimate as the total prompt.
 
 Checkpoint validation and manual compaction use the same bounded conversation profile as grounded
 sending. A valid 8,000-token lane checkpoint is not invalidated by comparison with a larger full
-model window. The meter refreshes when connected folder, knowledge or Git-change scopes change,
+model window. Checkpoints stamped with an effective input budget remain reusable when only the
+model window grows and the independent input ceiling keeps that budget unchanged. Legacy records
+without the budget stamp retain their window-based comparison. The shared capture evidence records
+both current and stamped input budgets when known. A failed checkpoint listing or manifest read
+has the explicit `read-failed` disposition and partial completeness; it never claims that no
+checkpoint existed. The correlated read diagnostic preserves the failure evidence.
+
+The meter refreshes when connected folder, knowledge or Git-change scopes change,
 without requiring another sent message to update its grounding posture. Body-free
 `chat.context.management` evidence includes `conversationInputBudgetTokens` and
 `sourceCapacityTokens` so its displayed lane and unused source capacity can be reconstructed.

@@ -7,6 +7,7 @@ import { getServerLogger } from "./observability/index.js";
 
 export type CheckpointDisposition =
   | "none"
+  | "read-failed"
   | "restored"
   | "revision-mismatch"
   | "window-expanded"
@@ -21,6 +22,8 @@ export interface ChatHistoryCaptureEvidence {
   readonly foldedItems: number;
   readonly retainedItems: number;
   readonly contextWindowTokens: number;
+  readonly effectiveInputBudgetTokens?: number;
+  readonly checkpointInputBudgetTokens?: number;
 }
 
 const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
@@ -38,6 +41,7 @@ const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
       required: true,
       values: [
         "none",
+        "read-failed",
         "restored",
         "revision-mismatch",
         "window-expanded",
@@ -50,6 +54,8 @@ const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
     foldedItems: { type: "integer", dataClass: "count", required: true },
     retainedItems: { type: "integer", dataClass: "count", required: true },
     contextWindowTokens: { type: "integer", dataClass: "count", required: true },
+    effectiveInputBudgetTokens: { type: "integer", dataClass: "count", required: false },
+    checkpointInputBudgetTokens: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -136,7 +142,11 @@ export function logChatHistoryCapture(
     activityLogEvent(
       CHAT_CONTINUITY_CAPTURE,
       { correlationId: correlationIdOrUnknown(correlationId) },
-      { ...evidence, completeness: "complete", loss: "none" },
+      {
+        ...evidence,
+        completeness: evidence.checkpointDisposition === "read-failed" ? "partial" : "complete",
+        loss: "none",
+      },
     ),
   );
 }

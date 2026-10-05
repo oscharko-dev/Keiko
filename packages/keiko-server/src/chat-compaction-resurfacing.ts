@@ -80,15 +80,24 @@ export function buildChatCompactionResurfacingContext(
   }
 }
 
+export type CheckpointLoadDisposition = "none" | "revision-mismatch" | "available" | "read-failed";
+
 export function loadChatContinuityCheckpoint(
   store: EvidenceStore,
   chatId: string,
   historyRevision: number,
   correlationId?: string,
-  onDisposition?: (disposition: "none" | "revision-mismatch" | "available") => void,
+  onDisposition?: (disposition: CheckpointLoadDisposition) => void,
 ): ContextCompactionRecord | undefined {
   try {
-    const records = loadChatCompactionRecords(store, chatId, correlationId);
+    const readStatus = { failed: false };
+    const records = loadChatCompactionRecords(store, chatId, correlationId, () => {
+      readStatus.failed = true;
+    });
+    if (readStatus.failed) {
+      onDisposition?.("read-failed");
+      return undefined;
+    }
     const checkpoint = [...records]
       .reverse()
       .find(
@@ -99,6 +108,7 @@ export function loadChatContinuityCheckpoint(
     return checkpoint;
   } catch (error) {
     recordReadFailure(error, correlationId);
+    onDisposition?.("read-failed");
     return undefined;
   }
 }
@@ -133,11 +143,12 @@ function loadChatCompactionRecords(
   store: EvidenceStore,
   chatId: string,
   correlationId: string | undefined,
+  onReadFailure?: () => void,
 ): readonly TimedRecord[] {
   const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
   const records: TimedRecord[] = [];
   for (const runId of newestRunIds(listByPrefix(store, prefix), prefix)) {
-    const manifest = safeLoad(store, runId, correlationId);
+    const manifest = safeLoad(store, runId, correlationId, onReadFailure);
     if (manifest === undefined) {
       continue;
     }
@@ -204,11 +215,13 @@ function safeLoad(
   store: EvidenceStore,
   runId: string,
   correlationId: string | undefined,
+  onReadFailure?: () => void,
 ): EvidenceManifest | undefined {
   try {
     return loadEvidence(store, runId);
   } catch (error) {
     recordReadFailure(error, correlationId);
+    onReadFailure?.();
     return undefined;
   }
 }
