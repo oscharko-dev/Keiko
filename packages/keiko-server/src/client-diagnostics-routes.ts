@@ -1899,7 +1899,7 @@ function logClientSupportReportPreparationFailed(
         ...(prepared.originalErrorKind === undefined
           ? {}
           : { originalErrorKind: prepared.originalErrorKind }),
-        ...(prepared.errorEvidence ?? {}),
+        ...prepared.errorEvidence,
         durationMs: prepared.durationMs,
         completeness: "complete",
         loss: "none",
