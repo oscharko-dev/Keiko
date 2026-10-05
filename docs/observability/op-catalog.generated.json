@@ -81342,19 +81342,19 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/support-incident.ts:1975",
+      "site": "packages/keiko-activity-log/src/support-incident.ts:1978",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/support-incident.ts:2125",
+      "site": "packages/keiko-activity-log/src/support-incident.ts:2128",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/support-incident.ts:2182",
+      "site": "packages/keiko-activity-log/src/support-incident.ts:2185",
       "package": "keiko-activity-log"
     },
     {
@@ -83053,21 +83053,21 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-pack-validation.ts:96",
+      "site": "packages/keiko-server/src/grounded-pack-validation.ts:125",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:253",
+      "site": "packages/keiko-server/src/grounded-qa.ts:254",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2551",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2559",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -85247,7 +85247,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2848",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2856",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
