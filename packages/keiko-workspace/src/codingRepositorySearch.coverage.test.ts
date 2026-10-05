@@ -48,6 +48,36 @@ function unavailableFs(code: string, matchingFile: boolean): WorkspaceFs {
 }
 
 describe("coding repository search completeness", () => {
+  it("includes projection time in the returned duration and the final observation", async () => {
+    let now = 0;
+    let reads = 0;
+    const base = memFs(ROOT, { "fact.html": "CodingCoverageProbe readable" });
+    const read = base.readFileBytes;
+    if (read === undefined) throw new Error("fixture bounded reader missing");
+    const observedDurations: number[] = [];
+    const result = await executeCodingRepositoryRequest(workspace, request, {
+      fs: {
+        ...base,
+        readFileBytes: async (...args): Promise<Uint8Array> => {
+          reads += 1;
+          if (reads === 2) now = 73;
+          return read(...args);
+        },
+      },
+      nowMs: () => now,
+      onSearchObservation: (observation) => {
+        observedDurations.push(observation.metrics.durationMs);
+      },
+    });
+    expect(reads).toBe(2);
+    expect(result).toMatchObject({
+      ok: true,
+      hits: [{ path: "fact.html" }],
+      metrics: { durationMs: 73 },
+    });
+    expect(observedDurations).toEqual([0, 73]);
+  });
+
   it("settles a blocked projection at its soft timer without waiting for the physical read", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
