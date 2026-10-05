@@ -414,6 +414,7 @@ export const EN_MESSAGES = {
   "workspace.connect.start":
     "Connecting from {title}. Tab to a highlighted window and press Enter on it or one of its connection ports to connect. Press Escape to cancel.",
   "workspace.connect.cancelled": "Connection cancelled",
+  "workspace.connect.notConnected": "Could not connect.",
   "workspace.connect.connected": "Connected",
   "workspace.connect.connectedWith": "Connected: {label}",
   "palette.description": "Pick a card to add to your workspace",

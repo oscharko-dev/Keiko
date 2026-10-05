@@ -1665,7 +1665,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   // are still live, appends the Connection (with its bind-time scope snapshot) unless it's a
   // duplicate, and focuses the target. Split out of confirmConnect so the promise continuation
   // doesn't add nested branches to confirmConnect's own complexity.
-  const applyConnection = (input: ApplyConnectionInput): void => {
+  const applyConnection = (input: ApplyConnectionInput): boolean => {
     const {
       binding,
       fromId,
@@ -1676,9 +1676,9 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectorScope,
       gitChangeSelection,
     } = input;
-    if (!binding.accepted) return;
+    if (!binding.accepted) return false;
     if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById))
-      return;
+      return false;
     // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
     // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
     // the user navigated the Files window or re-selected another capsule.
@@ -1702,6 +1702,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
           ],
     );
     focus(toId);
+    return true;
   };
 
   const updateConnectionScope = (
@@ -1793,9 +1794,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const connectionAttemptFor = (
     fromId: string,
     toId: string,
-    from: AppWindow,
-    to: AppWindow,
-  ): ConnectionAttempt | null => {
+    from: AppWindow | undefined,
+    to: AppWindow | undefined,
+  ): ConnectionAttempt | "already-connected" | null => {
+    if (from === undefined || to === undefined || !canConnect(from.type, to.type)) return null;
     const selection = connectionBindingSelection(from, to);
     if (selection === null) return null;
     const { boundScope, chatWindowId, connectorScope, gitChangeSelection } = selection;
@@ -1804,7 +1806,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // overwrite the edge's `boundGitChangeRelationshipId`, orphaning the original relationship
     // on the server (disconnect only unbinds the id currently on the edge). One edge, one
     // relationship — reject the duplicate before the callback is ever called.
-    if (gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId)) return null;
+    if (gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId))
+      return "already-connected";
     const chatConversationIdAtBind =
       chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
     return {
@@ -1854,11 +1857,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       );
       return;
     }
-    if (!binding.accepted || !attemptEndpointsCurrent(attempt)) {
-      reportAttemptOutcome(attempt, false);
-      return;
-    }
-    applyConnection({
+    const applied = applyConnection({
       binding,
       fromId: attempt.fromId,
       toId: attempt.toId,
@@ -1868,7 +1867,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectorScope: attempt.connectorScope,
       gitChangeSelection: null,
     });
-    reportAttemptOutcome(attempt, true);
+    reportAttemptOutcome(attempt, applied);
   };
 
   const rollbackRejectedConnectionAttempt = (attempt: ConnectionAttempt): void => {
@@ -1912,15 +1911,14 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     e.stopPropagation();
     const c = connectingRef.current;
     if (c === null) return;
-    reportConnectionOutcome({ kind: "rejected" });
-    const from = winById(c.from);
-    const to = winById(toId);
-    if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
-      const attempt = connectionAttemptFor(c.from, toId, from, to);
-      if (attempt !== null) {
-        reportConnectionOutcome({ kind: "pending" });
-        beginConnectionAttempt(attempt);
-      }
+    const attempt = connectionAttemptFor(c.from, toId, winById(c.from), winById(toId));
+    if (attempt === "already-connected") {
+      reportConnectionOutcome({ kind: "connected", fromId: c.from, toId });
+    } else if (attempt === null) {
+      reportConnectionOutcome({ kind: "not-connected" });
+    } else {
+      reportConnectionOutcome({ kind: "pending" });
+      beginConnectionAttempt(attempt);
     }
     clearConnect();
   };

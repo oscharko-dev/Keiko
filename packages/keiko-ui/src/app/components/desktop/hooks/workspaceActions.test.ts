@@ -2759,6 +2759,27 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     await Promise.resolve();
   }
 
+  it.each(["missing", "files-2"])(
+    "does not announce a scope failure for the unattempted target %s",
+    (toId) => {
+      const outcomes: ConnectionOutcome[] = [];
+      const onScopeBind = vi.fn();
+      const harness = makeConnectHarness(
+        [win("files", {}, "files-1"), win("files", {}, "files-2")],
+        [],
+        {
+          connecting: { from: "files-1", x: 0, y: 0 },
+          onScopeBind,
+          onConnectionOutcome: (outcome) => outcomes.push(outcome),
+        },
+      );
+      harness.confirmConnect(toId, evt);
+      expect(outcomes).toEqual([{ kind: "not-connected" }]);
+      expect(onScopeBind).not.toHaveBeenCalled();
+      expect(harness.cancelConnect()).toBe(false);
+    },
+  );
+
   it("reports cancellation only while the current connection gesture is active", () => {
     const outcomes: ConnectionOutcome[] = [];
     const harness = makeConnectHarness([win("files", {}, "files-1")], [], {
@@ -2784,13 +2805,16 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     );
     harness.confirmConnect("chat-1", evt);
-    expect(outcomes.at(-1)?.kind).toBe("pending");
+    expect(outcomes).toEqual([{ kind: "pending" }]);
     expect(harness.cancelConnect()).toBe(false);
     expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
     acceptance.resolve(true);
     await acceptance.promise;
     await flushAsyncBind();
-    expect(outcomes.at(-1)).toEqual({ kind: "connected", fromId: "files-1", toId: "chat-1" });
+    expect(outcomes).toEqual([
+      { kind: "pending" },
+      { kind: "connected", fromId: "files-1", toId: "chat-1" },
+    ]);
     expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
   });
 
@@ -2836,7 +2860,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     const rejected = makeConnectHarness(wins, [], overrides);
     rejected.confirmConnect("chat-1", evt);
     await flushAsyncBind();
-    expect(outcomes.at(-1)?.kind).toBe("rejected");
+    expect(outcomes).toEqual([{ kind: "pending" }, { kind: "rejected" }]);
     const cancelled = makeConnectHarness(wins, [], overrides);
     cancelled.cancelConnect();
     expect(outcomes.at(-1)?.kind).toBe("cancelled");
@@ -3171,6 +3195,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 
   it("does not draw a Git↔Chat edge when the Git comparison has no distinct base", async () => {
     const store = { conns: [] as Connection[] };
+    const outcomes: ConnectionOutcome[] = [];
     const onGitChangeBind = vi.fn();
     const harness = makeConnectHarness(
       [
@@ -3186,27 +3211,35 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
         connecting: { from: "git-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
         onGitChangeBind,
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
       },
     );
     harness.confirmConnect("chat-1", evt);
     await flushAsyncBind();
     expect(onGitChangeBind).not.toHaveBeenCalled();
     expect(store.conns).toHaveLength(0);
+    expect(outcomes).toEqual([{ kind: "not-connected" }]);
   });
 
   it("still draws non-binding edges when no callbacks are wired", async () => {
     const store = { conns: [] as Connection[] };
+    const outcomes: ConnectionOutcome[] = [];
     const harness = makeConnectHarness(
       [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("quality", {}, "quality")],
       [],
       {
         connecting: { from: "files-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
       },
     );
     harness.confirmConnect("quality", evt);
     await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
+    expect(outcomes).toEqual([
+      { kind: "pending" },
+      { kind: "connected", fromId: "files-1", toId: "quality" },
+    ]);
   });
 
   // #3506 review — rejecting a duplicate Git↔Chat bind at the source. Without this guard, a
@@ -3214,6 +3247,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
   // relationship, and the edge's `boundGitChangeRelationshipId` was overwritten — the original
   // relationship stayed active on the server but became unreachable through the UI.
   it("does not re-invoke onGitChangeBind when the Git↔Chat pair is already bound", async () => {
+    const outcomes: ConnectionOutcome[] = [];
     const store = {
       conns: [
         {
@@ -3238,11 +3272,13 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
         connecting: { from: "git-1", x: 0, y: 0 },
         setConns: collectingSetConns(store),
         onGitChangeBind,
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
       },
     );
     harness.confirmConnect("chat-1", evt);
     await flushAsyncBind();
     expect(onGitChangeBind).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([{ kind: "connected", fromId: "git-1", toId: "chat-1" }]);
     // The pre-existing edge (with its original relationship id) survives untouched — no new
     // relationship replaces it.
     expect(store.conns).toEqual([

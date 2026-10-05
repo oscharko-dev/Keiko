@@ -426,6 +426,7 @@ export const DE_MESSAGES = {
   "workspace.connect.start":
     "Verbindung ausgehend von {title}. Wechsle mit Tab zu einem hervorgehobenen Fenster und bestätige mit Enter auf dem Fenster oder einem seiner Verbindungspunkte. Escape bricht ab.",
   "workspace.connect.cancelled": "Verbindung abgebrochen",
+  "workspace.connect.notConnected": "Verbindung konnte nicht hergestellt werden.",
   "workspace.connect.connected": "Verbunden",
   "workspace.connect.connectedWith": "Verbunden: {label}",
   "palette.description": "Wähle eine Karte für deinen Arbeitsbereich",

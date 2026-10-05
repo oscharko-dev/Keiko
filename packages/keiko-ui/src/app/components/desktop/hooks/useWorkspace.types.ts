@@ -159,6 +159,7 @@ export type ConnectionOutcome =
   | { readonly kind: "connected"; readonly fromId: string; readonly toId: string }
   | { readonly kind: "pending" }
   | { readonly kind: "cancelled" }
+  | { readonly kind: "not-connected" }
   | { readonly kind: "rejected" };
 
 export interface UseWorkspaceResult {

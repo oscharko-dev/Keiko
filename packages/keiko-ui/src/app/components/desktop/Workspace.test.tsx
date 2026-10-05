@@ -963,6 +963,13 @@ describe("Workspace card connections", () => {
       "Unable to connect scope.",
     );
     rerender(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connectionOutcome: { kind: "not-connected" } })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Could not connect.");
+    rerender(
       <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "cancelled" } })} />,
     );
     expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(

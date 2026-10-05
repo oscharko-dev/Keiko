@@ -288,6 +288,7 @@ function describeConnectionOutcome(
 ): string {
   if (outcome.kind === "pending") return t("scope.connect.connecting");
   if (outcome.kind === "cancelled") return t("workspace.connect.cancelled");
+  if (outcome.kind === "not-connected") return t("workspace.connect.notConnected");
   if (outcome.kind === "rejected") return t("scope.connect.error");
   const a = wins?.find((win) => win.id === outcome.fromId);
   const b = wins?.find((win) => win.id === outcome.toId);
