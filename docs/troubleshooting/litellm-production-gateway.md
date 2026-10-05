@@ -140,9 +140,10 @@ selected model's context window is too small for a coding run, or that Keiko is 
 
 **Root Cause**
 
-A coding run's prompt needs a window of at least 32,000 prompt tokens, the minimum the default
-model's readiness already requires. A LiteLLM route that declares no token limits leaves the
-4,096-token setup placeholder until Keiko's automatic long-context probe proves a larger window.
+A coding run needs at least 32,000 admissible prompt tokens after the response and safety reserves
+and any separate `max_input_tokens` ceiling. Exactly 32,000 admissible prompt tokens qualifies;
+a whole-window declaration of 32,000 does not by itself prove that usable capacity. A LiteLLM route
+that declares no token limits leaves the 4,096-token setup placeholder until Keiko's automatic long-context probe proves a larger window.
 Before 1.1.8 such a model was admitted; the gateway then refused the run's first request, and the
 run failed after the two-minute start timeout without a reason.
 

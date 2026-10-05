@@ -100,8 +100,9 @@ Connected source reads can return several separate, bounded windows for disjoint
 including anchors on the same minified HTML source line. Each window retains its real line range;
 no fabricated contiguous text joins distant spans. Same-line partial windows carry an opaque
 identity derived from their content and source range so canonical atom IDs and context-pack cache
-keys distinguish them. Per-file window and aggregate excerpt-byte budgets still apply. A file with
-several selected windows counts as one file read, while excerpt diagnostics count each window.
+keys distinguish them. The cumulative per-file byte grant and aggregate excerpt-byte budget still
+apply; there is no per-file window-count quota. A file with several selected windows counts as one
+file read, while excerpt diagnostics count each window.
 
 ### D1 — Additive EvidenceManifest fields: contextAssembly? and compaction?
 
