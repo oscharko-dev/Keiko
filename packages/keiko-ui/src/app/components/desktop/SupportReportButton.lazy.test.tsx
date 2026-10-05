@@ -45,8 +45,8 @@ async function cancelApiChunk(component: ReportComponent): Promise<void> {
   const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
   const view = render(<component.SupportReportButton correlationId="late-api-chunk" />);
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-  expect(api.imports).toBe(1);
-  expect(local.imports).toBe(0);
+  await waitFor(() => expect(api.imports).toBe(1));
+  await waitFor(() => expect(local.imports).toBe(1));
   expect(api.create).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
     "aria-disabled",
@@ -58,18 +58,37 @@ async function cancelApiChunk(component: ReportComponent): Promise<void> {
   timeout.mockReturnValue(new AbortController().signal);
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
   view.unmount();
-  await act(async () => api.release());
+  await act(async () => {
+    api.release();
+    local.release();
+  });
   expect(api.create).not.toHaveBeenCalled();
-  expect(local.imports).toBe(0);
+  expect(api.imports).toBe(1);
+  expect(local.imports).toBe(1);
+  expect(screen.queryByRole("link", { name: "Download report" })).not.toBeInTheDocument();
   component.resetSupportReportOutcomesForTests();
 }
 
-async function cancelLocalChunk(component: ReportComponent): Promise<void> {
+async function cancelLocalChunk(): Promise<ReportComponent> {
+  // Give this phase its own pending factory; the prior parallel imports have both settled.
+  vi.resetModules();
+  let releaseLocal: (() => void) | undefined;
+  vi.doMock("@/lib/support-report-local", async () => {
+    await new Promise<void>((resolve) => {
+      releaseLocal = resolve;
+    });
+    return {
+      originalSupportReportFailure: vi.fn(() => undefined),
+      prepareLocalSupportReport: vi.fn(),
+      prepareCachedSupportReport: vi.fn(),
+    };
+  });
+  const component = await import("./SupportReportButton");
   const deadline = new AbortController();
   vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
   const view = render(<component.SupportReportButton correlationId="late-local-chunk" />);
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-  await waitFor(() => expect(local.imports).toBe(1));
+  await waitFor(() => expect(releaseLocal).toBeDefined());
   expect(api.create).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
     "aria-disabled",
@@ -78,12 +97,13 @@ async function cancelLocalChunk(component: ReportComponent): Promise<void> {
   await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
   expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
   view.unmount();
-  await act(async () => local.release());
+  await act(async () => releaseLocal?.());
   expect(api.create).not.toHaveBeenCalled();
   component.resetSupportReportOutcomesForTests();
+  return component;
 }
 
-it("renders without either report chunk, bounds both waits and ignores cancelled late imports", async () => {
+it("renders without report chunks, imports both on click and ignores cancelled late imports", async () => {
   const automaticClick = vi
     .spyOn(HTMLAnchorElement.prototype, "click")
     .mockImplementation(() => undefined);
@@ -93,11 +113,11 @@ it("renders without either report chunk, bounds both waits and ignores cancelled
     return value;
   });
   await waitFor(() => expect(loaded).toBe(true));
-  const component = await pending;
+  let component = await pending;
   expect(api.imports).toBe(0);
   expect(local.imports).toBe(0);
   await cancelApiChunk(component);
-  await cancelLocalChunk(component);
+  component = await cancelLocalChunk();
   vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
   const report = { fileName: "report.json", reportJson: "{}" };
   api.create.mockResolvedValueOnce(report);
