@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  clientDiagnosticFailureFacts,
   recordClientDiagnosticLoss,
   reportClientDiagnostic,
   reportFilesScopeDecision,
@@ -250,4 +251,28 @@ it("routes Files ownership decisions without replacing a real global failure", (
     },
   ]);
   expect(currentGlobalClientFailure()).toBe(priorFailure);
+});
+
+describe("clientDiagnosticFailureFacts", () => {
+  it.each([
+    [{}, []],
+    [{ kind: "window-error" }, ["kind:window-error"]],
+    [{ renderFailure: "shell" }, ["render:shell"]],
+    [{ moduleLoadFailure: "git-sync" }, ["module:git-sync"]],
+    [
+      { stageReport: { stage: "files source preview", phase: "started", ordinal: 1 } },
+      ["stage:files-source-preview"],
+    ],
+  ] as const)("retains only the canonical closed context for %j", (meta, context) => {
+    expect(clientDiagnosticFailureFacts(meta)).toEqual({ errorKind: "unknown", context });
+  });
+
+  it("preserves classified errors and bounded frames without the diagnostic prose", () => {
+    const errorEvidence = { errorClass: "TypeError" as const, frames: [], causeChain: [] };
+    expect(clientDiagnosticFailureFacts({ errorKind: "internal", errorEvidence })).toEqual({
+      errorKind: "internal",
+      context: [],
+      errorEvidence,
+    });
+  });
 });

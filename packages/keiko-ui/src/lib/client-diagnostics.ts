@@ -221,7 +221,7 @@ export function clientDiagnosticFailureFacts(
       clientKind: meta.kind,
       renderFailure: meta.renderFailure,
       moduleLoadFailure: meta.moduleLoadFailure,
-      stage: meta.stageReport?.stage,
+      stage: meta.stageReport?.stage.replaceAll(" ", "-"),
     }),
   };
 }
@@ -315,8 +315,9 @@ export function dismissGlobalClientFailure(ordinal: number): void {
   for (const listener of globalFailureListeners) listener();
 }
 
-function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
-  if (meta?.globalFailure !== true) return;
+/** Keeps the original report action stable while later errors remain transport-visible. */
+export function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
+  if (globalFailure !== null || meta?.globalFailure !== true) return;
   if (meta.kind !== "window-error" && meta.kind !== "unhandled-rejection") return;
   globalFailure = {
     ordinal: ++globalFailureOrdinal,
