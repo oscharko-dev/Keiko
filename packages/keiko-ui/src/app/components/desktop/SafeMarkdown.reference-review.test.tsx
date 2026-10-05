@@ -10,6 +10,51 @@ const roots = [{ root: "/workspace", label: "Workspace" }];
 afterEach(() => vi.clearAllMocks());
 
 describe("Markdown source boundaries", () => {
+  const explicitLocations = {
+    code: (location: string): string => `\`${location}\``,
+    brackets: (location: string): string => `[${location}]`,
+    table: (location: string): string => `| Location |\n|---|\n| ${location} |`,
+  };
+  describe.each(Object.entries(explicitLocations))("%s explicit references", (_name, format) => {
+    it.each([
+      "$HOME/src/a.ts",
+      "$GITHUB_WORKSPACE/packages/x/package.json",
+      "$(pwd)/a.json",
+      "${ROOT}/a.ts",
+    ])("does not turn the shell expression %s into a repository target", (path) => {
+      const open = vi.fn();
+      render(
+        <SafeMarkdown
+          source={format(`${path}:12`)}
+          repositoryRoots={roots}
+          openRepositoryReference={open}
+        />,
+      );
+      expect(screen.queryByRole("button")).toBeNull();
+      expect(document.body).toHaveTextContent(path);
+      expect(open).not.toHaveBeenCalled();
+    });
+    it.each(["app/routes/$userId.tsx", "src/Outer$Inner.java", "manuals/$archive/chapter.md"])(
+      "keeps the actual later-segment dollar filename %s",
+      (path) => {
+        const open = vi.fn(() => ({ ok: true as const, windowId: "editor" }));
+        render(
+          <SafeMarkdown
+            source={format(`${path}:12`)}
+            repositoryRoots={roots}
+            openRepositoryReference={open}
+          />,
+        );
+        fireEvent.click(screen.getByRole("button"));
+        expect(open).toHaveBeenCalledExactlyOnceWith({
+          root: "/workspace",
+          path,
+          lineStart: 12,
+          lineEnd: 12,
+        });
+      },
+    );
+  });
   it.each(["cat README.md", "git add package.json", "node scripts/build.mjs", "node server.js"])(
     "preserves an inline command as literal code: %s",
     (command) => {

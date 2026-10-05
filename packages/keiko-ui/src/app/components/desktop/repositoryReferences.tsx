@@ -271,7 +271,7 @@ function isSafeRawReferencePath(path: string): boolean {
 
 function validRepositoryPath(path: string): boolean {
   if (!isSafeRawReferencePath(path)) return false;
-  if (/[*?{}<>|"]|^\$[^/]*$/u.test(path)) return false;
+  if (/[*?{}<>|"]/u.test(path) || path.startsWith("$")) return false;
   if (path.startsWith(".") || path.includes("..")) return false;
   if (!path.includes(".")) return false;
   const filename = path.split("/").at(-1) ?? "";
