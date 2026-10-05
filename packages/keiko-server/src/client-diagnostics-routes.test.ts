@@ -1523,9 +1523,11 @@ describe("POST /api/diagnostics/client", () => {
       reportCompleteness: "partial",
       reportLoss: "event-dropped",
     });
-    expect(analyzeLogText(formatActivityLogProofLine(event ?? {})).sufficiency.status).toBe(
-      "complete",
-    );
+    const line = formatActivityLogProofLine(event ?? {});
+    const record = expectActivityLogProof("client.support-report.prepared.line", line);
+    expect(record).toMatchObject({ evidenceScope: "server", reportBytes: 1024 });
+    expect(record).not.toHaveProperty("availabilityReason");
+    expect(analyzeLogText(line).sufficiency.status).toBe("complete");
   });
   it("persists local producer cause evidence joined to the failed server request and selected error", async () => {
     const sink = captureServerLog();
