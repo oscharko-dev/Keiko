@@ -376,54 +376,66 @@ function repositoryTestContextSummary(): ReturnType<typeof buildGroundedAnswerCo
 }
 
 describe("ChatWindow cancel button", () => {
-  it("retains canonical source attribution when reopening a saved multi-folder answer", () => {
-    const scopes = ["ManualA", "ManualB"].map((name) => ({
-      root: `/${name}`,
-      kind: "directory" as const,
-      relativePaths: ["src"],
-      connectedAtMs: 1,
-    }));
-    const groundedAnswer: GroundedAnswer = {
-      groundingKind: "connected-context",
-      userMessageId: "m1",
-      assistantMessageId: "m2",
-      content: "Grounded saved answer",
-      uncertainty: [],
-      omittedCount: 0,
-      elapsedMs: 1,
-      contextPack: repositoryTestContextSummary(),
-      citations: scopes.map((scope) => ({
-        scopePath: "src/foo.ts",
-        stableId: scope.root,
-        score: 1,
-        lineRange: { startLine: 1, endLine: 2 },
-        source: scope.root.slice(1),
-        sourceScopeFingerprint: connectedScopeFingerprint(scope),
-      })),
-    };
-    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
-    renderWindow(
-      makeSession({
-        activeChat: makeChat({ connectedScopes: scopes }),
-        messages: [
-          makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
-        ],
-      }),
-      { openEditorFile },
-    );
-    const summary = document.querySelector("details.grounded-evidence-disclosure summary");
-    if (summary === null) throw new TypeError("Missing grounded evidence disclosure");
-    fireEvent.click(summary);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open ManualB · src/foo.ts at lines 1-2 in editor" }),
-    );
-    expect(openEditorFile).toHaveBeenCalledWith({
-      root: "/ManualB",
-      path: "src/foo.ts",
-      lineStart: 1,
-      lineEnd: 2,
-    });
-  });
+  it.each([
+    { roots: ["/ManualA", "/ManualB"], expectedRoot: "/ManualB", legacy: false },
+    { roots: ["/ManualA", "/ManualA/sub"], expectedRoot: "/ManualA", legacy: false },
+    { roots: ["/proj"], expectedRoot: "/proj", legacy: true },
+  ])(
+    "preserves canonical citation roots for $roots (legacy: $legacy)",
+    ({ roots, expectedRoot, legacy }) => {
+      const scopes = roots.map((root) => ({
+        root,
+        kind: "directory" as const,
+        relativePaths: ["src"],
+        connectedAtMs: 1,
+      }));
+      const groundedAnswer: GroundedAnswer = {
+        groundingKind: "connected-context",
+        userMessageId: "m1",
+        assistantMessageId: "m2",
+        content: "Grounded saved answer",
+        uncertainty: [],
+        omittedCount: 0,
+        elapsedMs: 1,
+        contextPack: repositoryTestContextSummary(),
+        citations: scopes.map((scope) => ({
+          scopePath: "src/foo.ts",
+          stableId: scope.root,
+          score: 1,
+          lineRange: { startLine: 1, endLine: 2 },
+          source: scope.root.slice(1),
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        })),
+      };
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+      renderWindow(
+        makeSession({
+          activeChat: makeChat({
+            connectedScopes: legacy ? scopes.map(({ root: _root, ...scope }) => scope) : scopes,
+          }),
+          activeProject: makeProject("/DifferentActiveProject"),
+          messages: [
+            makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+          ],
+        }),
+        { openEditorFile },
+      );
+      const summary = document.querySelector("details.grounded-evidence-disclosure summary");
+      if (summary === null) throw new TypeError("Missing grounded evidence disclosure");
+      fireEvent.click(summary);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Open ${legacy ? "" : `${expectedRoot.slice(1)} · `}src/foo.ts at lines 1-2 in editor`,
+        }),
+      );
+      expect(openEditorFile).toHaveBeenCalledWith({
+        root: expectedRoot,
+        path: "src/foo.ts",
+        lineStart: 1,
+        lineEnd: 2,
+      });
+    },
+  );
 
   it("renders regenerate on the latest ungrounded assistant response", async () => {
     const regenerateMessage = vi.fn().mockResolvedValue(undefined);
@@ -4658,7 +4670,7 @@ describe("ChatWindow message copy", () => {
     });
   });
 
-  it("prefers nested chat repository roots over linked parent folder roots", async () => {
+  it("asks for the source of unqualified references when ancestor and descendant are connected", async () => {
     const user = userEvent.setup();
     const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     renderWindow(
@@ -4704,7 +4716,9 @@ describe("ChatWindow message copy", () => {
       }),
     );
 
-    expect(screen.queryByRole("button", { name: /^Select repository source:/ })).toBeNull();
+    expect(openEditorFile).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: /^Select repository source:/ })).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Select repository source: Keiko" }));
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/Users/dev/Projects/Keiko",
       path: "packages/keiko-editor/src/range.ts",

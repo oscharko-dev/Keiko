@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState, type ReactNode } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as i18n from "./i18n";
 import type { OptionalWidgetTranslate } from "./optional-widget-i18n";
@@ -89,5 +89,41 @@ describe("optional widget locale recovery", () => {
     expect(screen.getByLabelText("Clicks")).toHaveTextContent("2");
     fireEvent.click(recovered);
     expect(screen.getByLabelText("Clicks")).toHaveTextContent("3");
+  });
+});
+
+describe("optional translator identity", () => {
+  it("updates delayed German labels without restarting effects that depend on the translator", async () => {
+    vi.resetModules();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.doMock("./i18n-messages.optional.de", async (importOriginal) => {
+      await gate;
+      return importOriginal<typeof import("./i18n-messages.optional.de")>();
+    });
+    const widget = await import("./optional-widget-i18n");
+    const effect = vi.fn();
+    function Probe(): ReactNode {
+      const t = widget.useOptionalWidgetTranslate();
+      useEffect(effect, [t]);
+      return <Counter t={t} />;
+    }
+    window.localStorage.setItem("keiko.locale", "en");
+    render(
+      <i18n.I18nProvider>
+        <Probe />
+      </i18n.I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "German" }));
+    await waitFor(() => expect(document.documentElement.lang).toBe("de"));
+    expect(effect).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await screen.findByRole("button", { name: "Akzeptieren" });
+    expect(effect).toHaveBeenCalledTimes(2);
   });
 });

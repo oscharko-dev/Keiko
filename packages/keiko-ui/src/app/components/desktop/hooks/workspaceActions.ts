@@ -1,5 +1,6 @@
 "use client";
 
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { canConnect, snapMap } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
@@ -41,11 +42,7 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
-import {
-  connectedScopeFingerprint,
-  connectedScopeIdentity,
-  isConnectedScopeFingerprint,
-} from "./workspaceScopeIdentity";
+import { connectedScopeFingerprint, isConnectedScopeFingerprint } from "./workspaceScopeIdentity";
 
 function addPosition(
   vp: ViewportWorld,
@@ -2291,8 +2288,8 @@ function normaliseRelativePath(path: string): string {
 }
 
 function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
-  const identity = connectedScopeIdentity(a);
-  return identity !== null && identity === connectedScopeIdentity(b);
+  const identity = chatConnectedScopeIdentity(a);
+  return identity !== null && identity === chatConnectedScopeIdentity(b);
 }
 
 /** Only canonical Chat scopes can restore a private persisted edge snapshot. */

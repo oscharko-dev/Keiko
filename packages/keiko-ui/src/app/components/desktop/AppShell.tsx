@@ -1,5 +1,6 @@
 "use client";
 
+import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { withGroundingScopeRefresh } from "@/lib/chat-grounding-mutation";
 import type { ClientFilesScopeDecision } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
@@ -48,7 +49,6 @@ import {
   type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
 import {
-  connectedScopeIdentity,
   connectedScopeFingerprint,
   isConnectedScopeFingerprint,
 } from "./hooks/workspaceScopeIdentity";
@@ -429,7 +429,7 @@ function isOnlySlashes(value: string): boolean {
 }
 
 function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
-  return connectedScopeIdentity(scope);
+  return chatConnectedScopeIdentity(scope);
 }
 
 function missingFilesScopeOwnership(

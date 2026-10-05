@@ -471,7 +471,7 @@ export function repositoryReferenceRootsForScopes(
       scopeFingerprints: [],
     };
     const fingerprint = connectedScopeFingerprint({ ...scope, root });
-    if (fingerprint !== undefined && !option.scopeFingerprints.includes(fingerprint)) {
+    if (!option.scopeFingerprints.includes(fingerprint)) {
       option.scopeFingerprints.push(fingerprint);
     }
     roots.set(root, option);

@@ -77,7 +77,7 @@ function isOptionalWidgetKey(key: WidgetMessageKey): key is OptionalWidgetMessag
 
 export function useOptionalWidgetTranslate(): OptionalWidgetTranslate {
   const locale = useLocale();
-  const [catalog, setCatalog] = useState(() => catalogFor(locale));
+  const [, setCatalog] = useState(() => catalogFor(locale));
   useEffect(() => {
     let cancelled = false;
     void loadOptionalWidgetMessages(locale).then((loaded) => {
@@ -89,13 +89,8 @@ export function useOptionalWidgetTranslate(): OptionalWidgetTranslate {
   }, [locale]);
   return useCallback(
     (key: WidgetMessageKey, values?: MessageValues): string =>
-      translateWithCatalog(
-        locale === "de" ? catalog : OPTIONAL_WIDGET_EN_MESSAGES,
-        locale,
-        key,
-        values,
-      ),
-    [catalog, locale],
+      translateOptionalWidget(locale, key, values),
+    [locale],
   );
 }
 
