@@ -179,13 +179,17 @@ describe("shared canonical browser report producer", () => {
     ).toThrow(SupportReportError);
   });
 
-  it.each(["ascii", "é", "😀", "\ud800"])(
+  it.each(["ascii", "é", "😀", "\ud800", "\udc00"])(
     "charges UTF-8 bytes identically to Node for %s",
     (value) => {
-      const text = JSON.stringify(value);
+      // Keep raw surrogate code units: JSON.stringify would escape them into ASCII first.
+      const text = `"${value}"`;
       const bytes = Buffer.byteLength(text);
       expect(new TextEncoder().encode(text).byteLength).toBe(bytes);
       expect(() => parseCanonicalSupportJson(text, bytes - 1)).toThrow("report-budget-exceeded");
+      if (value === "ascii") expect(parseCanonicalSupportJson(text, bytes)).toBe(value);
+      // At the inclusive budget the non-ASCII privacy guard, not a byte-budget refusal, applies.
+      else expect(() => parseCanonicalSupportJson(text, bytes)).toThrow("unsafe-report");
     },
   );
 
