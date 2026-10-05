@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ca57d15b19a69e01b1aaf7c506c88bbb4bb193f1e41d4fd3929e674a1731a293"
+    "catalogDigest": "0426cf3f96481ff42bcb25727baec00142c045a5233742b7136493db069da925"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 516,
-    "proofCount": 523,
-    "resolvedProofCount": 523,
+    "operationCount": 517,
+    "proofCount": 524,
+    "resolvedProofCount": 524,
     "failureClassCount": 336,
     "scenarioCount": 31,
     "resolvedScenarioCount": 31
@@ -95,6 +95,7 @@
         "chat.creation.rejected",
         "chat.regeneration.rejected",
         "chat.response.message",
+        "chat.scope.update",
         "chat.send.rejected",
         "chat.turn.started",
         "git-change.chat.apply",
@@ -1102,6 +1103,7 @@
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
+    "chat.scope.update.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
     "chat.send.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
@@ -1721,10 +1723,12 @@
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.stream.failed.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
       "packages/keiko-model-gateway/src/gateway.logging.test.ts",
       "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
     ],
     "gateway.stream.started.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.tool-calling.verification.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
@@ -2307,10 +2311,12 @@
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.expired.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-recovery.test.ts",
       "packages/keiko-activity-log/src/support-incident-retention.test.ts",
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.rejected.emitted-line": [
+      "packages/keiko-activity-log/src/support-incident-recovery.test.ts",
       "packages/keiko-activity-log/src/support-incident.test.ts"
     ],
     "support.incident.retirement-failed.emitted-line": [
