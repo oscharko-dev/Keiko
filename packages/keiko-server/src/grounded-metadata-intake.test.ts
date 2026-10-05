@@ -79,9 +79,12 @@ describe("metadata admission before retention", () => {
     expect(result.pack.usage.filesRead).toBe(1);
     expect(result.pack.diagnostics?.coverage).toMatchObject({
       filesDiscovered: 1,
-      deniedByDiscovery: invalidMetadataNames.length,
-      incomplete: false,
+      deniedByDiscovery: 0,
+      unrepresentablePathsByDiscovery: invalidMetadataNames.length,
+      incomplete: true,
+      reasons: ["unrepresentable-path"],
     });
+    expect(result.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
     expect(result.pack.omitted).toEqual([]);
   });
 

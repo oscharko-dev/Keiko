@@ -35,6 +35,7 @@ import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runt
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   retrieveConnectedContextPack,
+  ClarificationNeededError,
   type GroundedAnswerer,
   type OrchestratorDeps,
   type OrchestratorInput,
@@ -305,7 +306,10 @@ const COMPLETION_FIELD_GROUPS: Readonly<Record<string, Readonly<Record<string, s
 
 function lifecycleEvents(
   activityLog: BufferedServerLogSink,
-  terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
+  terminalOp:
+    | "search.connected-context.completed"
+    | "search.connected-context.failed"
+    | "search.connected-context.clarification-needed",
 ): readonly [ServerLogEvent, ServerLogEvent] {
   expect(activityLog.events).toHaveLength(
     terminalOp === "search.connected-context.completed" ? 4 : 2,
@@ -1536,18 +1540,42 @@ describe("retrieveConnectedContextPack activity log", () => {
 
   it("logs malformed scope input without dereferencing unvalidated fields", async () => {
     const activityLog = createBufferedServerLogSink();
+    const realPath = vi.fn((): never => {
+      throw new TypeError("Invalid scope must not reach filesystem resolution");
+    });
+    const detectWorkspace = vi.fn(fixtureWorkspace);
     const malformed = {
       ...fixtureInput(),
       scope: { ...fixtureScope(), relativePaths: undefined },
     } as unknown as OrchestratorInput;
 
-    await expect(
-      retrieveConnectedContextPack(malformed, fixtureDeps(activityLog, CORRELATION_ID)),
-    ).rejects.toBeInstanceOf(Error);
+    const retrieval = retrieveConnectedContextPack(malformed, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: { ...memFs(FIXTURE_ROOT, {}), realPath },
+      detectWorkspace,
+    });
+    await expect(retrieval).rejects.toBeInstanceOf(ClarificationNeededError);
+    await expect(retrieval).rejects.toMatchObject({ clarification: { reason: "scope-invalid" } });
+    expect(realPath).not.toHaveBeenCalled();
+    expect(detectWorkspace).not.toHaveBeenCalled();
 
-    const [started, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
+    const [started, clarified] = lifecycleEvents(
+      activityLog,
+      "search.connected-context.clarification-needed",
+    );
     expect(started.extra).toMatchObject({ scopeKind: "files", relativePathCount: 0 });
-    expect(failed.extra).toMatchObject({ retrievalPhase: "planning", plannedRingCount: 0 });
+    expect(clarified.extra).toMatchObject({
+      clarificationReason: "scope-invalid",
+      anchorCount: 0,
+      plannedRingCount: 0,
+      completeness: "complete",
+      loss: "none",
+    });
     expectBodyFree(activityLog);
+    expect(clarified.correlationId).toBe(CORRELATION_ID);
+    expectActivityLogProof(
+      "search.connected-context.clarification-needed.line",
+      formatActivityLogProofLine(clarified),
+    );
   });
 });
