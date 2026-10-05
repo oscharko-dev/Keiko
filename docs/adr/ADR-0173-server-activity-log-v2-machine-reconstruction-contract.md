@@ -832,6 +832,32 @@ selected error. Structured delivery facts preserve the source (`server` or `brow
 is served again through a local Blob. Legacy string `automatic` and `manual` values are accepted only
 for older clients. The line carries no report body, destination, filename or saved claim.
 
+`client.files-scope.decision` records closed source-ownership and grounding-queue state, with
+optional source/candidate counts and a binding fingerprint; it contains no source references or
+content. `CLIENT_FILES_SCOPE_DECISIONS` is the shared vocabulary: `restored`, `owned-elsewhere`,
+`released`, `blocked-ambiguous`, `fingerprint-absent`, `conflict-retried`, `ack-missing`,
+`acknowledged`, `ack-invalidated`, `automatic-suppressed`, `timeout-blocked`, `timeout-recovered`,
+`timeout-rejected` and `request-superseded`. Current queue and retry producers identify
+`mutationSurface` explicitly as `files`, `local-knowledge` or `git-change` using the same shared
+contract tuple as the validator and registered line. The original action retains its correlation
+through a timeout and later recovery. Each actually refused attempt records one `timeout-rejected`
+under its own correlation, with the blocking action as `parentCorrelationId`. Only
+`timeout-recovered` carries `rejectionCount`: the exact nonnegative safe-integer number of refused
+attempts, including zero. These are separate actions plus a recovery summary, not repeated failures
+of the original action or a count of missing log events.
+
+`gateway.setup.metadata.resolved` records the discovery outcome (`available`, `unavailable`,
+`cancelled` or `failed`) and elapsed time. When setup supplied explicit selections,
+`selectedModelCount` counts selected chat and embedding entries. After successful discovery,
+`metadataEnrichedModelCount` counts role-compatible selected entries with nonempty discovered
+metadata, `roleMismatchModelCount` counts discovered selections incompatible with their selected
+role, and `notDiscoveredModelCount` counts selections absent from discovery. A role-compatible
+entry without metadata belongs to none of those three subsets, so their sum need not equal the
+selected count. Discovery-only calls omit selection counts; failed or cancelled discovery can
+retain the known selected count but omits the three unmeasured result counts. The event contains
+no model identifiers, endpoints or credentials and does not claim that every selected model has a
+known context window.
+
 The shared desktop report action preserves the selected error when reporting itself fails. A
 session refusal offers report regeneration, a local service failure names application recovery, and a
 rate refusal names the bounded retry delay; none grants authority or automatically replays a write.

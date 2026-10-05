@@ -32,6 +32,36 @@ A downloaded report contains body-free evidence, build/registry identities, caus
 sufficiency reasons. It does not include file contents or raw workspace paths. The report requires
 the local server to respond; a stopped server cannot create an export through this endpoint.
 
+For report delivery, `support.report.ui.delivered.reportBytes` is the canonical JSON size;
+`transportBytes` is the compressed attachment size. `parentCorrelationId` joins the creating
+request and `reportDigest` identifies the artifact. Response completion and
+`client.support-report.download-started` show transport completion and manual initiation,
+respectively; neither acknowledges an operating-system save. Download refusals use
+`support.report.ui.download-refused` with `no-session`, `other-session` or `expired-or-unknown`
+and the actual HTTP status. Unknown references and other sessions return 404; an existing protected
+reference without a valid session returns 403.
+
+Browser preparation records artifact quality in `client.support-report.prepared.reportCompleteness`
+and `reportLoss`. The event's own `completeness: complete` and `loss: none` mean that this state
+was recorded successfully, not that the report contains complete server evidence. Closed
+`evidenceScope` and `availabilityReason` describe that distinction without report contents.
+
+`client.files-scope.decision` joins source ownership and grounding-queue decisions to their actual
+actions. Current queue/retry records identify `mutationSurface` as `files`, `local-knowledge` or
+`git-change`. The shared closed decision vocabulary covers restoration, release, ambiguity,
+acknowledgement, conflict retries, suppression, timeout and supersession. A `timeout-rejected`
+record belongs to the refused attempt and names the blocker in `parentCorrelationId`;
+`timeout-recovered.rejectionCount` summarizes the exact number refused, including zero, under the
+original action. Source/candidate counts and binding fingerprints contain no paths or source bodies.
+
+`gateway.setup.metadata.resolved` distinguishes available, unavailable, cancelled and failed
+discovery. `selectedModelCount` is the known number of explicit chat/embedding selections.
+Successful discovery additionally reports `metadataEnrichedModelCount`, `roleMismatchModelCount`
+and `notDiscoveredModelCount`. Compatible selections with no metadata are outside those three
+subsets; the counts are not guaranteed to sum to the selection count. Unknown result counts are
+omitted after failure or cancellation, and discovery without explicit selections omits selection
+counts entirely. These counts do not establish a model's context window or expose model names.
+
 ## File location, segments, and retention
 
 Normal runtime activity lives in `<stateDir>/logs/`. `<stateDir>` is `./.keiko` by default, or
