@@ -6932,7 +6932,7 @@ function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRun
 }
 
 function hasReadableScopeManifest(rings: RingRunSummary): boolean {
-  return [...(rings.knownFitFileBytes?.keys() ?? [])].some(isCanonicalMetadataFile);
+  return [...(rings.knownFitFileBytes?.keys() ?? [])].some((path) => isCanonicalMetadataFile(path));
 }
 
 async function augmentRingsWithDeterministicAtoms(
