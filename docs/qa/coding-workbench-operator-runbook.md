@@ -139,7 +139,10 @@ allowance without a tool call gets one steered repair from the gateway
 (`gateway.retry.scheduled reason=output-exhausted-repair`); a second exhaustion ends the turn as
 final (`coding-sidecar.gateway.turn-failed failureCode=output-exhausted runtimeRetry=refused
 repairOutcome=exhausted-again`). See the LiteLLM troubleshooting entry "Coding Workbench turn
-reasons until its output budget is exhausted".
+reasons until its output budget is exhausted". A turn that ends after reasoning with no tool call or
+text gets the same one repair (`reason=empty-answer-repair`, a second empty answer is final with
+`repairOutcome=empty-again`, and the sidecar never resends a failed turn's reasoning upstream), see
+"Coding Workbench turn ends after reasoning without a tool call or text, again and again" (#3873, F23).
 
 ## Repository working instructions
 

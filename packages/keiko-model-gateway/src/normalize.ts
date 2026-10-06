@@ -167,6 +167,16 @@ export function reasoningText(record: Record<string, unknown>): string | undefin
   return undefined;
 }
 
+/**
+ * Whether an answer carried model reasoning, as the reasoning text it holds or the bytes its usage
+ * recorded (the text is gone once a surface that does not display reasoning discarded it). The one
+ * definition behind the reasoning disposition of a completion line and behind the empty answer the
+ * gateway steers a repair for (#3873, F23).
+ */
+export function carriedReasoning(response: NormalizedResponse): boolean {
+  return response.reasoning !== undefined || (response.usage.reasoningBytes ?? 0) > 0;
+}
+
 function firstMessage(payload: Record<string, unknown>): Record<string, unknown> {
   const choice = firstChoice(payload);
   return choice !== undefined && isRecord(choice.message) ? choice.message : {};

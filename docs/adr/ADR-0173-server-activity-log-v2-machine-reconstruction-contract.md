@@ -1558,13 +1558,21 @@ revision, state, a closed publication reason (published, unavailable hub, termin
 event, exhausted sequence, or capacity pressure), and `runtimeRetry`: `refused` when the provider
 rejected the turn in a way no retry can change (a 4xx other than 408/409/429, a refused credential,
 an invalid configuration — the gateway's own retry policy calls it terminal) and when an
-`output-exhausted` turn's one steered gateway repair exhausted the budget again (#3873, F17: the
-identical turn would run away identically), `allowed` otherwise. The line, and the turn's
+`output-exhausted` or `empty-answer` turn's one steered gateway repair failed the same way again
+(`repairOutcome` `exhausted-again` or `empty-again`; #3873, F17, F23: the identical turn would run
+away identically), `allowed` otherwise. The line, and the turn's
 `coding-sidecar.gateway.outcome` line, carry `repairAttempted` and, when a repair ran, the closed
-`repairOutcome` (`recovered`, `exhausted-again`, `failed`), read off the gateway's own marks on the
-response or the error (ADR-0003), so an exhausted turn is reconstructable from
-`chat.response.streamed outputExhausted=true`, `gateway.retry.scheduled reason=output-exhausted-repair`,
-the second read and these two lines alone.
+`repairOutcome` (`recovered`, `exhausted-again`, `empty-again`, `failed`), read off the gateway's own
+marks on the response or the error (ADR-0003) and naming how the repaired attempt ended, so an
+exhausted turn is reconstructable from `chat.response.streamed outputExhausted=true`,
+`gateway.retry.scheduled reason=output-exhausted-repair`, the second read and these two lines alone,
+and a turn that ended empty after reasoning from `gateway.retry.scheduled reason=empty-answer-repair`
+(the closed `reason` of that line is `retryable-error`, `output-exhausted-repair` or
+`empty-answer-repair`), the second read and the same two lines. Prior reasoning is never resent
+upstream (#3873, F23): `coding-sidecar.gateway.request-validated` records
+`droppedReasoningMessageCount`, the number of prior assistant messages that carried nothing but
+reasoning and were dropped before the gateway request was built (the line's prompt estimate and
+`inputMessageCount` describe what is sent), a count and never the reasoning.
 A refused turn is answered to the runtime as a final 400 — an HTTP 400 before the stream opened, an
 error chunk with `code: 400` and `type: invalid_request_error` after it — which OpenCode 2.0.10
 reads as final; `finish_reason: "error"` or a 503, which it retries, stays the answer to everything

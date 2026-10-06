@@ -398,9 +398,18 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 
 ### D8 — Model reasoning is transient live content, labelled, opt-out, and never evidence
 
-- **Default on, operator opt-out.** A coding-workbench call forwards the model's reasoning unless
-  the gateway configuration sets `codingReasoningDisplay: "off"`; with the switch off the gateway
-  still parses the reasoning and discards it. Every other surface always discards it (ADR-0003).
+- **Default on, operator opt-out.** A coding turn's gateway call, which carries the explicit
+  `reasoningDelivery: "forward"` that only the coding sidecar route sets, forwards the model's
+  reasoning unless the gateway configuration sets `codingReasoningDisplay: "off"`; with the switch off
+  the gateway still parses the reasoning and discards it. Every other surface always discards it,
+  also one that borrows the `coding-workbench` latency profile for its timeout floors (ADR-0003,
+  #3873 F23).
+- **Never resent upstream.** The runtime records the forwarded reasoning in its history and sends it
+  back with later requests. The sidecar drops it there: the reasoning fields of prior assistant
+  messages never reach the gateway request, and an assistant message that carries nothing but
+  reasoning (no answer text, no tool call) is dropped and counted
+  (`droppedReasoningMessageCount` on `coding-sidecar.gateway.request-validated`), so a failed turn's
+  reasoning does not grow the prompt of the attempts that follow it (#3873 F23).
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows

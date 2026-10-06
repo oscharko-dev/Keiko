@@ -643,14 +643,20 @@ records `contentBytes`, `reasoningBytes` and `reasoningTokens` beside `outputByt
 `coding-sidecar.gateway.outcome` records the `reasoningFrames` forwarded to the coding runtime; and
 `coding-runtime.history-projection` the `reasoningSignalCount` that reached the timeline. The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-A model answer that exhausted its output budget without a tool call or a final answer gets one
-steered repair from the gateway (#3873, F17), and the log records it in closed words only:
-`gateway.retry.scheduled` names it with `reason=output-exhausted-repair` (`retryable-error` on
-every ordinary retry), and `coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed`
-record `repairAttempted` and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`,
-`failed`); a repaired turn that exhausted the budget again is final for the coding runtime
-(`runtimeRetry=refused`). The correction the model receives is one fixed sentence, and the
-exhausted reasoning is never recorded.
+A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
+final answer gets one steered repair from the gateway (#3873, F17, F23), and the log records it in
+closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
+`reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
+`coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`
+and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`, `empty-again`, `failed`,
+naming how the repaired attempt ended); a repaired turn that failed the same way again is final for
+the coding runtime (`runtimeRetry=refused`). The correction the model receives is one fixed
+sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
+upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
+assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
+records the number dropped as `droppedReasoningMessageCount`. The gateway hands reasoning only to a
+call that asks for it with the explicit `reasoningDelivery: "forward"` (the coding sidecar route
+alone); the `coding-workbench` latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
 

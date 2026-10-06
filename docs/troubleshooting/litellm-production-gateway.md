@@ -192,6 +192,80 @@ the call's budget could not hold a repair. None of these lines carries the model
 
 ---
 
+## Coding Workbench turn ends after reasoning without a tool call or text, again and again
+
+| Field             | Value                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                    |
+| Surface           | Coding Workbench                                                                        |
+| Stable identifier | `coding-sidecar.gateway.turn-failed failureCode=empty-answer` under the run correlation |
+
+**Symptom**
+
+A run with a reasoning model (Gemma 4 31B behind LiteLLM with streaming on in the live
+qualification) streams its first turns correctly, then a turn shows its reasoning, ends, and the
+timeline reports "The model finished this turn without any text or tool call". The same message
+repeats for turn after turn, each attempt as long as the model needs to reason, until the run is
+stopped; the prompt grows with every attempt.
+
+**Root Cause**
+
+Two defects made one empty answer a loop (#3873, F23). The model reasoned (about 4,500 tokens in the
+live run), then generated a tool call that the upstream never delivered: the provider answered HTTP
+200 with only a finish reason and usage, so the answer carried reasoning but no text and no tool
+call (`chat.response.streamed outcome=failed outputExhausted=false` after thousands of
+`reasoningEvents`, then `coding-sidecar.gateway.turn-failed failureCode=empty-answer`). Before the
+fix that answer got no repair, so the turn stayed `runtimeRetry: allowed` and the coding runtime
+retried the identical turn without end. And the failed turn's forwarded reasoning stayed in the
+runtime's history, which resent it with every later request: the prompt estimate on
+`coding-sidecar.gateway.request-validated` grew by about 6,200 tokens and two messages per attempt.
+
+The gateway now gives an empty answer that carried reasoning the same one steered repair an
+exhausted budget gets: the original request plus one fixed system message that tells the model its
+previous answer ended after reasoning without a tool call or a final answer and asks it to call the
+next tool or answer, keeping any reasoning to a few sentences. The repair is granted once per call,
+counts against neither the provider's attempt count nor the coding outage window, and never against
+the circuit breaker. If the repaired attempt ends empty again, the turn is final for the runtime
+(`runtimeRetry: refused`), so the run settles with an honest cause instead of looping. With the
+reasoning display on (the default) the first attempt's reasoning has already reached the Workbench
+when the repair runs, so the timeline shows a second reasoning passage. An empty answer that carried
+no reasoning at all is not repaired and stays the retryable failure it was. The coding sidecar also
+never resends prior reasoning upstream: the reasoning fields of prior assistant messages and every
+assistant message that carries nothing but reasoning are dropped before the gateway request is
+built.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>`, then per empty turn:
+
+- `chat.response.streamed outcome=failed` with `reasoningEvents` above 0 and `outputExhausted=false`:
+  the read ended after reasoning without content (a finish reason other than `length`).
+- One `gateway.retry.scheduled reason=empty-answer-repair delayMs=0`, then the repaired attempt's own
+  read. A recovered turn records `coding-sidecar.gateway.outcome outcome=accepted repairAttempted=true
+repairOutcome=recovered`; a turn whose repair ended empty again records
+  `coding-sidecar.gateway.turn-failed failureCode=empty-answer runtimeRetry=refused repairAttempted=true
+repairOutcome=empty-again` and the matching `outcome=failed` line. `repairAttempted=false` with
+  `runtimeRetry=allowed` means the answer carried no reasoning, or the call's budget could not hold a
+  repair.
+- `coding-sidecar.gateway.request-validated` `droppedReasoningMessageCount` above 0 is the number of
+  prior assistant messages that carried only reasoning and were not resent; its
+  `estimatedPromptTokens` and `inputMessageCount` describe what is sent. None of these lines carries
+  the model's reasoning or text.
+
+**Resolution**
+
+- A recovered turn needs nothing; the repair line is the evidence of what the model was told.
+- A turn whose repair ended empty again points at a model or route that loses its tool call on this
+  task: check the model server and the LiteLLM route for a tool-call parser that drops or truncates
+  large calls (a direct probe with the same request shows whether the call arrives as one
+  `delta.tool_calls` event), lower the reasoning effort for the run if the model offers it, or pick
+  another model, then send the task again.
+- Do not widen the output allowance for this symptom: `outputExhausted=false` says the model stopped
+  by itself, not that it ran out of budget (compare "Coding Workbench turn reasons until its output
+  budget is exhausted" above).
+
+---
+
 ## Coding Workbench refuses to start a run with the selected model
 
 | Field             | Value                                                                       |

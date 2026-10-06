@@ -3,13 +3,23 @@
 // surface at once, and the coding runtime retried the identical turn, which ran away identically.
 // The gateway now steers ONE repaired attempt — the original request plus one fixed system
 // correction — before the exhaustion surfaces, on the buffered and on the streamed path alike.
+// #3873 (F23): the same one repair covers an answer that ended after reasoning without a tool call
+// or any text (Gemma 4 31B streamed through LiteLLM, run 74202984158312182524609898190850427735),
+// which the coding runtime also retried identically until the operator stopped the run.
 import { describe, expect, it } from "vitest";
 import {
   AuthenticationError,
   GatewayError,
+  ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
+  TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { Gateway, OUTPUT_EXHAUSTED_REPAIR_MESSAGE, type GatewayCallRequest } from "./gateway.js";
+import {
+  EMPTY_ANSWER_REPAIR_MESSAGE,
+  Gateway,
+  OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
+  type GatewayCallRequest,
+} from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { providerRequestBudgetMs } from "./resilience.js";
 import type {
@@ -432,7 +442,11 @@ async function drainInto(
 // reasoning passage, and no answer text or tool call is ever duplicated — while an exhaustion after
 // delivered answer text stays unrepaired and honest.
 describe("Gateway output-exhausted repair after forwarded reasoning (#3873 F17, option iii)", () => {
-  const CODING_REQUEST: GatewayCallRequest = { ...REQUEST, latencyProfile: "coding-workbench" };
+  const CODING_REQUEST: GatewayCallRequest = {
+    ...REQUEST,
+    latencyProfile: "coding-workbench",
+    reasoningDelivery: "forward",
+  };
   const exhausted = (): ProviderOutputExhaustedError => new ProviderOutputExhaustedError(MODEL);
 
   it("steers one repaired attempt after reasoning alone was forwarded, delivering a second passage", async () => {
@@ -516,4 +530,371 @@ describe("Gateway output-exhausted repair after forwarded reasoning (#3873 F17, 
     expect(scripted.requests).toHaveLength(1);
     expect(scheduledLines(events)).toEqual([]);
   });
+});
+
+// #3873 (F23): a model that reasons and then ends its turn without a tool call or any text (the
+// provider answers HTTP 200 with `finish_reason: "stop"`, so it is not an exhausted budget) got no
+// repair: the coding runtime retried the identical turn seven times. The same one steered repair now
+// covers it — with its own fixed correction — but only when the answer carried reasoning; an answer
+// that was empty with no reasoning at all keeps being surfaced as the model's final word (#3610).
+describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
+  const emptyAfterReasoning = (): ProviderEmptyAnswerError =>
+    new ProviderEmptyAnswerError(MODEL, [], true);
+  const plainEmpty = (): ProviderEmptyAnswerError => new ProviderEmptyAnswerError(MODEL);
+  const exhausted = (): ProviderOutputExhaustedError => new ProviderOutputExhaustedError(MODEL);
+
+  it("steers exactly one repaired buffered attempt with the empty-answer correction appended", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = bufferedAdapter([emptyAfterReasoning(), toolCallAnswer()]);
+
+    const result = await gatewayFor(scripted, events).chat(REQUEST);
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.outputRepair).toBe("recovered");
+    expect(scripted.requests).toHaveLength(2);
+    // The original request plus ONE system correction: nothing is dropped and the model's
+    // reasoning is never quoted back.
+    expect(scripted.requests[1]?.messages).toEqual([
+      ...REQUEST.messages,
+      { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+    ]);
+    expect(scripted.requests[1]?.maxOutputTokens).toBe(REQUEST.maxOutputTokens);
+    const scheduled = scheduledLines(events);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]).toMatchObject({
+      correlationId: "run-f17-324076",
+      extra: { reason: "empty-answer-repair", delayMs: 0, attempt: 1, httpStatus: 200 },
+    });
+    expect(
+      expectActivityLogProof(
+        "gateway.retry.scheduled.emitted-line",
+        formatActivityLogProofLine(scheduled[0] ?? {}),
+      ),
+    ).toMatchObject({ reason: "empty-answer-repair", delayMs: 0 });
+    expect(JSON.stringify(events)).not.toContain("Read the seven files");
+  });
+
+  it("words the empty-answer correction apart from the exhausted-budget one", () => {
+    expect(EMPTY_ANSWER_REPAIR_MESSAGE).not.toBe(OUTPUT_EXHAUSTED_REPAIR_MESSAGE);
+    expect(EMPTY_ANSWER_REPAIR_MESSAGE).toContain("ended after reasoning");
+    expect(EMPTY_ANSWER_REPAIR_MESSAGE).toContain("without a tool call or a final answer");
+  });
+
+  it("surfaces a second empty answer once, marked as the repair's outcome, without a third attempt", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = bufferedAdapter([
+      emptyAfterReasoning(),
+      emptyAfterReasoning(),
+      toolCallAnswer(),
+    ]);
+    const gateway = gatewayFor(scripted, events);
+
+    const failure = await gateway.chat(REQUEST).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(failure).toMatchObject({ outputRepair: "empty-again" });
+    expect(scripted.requests).toHaveLength(2);
+    expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
+      "empty-answer-repair",
+    ]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 2,
+      reason: "terminal",
+    });
+    // The model answered twice: neither answer is a provider fault for the breaker.
+    expect(gateway.circuitStatus(MODEL)).toMatchObject({ state: "closed", consecutiveFailures: 0 });
+  });
+
+  // The #3610 pin, kept exactly: an empty answer with no reasoning is the model's final word.
+  it("does not repair an empty answer that carried no reasoning", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = bufferedAdapter([plainEmpty(), toolCallAnswer()]);
+
+    const failure = await gatewayFor(scripted, events)
+      .chat(REQUEST)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect((failure as GatewayError).outputRepair).toBeUndefined();
+    expect(scripted.requests).toHaveLength(1);
+    expect(scheduledLines(events)).toEqual([]);
+  });
+
+  it("grants one repair per call whichever of the two failures comes first", async () => {
+    const exhaustedFirst = bufferedAdapter([exhausted(), emptyAfterReasoning(), toolCallAnswer()]);
+    const emptyFirst = bufferedAdapter([emptyAfterReasoning(), exhausted(), toolCallAnswer()]);
+
+    const afterExhausted = await gatewayFor(exhaustedFirst, [])
+      .chat(REQUEST)
+      .catch((error: unknown) => error);
+    const afterEmpty = await gatewayFor(emptyFirst, [])
+      .chat(REQUEST)
+      .catch((error: unknown) => error);
+
+    // The outcome names how the repaired attempt ended, whatever the first failure was.
+    expect(afterExhausted).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(afterExhausted).toMatchObject({ outputRepair: "empty-again" });
+    expect(afterEmpty).toBeInstanceOf(ProviderOutputExhaustedError);
+    expect(afterEmpty).toMatchObject({ outputRepair: "exhausted-again" });
+    expect(exhaustedFirst.requests).toHaveLength(2);
+    expect(emptyFirst.requests).toHaveLength(2);
+    // Each repair carries the correction of the failure it answers.
+    expect(exhaustedFirst.requests[1]?.messages.at(-1)?.content).toBe(
+      OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
+    );
+    expect(emptyFirst.requests[1]?.messages.at(-1)?.content).toBe(EMPTY_ANSWER_REPAIR_MESSAGE);
+  });
+
+  it("marks a repaired attempt that fails for another reason as failed", async () => {
+    const scripted = bufferedAdapter([
+      emptyAfterReasoning(),
+      new AuthenticationError("credential refused"),
+    ]);
+
+    const failure = await gatewayFor(scripted, [])
+      .chat(REQUEST)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AuthenticationError);
+    expect(failure).toMatchObject({ outputRepair: "failed" });
+    expect(scripted.requests).toHaveLength(2);
+  });
+
+  it("does not steer a repair the call's budget can no longer hold", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const clock = scriptedClock();
+    const providerValue = provider();
+    const requests: GatewayRequest[] = [];
+    const scripted: Scripted = {
+      requests,
+      adapter: {
+        call: (request): Promise<NormalizedResponse> => {
+          requests.push(request);
+          clock.advance(providerRequestBudgetMs(providerValue));
+          return Promise.reject(emptyAfterReasoning());
+        },
+      },
+    };
+
+    const failure = await gatewayFor(scripted, events, config(providerValue), clock)
+      .chat(REQUEST)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect((failure as GatewayError).outputRepair).toBeUndefined();
+    expect(requests).toHaveLength(1);
+    expect(scheduledLines(events)).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      reason: "budget",
+    });
+  });
+
+  it("steers one repaired streamed attempt when nothing but discarded reasoning preceded the empty answer", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = streamingAdapter([emptyAfterReasoning(), toolCallAnswer()]);
+
+    const chunks = await drain(
+      gatewayFor(scripted, events, config(provider(), true)).chatStream(REQUEST),
+    );
+
+    expect(chunks.map((chunk) => chunk.type)).toEqual(["delta", "done"]);
+    const done = chunks.at(-1);
+    expect(done?.type === "done" ? done.response.outputRepair : undefined).toBe("recovered");
+    expect(scripted.requests).toHaveLength(2);
+    expect(scripted.requests[1]?.messages).toEqual([
+      ...REQUEST.messages,
+      { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+    ]);
+    expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
+      "empty-answer-repair",
+    ]);
+  });
+
+  it("surfaces a second streamed empty answer once, marked as the repair's outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = streamingAdapter([
+      emptyAfterReasoning(),
+      emptyAfterReasoning(),
+      toolCallAnswer(),
+    ]);
+    const gateway = gatewayFor(scripted, events, config(provider(), true));
+
+    const failure = await drain(gateway.chatStream(REQUEST)).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(failure).toMatchObject({ outputRepair: "empty-again" });
+    expect(scripted.requests).toHaveLength(2);
+    expect(gateway.circuitStatus(MODEL)).toMatchObject({ state: "closed", consecutiveFailures: 0 });
+  });
+
+  // The coding turn asks for reasoning delivery, so its first attempt has already shown its
+  // reasoning when the answer ends empty. The one repair still runs — the caller then sees a second
+  // reasoning passage, and no answer text or tool call is duplicated (owner decision 2026-10-06,
+  // option iii, applied to this failure as it is to an exhausted budget).
+  describe("after forwarded reasoning", () => {
+    const CODING_REQUEST: GatewayCallRequest = {
+      ...REQUEST,
+      latencyProfile: "coding-workbench",
+      reasoningDelivery: "forward",
+    };
+
+    it("steers one repaired attempt after reasoning alone was forwarded, delivering a second passage", async () => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = scriptedStreams([
+        [{ type: "reasoning", token: "first passage" }, emptyAfterReasoning()],
+        [
+          { type: "reasoning", token: "second passage" },
+          { type: "done", response: toolCallAnswer() },
+        ],
+      ]);
+
+      const chunks = await drain(
+        gatewayFor(scripted, events, config(provider(), true)).chatStream(CODING_REQUEST),
+      );
+
+      expect(kinds(chunks)).toEqual([
+        "reasoning:first passage",
+        "reasoning:second passage",
+        "done",
+      ]);
+      const done = chunks.at(-1);
+      expect(done?.type === "done" ? done.response : undefined).toMatchObject({
+        outputRepair: "recovered",
+        toolCalls: [{ name: "keiko_read_file" }],
+      });
+      expect(scripted.requests).toHaveLength(2);
+      expect(scripted.requests[1]?.messages).toEqual([
+        ...REQUEST.messages,
+        { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+      ]);
+      expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
+        "empty-answer-repair",
+      ]);
+      expect(events.find((event) => event.op === "gateway.stream.failed")).toBeUndefined();
+      expect(JSON.stringify(events)).not.toContain("first passage");
+    });
+
+    it("surfaces a second empty answer after forwarded reasoning once, marked as the repair's outcome", async () => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = scriptedStreams([
+        [{ type: "reasoning", token: "first passage" }, emptyAfterReasoning()],
+        [{ type: "reasoning", token: "second passage" }, emptyAfterReasoning()],
+        [{ type: "done", response: toolCallAnswer() }],
+      ]);
+      const gateway = gatewayFor(scripted, events, config(provider(), true));
+      const delivered: GatewayStreamChunk[] = [];
+
+      const failure = await drainInto(gateway.chatStream(CODING_REQUEST), delivered);
+
+      expect(kinds(delivered)).toEqual(["reasoning:first passage", "reasoning:second passage"]);
+      expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+      expect(failure).toMatchObject({ outputRepair: "empty-again" });
+      expect(scripted.requests).toHaveLength(2);
+      expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
+        "empty-answer-repair",
+      ]);
+      expect(events.find((event) => event.op === "gateway.stream.failed")?.extra).toMatchObject({
+        afterFirstChunk: true,
+        chunkCount: 2,
+      });
+      expect(gateway.circuitStatus(MODEL)).toMatchObject({
+        state: "closed",
+        consecutiveFailures: 0,
+      });
+    });
+
+    it("does not repair an empty answer that carried no reasoning, even on a forwarding call", async () => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = scriptedStreams([
+        [{ type: "reasoning", token: "first passage" }, plainEmpty()],
+        [{ type: "done", response: toolCallAnswer() }],
+      ]);
+      const delivered: GatewayStreamChunk[] = [];
+
+      const failure = await drainInto(
+        gatewayFor(scripted, events, config(provider(), true)).chatStream(CODING_REQUEST),
+        delivered,
+      );
+
+      expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+      expect((failure as GatewayError).outputRepair).toBeUndefined();
+      expect(scripted.requests).toHaveLength(1);
+      expect(scheduledLines(events)).toEqual([]);
+    });
+  });
+});
+
+// The steer belongs to the call, not to one attempt (#3873, F17, F23): when the repaired attempt
+// meets an ordinary provider failure, the provider retry that follows resends the corrected request,
+// never the original one the model could not answer.
+describe("Gateway steered repair across a provider retry (#3873 F17, F23)", () => {
+  const failures = [
+    [
+      "an exhausted answer",
+      (): Error => new ProviderOutputExhaustedError(MODEL),
+      OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
+      "output-exhausted-repair",
+    ],
+    [
+      "an empty answer after reasoning",
+      (): Error => new ProviderEmptyAnswerError(MODEL, [], true),
+      EMPTY_ANSWER_REPAIR_MESSAGE,
+      "empty-answer-repair",
+    ],
+  ] as const;
+
+  it.each(failures)(
+    "keeps the correction on the buffered provider retry after %s",
+    async (_label, failure, correction, reason) => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = bufferedAdapter([
+        failure(),
+        new TransportError("fixture connection reset"),
+        toolCallAnswer(),
+      ]);
+
+      const result = await gatewayFor(scripted, events).chat(REQUEST);
+
+      expect(result.outputRepair).toBe("recovered");
+      const steered = [...REQUEST.messages, { role: "system", content: correction }];
+      expect(scripted.requests.map((request) => request.messages)).toEqual([
+        REQUEST.messages,
+        steered,
+        steered,
+      ]);
+      expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
+        reason,
+        "retryable-error",
+      ]);
+    },
+  );
+
+  it.each(failures)(
+    "keeps the correction on the streamed provider retry after %s",
+    async (_label, failure, correction, reason) => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = streamingAdapter([
+        failure(),
+        new TransportError("fixture connection reset"),
+        toolCallAnswer(),
+      ]);
+
+      const chunks = await drain(
+        gatewayFor(scripted, events, config(provider(), true)).chatStream(REQUEST),
+      );
+
+      const done = chunks.at(-1);
+      expect(done?.type === "done" ? done.response.outputRepair : undefined).toBe("recovered");
+      const steered = [...REQUEST.messages, { role: "system", content: correction }];
+      expect(scripted.requests.map((request) => request.messages)).toEqual([
+        REQUEST.messages,
+        steered,
+        steered,
+      ]);
+      expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
+        reason,
+        "retryable-error",
+      ]);
+    },
+  );
 });

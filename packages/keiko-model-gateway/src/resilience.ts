@@ -194,15 +194,16 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
     attempt: { type: "integer", dataClass: "count", required: true },
     maxRetries: { type: "integer", dataClass: "count", required: true },
     delayMs: { type: "number", dataClass: "duration", required: true },
-    // #3873 (F17): why a further attempt was scheduled — a retryable provider failure, or the one
-    // steered repair of an answer that exhausted its output budget, which is not a provider retry
-    // and must read as such. `required: false` only because a record written before this field
-    // existed lacks it; every line written since carries it.
+    // #3873 (F17, F23): why a further attempt was scheduled — a retryable provider failure, or the
+    // one steered repair of an answer the model could not use (it exhausted its output budget, or it
+    // ended after reasoning without a tool call or any text), which is not a provider retry and must
+    // read as such. `required: false` only because a record written before this field existed lacks
+    // it; every line written since carries it.
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["retryable-error", "output-exhausted-repair"],
+      values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
@@ -364,21 +365,25 @@ export interface RetryConfig {
   /**
    * A steered repair of a TERMINAL failure the caller can correct (#3873, F17): consulted on every
    * failed attempt; a reason schedules ONE further attempt at once, which receives the failure as
-   * its `previousError` and sends a corrected request. The repair is granted once per call and is
-   * not a provider retry: neither `maxRetries` nor the outage window applies to it, only what is
-   * left of `timeoutMs`. A second failure of the same class surfaces to the caller.
+   * its `previousError` and sends a corrected request. The repair is granted once per call, for
+   * whichever failure comes first, and is not a provider retry: neither `maxRetries` nor the outage
+   * window applies to it, only what is left of `timeoutMs`. A second failure surfaces to the caller.
    */
   readonly repair?: ((error: Error) => RetryRepairReason | undefined) | undefined;
 }
 
-/** The one steered repair the loop knows: a model answer that exhausted its output budget. */
-export type RetryRepairReason = "output-exhausted-repair";
+/**
+ * The steered repairs the loop knows, one per failure of the model's own answer: one that exhausted
+ * its output budget (#3873, F17) and one that ended after reasoning without a tool call or any text
+ * (#3873, F23). The reason names the correction the caller sends and is what the scheduled line says.
+ */
+export type RetryRepairReason = "output-exhausted-repair" | "empty-answer-repair";
 
 /**
  * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
- * resumes after it, so the one steered repair of a streamed answer that exhausted its output budget
- * after nothing but forwarded reasoning is decided, logged and bounded exactly like a repair before
- * the first chunk. The failed attempt is the resumed loop's attempt 1.
+ * resumes after it, so the one steered repair of a streamed answer that failed after nothing but
+ * forwarded reasoning is decided, logged and bounded exactly like a repair before the first chunk.
+ * The failed attempt is the resumed loop's attempt 1.
  */
 export interface RetryResume {
   readonly failedAttempt: Error;
@@ -387,10 +392,17 @@ export interface RetryResume {
 // The reason a further attempt was scheduled, on the scheduled line.
 type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 
-// The gateway's own repair of an exhausted answer (#3873, F17): `Gateway` sends the corrected
-// request on the attempt that follows; the loop only grants that attempt, once.
-export function outputExhaustedRepair(error: Error): RetryRepairReason | undefined {
-  return error instanceof ProviderOutputExhaustedError ? "output-exhausted-repair" : undefined;
+// The gateway's own repair of an answer the model could not use: one that exhausted its output
+// budget (#3873, F17), and one that ended after reasoning without a tool call or any text (F23) —
+// an empty answer that carried no reasoning is the model's final word and gets none (#3610).
+// `Gateway` sends the corrected request on the attempt that follows; the loop only grants that
+// attempt, once. The single classification every path consults: the buffered attempt, the streamed
+// startup, and the stream resumed after forwarded reasoning.
+export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined {
+  if (error instanceof ProviderOutputExhaustedError) return "output-exhausted-repair";
+  return error instanceof ProviderEmptyAnswerError && error.afterReasoning
+    ? "empty-answer-repair"
+    : undefined;
 }
 
 // Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
@@ -969,15 +981,15 @@ export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
 // the budget derived from it bounds the call. Every chat call — buffered, and a stream before its
-// first content — derives its policy from here, so the one steered repair of an exhausted answer
-// (#3873, F17) is part of it rather than re-attached by each caller.
+// first content — derives its policy from here, so the one steered repair of an exhausted or empty
+// answer (#3873, F17, F23) is part of it rather than re-attached by each caller.
 export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
   return {
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     attemptTimeoutMs: chatAttemptTimeoutMs(provider),
     timeoutMs: providerRequestBudgetMs(provider),
-    repair: outputExhaustedRepair,
+    repair: steeredAnswerRepair,
   };
 }
 

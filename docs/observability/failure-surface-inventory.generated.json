@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6df793c9f78d58283db07eb3ddc712e194e5a160b2bceaef4d7290067a932f5e"
+    "catalogDigest": "bbd48b120502ec422d961d28adadaaf94a8c4f133bd39a533551c3498217cc7b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1722,7 +1722,8 @@
     "gateway.retry.scheduled.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
       "packages/keiko-model-gateway/src/openai-adapter.test.ts",
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
+      "packages/keiko-model-gateway/src/resilience.logging.test.ts",
+      "packages/keiko-model-gateway/src/resilience.test.ts"
     ],
     "gateway.route.rejected.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"

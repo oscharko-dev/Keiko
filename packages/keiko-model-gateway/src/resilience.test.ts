@@ -3,7 +3,9 @@ import {
   AuthenticationError,
   CancelledError,
   CircuitOpenError,
+  ProviderEmptyAnswerError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -14,6 +16,7 @@ import {
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
+  steeredAnswerRepair,
 } from "./resilience.js";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
@@ -1150,5 +1153,89 @@ describe("executeWithRetry — steered repair (#3873 F17)", () => {
     expect(calls).toBe(1);
     expect(log.events.map((event) => event.op)).toEqual(["gateway.retry.exhausted"]);
     expect(log.events[0]?.extra).toMatchObject({ reason: "budget", delayMs: 0, remainingMs: 0 });
+  });
+});
+
+// #3873 (F17, F23): which failures of a model's own answer the gateway steers one repair for, and the
+// reason each one carries on its scheduled line. The classification is the single decision the
+// buffered path, the streamed startup and the stream resumed after forwarded reasoning all consult.
+describe("steeredAnswerRepair (#3873 F17, F23)", () => {
+  it.each([
+    [
+      "an exhausted output budget",
+      new ProviderOutputExhaustedError("m"),
+      "output-exhausted-repair",
+    ],
+    [
+      "an empty answer after reasoning",
+      new ProviderEmptyAnswerError("m", [], true),
+      "empty-answer-repair",
+    ],
+    ["an empty answer without reasoning", new ProviderEmptyAnswerError("m"), undefined],
+    ["a retryable transport failure", new TransportError("upstream reset"), undefined],
+    ["a refused credential", new AuthenticationError("refused"), undefined],
+    ["a plain provider error", new ProviderError("upstream", 200), undefined],
+  ] as const)("classifies %s", (_label, error, reason) => {
+    expect(steeredAnswerRepair(error)).toBe(reason);
+  });
+
+  it("is the repair every provider retry configuration carries", () => {
+    const config = providerRetryConfig({ timeoutMs: 30_000, maxRetries: 2, retryBaseDelayMs: 500 });
+    expect(config.repair).toBe(steeredAnswerRepair);
+  });
+
+  it("names the empty-answer repair on its scheduled line, once, and never retries it as a provider error", async () => {
+    const { clock, sleeps } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new ProviderEmptyAnswerError("m", [], true));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: { write: (event): void => void events.push(event) }, modelId: "m" },
+      ),
+    ).rejects.toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([0]);
+    expect(events.map((event) => event.op)).toEqual([
+      "gateway.retry.scheduled",
+      "gateway.retry.exhausted",
+    ]);
+    expect(events[0]?.extra).toMatchObject({ reason: "empty-answer-repair", delayMs: 0 });
+    expect(
+      expectActivityLogProof(
+        "gateway.retry.scheduled.emitted-line",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ reason: "empty-answer-repair" });
+  });
+
+  it("resumes after an attempt that already ran, granting the empty-answer repair at once", async () => {
+    const { clock, sleeps } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    const seen: (Error | undefined)[] = [];
+    const failedAttempt = new ProviderEmptyAnswerError("m", [], true);
+    const value = await executeWithRetry(
+      (_attemptMs, _remainingMs, previousError) => {
+        seen.push(previousError);
+        return Promise.resolve("repaired");
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: { write: (event): void => void events.push(event) }, modelId: "m" },
+      { failedAttempt },
+    );
+    expect(value).toBe("repaired");
+    expect(seen).toEqual([failedAttempt]);
+    expect(sleeps).toEqual([0]);
+    expect(events[0]?.extra).toMatchObject({ reason: "empty-answer-repair", attempt: 1 });
   });
 });

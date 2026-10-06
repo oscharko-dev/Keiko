@@ -831,14 +831,17 @@ export type FinishReason =
   "stop" | "tool_calls" | "length" | "content_filter" | "error" | "cancelled";
 
 /**
- * How the gateway's one steered repair of an answer that exhausted its output budget without a
- * tool call or a final answer ended (#3873, F17). `recovered` rides on the repaired response
- * (`NormalizedResponse.outputRepair`); `exhausted-again` (the model spent the whole budget once
- * more) and `failed` (the repaired attempt failed for another reason) ride on the error the
- * repaired attempt surfaced (`GatewayError.outputRepair` in keiko-security). A call whose first
- * answer was usable, or whose budget could not hold a repair, carries neither.
+ * How the gateway's one steered repair of an answer the model could not use ended: an answer that
+ * exhausted its output budget without a tool call or a final answer (#3873, F17), or one that ended
+ * after reasoning without a tool call or any text (#3873, F23). `recovered` rides on the repaired
+ * response (`NormalizedResponse.outputRepair`). The rest ride on the error the repaired attempt
+ * surfaced (`GatewayError.outputRepair` in keiko-security) and name how that attempt ended, whichever
+ * failure triggered the repair: `exhausted-again` (it spent the whole budget), `empty-again` (it
+ * ended without any text or tool call) and `failed` (it failed for another reason, or the repair
+ * never ran). A call whose first answer was usable, or whose budget could not hold a repair,
+ * carries neither.
  */
-export type GatewayOutputRepairOutcome = "recovered" | "exhausted-again" | "failed";
+export type GatewayOutputRepairOutcome = "recovered" | "exhausted-again" | "empty-again" | "failed";
 
 export interface NormalizedResponse {
   readonly modelId: string;
@@ -858,7 +861,8 @@ export interface NormalizedResponse {
   readonly reasoning?: string | undefined;
   /**
    * Set by the gateway, never by a provider: this answer came from the one steered repair of a
-   * preceding answer that exhausted its output budget (#3873, F17). Absent on every first answer.
+   * preceding answer that exhausted its output budget (#3873, F17) or ended after reasoning without
+   * a tool call or any text (#3873, F23). Absent on every first answer.
    */
   readonly outputRepair?: Extract<GatewayOutputRepairOutcome, "recovered"> | undefined;
 }

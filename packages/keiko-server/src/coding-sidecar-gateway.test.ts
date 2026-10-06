@@ -435,9 +435,12 @@ describe("coding-sidecar gateway", () => {
       if (stream) expect(result).toBe(STREAMING);
       else expect(result).toMatchObject({ status: 200 });
       expect(captured).toHaveLength(1);
+      // #3873 (F23): the explicit reasoning delivery rides with the timeout floors and the outage
+      // policy, so the gateway forwards the model's reasoning on this route and nowhere else.
       expect(captured[0]).toMatchObject({
         latencyProfile: "coding-workbench",
         outagePolicy: "outage-window",
+        reasoningDelivery: "forward",
       });
     } finally {
       chat.mockRestore();
@@ -6855,5 +6858,615 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
       repairAttempted: true,
       repairOutcome: "recovered",
     });
+  });
+});
+
+// #3873 (F23): run 74202984158312182524609898190850427735 — Gemma 4 31B streamed through LiteLLM
+// reasoned for about 4,500 tokens and ended its turn without a tool call or any text, and the
+// runtime retried the identical turn seven times. The gateway now steers one repair for an answer
+// that ended after reasoning (gateway.output-repair.test.ts); the turn's settlement lines say how it
+// ended, and a repair that ended empty again is answered as final to the runtime, like an exhausted
+// budget that stayed exhausted.
+describe("coding sidecar gateway empty-answer repair evidence (#3873 F23)", () => {
+  afterEach(resetServerLogger);
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 7 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const emptyAfterReasoning = (outputRepair?: "empty-again" | "failed"): ProviderEmptyAnswerError =>
+    Object.assign(
+      new ProviderEmptyAnswerError("coding", [], true),
+      outputRepair === undefined ? {} : { outputRepair },
+    );
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const bufferedDeps = (answer: () => Promise<NormalizedResponse>): UiHandlerDeps => ({
+    ...depsValue(configValue(provider(), capability()), () => answer),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+  const streamedDeps = (stream: () => AsyncGenerator<GatewayStreamChunk>): UiHandlerDeps => ({
+    ...runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-empty-repair" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+        stream(),
+    ),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+
+  it("refuses a runtime retry once the repaired buffered attempt ended empty again", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(emptyAfterReasoning("empty-again"))),
+    );
+    // A final 400, which the runtime reads as the end of the turn, not a 503 it would retry.
+    expect(result).toMatchObject({ status: 400 });
+    const failed = lineOf(sink.events, "coding-sidecar.gateway.turn-failed");
+    expect(failed?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.turn-failed.emitted-line",
+        formatActivityLogProofLine(failed ?? {}),
+      ),
+    ).toMatchObject({ runtimeRetry: "refused", repairOutcome: "empty-again" });
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+  });
+
+  it.each([
+    ["a first empty answer the call could not repair", undefined, false],
+    ["a repair that never ran because its admission was refused", "failed", true],
+  ] as const)("keeps %s retryable", async (_label, outputRepair, repairAttempted) => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(emptyAfterReasoning(outputRepair))),
+    );
+    expect(result).toMatchObject({ status: 503 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "allowed",
+      repairAttempted,
+    });
+  });
+
+  it("refuses a runtime retry once the repaired streamed attempt ended empty again", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw emptyAfterReasoning("empty-again");
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic turn" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      },
+      streamedDeps(stream),
+    );
+    expect(result).toBe(STREAMING);
+    // The final rejection chunk, never `finish_reason: "error"`, which the runtime would retry.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+  });
+});
+
+// The F23 loop on the sidecar's real wire: the provider's SSE answer ends after reasoning, the real
+// gateway steers its one repair, and the runtime receives the second reasoning passage — or, when
+// the repaired attempt ends empty again, the final rejection it reads as the end of the turn.
+describe("coding sidecar gateway empty-answer repair after forwarded reasoning (#3873 F23)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 9 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const usageFrame = (): string =>
+    sseData({
+      choices: [],
+      usage: {
+        prompt_tokens: 40,
+        completion_tokens: 900,
+        completion_tokens_details: { reasoning_tokens: 900 },
+      },
+    });
+
+  // The provider's answer that reasoned and ended its turn: reasoning deltas, `finish_reason: "stop"`
+  // and no content or tool call (HTTP 200, so neither a broken stream nor an exhausted budget).
+  function emptyAfterReasoningAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Think " }),
+      sseDelta({ reasoning_content: "hard." }),
+      sseFinish("stop"),
+      usageFrame(),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  // The same, with no reasoning at all: the model's final word, never repaired (#3610).
+  function plainEmptyAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: "" }),
+      sseFinish("stop"),
+      usageFrame(),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function repairedAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Briefly: " }),
+      sseDelta({ content: "Done." }),
+      sseFinish("stop"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 70,
+          completion_tokens: 12,
+          completion_tokens_details: { reasoning_tokens: 4 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function liveRepairDeps(runId: string): UiHandlerDeps {
+    return { ...liveDeps(runId), codingRuntimeOrchestrator: runningOrchestrator };
+  }
+
+  it("repairs a live turn that ended empty after forwarded reasoning and delivers the second passage", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+        return Promise.resolve(
+          bodies.length === 1 ? emptyAfterReasoningAnswer() : repairedAnswer(),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-empty-repair-live"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(bodies).toHaveLength(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Briefly: " },
+      { content: "Done." },
+    ]);
+    expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
+    // The repaired request is the original plus the fixed correction, never the reasoning quoted back.
+    const repaired = bodies[1] as { readonly messages?: readonly { readonly content?: unknown }[] };
+    expect(repaired.messages?.at(-1)).toMatchObject({ role: "system" });
+    expect(String(repaired.messages?.at(-1)?.content)).toContain("ended after reasoning");
+    expect(JSON.stringify(bodies[1])).not.toContain("Think ");
+    expect(lineOf(sink.events, "gateway.retry.scheduled")?.extra).toMatchObject({
+      reason: "empty-answer-repair",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+      reasoningFrames: 3,
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  it("refuses a runtime retry once the repaired live turn ended empty again after forwarded reasoning", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const fetchMock = vi.fn(() => Promise.resolve(emptyAfterReasoningAnswer()));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-empty-repair-exhausted"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+    ]);
+    // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    const failed = lineOf(sink.events, "coding-sidecar.gateway.turn-failed");
+    expect(failed?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.turn-failed.emitted-line",
+      formatActivityLogProofLine(failed ?? {}),
+    );
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+      reasoningFrames: 4,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  // The #3610 pin on the real wire: an empty answer with no reasoning is the model's final word, so
+  // it gets no repair and stays the retryable failure it always was.
+  it("does not repair an empty live answer that carried no reasoning", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const fetchMock = vi.fn(() => Promise.resolve(plainEmptyAnswer()));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-empty-no-repair"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(lineOf(sink.events, "gateway.retry.scheduled")).toBeUndefined();
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "allowed",
+      repairAttempted: false,
+    });
+  });
+});
+
+// #3873 (F23): the failed turn's reasoning stayed in OpenCode's history and was resent, which grew
+// the prompt by about 6,200 tokens and two messages per attempt. Prior reasoning is never resent
+// upstream: the sidecar drops the reasoning fields of prior assistant messages and every assistant
+// message that carries nothing but reasoning, before the gateway request is built, and records how
+// many it dropped as a count.
+describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F23)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const READ_CALL = {
+    id: "call-1",
+    type: "function",
+    function: { name: "keiko_workspace_read", arguments: '{"relativePath":"src/a.ts"}' },
+  };
+  // OpenCode's history after a failed turn: the reasoning the sidecar forwarded came back as an
+  // assistant message that carries nothing else, and earlier assistant messages carry their own.
+  const HISTORY: readonly unknown[] = [
+    { role: "system", content: "governed prompt" },
+    { role: "user", content: "fix the parser" },
+    { role: "assistant", content: "", reasoning_content: "private failed-turn reasoning" },
+    { role: "user", content: "continue" },
+    {
+      role: "assistant",
+      content: "Reading the file.",
+      reasoning_content: "private reasoning beside a tool call",
+      tool_calls: [READ_CALL],
+    },
+    { role: "tool", content: "file body", tool_call_id: "call-1" },
+    { role: "assistant", content: null, reasoning: "private second failed-turn reasoning" },
+    { role: "user", content: "go on" },
+  ];
+
+  it("drops prior reasoning and reasoning-only assistant messages before the gateway request is built", async () => {
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "coding", messages: HISTORY, tools: v2ModelVisibleTools() }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    expect(seen[0]?.messages[3]).toMatchObject({
+      role: "assistant",
+      content: "Reading the file.",
+      toolCalls: [expect.objectContaining({ id: "call-1" })],
+    });
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("private");
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("reasoning");
+    const validated = lineOf(sink.events, "coding-sidecar.gateway.request-validated");
+    expect(validated?.extra).toMatchObject({
+      inputMessageCount: 6,
+      droppedReasoningMessageCount: 2,
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.request-validated.line",
+        formatActivityLogProofLine(validated ?? {}),
+      ),
+    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    expect(JSON.stringify(sink.events)).not.toContain("private");
+  });
+
+  it("sends neither the reasoning nor a reasoning-only message over the provider wire", async () => {
+    resetGatewayInstanceCacheForTests();
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+        return Promise.resolve(
+          providerSse([
+            sseDelta({ role: "assistant", content: "ok" }),
+            sseFinish("stop"),
+            "data: [DONE]\n\n",
+          ]),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: HISTORY,
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      },
+      liveDeps("run-history-wire"),
+    );
+
+    expect(bodies).toHaveLength(1);
+    const upstream = bodies[0] as { readonly messages?: readonly Record<string, unknown>[] };
+    expect(upstream.messages?.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    // No assistant message is empty, and none carries a reasoning field of either name.
+    expect(
+      upstream.messages?.every(
+        (message) => !("reasoning_content" in message) && !("reasoning" in message),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(bodies[0])).not.toContain("private");
+  });
+
+  it.each([
+    ["an empty string", { content: "" }],
+    ["null", { content: null }],
+    ["no content field", {}],
+    ["whitespace only", { content: " \n\t" }],
+    ["an empty text part list", { content: [] }],
+    ["empty text parts", { content: [{ type: "text", text: "" }] }],
+    ["an empty list of tool calls", { content: "", tool_calls: [] }],
+  ] as const)(
+    "drops an assistant message whose only payload is reasoning, with %s as its content",
+    async (_label, contentFields) => {
+      const sink = captureServerLog("info");
+      const seen: GatewayRequest[] = [];
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [
+            { role: "user", content: "task" },
+            { role: "assistant", ...contentFields, reasoning_content: "private thought" },
+            { role: "user", content: "continue" },
+          ],
+          tools: v2ModelVisibleTools(),
+        }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-history-shapes" } }),
+          (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+            (request: GatewayRequest): Promise<NormalizedResponse> => {
+              seen.push(request);
+              return Promise.resolve(assistantResponse("azure-coding-model"));
+            },
+        ),
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(seen[0]?.messages.map((message) => message.role)).toEqual(["user", "user"]);
+      expect(lineOf(sink.events, "coding-sidecar.gateway.request-validated")?.extra).toMatchObject({
+        inputMessageCount: 2,
+        droppedReasoningMessageCount: 1,
+      });
+    },
+  );
+
+  it.each([
+    ["answer text", { content: "Done." }],
+    ["a tool call", { content: "", tool_calls: [READ_CALL] }],
+    ["a null content and a tool call", { content: null, tool_calls: [READ_CALL] }],
+  ] as const)(
+    "keeps an assistant message that carries %s beside its reasoning, without the reasoning",
+    async (_label, payload) => {
+      const sink = captureServerLog("info");
+      const seen: GatewayRequest[] = [];
+      const messages: unknown[] = [
+        { role: "user", content: "task" },
+        { role: "assistant", ...payload, reasoning_content: "private thought" },
+      ];
+      if ("tool_calls" in payload)
+        messages.push({ role: "tool", content: "file body", tool_call_id: "call-1" });
+      messages.push({ role: "user", content: "continue" });
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "coding", messages, tools: v2ModelVisibleTools() }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-history-kept" } }),
+          (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+            (request: GatewayRequest): Promise<NormalizedResponse> => {
+              seen.push(request);
+              return Promise.resolve(assistantResponse("azure-coding-model"));
+            },
+        ),
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(seen[0]?.messages).toHaveLength(messages.length);
+      expect(seen[0]?.messages[1]?.role).toBe("assistant");
+      expect(JSON.stringify(seen[0]?.messages)).not.toContain("private");
+      expect(lineOf(sink.events, "coding-sidecar.gateway.request-validated")?.extra).toMatchObject({
+        droppedReasoningMessageCount: 0,
+      });
+    },
+  );
+
+  // A message that carries nothing at all is not a reasoning-only message: it was never dropped and
+  // stays exactly as before, so the drop is no wider than the rule it implements.
+  it("keeps an assistant message that carries nothing at all, as before", async () => {
+    const seen: GatewayRequest[] = [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "task" },
+          { role: "assistant", content: "" },
+          { role: "user", content: "continue" },
+        ],
+        tools: v2ModelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history-empty" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+  });
+
+  it("does not take a reasoning field on another role for a message to drop", async () => {
+    const seen: GatewayRequest[] = [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "task", reasoning_content: "private user-side field" },
+          { role: "tool", content: "", tool_call_id: "call-x", reasoning_content: "private" },
+        ],
+        tools: v2ModelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history-roles" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages.map((message) => message.role)).toEqual(["user", "tool"]);
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("private");
+  });
+
+  it("refuses a history that was nothing but reasoning-only messages as an empty one", async () => {
+    const sink = captureServerLog("info");
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "assistant", content: "", reasoning_content: "private thought" }],
+        tools: v2ModelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history-nothing" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.reject(new Error("the gateway must not be reached")),
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 400 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.rejected")?.extra).toMatchObject({
+      reason: "body-empty-messages",
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 });

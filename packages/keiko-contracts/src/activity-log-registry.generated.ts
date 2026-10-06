@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6df793c9f78d58283db07eb3ddc712e194e5a160b2bceaef4d7290067a932f5e" as const;
+  "bbd48b120502ec422d961d28adadaaf94a8c4f133bd39a533551c3498217cc7b" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10078,6 +10078,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           safeContextFields: [
             {
               name: "admissiblePromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "droppedReasoningMessageCount",
               type: "integer",
               dataClass: "count",
               required: false,

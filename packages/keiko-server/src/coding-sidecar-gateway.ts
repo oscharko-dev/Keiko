@@ -254,6 +254,11 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // remains after the prompt — the value an output-exhausted turn has to be read against.
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: true },
+    // #3873 (F23): how many prior assistant messages carried nothing but the reasoning of a turn that
+    // already ran and were dropped before the gateway request was built, so the estimate above and
+    // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
+    // recorded. `required: false` only because a record written before this field existed lacks it.
+    droppedReasoningMessageCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -445,18 +450,22 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// #3873 (F17): the gateway's one steered repair of an answer that exhausted its output budget, on
-// every settlement line of a turn — whether it ran, and how it ended — so an `output-exhausted`
-// turn the runtime may not retry names its cause, and a recovered turn shows the repair that saved
-// it. `required: false` only because a record written before these fields existed lacks them; every
-// line written since carries `repairAttempted`, and `repairOutcome` whenever a repair ran.
+// #3873 (F17, F23): the gateway's one steered repair of an answer the model could not use — one that
+// exhausted its output budget, or ended after reasoning without a tool call or any text — on every
+// settlement line of a turn: whether it ran, and how the repaired attempt ended, so an
+// `output-exhausted` or `empty-answer` turn the runtime may not retry names its cause, and a
+// recovered turn shows the repair that saved it. `exhausted-again` and `empty-again` name how the
+// repaired attempt ended (the whole budget spent once more; no text or tool call once more),
+// whichever failure triggered the repair; `gateway.retry.scheduled` names that trigger. `required:
+// false` only because a record written before these fields existed lacks them; every line written
+// since carries `repairAttempted`, and `repairOutcome` whenever a repair ran.
 const OUTPUT_REPAIR_FIELDS = {
   repairAttempted: { type: "boolean", dataClass: "closed-enum", required: false },
   repairOutcome: {
     type: "string",
     dataClass: "closed-enum",
     required: false,
-    values: ["recovered", "exhausted-again", "failed"],
+    values: ["recovered", "exhausted-again", "empty-again", "failed"],
   },
 } as const;
 
@@ -505,7 +514,7 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
     },
     // Whether the answer to the runtime lets it retry the turn: `refused` for a provider rejection
     // no retry can change, which the runtime reads as final (lab 2026-09-26), and for an exhausted
-    // answer whose one steered repair exhausted the budget again (#3873, F17).
+    // or empty answer whose one steered repair failed the same way again (#3873, F17, F23).
     runtimeRetry: {
       type: "string",
       dataClass: "closed-enum",
@@ -869,6 +878,12 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
 export interface CodingSidecarGatewayChatCompletionRequest {
   readonly model?: string | undefined;
   readonly messages: readonly CodingSidecarGatewayChatMessage[];
+  /**
+   * How many prior assistant messages were dropped because they carried nothing but reasoning
+   * (#3873, F23). They are not in `messages`, so neither the prompt estimate nor the message count
+   * the route admits against includes them.
+   */
+  readonly droppedReasoningMessageCount: number;
   readonly tools?: readonly ToolDefinition[] | undefined;
   readonly stream?: boolean | undefined;
   readonly temperature?: number | undefined;
@@ -946,14 +961,20 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
 }
 
 // How every model call of a coding turn reaches the gateway, buffered or streamed: under the
-// coding-workbench timeout floors (#3591) and the explicit outage policy (#3873), which rides out a
-// gateway overload for the configured `codingOutageWindowMs` instead of failing the autonomous run.
-// This route is the only one that sets the outage policy: an interactive surface that borrows the
-// latency profile (the commit draft) keeps the fail-fast attempt count.
+// coding-workbench timeout floors (#3591), the explicit outage policy (#3873), which rides out a
+// gateway overload for the configured `codingOutageWindowMs` instead of failing the autonomous run,
+// and the explicit reasoning delivery (#3878, #3873 F23), which hands the model's reasoning to the
+// Workbench. This route is the only one that sets the last two: an interactive surface that borrows
+// the latency profile for its timeout floors (the commit draft) keeps the fail-fast attempt count
+// and receives its answer without the model's reasoning.
 const CODING_TURN_GATEWAY_POLICY = {
   latencyProfile: "coding-workbench",
   outagePolicy: "outage-window",
-} as const satisfies Pick<GatewayCallRequest, "latencyProfile" | "outagePolicy">;
+  reasoningDelivery: "forward",
+} as const satisfies Pick<
+  GatewayCallRequest,
+  "latencyProfile" | "outagePolicy" | "reasoningDelivery"
+>;
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
   return (_config, modelId) => {
@@ -1113,21 +1134,81 @@ function parseContinuationToolCall(value: unknown): NormalizedToolCall | undefin
   }
 }
 
+// The fields an OpenAI-compatible message carries a model's reasoning in. The gateway reads the same
+// two names off a provider's answer (`reasoningText`, keiko-model-gateway normalize.ts), and the
+// sidecar hands reasoning to the runtime as `reasoning_content` (#3878), so a client that echoes an
+// earlier assistant turn's reasoning back sends it under one of them.
+const REASONING_MESSAGE_FIELDS = ["reasoning_content", "reasoning"] as const;
+
+function carriesReasoning(entry: Readonly<Record<string, unknown>>): boolean {
+  return REASONING_MESSAGE_FIELDS.some((field) => {
+    const reasoning = entry[field];
+    return typeof reasoning === "string" && reasoning.length > 0;
+  });
+}
+
+// No answer text: absent, null, blank, or a list of nothing but blank text parts. A part of any other
+// kind is not "no text" — it is left to the content parser, which rejects what it does not accept.
+function hasNoAnswerText(content: unknown): boolean {
+  if (content === undefined || content === null) return true;
+  if (typeof content === "string") return content.trim().length === 0;
+  return (
+    Array.isArray(content) &&
+    content.every((part) => isTextContentPart(part) && part.text.trim().length === 0)
+  );
+}
+
+function hasNoToolCalls(toolCalls: unknown): boolean {
+  return (
+    toolCalls === undefined ||
+    toolCalls === null ||
+    (Array.isArray(toolCalls) && toolCalls.length === 0)
+  );
+}
+
+/**
+ * An assistant message that carries nothing but the reasoning of a turn that already ran (#3873,
+ * F23): a reasoning field, no answer text and no tool call. The runtime keeps the reasoning the
+ * sidecar forwarded for a turn that then failed in its history and sends that history back with
+ * every later request (the live F23 run: about 6,200 prompt tokens and two messages more per failed
+ * attempt). Prior reasoning is never resent upstream, so such a message is dropped; the reasoning of
+ * a message that also carries text or a tool call is dropped with it by the parser, which copies no
+ * reasoning field.
+ */
+function isReasoningOnlyAssistantMessage(entry: unknown): boolean {
+  return (
+    isRecord(entry) &&
+    entry.role === "assistant" &&
+    carriesReasoning(entry) &&
+    hasNoAnswerText(entry.content) &&
+    hasNoToolCalls(entry.tool_calls)
+  );
+}
+
+interface ParsedMessages {
+  readonly messages: readonly CodingSidecarGatewayChatMessage[];
+  readonly droppedReasoningMessageCount: number;
+}
+
 /**
  * Distinguishes the two 400 reasons an unusable `messages` array can hand back (#3390): `undefined`
  * for the array being missing/empty (`body-empty-messages`), a `RouteResult` when entries were
  * present but at least one was unparsable — `content-part-unsupported` for a recognized-but-closed
  * content part, `message-shape-invalid` (carrying only the total entry COUNT, never any entry's
- * content) for every other malformed shape.
+ * content) for every other malformed shape. Reasoning-only assistant messages are dropped and
+ * counted (#3873, F23); a history that was nothing else is an empty one.
  */
-function parseMessages(
-  value: unknown,
-): readonly CodingSidecarGatewayChatMessage[] | RouteResult | undefined {
+function parseMessages(value: unknown): ParsedMessages | RouteResult | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
   const messages: CodingSidecarGatewayChatMessage[] = [];
+  let droppedReasoningMessageCount = 0;
   for (const entry of value) {
+    if (isReasoningOnlyAssistantMessage(entry)) {
+      droppedReasoningMessageCount += 1;
+      continue;
+    }
     const parsed = parseMessageEntry(entry);
     if (parsed.kind === "content-part-unsupported") {
       return badRequest("Request body message content included an unsupported content part.");
@@ -1139,7 +1220,7 @@ function parseMessages(
     }
     messages.push(parsed.value);
   }
-  return messages;
+  return messages.length === 0 ? undefined : { messages, droppedReasoningMessageCount };
 }
 
 function badRequest(message: string): RouteResult {
@@ -1314,12 +1395,12 @@ function buildChatRequest(
 function parseChatRequest(
   body: Record<string, unknown>,
 ): CodingSidecarGatewayChatCompletionRequest | RouteResult | undefined {
-  const messages = parseMessages(body.messages);
-  if (messages === undefined) {
+  const parsedMessages = parseMessages(body.messages);
+  if (parsedMessages === undefined) {
     return undefined;
   }
-  if (isRouteResult(messages)) {
-    return messages;
+  if (isRouteResult(parsedMessages)) {
+    return parsedMessages;
   }
   const tools = parseTools(body.tools);
   if (isRouteResult(tools)) {
@@ -1327,7 +1408,8 @@ function parseChatRequest(
   }
   return {
     ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
-    messages,
+    messages: parsedMessages.messages,
+    droppedReasoningMessageCount: parsedMessages.droppedReasoningMessageCount,
     ...(tools === undefined ? {} : { tools }),
     ...(typeof body.stream === "boolean" ? { stream: body.stream } : {}),
     ...(typeof body.temperature === "number" ? { temperature: body.temperature } : {}),
@@ -1465,8 +1547,8 @@ const NO_GATEWAY_OUTPUT: GatewayOutcomeMetrics = {
   reasoningFrames: 0,
 };
 
-// The gateway's one steered repair of an exhausted answer (#3873, F17), read off what the call
-// settled with: `recovered` rides on the response (`NormalizedResponse.outputRepair`), the two
+// The gateway's one steered repair of an exhausted or empty answer (#3873, F17, F23), read off what
+// the call settled with: `recovered` rides on the response (`NormalizedResponse.outputRepair`), the
 // failures on the error the repaired attempt surfaced. Absent when no repair ran.
 function outputRepairOf(error: unknown): GatewayOutputRepairOutcome | undefined {
   return error instanceof GatewayError ? error.outputRepair : undefined;
@@ -1704,9 +1786,9 @@ function gatewayDiagnosticCorrelation(
 // server fault: the warn-level turn-failed line names it. An error-level diagnostic opened a support
 // incident for every such turn; a lab run of the 1.1.8 candidate behind a LiteLLM hosted_vllm route
 // opened one on its first empty answer. The runtime may retry these, with one exception: an
-// exhausted answer whose steered gateway repair exhausted the budget again is answered as final
-// (`runtimeRetryFor`, #3873 F17) — the identical turn ran away identically, and a third attempt
-// would only burn the envelope's duration.
+// exhausted or empty answer whose steered gateway repair failed the same way again is answered as
+// final (`runtimeRetryFor`, #3873 F17, F23) — the identical turn ran away identically, and a third
+// attempt would only burn the envelope's duration.
 const MODEL_ANSWER_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode> = new Set([
   "output-exhausted",
   "empty-answer",
@@ -1900,19 +1982,28 @@ function runtimeRetryFor(
   failureCode: CodingWorkbenchTurnFailureCode,
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
-  if (repairExhaustedAgain(error, failureCode)) return "refused";
+  if (repairFailedAgain(error, failureCode)) return "refused";
   return isFinalProviderRejection(error, failureCode) ? "refused" : "allowed";
 }
 
-// #3873 (F17): the gateway already steered the one repair an exhausted answer gets, and the model
-// spent the whole budget again. A runtime retry of the identical turn would run away identically
-// (run 324076066246415201273338647160811469441: three seven-minute attempts, no progress), so the
-// turn is final. A first exhaustion the call's budget could not repair stays retryable.
-function repairExhaustedAgain(
-  error: unknown,
-  failureCode: CodingWorkbenchTurnFailureCode,
-): boolean {
-  return failureCode === "output-exhausted" && outputRepairOf(error) === "exhausted-again";
+// How the repaired attempt of each model-answer failure ends when the model fails that way again.
+const REPAIRED_ANSWER_FAILED_AGAIN: ReadonlyMap<
+  CodingWorkbenchTurnFailureCode,
+  GatewayOutputRepairOutcome
+> = new Map([
+  ["output-exhausted", "exhausted-again"],
+  ["empty-answer", "empty-again"],
+]);
+
+// #3873 (F17, F23): the gateway already steered the one repair an exhausted or empty answer gets,
+// and the model failed the same way again. A runtime retry of the identical turn would run away
+// identically (run 324076066246415201273338647160811469441: three seven-minute attempts, no
+// progress; run 74202984158312182524609898190850427735: seven attempts that each ended empty after
+// reasoning), so the turn is final. A first failure the call's budget could not repair, and a
+// repair that failed for another reason, stay retryable.
+function repairFailedAgain(error: unknown, failureCode: CodingWorkbenchTurnFailureCode): boolean {
+  const again = REPAIRED_ANSWER_FAILED_AGAIN.get(failureCode);
+  return again !== undefined && outputRepairOf(error) === again;
 }
 
 function isFinalProviderRejection(
@@ -3942,6 +4033,7 @@ function logValidatedRequestBounds(
         estimatedPromptTokens,
         maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
         inputMessageCount: request.messages.length,
+        droppedReasoningMessageCount: request.droppedReasoningMessageCount,
         completeness: "complete",
         loss: "none",
       },

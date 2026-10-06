@@ -645,7 +645,7 @@ following error types are never retried: `AuthenticationError`, `ModelRefusalErr
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
-**Steered repair of an exhausted answer (#3873, F17).** A `ProviderOutputExhaustedError` — an HTTP
+**Steered repair of an exhausted or empty answer (#3873, F17, F23).** A `ProviderOutputExhaustedError` — an HTTP
 200 answer whose `finish_reason` is `length` with neither a tool call nor content, the model having
 spent its whole output budget on reasoning — is never retried as is, but it is not surfaced at once
 either. The retry loop (`RetryConfig.repair`, `resilience.ts`) grants exactly one further attempt
@@ -672,6 +672,28 @@ Live qualification of 1.1.x with Gemma 4 31B behind LiteLLM (run
 `324076066246415201273338647160811469441`) motivated this: the fourth turn reasoned for its whole 8k
 budget, the runtime retried the identical turn twice, and every attempt cost seven minutes at 20
 tokens per second with nothing steering the model.
+
+The same one repair covers an answer that ended **after reasoning without a tool call or any text**
+(F23). That answer is a `ProviderEmptyAnswerError` (#3610: HTTP 200, a finish reason other than
+`length`, neither content nor a tool call), and it carries `afterReasoning` — a flag the adapter sets
+when the answer carried reasoning, never the reasoning itself (`carriedReasoning`, `normalize.ts`). Only
+that empty answer is repaired; an empty answer that carried no reasoning is the model's final word,
+surfaces at once, and is never retried, exactly as before. `steeredAnswerRepair` (`resilience.ts`) is
+the single classification the buffered attempt, the streamed startup and the stream resumed after
+forwarded reasoning all consult, and the repair is granted once per call whichever of the two failures
+comes first. The gateway sends the original request plus its own fixed system message
+(`EMPTY_ANSWER_REPAIR_MESSAGE`): the previous answer ended after reasoning without a tool call or a
+final answer, so call the next tool now or give the final answer, keeping any reasoning to a few
+sentences. Its scheduled line carries `reason: "empty-answer-repair"`. The marks name how the repaired
+attempt ended, whichever failure triggered the repair: `exhausted-again` (it spent the whole budget),
+`empty-again` (it ended without any text or tool call), `failed` (it failed for another reason, or the
+repair never ran). Gemma 4 31B streamed through LiteLLM (run `74202984158312182524609898190850427735`)
+motivated this: turn 5 reasoned for about 4,500 tokens and ended empty, the coding runtime retried the
+identical turn six more times, and the failed turns' reasoning stayed in the resent history. A coding
+sidecar turn whose repair ended `empty-again` is answered as final to the runtime (ADR-0173), and the
+sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
+fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
+the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
@@ -709,7 +731,12 @@ gets no special treatment past what every other interactive `Gateway.chat()`/`ch
 already receives; a larger configured timeout is retained. The sidecar route derives its backstop
 from the same effective timeout. Retrieval, indexing and voice retain their own, smaller per-call
 floor (above). The gateway's body-free call-started line records the effective `timeoutMs` so a
-slow self-hosted provider can be distinguished from a hung turn.
+slow self-hosted provider can be distinguished from a hung turn. **`latencyProfile` selects timeout
+floors only.** It never selects the retry policy (the explicit `outagePolicy: "outage-window"`, which
+only the coding sidecar route sets) and never the reasoning delivery (the explicit
+`reasoningDelivery: "forward"`, below), so an interactive surface that borrows the profile for its
+floors — the commit draft does — still fails fast and still receives its answer without the model's
+reasoning (#3873, F23).
 
 **The streamed chunk model and model reasoning (#3878, 2026-10-06).** `GatewayStreamChunk` has
 three kinds: `delta` (answer text), `reasoning` (the model's own reasoning, which LiteLLM normalises
@@ -719,16 +746,22 @@ names it `reasoning` is read the same way) and the terminal `done`. Reasoning ne
 `usage.reasoningBytes`, and the provider's own `usage.completion_tokens_details.reasoning_tokens`
 as `usage.reasoningTokens` when the provider reports it (never estimated). It passes the same
 secret redaction as the answer, in a hold-back lane of its own, and a reasoning-only answer still
-fails as output-exhausted or empty. The gateway hands reasoning only to a `coding-workbench` call,
+fails as output-exhausted or empty. The gateway hands reasoning only to a call that asks for it with
+the explicit `GatewayCallRequest.reasoningDelivery: "forward"` (local, never serialized; only the
+coding sidecar route sets it, beside the `coding-workbench` latency profile and the outage policy),
 and only while the configuration's `codingReasoningDisplay` is not `"off"` (owner decision
-2026-10-06: on by default, opt-out only); every other surface keeps its answer without reasoning.
+2026-10-06: on by default, opt-out only); every other surface keeps its answer without reasoning,
+whatever latency profile it borrows. Until #3873 (F23) the gateway keyed forwarding on the latency
+profile, so the commit draft, which borrows the profile for its timeout floors, received the
+reasoning too (`reasoningDisposition=forwarded` on its completion line); it now records `discarded`.
 Discarded reasoning chunks are dropped where the provider stream is read, below the commit point:
 a discarded thought is never a delivered chunk, so it neither starts the caller's answer nor ends
 the startup retries, while forwarded reasoning commits the stream exactly like a content delta —
 with one owner-decided exception (2026-10-06, #3873 F17, option iii): an answer that exhausts its
-output budget after forwarded reasoning alone still receives the one steered repair described under
-"Bounded retry", so the caller sees a second reasoning passage; every other failure after forwarded
-reasoning stays terminal, and nothing is ever replayed after answer text or a tool call.
+output budget, or ends empty (F23), after forwarded reasoning alone still receives the one steered
+repair described under "Steered repair of an exhausted or empty answer", so the caller sees a second
+reasoning passage; every other failure after forwarded reasoning stays terminal, and nothing is ever
+replayed after answer text or a tool call.
 Reasoning is a body: `chat.response.streamed` records its events and bytes, and
 `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
 and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.
@@ -757,7 +790,9 @@ States:
   that completed with neither content nor a tool call: the provider answered, the model produced
   nothing usable. It keeps the provider error code, so the chat surfaces are unchanged, and the
   coding runtime reports it as its own `empty-answer` turn-failure cause instead of a broken
-  stream. A stream that ends without any terminal frame is still a provider failure.
+  stream; an empty answer that carried reasoning first gets the one steered repair described above
+  before it surfaces (#3873, F23). A stream that ends without any terminal frame is still a provider
+  failure.
   `MalformedToolCallError` covers the model's own tool call that did not parse or did not match the
   tool's schema, including the catalog rejection `GatewayToolCatalogError` and the redaction-depth
   refusal `ResponseRedactionError`, which both extend it. The gateway still retries a schema

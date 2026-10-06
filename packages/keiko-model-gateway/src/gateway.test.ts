@@ -674,8 +674,10 @@ describe("Gateway.chatStream", () => {
   // #3610: an HTTP 200 answer with neither content nor a tool call is the same kind of fault — the
   // provider answered — so it must not count toward opening the breaker either.
   // #3873 (F17): an exhausted answer gets ONE steered repair before it surfaces, so the model is
-  // asked twice; an empty answer is still never retried. Neither answer counts for the breaker,
-  // however many of them a call sees.
+  // asked twice; an empty answer that carried no reasoning (this fixture's) is still never retried.
+  // An empty answer that carried reasoning gets the same one repair (F23, pinned with its breaker
+  // behaviour in gateway.output-repair.test.ts). Neither answer counts for the breaker, however many
+  // of them a call sees.
   it.each([
     ["ProviderOutputExhaustedError", ProviderOutputExhaustedError, 2],
     ["ProviderEmptyAnswerError", ProviderEmptyAnswerError, 1],

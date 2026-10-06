@@ -219,6 +219,76 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
     );
   });
 
+  // #3873 (F23): the gateway steers one repair for an answer that ended after reasoning without text
+  // or a tool call, so the empty-answer error says whether reasoning preceded it — a flag, never the
+  // reasoning itself.
+  it("marks the empty answer of a reasoning-only streamed turn as ended after reasoning", async () => {
+    const adapter = adapterAnswering(() =>
+      sse([streamDelta({ reasoning_content: "thinking only" }), finish("stop"), DONE]),
+    );
+
+    const failure = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS)).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(failure).toMatchObject({ afterReasoning: true });
+    expect(JSON.stringify(failure)).not.toContain("thinking only");
+    expect((failure as Error).message).not.toContain("thinking only");
+  });
+
+  it("does not mark an empty streamed answer that carried no reasoning", async () => {
+    const adapter = adapterAnswering(() =>
+      sse([streamDelta({ role: "assistant", content: "" }), finish("stop"), DONE]),
+    );
+
+    const failure = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS)).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(failure).toMatchObject({ afterReasoning: false });
+  });
+
+  it.each([
+    ["message.reasoning_content", { reasoning_content: REASONING_TEXT }, true],
+    ["message.reasoning", { reasoning: REASONING_TEXT }, true],
+    ["no reasoning", {}, false],
+  ] as const)(
+    "marks a buffered empty answer by whether reasoning preceded it (%s)",
+    async (_label, reasoningFields, afterReasoning) => {
+      const adapter = adapterAnswering(() =>
+        json({
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { role: "assistant", content: "", ...reasoningFields },
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 20 },
+        }),
+      );
+
+      const failure = await adapter.call(REQUEST, CONFIG).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+      expect(failure).toMatchObject({ afterReasoning });
+    },
+  );
+
+  it("keeps a reasoning-only answer that spent its budget an exhausted-output failure, not an empty one", async () => {
+    const adapter = adapterAnswering(() =>
+      sse([streamDelta({ reasoning_content: "thinking only" }), finish("length"), DONE]),
+    );
+
+    const failure = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS)).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(ProviderOutputExhaustedError);
+    expect(failure).not.toBeInstanceOf(ProviderEmptyAnswerError);
+  });
+
   it("reads message.reasoning_content of a buffered answer apart from its content", async () => {
     const adapter = adapterAnswering(() =>
       json({

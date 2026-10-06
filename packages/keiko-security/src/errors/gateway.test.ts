@@ -10,6 +10,7 @@ import {
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
+  ProviderEmptyAnswerError,
   ProviderError,
   RateLimitError,
   TimeoutError,
@@ -153,5 +154,32 @@ describe("ProviderError retry classification by HTTP status", () => {
   ] as const)("status %d → retryable %s", (status, retryable) => {
     expect(new ProviderError("upstream", status).retryable).toBe(retryable);
     expect(new ProviderError("upstream", status).httpStatus).toBe(status);
+  });
+});
+
+// #3873 (F23): the gateway steers one repair for an answer that ended after reasoning without text
+// or a tool call. The error says whether reasoning preceded it — a flag, never the reasoning itself —
+// and keeps the provider error code, message and (non-)retryability the chat surfaces already read.
+describe("ProviderEmptyAnswerError", () => {
+  it("is not marked as ended after reasoning unless the adapter says so", () => {
+    expect(new ProviderEmptyAnswerError("m").afterReasoning).toBe(false);
+    expect(new ProviderEmptyAnswerError("m", []).afterReasoning).toBe(false);
+    expect(new ProviderEmptyAnswerError("m", [], true).afterReasoning).toBe(true);
+  });
+
+  it("keeps the provider error contract whichever way it is marked", () => {
+    for (const afterReasoning of [false, true]) {
+      const error = new ProviderEmptyAnswerError("m", [], afterReasoning);
+      expect(error.code).toBe(ERROR_CODES.PROVIDER_ERROR);
+      expect(error.httpStatus).toBe(200);
+      expect(error.retryable).toBe(false);
+      expect(error.emptyAnswer).toBe(true);
+      expect(error.message).toBe("provider returned an empty assistant response for 'm'");
+    }
+  });
+
+  it("redacts a configured secret from its message at construction", () => {
+    const error = new ProviderEmptyAnswerError("model-fixture-secret", ["fixture-secret"], true);
+    expect(error.message).not.toContain("fixture-secret");
   });
 });

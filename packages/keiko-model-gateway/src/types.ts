@@ -215,7 +215,8 @@ export interface GatewayConfig {
   // to the coding runtime as the provider produces it. Absent means "on" wherever the model's
   // capability streams; "off" restores the buffered answer.
   readonly codingStreaming?: GatewayFeatureSwitch | undefined;
-  // #3878: whether a coding-workbench call forwards the model's reasoning (`reasoning_content`) so
+  // #3878: whether a call that asks for reasoning delivery (`GatewayCallRequest.reasoningDelivery`,
+  // set by the coding sidecar route alone) forwards the model's reasoning (`reasoning_content`) so
   // the Workbench can show it. Absent means "on"; with "off" the gateway still parses the
   // reasoning and discards it. Every other surface always discards it.
   readonly codingReasoningDisplay?: GatewayFeatureSwitch | undefined;
@@ -235,8 +236,9 @@ export interface GatewayConfig {
 // #3878) arrives as separate `reasoning` chunks and never inside a `delta`; a terminal `done`
 // chunk carries the fully assembled, redacted NormalizedResponse. Tool calls are assembled from
 // their fragments and bound against the advertised catalog before they appear, on `done` only.
-// The gateway yields `reasoning` chunks only on a call whose surface displays reasoning
-// (`GatewayConfig.codingReasoningDisplay`); every other consumer never sees one.
+// The gateway yields `reasoning` chunks only on a call that asks for reasoning delivery
+// (`GatewayCallRequest.reasoningDelivery`) while `GatewayConfig.codingReasoningDisplay` is not
+// "off"; every other consumer never sees one.
 export type GatewayStreamChunk =
   | { readonly type: "delta"; readonly token: string }
   | { readonly type: "reasoning"; readonly token: string }

@@ -13,6 +13,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   ContextOverflowError,
   GatewayError,
+  ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   TransportError,
   UnknownModelError,
@@ -21,8 +22,10 @@ import {
   deriveContextProfile,
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
+import { carriedReasoning } from "./normalize.js";
 import {
   activityLogErrorKind,
   logEndpointHost,
@@ -46,6 +49,7 @@ import {
   type CircuitBreakerAdmission,
   type RetryConfig,
   type RetryPolicy,
+  type RetryRepairReason,
   type RetryResume,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
@@ -54,6 +58,7 @@ import {
   isNonProviderFault,
   providerRequestBudgetMs,
   codingWorkbenchRetryConfig,
+  steeredAnswerRepair,
   streamedCallBudgetMs,
   streamRequestBudgetMs,
   systemClock,
@@ -142,8 +147,9 @@ export interface GatewayCallRequest extends GatewayRequest {
   readonly logContext?: ModelGatewayLogContext | undefined;
   /**
    * A closed local profile; never serialized into a provider request body. It selects only the
-   * coding-workbench timeout floors, never the retry policy: an interactive surface may borrow the
-   * floors (the commit draft does, #3591) and still fails fast.
+   * coding-workbench timeout floors, never the retry policy and never the reasoning delivery: an
+   * interactive surface may borrow the floors (the commit draft does, #3591) and still fails fast
+   * and still receives its answer without the model's reasoning (#3873, F23).
    */
   readonly latencyProfile?: "coding-workbench" | undefined;
   /**
@@ -154,6 +160,15 @@ export interface GatewayCallRequest extends GatewayRequest {
    * keeps the provider's attempt count and the fail-fast breaker.
    */
   readonly outagePolicy?: "outage-window" | undefined;
+  /**
+   * The explicit reasoning delivery of a call whose surface displays the model's reasoning (#3878,
+   * #3873 F23); local, never serialized into a provider request body. `forward` hands the model's
+   * reasoning to the caller beside its answer (as `reasoning` chunks and `NormalizedResponse.reasoning`),
+   * while the configuration's `codingReasoningDisplay` is not `"off"`. Only the coding sidecar route
+   * sets it; every other call, whatever latency profile it borrows, receives its answer without the
+   * reasoning, which the gateway still parses and counts.
+   */
+  readonly reasoningDelivery?: "forward" | undefined;
 }
 
 // The two ids a single gateway call carries.
@@ -689,11 +704,17 @@ function streamStartupRetryConfig(
   };
 }
 
-// The one steered repair of an answer that exhausted its output budget (#3873, F17): the answer
-// the repaired attempt corrects, set the moment that attempt starts and absent until then. Shared by
-// the buffered attempt state and the prepared stream, and read once the call settles.
+// The one steered repair of an answer the model could not use (#3873, F17, F23): the correction the
+// retry loop granted and the failure the repaired attempt corrects.
+interface SteeredRepair {
+  readonly reason: RetryRepairReason;
+  readonly failure: Error;
+}
+
+// The steered repair of a call, set the moment the repaired attempt starts and absent until then.
+// Shared by the buffered attempt state and the prepared stream, and read once the call settles.
 interface OutputRepairState {
-  exhaustion?: ProviderOutputExhaustedError | undefined;
+  steered?: SteeredRepair | undefined;
 }
 
 interface BufferedChatAttempt {
@@ -718,26 +739,61 @@ interface BufferedChatAttempt {
 export const OUTPUT_EXHAUSTED_REPAIR_MESSAGE =
   "Your previous answer used the whole output budget without producing a tool call or a final answer. Reply now with the tool call or the final answer directly; keep any reasoning to a few sentences.";
 
+/**
+ * What the model is told after an answer that ended after reasoning without a tool call or any text
+ * (#3873, F23: Gemma 4 31B streamed through LiteLLM reasoned for about 4,500 tokens, then produced
+ * nothing, turn after turn). Fixed and body-free like the sentence above: it names the outcome,
+ * never the reasoning. Module-level export (not part of the package surface) so it can be pinned.
+ */
+export const EMPTY_ANSWER_REPAIR_MESSAGE =
+  "Your previous answer ended after reasoning without a tool call or a final answer. Call the next tool now, or give the final answer; keep any reasoning to a few sentences.";
+
+// The one correction each steered repair sends.
+const REPAIR_MESSAGES: Readonly<Record<RetryRepairReason, string>> = {
+  "output-exhausted-repair": OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
+  "empty-answer-repair": EMPTY_ANSWER_REPAIR_MESSAGE,
+};
+
 // The steered request: the ORIGINAL request plus one system correction, like the schema repair —
-// one correction at a time, and never the exhausted answer quoted back.
-function outputExhaustedRepairRequest(original: GatewayCallRequest): GatewayCallRequest {
+// one correction at a time, and never the failed answer's reasoning quoted back.
+function steeredRepairRequest(
+  original: GatewayCallRequest,
+  reason: RetryRepairReason,
+): GatewayCallRequest {
   return {
     ...original,
-    messages: [...original.messages, { role: "system", content: OUTPUT_EXHAUSTED_REPAIR_MESSAGE }],
+    messages: [...original.messages, { role: "system", content: REPAIR_MESSAGES[reason] }],
   };
 }
 
-// Marks the error that ended a steered attempt (attach-at-throw-site, like `requestId`): the model
-// exhausted its budget once more, or the repaired attempt failed for another reason — including the
-// first exhaustion itself resurfacing because the repair was refused admission. A call that never
-// started a repair leaves the error unmarked.
+// The repair the retry loop granted for the failure an attempt follows, as that attempt starts.
+// Undefined for every other attempt: an ordinary provider retry keeps whatever steer is already set.
+function grantedRepair(previousError: Error | undefined): SteeredRepair | undefined {
+  if (previousError === undefined) return undefined;
+  const reason = steeredAnswerRepair(previousError);
+  return reason === undefined ? undefined : { reason, failure: previousError };
+}
+
+// How the steered attempt ended, by the failure it ended with, whichever failure triggered the
+// repair: the model spent the whole budget (`exhausted-again`) or ended empty (`empty-again`) once
+// more, or the attempt failed for another reason — including the first failure itself resurfacing
+// because the repair was refused admission (`failed`).
+function repairOutcomeOf(
+  error: GatewayError,
+  steered: SteeredRepair,
+): Exclude<GatewayOutputRepairOutcome, "recovered"> {
+  if (error === steered.failure) return "failed";
+  if (error instanceof ProviderOutputExhaustedError) return "exhausted-again";
+  return error instanceof ProviderEmptyAnswerError ? "empty-again" : "failed";
+}
+
+// Marks the error that ended a steered attempt (attach-at-throw-site, like `requestId`) with how
+// that attempt ended. A call that never started a repair leaves the error unmarked.
 function attachOutputRepair(error: unknown, state: OutputRepairState): void {
-  if (state.exhaustion === undefined || !(error instanceof GatewayError)) return;
+  const { steered } = state;
+  if (steered === undefined || !(error instanceof GatewayError)) return;
   if (error.outputRepair !== undefined) return;
-  error.outputRepair =
-    error instanceof ProviderOutputExhaustedError && error !== state.exhaustion
-      ? "exhausted-again"
-      : "failed";
+  error.outputRepair = repairOutcomeOf(error, steered);
 }
 
 // The answer a steered attempt recovered, marked so the caller's own evidence can say so.
@@ -745,7 +801,7 @@ function recoveredResponse(
   response: NormalizedResponse,
   state: OutputRepairState,
 ): NormalizedResponse {
-  return state.exhaustion === undefined ? response : { ...response, outputRepair: "recovered" };
+  return state.steered === undefined ? response : { ...response, outputRepair: "recovered" };
 }
 
 interface OpenedStream {
@@ -760,17 +816,17 @@ function commitsStream(chunk: GatewayStreamChunk): boolean {
 }
 
 // The request of a streamed attempt: the prepared request, or — from the attempt that follows an
-// exhausted answer on — its steered repair. The retry loop grants that attempt exactly once
-// (`outputExhaustedRepair`, resilience.ts); a later provider retry keeps the steer.
+// exhausted or empty answer on — its steered repair. The retry loop grants that attempt exactly once
+// (`steeredAnswerRepair`, resilience.ts); a later provider retry keeps the steer.
 function steeredStreamRequest(
   state: PreparedStream,
   previousError: Error | undefined,
 ): GatewayCallRequest {
-  if (previousError instanceof ProviderOutputExhaustedError)
-    state.outputRepair.exhaustion = previousError;
-  return state.outputRepair.exhaustion === undefined
+  state.outputRepair.steered = grantedRepair(previousError) ?? state.outputRepair.steered;
+  const { steered } = state.outputRepair;
+  return steered === undefined
     ? state.prepared
-    : outputExhaustedRepairRequest(state.prepared);
+    : steeredRepairRequest(state.prepared, steered.reason);
 }
 
 function admissionBudget(
@@ -994,10 +1050,6 @@ interface ReasoningCompletion {
   readonly reasoningDisposition: ReasoningDisposition;
 }
 
-function carriedReasoning(response: NormalizedResponse): boolean {
-  return response.reasoning !== undefined || (response.usage.reasoningBytes ?? 0) > 0;
-}
-
 function reasoningDisposition(
   response: NormalizedResponse,
   forwards: boolean,
@@ -1169,12 +1221,13 @@ export class Gateway {
     admissionBudgetMs?: number,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
-    if (previousError instanceof ProviderOutputExhaustedError) {
-      // The attempt the retry loop granted as the one steered repair (#3873, F17): the original
+    const granted = grantedRepair(previousError);
+    if (granted !== undefined) {
+      // The attempt the retry loop granted as the one steered repair (#3873, F17, F23): the original
       // request plus the fixed correction, in place of any pending schema correction.
       attempt.state.repair = undefined;
-      attempt.state.request = outputExhaustedRepairRequest(attempt.originalRequest);
-      attempt.state.exhaustion = previousError;
+      attempt.state.request = steeredRepairRequest(attempt.originalRequest, granted.reason);
+      attempt.state.steered = granted;
     }
     const provider = {
       ...attempt.route.provider,
@@ -1337,13 +1390,14 @@ export class Gateway {
     }
   }
 
-  // #3878: only a coding-workbench call forwards the model's reasoning, so the Coding Workbench can
-  // show it, and only while the operator has not switched `codingReasoningDisplay` off. Every other
-  // surface keeps today's answer: the reasoning is parsed and discarded.
+  // #3878: only a call that asks for reasoning delivery (`reasoningDelivery: "forward"`, set by the
+  // coding sidecar route alone) forwards the model's reasoning, so the Coding Workbench can show it,
+  // and only while the operator has not switched `codingReasoningDisplay` off. Every other surface
+  // keeps today's answer: the reasoning is parsed and discarded — including a surface that borrows
+  // the coding-workbench latency profile for its timeout floors, which selects timeouts only (the
+  // commit draft received the reasoning with it until #3873, F23).
   private forwardsReasoning(request: GatewayCallRequest): boolean {
-    return (
-      request.latencyProfile === "coding-workbench" && this.config.codingReasoningDisplay !== "off"
-    );
+    return request.reasoningDelivery === "forward" && this.config.codingReasoningDisplay !== "off";
   }
 
   private async prepareStream(request: GatewayCallRequest): Promise<PreparedStream> {
@@ -1637,8 +1691,8 @@ export class Gateway {
     );
   }
 
-  // The startup retries of a streamed call, or — resumed after an attempt that exhausted its output
-  // budget on forwarded reasoning alone (#3873 F17, option iii) — the one steered repair of it.
+  // The startup retries of a streamed call, or — resumed after an attempt that failed on forwarded
+  // reasoning alone, exhausted or empty (#3873 F17, F23, option iii) — the one steered repair of it.
   private async openRetriedStream(
     state: PreparedStream,
     resume?: RetryResume,
@@ -1692,30 +1746,32 @@ export class Gateway {
 
   // A delivered chunk commits the stream: nothing may be replayed after it. Forwarded reasoning is
   // the one owner-decided exception (#3873 F17, option iii, 2026-10-06): an answer that exhausts its
-  // output budget after nothing but reasoning still gets the one steered repair, through the same
-  // retry loop resumed after the exhausted attempt — the caller then sees a second reasoning
-  // passage, and no answer text or tool call is ever duplicated. A delivered answer delta or `done`,
-  // and a repair that already ran, close the window: the exhaustion then surfaces at once.
+  // output budget — or ends empty (F23) — after nothing but reasoning still gets the one steered
+  // repair, through the same retry loop resumed after the failed attempt — the caller then sees a
+  // second reasoning passage, and no answer text or tool call is ever duplicated. A delivered answer
+  // delta or `done`, and a repair that already ran, close the window: the failure then surfaces at
+  // once.
   private async *streamFrom(state: PreparedStream): AsyncGenerator<GatewayStreamChunk> {
     let opened = await this.openRetriedStream(state);
     try {
       for (;;) {
-        const exhaustion = yield* this.deliverUntilCommitted(state, opened);
-        if (exhaustion === undefined) return;
+        const failure = yield* this.deliverUntilCommitted(state, opened);
+        if (failure === undefined) return;
         await opened.iterator.return(undefined);
-        opened = await this.openRetriedStream(state, { failedAttempt: exhaustion });
+        opened = await this.openRetriedStream(state, { failedAttempt: failure });
       }
     } finally {
       await opened.iterator.return(undefined);
     }
   }
 
-  // Delivers an opened stream. Returns the exhaustion a stream of nothing but reasoning ended with —
-  // the one failure the repair window stays open for — and rethrows every other failure.
+  // Delivers an opened stream. Returns the failure a stream of nothing but reasoning ended with when
+  // the call may still be repaired — the one failure the repair window stays open for — and
+  // rethrows every other failure.
   private async *deliverUntilCommitted(
     state: PreparedStream,
     opened: OpenedStream,
-  ): AsyncGenerator<GatewayStreamChunk, ProviderOutputExhaustedError | undefined> {
+  ): AsyncGenerator<GatewayStreamChunk, Error | undefined> {
     let committed = commitsStream(opened.first);
     try {
       yield opened.first;
@@ -1727,8 +1783,9 @@ export class Gateway {
     } catch (error) {
       const repairable =
         !committed &&
-        state.outputRepair.exhaustion === undefined &&
-        error instanceof ProviderOutputExhaustedError;
+        state.outputRepair.steered === undefined &&
+        error instanceof Error &&
+        steeredAnswerRepair(error) !== undefined;
       if (!repairable) throw error;
       return error;
     }

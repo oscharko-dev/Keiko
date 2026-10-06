@@ -1085,6 +1085,37 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(captured).not.toHaveProperty("outagePolicy");
   });
 
+  // #3873 (F23): the draft borrows the coding-workbench latency profile for its timeout floors only.
+  // That profile used to make the gateway hand the model's reasoning to the draft too
+  // (`reasoningDisposition=forwarded` on a commit draft's completion line); forwarding is now keyed
+  // on an explicit signal that only the coding sidecar route sets, so the draft's request carries none.
+  it("keeps the commit draft's model request free of any reasoning delivery signal", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured).toBeDefined();
+    // The timeout floors are still borrowed; nothing else of the coding turn's policy is.
+    expect(captured?.latencyProfile).toBe("coding-workbench");
+    expect(captured).not.toHaveProperty("reasoningDelivery");
+  });
+
   // Review of #3591: the raised budget must not exceed what the model declares — the spend-budget
   // port refuses a request above `capability.maxOutputTokens` before any provider call. A model
   // that declares no limit keeps the full budget.
@@ -1727,6 +1758,70 @@ describe("commit draft repeatability boundaries", () => {
       (await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies)).body,
     ).toEqual(first.body);
     expect(calls).toBe(2);
+  });
+
+  // #3873 (F23): the draft borrows the coding-workbench latency profile for its timeout floors, and
+  // used to receive the model's reasoning with it (`reasoningDisposition=forwarded` on its completion
+  // line). Through the real gateway and adapter, a reasoning model's draft now carries no reasoning:
+  // the gateway parses and counts it, and discards it, as it does on every surface but the coding turn.
+  it("discards the model's reasoning on a commit draft that borrows the coding-workbench latency profile", async () => {
+    const config: GatewayConfig = {
+      ...DRAFT_GATEWAY_CONFIG,
+      capabilities: [{ ...DRAFT_MODEL_CAPABILITY, structuredOutput: false, streaming: true }],
+    };
+    const lines: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
+    }[] = [];
+    const answers: NormalizedResponse[] = [];
+    const draft = JSON.stringify({ subject: "fix: handle missing values", body: "Handle values." });
+    const frame = (delta: Record<string, unknown>, finishReason?: string): string =>
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            index: 0,
+            delta,
+            ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
+          },
+        ],
+      })}\n\n`;
+    const gateway = new Gateway(config, {
+      fetchImpl: (): Promise<Response> =>
+        Promise.resolve(
+          new Response(
+            frame({ reasoning_content: "private draft reasoning" }) +
+              frame({ content: draft }, "stop") +
+              "data: [DONE]\n\n",
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        ),
+      log: { write: (event): void => void lines.push({ op: event.op, extra: event.extra }) },
+    });
+    const dependencies = deps({
+      config,
+      modelPortFactory: () => ({
+        call: async (request, cancellationSignal): Promise<NormalizedResponse> => {
+          const answer = await gateway.chat({ ...request, cancellationSignal });
+          answers.push(answer);
+          return answer;
+        },
+      }),
+    });
+
+    const result = await fixedDraftHandler()(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      dependencies,
+    );
+
+    expect(result.status).toBe(200);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).not.toHaveProperty("reasoning");
+    expect(answers[0]?.usage.reasoningBytes).toBeGreaterThan(0);
+    expect(lines.find((line) => line.op === "gateway.chat.completed")?.extra).toMatchObject({
+      reasoningDisposition: "discarded",
+    });
+    expect(JSON.stringify(lines)).not.toContain("private draft reasoning");
+    expect(JSON.stringify(result.body)).not.toContain("private draft reasoning");
   });
 
   it("records reuse and prompt bounds without recording customer content", async () => {

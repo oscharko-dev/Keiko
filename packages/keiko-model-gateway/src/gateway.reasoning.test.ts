@@ -1,7 +1,10 @@
-// #3878: the gateway hands the model's reasoning only to a coding-workbench call, so the Coding
-// Workbench can show it, and only while the operator has not switched `codingReasoningDisplay` off
-// (owner decision 2026-10-06: on by default, opt-out only). Every other surface keeps its answer
-// without reasoning. Either way the completion line records the reasoning share as counts only.
+// #3878: the gateway hands the model's reasoning only to a call that asks for it explicitly
+// (`reasoningDelivery: "forward"`, set by the coding sidecar route alone), so the Coding Workbench
+// can show it, and only while the operator has not switched `codingReasoningDisplay` off (owner
+// decision 2026-10-06: on by default, opt-out only). Every other surface keeps its answer without
+// reasoning — including one that borrows the coding-workbench latency profile for its timeout floors
+// (the commit draft, #3873 F23). Either way the completion line records the reasoning share as
+// counts only.
 import { describe, expect, it } from "vitest";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { Gateway, type GatewayCallRequest } from "./gateway.js";
@@ -54,9 +57,18 @@ function config(codingReasoningDisplay?: GatewayConfig["codingReasoningDisplay"]
   };
 }
 
+// The coding sidecar route's own policy: the timeout floors and the explicit reasoning delivery.
 const CODING: GatewayCallRequest = {
   modelId: "example-chat-model",
   messages: [{ role: "user", content: "fix it" }],
+  latencyProfile: "coding-workbench",
+  reasoningDelivery: "forward",
+};
+// An interactive surface that borrows the coding-workbench timeout floors and nothing else, as the
+// commit draft does (`buildCommitDraftModelRequest`): the latency profile selects timeouts only.
+const BORROWER: GatewayCallRequest = {
+  modelId: "example-chat-model",
+  messages: CODING.messages,
   latencyProfile: "coding-workbench",
 };
 const CHAT: GatewayCallRequest = { modelId: "example-chat-model", messages: CODING.messages };
@@ -164,7 +176,7 @@ function lineOf(events: readonly ModelGatewayLogEvent[], op: string): ModelGatew
 }
 
 describe("Gateway reasoning policy (#3878)", () => {
-  it("forwards the reasoning of a coding-workbench stream by default", async () => {
+  it("forwards the reasoning of a stream that asks for reasoning delivery, by default", async () => {
     const log = recorder();
     const gateway = gatewayWith(scriptedAdapter([ANSWERED]).adapter, config(), log.sink);
 
@@ -209,6 +221,32 @@ describe("Gateway reasoning policy (#3878)", () => {
     });
   });
 
+  // #3873 (F23): the commit draft borrows the coding-workbench latency profile for its timeout
+  // floors and used to receive the model's reasoning with it (`reasoningDisposition=forwarded`).
+  // The latency profile selects timeout floors only; forwarding is keyed on the explicit signal.
+  it("discards the reasoning of a call that borrows only the coding-workbench latency profile", async () => {
+    const log = recorder();
+    const gateway = gatewayWith(scriptedAdapter([ANSWERED]).adapter, config("on"), log.sink);
+
+    const chunks = await streamed(gateway, BORROWER);
+
+    expect(kinds(chunks)).toEqual(["delta:answer", "done"]);
+    expect(terminal(chunks)).not.toHaveProperty("reasoning");
+    expect(lineOf(log.events, "gateway.stream.completed").extra).toMatchObject({
+      reasoningBytes: REASONING.length,
+      reasoningDisposition: "discarded",
+    });
+  });
+
+  it("discards the reasoning a non-streaming adapter's fallback answer carries for such a call", async () => {
+    const adapter: ProviderAdapter = { call: () => Promise.resolve(REASONED) };
+    const gateway = gatewayWith(adapter, config(), recorder().sink);
+
+    const chunks = await streamed(gateway, BORROWER);
+
+    expect(kinds(chunks)).toEqual(["delta:answer", "done"]);
+  });
+
   it("records no reasoning share for an answer that carried none", async () => {
     const log = recorder();
     const plain: readonly Step[] = [
@@ -225,8 +263,14 @@ describe("Gateway reasoning policy (#3878)", () => {
   });
 
   it.each([
-    ["a coding-workbench call", CODING, undefined, "forwarded"],
+    ["a call that asks for reasoning delivery", CODING, undefined, "forwarded"],
     ["a coding-workbench call with the display off", CODING, "off", "discarded"],
+    [
+      "a call that only borrows the coding-workbench latency profile",
+      BORROWER,
+      undefined,
+      "discarded",
+    ],
     ["any other call", CHAT, undefined, "discarded"],
   ] as const)(
     "applies the same policy to the buffered answer of %s",
@@ -283,7 +327,7 @@ describe("Gateway reasoning policy (#3878)", () => {
     expect(scripted.attempts()).toBe(1);
   });
 
-  it("forwards the reasoning of a non-streaming adapter's fallback answer on a coding call", async () => {
+  it("forwards the reasoning of a non-streaming adapter's fallback answer on a call that asks for it", async () => {
     const adapter: ProviderAdapter = { call: () => Promise.resolve(REASONED) };
     const gateway = gatewayWith(adapter, config(), recorder().sink);
 

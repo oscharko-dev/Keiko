@@ -59,10 +59,11 @@ export abstract class GatewayError extends RedactingError {
   // as requestId above): optional so no constructor changes and no existing
   // GatewayError construction/test is affected. Counts only, never content.
   partialUsage?: PartialStreamUsage;
-  // #3873 (F17): set by the gateway when this error ended the one steered repair of an answer that
-  // had exhausted its output budget — `exhausted-again` when the repaired attempt did so once more,
+  // #3873 (F17, F23): set by the gateway when this error ended the one steered repair of an answer
+  // that had exhausted its output budget or ended empty after reasoning — `exhausted-again` when the
+  // repaired attempt spent the whole budget, `empty-again` when it ended without text or a tool call,
   // `failed` when it failed for another reason — so the caller can tell a repaired-and-failed turn
-  // from a first exhaustion the budget never allowed to repair. Same attach-at-throw-site pattern as
+  // from a first failure the budget never allowed to repair. Same attach-at-throw-site pattern as
   // requestId above; a recovered repair rides on the response instead. A closed word, never content.
   outputRepair?: Exclude<GatewayOutputRepairOutcome, "recovered">;
 }
@@ -204,12 +205,19 @@ export class ProviderOutputExhaustedError extends ProviderError {
 // and keeps only its reasoning. The provider answered, so this is neither a broken stream nor an
 // outage: it never counts toward the circuit breaker, and the coding runtime reports it as its own
 // turn-failure cause. It keeps the provider error code and message, so the chat surfaces and the
-// wire are unchanged, and it is not retried as is.
+// wire are unchanged, and it is not retried as is. When the answer carried reasoning before it
+// ended (`afterReasoning`, a flag and never the reasoning itself) the gateway steers ONE repaired
+// attempt, the same request plus a fixed system correction (#3873, F23); only a second empty
+// answer, or the repaired attempt's own failure, surfaces to the caller, marked on `outputRepair`.
 export class ProviderEmptyAnswerError extends ProviderError {
   readonly emptyAnswer = true;
+  // Whether the answer carried reasoning before it ended without text or a tool call — the one
+  // empty answer the gateway steers a repair for. Set by the adapter that read the answer.
+  readonly afterReasoning: boolean;
 
-  constructor(modelId: string, secrets: readonly string[] = []) {
+  constructor(modelId: string, secrets: readonly string[] = [], afterReasoning = false) {
     super(`provider returned an empty assistant response for '${modelId}'`, 200, secrets);
+    this.afterReasoning = afterReasoning;
   }
 }
 

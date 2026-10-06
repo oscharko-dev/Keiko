@@ -9405,7 +9405,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["recovered", "exhausted-again", "failed"],
+        values: ["recovered", "exhausted-again", "empty-again", "failed"],
       },
     },
     causal: "correlation",
@@ -9662,6 +9662,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      droppedReasoningMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -9823,7 +9828,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["recovered", "exhausted-again", "failed"],
+        values: ["recovered", "exhausted-again", "empty-again", "failed"],
       },
       frames: {
         type: "string-array",
@@ -15256,7 +15261,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["retryable-error", "output-exhausted-repair"],
+        values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
       },
       httpStatus: {
         type: "integer",

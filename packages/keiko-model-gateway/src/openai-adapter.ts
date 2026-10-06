@@ -47,6 +47,7 @@ import {
 } from "./toolCatalogBridge.js";
 import {
   bindNormalizedToolCalls,
+  carriedReasoning,
   normalizeChatResponse,
   reasoningOfChatPayload,
   reasoningText,
@@ -963,7 +964,8 @@ function assertUsableAssistantResponse(
     throw new ProviderOutputExhaustedError(modelId, secrets);
   }
   // The answer completed with nothing usable in it: the model's result, not a broken stream (#3610).
-  throw new ProviderEmptyAnswerError(modelId, secrets);
+  // Whether reasoning preceded it decides if the gateway steers a repair for it (#3873, F23).
+  throw new ProviderEmptyAnswerError(modelId, secrets, carriedReasoning(response));
 }
 
 // A provider error body is untrusted and may be megabytes long (the chat path caps it at 10 MB).
