@@ -87,6 +87,8 @@ import {
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
+import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -201,6 +203,8 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
+  /** The run correlation every governed tool result's model-facing rendering is recorded under. */
+  readonly toolResultCorrelationId?: string | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly onSandboxAttestation?: CodingRuntimeManagerDeps["onSandboxAttestation"];
   /**
@@ -327,6 +331,7 @@ export function createOpenCodeRuntimeComposition(
     input.diagnostics,
     input.toolFacadeOrigin,
     { approvals, runs },
+    renderedResultLog(input),
   );
   const lifecycle = lifecycleAdapter(input, bridge, runs);
   const manager = createCodingRuntimeManager({
@@ -1392,6 +1397,22 @@ interface ToolBridgeExecutionDeps {
   readonly facade: CodingToolFacade;
   readonly settleTool: SafeToolSettlement | undefined;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly renderedResults?: RenderedResultLog | undefined;
+}
+
+/** Where a delivered tool result's model-facing rendering is recorded (#3873). */
+interface RenderedResultLog {
+  readonly sink: ServerLogSink;
+  readonly correlationId: string;
+}
+
+function renderedResultLog(input: OpenCodeRuntimeCompositionInput): RenderedResultLog | undefined {
+  return input.toolResultCorrelationId === undefined
+    ? undefined
+    : {
+        sink: input.activityLog ?? processServerLogSink(),
+        correlationId: input.toolResultCorrelationId,
+      };
 }
 
 // #3390 (ADR-0043 D11-D14): the tool facade no longer opens its own loopback listener -- a second
@@ -1414,12 +1435,19 @@ function createToolBridge(
     readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
     readonly runs: ReadonlyMap<string, PreparedRun>;
   },
+  renderedResults?: RenderedResultLog,
 ): ToolBridgeController {
   const { approvals, runs } = v2;
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
-  const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
+  const deps: ToolBridgeExecutionDeps = {
+    capability,
+    facade,
+    settleTool,
+    diagnostics,
+    renderedResults,
+  };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
   const publicPort: OpenCodeToolBridge = {
@@ -1692,7 +1720,7 @@ async function executeToolRequest(
     const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
     if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
-    return responseForToolResult(result, settleTool, actionId);
+    return responseForToolResult(result, settleTool, actionId, deps.renderedResults);
   } catch (error) {
     const reason = abortReason(admission.controller.signal);
     // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
@@ -1733,6 +1761,7 @@ function responseForToolResult(
   result: CodingToolResult,
   settleTool: SafeToolSettlement | undefined,
   actionId: string | undefined,
+  renderedResults?: RenderedResultLog,
 ): { readonly status: number; readonly body: string } {
   if (result.status === "busy") {
     settleSafeTool(settleTool, actionId, "failed");
@@ -1740,9 +1769,13 @@ function responseForToolResult(
   }
   settleSafeTool(settleTool, actionId, safeToolState(result));
   const responseBody = JSON.stringify(result);
-  return Buffer.byteLength(responseBody, "utf8") <= CODING_TOOL_MAX_BODY_BYTES
-    ? { status: 200, body: responseBody }
-    : { status: 502, body: "" };
+  if (Buffer.byteLength(responseBody, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
+    return { status: 502, body: "" };
+  }
+  if (renderedResults !== undefined) {
+    recordGovernedToolModelContent(renderedResults.sink, renderedResults.correlationId, result);
+  }
+  return { status: 200, body: responseBody };
 }
 
 // Invoking inside `.then` defers the call, so a facade that dies SYNCHRONOUSLY (before returning a

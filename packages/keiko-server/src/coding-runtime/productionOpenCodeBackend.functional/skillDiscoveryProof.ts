@@ -3,7 +3,7 @@
 // discovery result. Discovery, invocation and their evidence still traverse the shipped runtime,
 // protocol, binder and production skill handlers.
 import { createHash } from "node:crypto";
-import { decodeModelFacingToolContent } from "./modelFacingToolContent.js";
+import { decodeGovernedToolModelContent } from "../governedToolModelContent.js";
 
 export const SKILL_DISCOVERY_PROOF_CALL_ID = "skill-real-binary-discovery";
 
@@ -32,7 +32,7 @@ function discoveryOutput(transcript: string): Record<string, unknown> {
   if (!record(reply) || typeof reply.content !== "string") {
     throw new TypeError("skill proof requires the correlated runtime discovery result");
   }
-  const output = decodeModelFacingToolContent(reply.content);
+  const output = decodeGovernedToolModelContent(reply.content);
   if (!record(output) || output.status !== "completed" || !record(output.skills)) {
     throw new TypeError("skill proof requires a completed discovery result");
   }

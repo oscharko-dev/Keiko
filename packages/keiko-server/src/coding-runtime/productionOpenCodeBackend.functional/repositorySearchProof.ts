@@ -1,7 +1,7 @@
 // Scripted MODEL boundary for the real-binary lane: the search result and subsequent bounded read
 // still traverse the shipped runtime, protocol, binder and production workspace handlers.
 import { createHash } from "node:crypto";
-import { decodeModelFacingToolContent } from "./modelFacingToolContent.js";
+import { decodeGovernedToolModelContent } from "../governedToolModelContent.js";
 
 export const H1_PROOF_SEARCH_CALL_ID = "h1-real-binary-search";
 
@@ -30,7 +30,7 @@ function searchOutput(transcript: string): Record<string, unknown> {
   if (!record(reply) || typeof reply.content !== "string") {
     throw new TypeError("H1 proof requires the correlated runtime search result");
   }
-  const output = decodeModelFacingToolContent(reply.content);
+  const output = decodeGovernedToolModelContent(reply.content);
   if (
     !record(output) ||
     output.status !== "completed" ||

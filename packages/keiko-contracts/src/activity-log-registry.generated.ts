@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4243a821f6210835886e0e6de437f152f89b7caa9b64c0e6d96acf157268815a" as const;
+  "56e9ac49019b0d97f4caafc43c6acf04c71e08190ae8cd577341c82cba55fca6" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8986,7 +8986,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.tool-result"],
+        state: ["coding-runtime.tool-result", "coding-runtime.tool-result-rendered"],
         end: [],
         failure: [],
         loss: [],
@@ -8996,9 +8996,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "coding-runtime.tool-result",
           mode: "correlation",
         },
+        {
+          op: "coding-runtime.tool-result-rendered",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.tool-result"],
+      resourceSignals: ["coding-runtime.tool-result", "coding-runtime.tool-result-rendered"],
       replayReferences: [],
       operations: [
         {
@@ -9065,6 +9069,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.tool-result.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.tool-result-rendered",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "framing",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "resultStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "textBlockCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.tool-result-rendered.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -38784,6 +38824,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.tool-authority.denied": "tools-workflows",
     "coding-runtime.tool-availability.failed": "tools-workflows",
     "coding-runtime.tool-result": "tools-workflows",
+    "coding-runtime.tool-result-rendered": "tools-workflows",
     "coding-runtime.verification": "tools-workflows",
     "coding-runtime.verification-summarized": "tools-workflows",
     "coding-runtime.workspace-read": "tools-workflows",

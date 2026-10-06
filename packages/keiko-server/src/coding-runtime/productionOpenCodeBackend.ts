@@ -236,6 +236,7 @@ function composeOpenCodeRun(
     supervisor: runtimeSupervisor(input, run),
     diagnostics: input.diagnostics,
     activityLog: input.activityLog,
+    toolResultCorrelationId: run.minted.authorityRef.runId,
     onRuntimeEvent: run.onRuntimeEvent,
     onSandboxAttestation: observeOpenCodeSandboxAttestation(input, run),
     authorityLifecycle: run.authorityLifecycle,
