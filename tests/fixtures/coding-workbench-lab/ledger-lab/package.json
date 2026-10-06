@@ -1,0 +1,24 @@
+{
+  "name": "ledger-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Small expense ledger library and CLI",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "start": "node src/cli.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.1",
+    "eslint": "^10.12.0",
+    "typescript": "~6.0.0",
+    "typescript-eslint": "^8.71.1"
+  }
+}

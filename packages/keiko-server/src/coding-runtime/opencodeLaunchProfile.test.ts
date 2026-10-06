@@ -144,7 +144,12 @@ describe("OpenCode launch profile", () => {
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
     const prompt = record(record(profile.configValue.agents).build).system;
     expect(prompt).toContain("Read every existing file before you edit it");
-    expect(prompt).toContain("For a new file, use a /dev/null source diff");
+    // #3873: the model-visible edit form is exact text replacements; the unified diff is gone.
+    expect(prompt).toContain("Submit changeset.edits: exact text replacements");
+    expect(prompt).toContain("An empty oldString creates a new file");
+    expect(prompt).not.toContain("unified diff");
+    expect(prompt).toContain("request all of them in the same turn");
+    expect(prompt).toContain("fix all of them, and only then run the verifier again");
     expect(prompt).toContain(createHash("sha256").update("", "utf8").digest("hex"));
   });
 
