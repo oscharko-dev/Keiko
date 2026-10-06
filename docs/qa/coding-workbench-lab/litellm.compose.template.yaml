@@ -1,0 +1,46 @@
+# Docker Compose service of the lab's LiteLLM gateway. This is a template: copy it to
+# ~/.keiko-litellm/compose.yaml next to config.yaml and litellm.env, then start it with
+#   docker compose -f ~/.keiko-litellm/compose.yaml up -d
+# and reload a changed config.yaml with `docker restart keiko-litellm`.
+name: keiko-litellm
+
+services:
+  litellm:
+    # v1.104.0 was the latest stable release when the lab was qualified (it mirrors the customer's
+    # gateway). The digest is the multi-arch index, so a re-pull can never change the binary.
+    image: ghcr.io/berriai/litellm:v1.104.0@sha256:625981c83410a3ea68eb0697590a57ec1d764d634514d54fa5db0591077ee839
+    container_name: keiko-litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    # litellm.env (mode 0600, never committed) defines LITELLM_MASTER_KEY, and the model server's
+    # key if it needs one. The lab README shows how to create it without printing the key.
+    env_file:
+      - ./litellm.env
+    environment:
+      LITELLM_LOG: "INFO"
+      NO_DOCKER_RUN: "true"
+    ports:
+      # Loopback only: the gateway is never reachable from the network.
+      - "127.0.0.1:4000:4000"
+    extra_hosts:
+      # Reaches the model server on the host from Linux; Docker Desktop provides the name itself.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(''http://127.0.0.1:4000/health/liveliness'', timeout=5).status == 200 else 1)"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

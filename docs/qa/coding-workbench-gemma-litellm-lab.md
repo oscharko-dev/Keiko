@@ -23,6 +23,8 @@ proves a larger window (see
 
 ## Lab repository
 
+The lab is reproducible from this repository: the fixture, task suite, drivers, LiteLLM template and chaos proxy are described in [`coding-workbench-lab/README.md`](coding-workbench-lab/README.md).
+
 A dependency-free TypeScript library and CLI (`ledger-lab`) run directly by Node.js 24 type
 stripping, with `node --test` tests, project rules in `AGENTS.md`, and a local bare remote for
 delivery. It carries deliberate defects:

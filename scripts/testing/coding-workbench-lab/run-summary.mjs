@@ -27,7 +27,7 @@ const OPTIONS = {
   mode: { type: "string" },
   head: { type: "string" },
 };
-const SETTLED_FIELDS = ["state", "status", "failureCode", "failureSummary", "outcome"];
+const SETTLED_FIELDS = ["op", "state", "status", "failureCode", "failureSummary", "outcome"];
 
 function tally(rows, keyOf) {
   const counts = new Map();
@@ -70,6 +70,7 @@ export function summarizeRun(events, suffix) {
         .find((id) => id?.startsWith("run-") && id.endsWith(suffix)) ?? `run-${suffix}`,
     firstTs: events[0].ts ?? "",
     lastTs: events.at(-1).ts ?? "",
+    settledTs: settled[0]?.ts,
     eventCount: events.length,
     turns: tally(
       where((op) => op === "coding-sidecar.gateway.outcome"),
@@ -122,7 +123,8 @@ export function formatSummary(summary) {
 
 /** A draft evidence-ledger row: the outcome is the settled state and duration, to be edited by hand. */
 export function ledgerRow(summary, { task = "<task>", mode = "<mode>", head = "<head>" } = {}) {
-  const minutes = (Date.parse(summary.lastTs) - Date.parse(summary.firstTs)) / 60_000;
+  const endTs = summary.settledTs ?? summary.lastTs;
+  const minutes = (Date.parse(endTs) - Date.parse(summary.firstTs)) / 60_000;
   const state = summary.settled[0]?.state ?? summary.settled[0]?.status ?? "unsettled";
   const turnCount = [...summary.turns.values()].reduce((total, count) => total + count, 0);
   const evidence = [

@@ -1,0 +1,46 @@
+# LiteLLM gateway configuration of the Coding Workbench live lab. This is a template: copy it to
+# ~/.keiko-litellm/config.yaml (the compose template mounts that file). It holds no secret; every
+# credential is an os.environ/NAME reference that LiteLLM resolves from litellm.env, which stays
+# outside the repository (see docs/qa/coding-workbench-lab/README.md).
+#
+# Every model_info bound below is the deployment's REAL limit, not a catalog maximum. Keiko
+# discovers the route through /model/info and derives its prompt budget from these fields:
+#   context_window             the whole served window; the model server must really serve it
+#   max_output_tokens          the output ceiling
+#   supports_function_calling  the coding runtime needs tool calling
+# A route that declares no window leaves Keiko on its 4,096-token setup placeholder until its
+# long-context probe proves a larger one, and a Coding run needs at least 32,000 admissible prompt
+# tokens (docs/troubleshooting/litellm-production-gateway.md).
+
+model_list:
+  - model_name: gemma-4-31b-it
+    litellm_params:
+      # hosted_vllm/ is LiteLLM's provider for a self-hosted OpenAI-compatible model server, the same
+      # code path a customer's own Gemma server uses. The part after the slash is the model name the
+      # server serves; for Ollama it is the name given to `ollama create` (the lab: keiko-gemma4-31b).
+      model: hosted_vllm/keiko-gemma4-31b
+      # The server's OpenAI-compatible base URL, ending in /v1. host.docker.internal reaches the host
+      # from the container (the compose template maps it on Linux as well).
+      #   direct:       http://host.docker.internal:11434/v1  Ollama's default port
+      #   chaos proxy:  http://host.docker.internal:11500/v1  scripts/testing/coding-workbench-lab/chaos-proxy.mjs
+      #                 forwards to 127.0.0.1:11434; route through it only for the resilience
+      #                 scenarios S1 to S7, then change the port back and restart the container
+      api_base: http://host.docker.internal:11434/v1
+      # A model server that requires a key: api_key: os.environ/MODEL_SERVER_API_KEY
+    model_info:
+      mode: chat
+      context_window: 131072
+      max_output_tokens: 16384
+      supports_function_calling: true
+      supports_vision: true
+
+litellm_settings:
+  # Keep prompts and completions out of LiteLLM's own logs and callbacks.
+  turn_off_message_logging: true
+  request_timeout: 1800
+  num_retries: 0
+
+general_settings:
+  # The key Keiko's Gateway Setup uses, sent as `Authorization: Bearer <key>`. The API key header
+  # stays `authorization` because litellm_key_header_name is deliberately not configured.
+  master_key: os.environ/LITELLM_MASTER_KEY

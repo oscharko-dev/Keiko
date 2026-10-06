@@ -17,6 +17,7 @@
       "entry": [
         "src/**/*.ts!",
         "scripts/*.mjs!",
+        "scripts/testing/coding-workbench-lab/*.mjs",
         "tests/e2e/**/*.spec.ts!",
         "tests/e2e/**/*.mts!",
         "tests/e2e/config/**/*.ts!",

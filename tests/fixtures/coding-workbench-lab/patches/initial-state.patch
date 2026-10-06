@@ -1,0 +1,847 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 5060ef5..367a8c4 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -3,9 +3,7 @@
+ - Node.js 24 runs the TypeScript sources directly (type stripping). Use erasable syntax only:
+   no `enum`, no `namespace`, no constructor parameter properties, and import types with
+   `import type` or inline `type` modifiers. Relative imports keep the `.ts` extension.
+-- Zero runtime dependencies. The only development dependencies are TypeScript, ESLint and their
+-  configs already in package.json; do not add packages.
++- Zero runtime and development dependencies. Do not add packages.
+ - Money is integer cents (`Cents`). Never store or sum floating-point currency values.
+ - Every bug fix ships a regression test next to the code (`src/<module>.test.ts`).
+-- Run `npm run check` (typecheck, lint, tests) before you finish; all three must pass. Fix lint
+-  findings in the code; never disable a rule, add an eslint-disable comment, or loosen the config.
++- Run `npm test` before you finish; it must pass.
+diff --git a/README.md b/README.md
+index 543d824..e091a4d 100644
+--- a/README.md
++++ b/README.md
+@@ -3,13 +3,8 @@
+ A small expense ledger: a TypeScript library plus a CLI that summarizes a CSV export.
+ 
+ ```bash
+-npm run check                           # typecheck, lint and tests
+-npm test                                # run the test suite (node:test, no runtime dependencies)
++npm test                                # run the test suite (node:test, no dependencies)
+ node src/cli.ts summary data/sample.csv # print the balance and monthly totals
+-node src/cli.ts accounts data/sample.csv   # per-account report
+-node src/cli.ts months data/sample.csv     # per-month report with the largest expense
+-node src/cli.ts categories data/sample.csv # expense categories
+-node src/cli.ts import --format bank-b data/bank-b.csv # summary of a Bank B export
+ ```
+ 
+ ## CSV format
+@@ -17,5 +12,3 @@ node src/cli.ts import --format bank-b data/bank-b.csv # summary of a Bank B exp
+ The file starts with the header `date,account,description,amount`. Dates are ISO
+ (`YYYY-MM-DD`), amounts are decimal with at most two fractional digits; negative
+ amounts are expenses.
+-
+-File formats, including the Bank B export, are described in `docs/FORMAT.md`.
+diff --git a/data/bank-b.csv b/data/bank-b.csv
+deleted file mode 100644
+index c0ededa..0000000
+--- a/data/bank-b.csv
++++ /dev/null
+@@ -1,13 +0,0 @@
+-Kontoauszug Bank B
+-Konto: Girokonto DE00 1234 5678 9000
+-Zeitraum: 01.01.2026 - 31.03.2026
+-
+-Datum;Konto;Verwendungszweck;Betrag
+-05.01.2026;giro;Gehalt;3.000,00
+-09.01.2026;giro;Miete Januar;-1.200,00
+-28.01.2026;karte;Lebensmittel;-84,50
+-02.02.2026;karte;Bücher, Zeitschriften;-42,90
+-15.02.2026;giro;Strom;-96,10
+-01.03.2026;giro;Gehalt;3.000,00
+-03.03.2026;karte;Bahnticket;-29,00
+-17.03.2026;giro;Steuererstattung;1.234,50
+diff --git a/docs/FORMAT.md b/docs/FORMAT.md
+deleted file mode 100644
+index ae795ca..0000000
+--- a/docs/FORMAT.md
++++ /dev/null
+@@ -1,31 +0,0 @@
+-# Ledger file formats
+-
+-## Native ledger CSV (`ledger-csv`)
+-
+-Comma-separated with a fixed header `date,account,description,amount`.
+-
+-- `date`: ISO calendar date `YYYY-MM-DD`.
+-- `account`: free text, required.
+-- `description`: free text; RFC 4180 quoting applies (a field containing a comma or a double quote
+-  is wrapped in double quotes, and a double quote inside such a field is doubled).
+-- `amount`: decimal with a dot and at most two fractional digits, optionally prefixed with `$`;
+-  negative values are expenses. Thousands separators are not accepted.
+-
+-Example: `data/sample.csv`.
+-
+-## Bank B export (`bank-b`)
+-
+-Semicolon-separated. The file starts with free-form metadata lines, then the header
+-`Datum;Konto;Verwendungszweck;Betrag`, then one entry per line.
+-
+-- `Datum`: `DD.MM.YYYY`.
+-- `Betrag`: German notation, comma as the decimal separator and an optional dot as the thousands
+-  separator, for example `-1.200,00` or `3.000,00`.
+-- Quoting is not used by Bank B; a `;` never occurs inside a field.
+-
+-Example: `data/bank-b.csv`.
+-
+-## Money
+-
+-Every amount is stored as integer cents (`Cents`). Parsers convert exactly; nothing in the ledger
+-stores or sums floating-point currency values.
+diff --git a/eslint.config.mjs b/eslint.config.mjs
+deleted file mode 100644
+index 2c5426f..0000000
+--- a/eslint.config.mjs
++++ /dev/null
+@@ -1,32 +0,0 @@
+-import js from "@eslint/js";
+-import tseslint from "typescript-eslint";
+-
+-export default tseslint.config(
+-  { ignores: ["node_modules/**"] },
+-  js.configs.recommended,
+-  ...tseslint.configs.strictTypeChecked,
+-  ...tseslint.configs.stylisticTypeChecked,
+-  {
+-    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+-    rules: {
+-      "@typescript-eslint/explicit-function-return-type": "error",
+-      "@typescript-eslint/no-explicit-any": "error",
+-      "@typescript-eslint/no-non-null-assertion": "error",
+-      complexity: ["error", 10],
+-      "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true }],
+-      "no-console": "off",
+-    },
+-  },
+-  {
+-    files: ["src/**/*.test.ts"],
+-    rules: {
+-      "max-lines-per-function": "off",
+-      // node:test's test() returns a promise the runner awaits itself.
+-      "@typescript-eslint/no-floating-promises": [
+-        "error",
+-        { allowForKnownSafeCalls: [{ from: "package", package: "node:test", name: ["test", "describe", "it"] }] },
+-      ],
+-    },
+-  },
+-  { files: ["eslint.config.mjs"], extends: [tseslint.configs.disableTypeChecked] },
+-);
+diff --git a/package.json b/package.json
+index a34baa8..944ed2b 100644
+--- a/package.json
++++ b/package.json
+@@ -9,16 +9,6 @@
+   },
+   "scripts": {
+     "test": "node --test",
+-    "typecheck": "tsc --noEmit",
+-    "lint": "eslint .",
+-    "check": "npm run typecheck && npm run lint && npm test",
+     "start": "node src/cli.ts"
+-  },
+-  "devDependencies": {
+-    "@eslint/js": "^10.0.1",
+-    "@types/node": "^24.19.1",
+-    "eslint": "^10.12.0",
+-    "typescript": "~6.0.0",
+-    "typescript-eslint": "^8.71.1"
+   }
+ }
+diff --git a/src/cli.ts b/src/cli.ts
+index bb3c9b0..bcdd225 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,25 +1,18 @@
+ import { readFileSync } from "node:fs";
+-import { importerFor, ledgerCsvImporter } from "./importers/index.ts";
+-import { Ledger, type Entry } from "./ledger.ts";
++import { parseCsv } from "./csv.ts";
++import { Ledger } from "./ledger.ts";
+ import { formatAmount } from "./money.ts";
+-import { renderAccountReport, renderCategoryReport, renderMonthReport } from "./report.ts";
+ 
+-export const USAGE = [
+-  "Usage:",
+-  "  ledger summary <file.csv>                 balance and monthly totals",
+-  "  ledger accounts <file.csv>                per-account income, expenses and balance",
+-  "  ledger months <file.csv>                  per-month totals with the largest expense",
+-  "  ledger categories <file.csv>              expense categories by share",
+-  "  ledger import --format <id> <file>        summary of a bank export (ledger-csv, bank-b)",
+-].join("\n");
++export const USAGE = "Usage: ledger summary <file.csv>";
+ 
+-function readEntries(file: string, format = ledgerCsvImporter.id): Entry[] {
+-  return importerFor(format).parse(readFileSync(file, "utf8"));
+-}
+-
+-function summary(entries: readonly Entry[]): string {
++/** Runs the CLI and returns its output text. */
++export function run(argv: readonly string[]): string {
++  const [command, file] = argv;
++  if (command !== "summary" || file === undefined) {
++    return USAGE;
++  }
+   const ledger = new Ledger();
+-  for (const entry of entries) {
++  for (const entry of parseCsv(readFileSync(file, "utf8"))) {
+     ledger.add(entry);
+   }
+   const lines = [`Balance: ${formatAmount(ledger.balance())}`];
+@@ -29,33 +22,6 @@ function summary(entries: readonly Entry[]): string {
+   return lines.join("\n");
+ }
+ 
+-const REPORTS: Readonly<Record<string, (entries: readonly Entry[]) => string>> = {
+-  summary,
+-  accounts: renderAccountReport,
+-  months: renderMonthReport,
+-  categories: renderCategoryReport,
+-};
+-
+-/** Runs the CLI and returns its output text. */
+-export function run(argv: readonly string[]): string {
+-  const [command, ...rest] = argv;
+-  if (command === "import") {
+-    const formatIndex = rest.indexOf("--format");
+-    const format = formatIndex === -1 ? undefined : rest[formatIndex + 1];
+-    const file = rest.find((arg, index) => !arg.startsWith("--") && index !== formatIndex + 1);
+-    if (format === undefined || file === undefined) {
+-      return USAGE;
+-    }
+-    return summary(readEntries(file, format));
+-  }
+-  const report = command === undefined ? undefined : REPORTS[command];
+-  const file = rest[0];
+-  if (report === undefined || file === undefined) {
+-    return USAGE;
+-  }
+-  return report(readEntries(file));
+-}
+-
+ if (import.meta.main) {
+   console.log(run(process.argv.slice(2)));
+ }
+diff --git a/src/csv.test.ts b/src/csv.test.ts
+index 74daa8f..08c42d4 100644
+--- a/src/csv.test.ts
++++ b/src/csv.test.ts
+@@ -9,20 +9,6 @@ test("parseCsv reads entries after the header", () => {
+   ]);
+ });
+ 
+-test("parseCsv handles quoted fields with commas", () => {
+-  const entries = parseCsv("date,account,description,amount\n2026-02-02,card,\"Books, magazines\",-42.90\n");
+-  assert.deepEqual(entries, [
+-    { date: "2026-02-02", account: "card", description: "Books, magazines", amount: -4290 },
+-  ]);
+-});
+-
+-test("parseCsv handles escaped quotes in quoted fields", () => {
+-  const entries = parseCsv("date,account,description,amount\n2026-02-03,card,\"The \"\"Big\"\" Book\",-10.00\n");
+-  assert.deepEqual(entries, [
+-    { date: "2026-02-03", account: "card", description: 'The "Big" Book', amount: -1000 },
+-  ]);
+-});
+-
+ test("parseCsv rejects an unexpected header", () => {
+   assert.throws(() => parseCsv("when,amount\n"), /Unexpected CSV header/);
+ });
+diff --git a/src/csv.ts b/src/csv.ts
+index 0d066dc..af404f4 100644
+--- a/src/csv.ts
++++ b/src/csv.ts
+@@ -3,40 +3,6 @@ import { parseAmount } from "./money.ts";
+ 
+ const HEADER = "date,account,description,amount";
+ 
+-/** Parses a single CSV line following RFC 4180 rules. */
+-function splitCsvLine(line: string): string[] {
+-  const cells: string[] = [];
+-  let currentCell = "";
+-  let inQuotes = false;
+-
+-  for (let i = 0; i < line.length; i++) {
+-    const char = line[i];
+-    if (inQuotes) {
+-      if (char === '"') {
+-        if (i + 1 < line.length && line[i + 1] === '"') {
+-          currentCell += '"';
+-          i++;
+-        } else {
+-          inQuotes = false;
+-        }
+-      } else {
+-        currentCell += char;
+-      }
+-    } else {
+-      if (char === '"') {
+-        inQuotes = true;
+-      } else if (char === ',') {
+-        cells.push(currentCell);
+-        currentCell = "";
+-      } else {
+-        currentCell += char;
+-      }
+-    }
+-  }
+-  cells.push(currentCell);
+-  return cells;
+-}
+-
+ /** Parses a ledger CSV export (header row + one entry per line). */
+ export function parseCsv(text: string): Entry[] {
+   const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+@@ -45,7 +11,7 @@ export function parseCsv(text: string): Entry[] {
+     throw new Error(`Unexpected CSV header, expected "${HEADER}"`);
+   }
+   return rows.map((row, index) => {
+-    const cells = splitCsvLine(row);
++    const cells = row.split(",");
+     if (cells.length !== 4) {
+       throw new Error(`Line ${index + 2}: expected 4 columns, got ${cells.length}`);
+     }
+diff --git a/src/importers/bank-b.ts b/src/importers/bank-b.ts
+deleted file mode 100644
+index 888b486..0000000
+--- a/src/importers/bank-b.ts
++++ /dev/null
+@@ -1,60 +0,0 @@
+-import type { Entry } from "../ledger.ts";
+-import type { Cents } from "../money.ts";
+-import type { Importer } from "./index.ts";
+-
+-/**
+- * Bank B exports: semicolon-separated, dates as DD.MM.YYYY, amounts in the German notation with a
+- * comma as the decimal separator and an optional dot as the thousands separator ("1.234,50").
+- * Lines before the header carry account metadata and are skipped.
+- */
+-
+-const HEADER = "Datum;Konto;Verwendungszweck;Betrag";
+-const DATE_PATTERN = /^(\d{2})\.(\d{2})\.(\d{4})$/;
+-
+-function isoDate(input: string): string {
+-  const match = DATE_PATTERN.exec(input.trim());
+-  if (match === null) {
+-    throw new Error(`Invalid Bank B date: ${input}`);
+-  }
+-  const [, day, month, year] = match as unknown as [string, string, string, string];
+-  return `${year}-${month}-${day}`;
+-}
+-
+-function germanAmountToCents(input: string): Cents {
+-  const value = Number.parseFloat(input.trim().replace(",", "."));
+-  if (Number.isNaN(value)) {
+-    throw new Error(`Invalid Bank B amount: ${input}`);
+-  }
+-  return Math.round(value * 100);
+-}
+-
+-function entryFromRow(row: string, lineNumber: number): Entry {
+-  const cells = row.split(";");
+-  if (cells.length !== 4) {
+-    throw new Error(`Line ${lineNumber}: expected 4 columns, got ${cells.length}`);
+-  }
+-  const [date, account, description, amount] = cells as [string, string, string, string];
+-  return {
+-    date: isoDate(date),
+-    account: account.trim(),
+-    description: description.trim(),
+-    amount: germanAmountToCents(amount),
+-  };
+-}
+-
+-export const bankBImporter: Importer = {
+-  id: "bank-b",
+-  describe: "Bank B export (semicolon-separated, DD.MM.YYYY, German amounts)",
+-  parse(text: string): Entry[] {
+-    const lines = text.split(/\r?\n/);
+-    const headerIndex = lines.findIndex((line) => line.trim() === HEADER);
+-    if (headerIndex === -1) {
+-      throw new Error(`Bank B header "${HEADER}" not found`);
+-    }
+-    return lines
+-      .slice(headerIndex + 1)
+-      .map((line, offset) => ({ line, lineNumber: headerIndex + offset + 2 }))
+-      .filter(({ line }) => line.trim() !== "")
+-      .map(({ line, lineNumber }) => entryFromRow(line, lineNumber));
+-  },
+-};
+diff --git a/src/importers/index.ts b/src/importers/index.ts
+deleted file mode 100644
+index 5352096..0000000
+--- a/src/importers/index.ts
++++ /dev/null
+@@ -1,28 +0,0 @@
+-import type { Entry } from "../ledger.ts";
+-import { parseCsv } from "../csv.ts";
+-import { bankBImporter } from "./bank-b.ts";
+-
+-/** A bank export format that can be turned into ledger entries. */
+-export interface Importer {
+-  readonly id: string;
+-  readonly describe: string;
+-  parse(text: string): Entry[];
+-}
+-
+-/** The native ledger CSV export (see docs/FORMAT.md). */
+-export const ledgerCsvImporter: Importer = {
+-  id: "ledger-csv",
+-  describe: "Ledger CSV export (comma-separated, ISO dates, decimal point)",
+-  parse: parseCsv,
+-};
+-
+-export const IMPORTERS: readonly Importer[] = [ledgerCsvImporter, bankBImporter];
+-
+-/** Finds an importer by id; throws with the known ids when none matches. */
+-export function importerFor(id: string): Importer {
+-  const importer = IMPORTERS.find((candidate) => candidate.id === id);
+-  if (importer === undefined) {
+-    throw new Error(`Unknown import format "${id}" (known: ${IMPORTERS.map((i) => i.id).join(", ")})`);
+-  }
+-  return importer;
+-}
+diff --git a/src/ledger.test.ts b/src/ledger.test.ts
+index 4a07bb9..829e4c2 100644
+--- a/src/ledger.test.ts
++++ b/src/ledger.test.ts
+@@ -18,29 +18,6 @@ test("balance can be restricted to one account", () => {
+   assert.equal(sampleLedger().balance("card"), -8450);
+ });
+ 
+-test("monthly totals are in chronological order and correctly keyed", () => {
+-  const ledger = new Ledger();
+-  ledger.add({ date: "2026-02-01", account: "a", description: "Feb", amount: 100 });
+-  ledger.add({ date: "2026-01-01", account: "a", description: "Jan", amount: 200 });
+-  
+-  const totals = ledger.monthlyTotals();
+-  const keys = Array.from(totals.keys());
+-  
+-  assert.deepEqual(keys, ["2026-01", "2026-02"]);
+-  assert.equal(totals.get("2026-01"), 200);
+-  assert.equal(totals.get("2026-02"), 100);
+-});
+-
+-test("monthly totals handle start-of-month dates independently of timezone", () => {
+-  const ledger = new Ledger();
+-  // 2026-01-01 is often shifted to 2025-12-31 in UTC- offset timezones when parsed as local.
+-  ledger.add({ date: "2026-01-01", account: "a", description: "New Year", amount: 100 });
+-  
+-  const totals = ledger.monthlyTotals();
+-  assert.ok(totals.has("2026-01"), "Should have 2026-01 key");
+-  assert.equal(totals.get("2026-01"), 100);
+-});
+-
+ test("add rejects invalid dates", () => {
+   assert.throws(
+     () => new Ledger().add({ date: "05.01.2026", account: "a", description: "x", amount: 1 }),
+diff --git a/src/ledger.ts b/src/ledger.ts
+index 424e9b9..0a312cd 100644
+--- a/src/ledger.ts
++++ b/src/ledger.ts
+@@ -39,15 +39,10 @@ export class Ledger {
+   monthlyTotals(): Map<string, Cents> {
+     const totals = new Map<string, Cents>();
+     for (const entry of this.#entries) {
+-      const key = entry.date.slice(0, 7);
++      const date = new Date(entry.date);
++      const key = `${date.getFullYear()}-${date.getMonth()}`;
+       totals.set(key, (totals.get(key) ?? 0) + entry.amount);
+     }
+-
+-    const sortedKeys = Array.from(totals.keys()).sort();
+-    const sortedTotals = new Map<string, Cents>();
+-    for (const key of sortedKeys) {
+-      sortedTotals.set(key, totals.get(key)!);
+-    }
+-    return sortedTotals;
++    return totals;
+   }
+ }
+diff --git a/src/report.test.ts b/src/report.test.ts
+deleted file mode 100644
+index 461596e..0000000
+--- a/src/report.test.ts
++++ /dev/null
+@@ -1,61 +0,0 @@
+-import assert from "node:assert/strict";
+-import { test } from "node:test";
+-import type { Entry } from "./ledger.ts";
+-import {
+-  categorize,
+-  recurringEntries,
+-  renderTable,
+-  share,
+-  summarizeAccounts,
+-  summarizeCategories,
+-} from "./report.ts";
+-
+-const entries: readonly Entry[] = [
+-  { date: "2026-01-05", account: "checking", description: "Salary", amount: 300000 },
+-  { date: "2026-01-09", account: "checking", description: "Rent", amount: -120000 },
+-  { date: "2026-01-28", account: "card", description: "Groceries", amount: -8450 },
+-  { date: "2026-02-09", account: "checking", description: "Rent", amount: -120000 },
+-  { date: "2026-02-15", account: "checking", description: "Electricity", amount: -9610 },
+-];
+-
+-test("renderTable pads columns and underlines the header", () => {
+-  const table = renderTable(
+-    [
+-      { header: "Name", align: "left" },
+-      { header: "Amount", align: "right" },
+-    ],
+-    [
+-      ["a", "1.00"],
+-      ["bbb", "-12.50"],
+-    ],
+-  );
+-  assert.equal(table, "Name  Amount\n----  ------\na       1.00\nbbb   -12.50");
+-});
+-
+-test("summarizeAccounts separates income and expenses per account", () => {
+-  const [card, checking] = summarizeAccounts(entries);
+-  assert.deepEqual(card, { account: "card", entryCount: 1, income: 0, expenses: -8450, balance: -8450 });
+-  assert.equal(checking?.income, 300000);
+-  assert.equal(checking?.expenses, -249610);
+-});
+-
+-test("categorize uses the first matching keyword rule", () => {
+-  assert.equal(categorize(entries[1] as Entry), "Housing");
+-  assert.equal(categorize({ ...(entries[0] as Entry), description: "Consulting" }), "Other");
+-});
+-
+-test("summarizeCategories lists expense categories largest first with their share", () => {
+-  const [housing, food] = summarizeCategories(entries);
+-  assert.equal(housing?.category, "Housing");
+-  assert.equal(housing?.total, -249610);
+-  assert.equal(food?.category, "Food");
+-  assert.equal(share(-8450, -258060), 3.3);
+-});
+-
+-test("recurringEntries reports a description and amount seen in two months once", () => {
+-  const recurring = recurringEntries(entries);
+-  assert.deepEqual(
+-    recurring.map((entry) => entry.description),
+-    ["Rent"],
+-  );
+-});
+diff --git a/src/report.ts b/src/report.ts
+deleted file mode 100644
+index 854946a..0000000
+--- a/src/report.ts
++++ /dev/null
+@@ -1,281 +0,0 @@
+-import type { Entry } from "./ledger.ts";
+-import { formatAmount, type Cents } from "./money.ts";
+-
+-/**
+- * Plain-text reporting for ledger entries: fixed-width tables, per-account sections and a
+- * month-by-month overview. Everything here is pure; the CLI decides what to print.
+- */
+-
+-export type Alignment = "left" | "right";
+-
+-export interface Column {
+-  readonly header: string;
+-  readonly align: Alignment;
+-  /** Minimum width; a longer cell widens the column. */
+-  readonly minWidth?: number;
+-}
+-
+-export interface TableOptions {
+-  /** Separator between columns. Defaults to two spaces. */
+-  readonly gutter?: string;
+-  /** Character used for the header underline. Defaults to "-". */
+-  readonly rule?: string;
+-}
+-
+-const DEFAULT_GUTTER = "  ";
+-const DEFAULT_RULE = "-";
+-
+-function pad(text: string, width: number, align: Alignment): string {
+-  if (text.length >= width) {
+-    return text;
+-  }
+-  const fill = " ".repeat(width - text.length);
+-  return align === "right" ? `${fill}${text}` : `${text}${fill}`;
+-}
+-
+-function widthOf(column: Column, cells: readonly string[]): number {
+-  let width = Math.max(column.header.length, column.minWidth ?? 0);
+-  for (const cell of cells) {
+-    if (cell.length > width) {
+-      width = cell.length;
+-    }
+-  }
+-  return width;
+-}
+-
+-/** Renders rows as a fixed-width table with a header and an underline. */
+-export function renderTable(
+-  columns: readonly Column[],
+-  rows: readonly (readonly string[])[],
+-  options: TableOptions = {},
+-): string {
+-  const gutter = options.gutter ?? DEFAULT_GUTTER;
+-  const rule = options.rule ?? DEFAULT_RULE;
+-  const widths = columns.map((column, index) =>
+-    widthOf(
+-      column,
+-      rows.map((row) => row[index] ?? ""),
+-    ),
+-  );
+-  const line = (cells: readonly string[]): string =>
+-    columns.map((column, index) => pad(cells[index] ?? "", widths[index] ?? 0, column.align)).join(gutter);
+-  const header = line(columns.map((column) => column.header));
+-  const underline = widths.map((width) => rule.repeat(width)).join(gutter);
+-  return [header, underline, ...rows.map((row) => line(row))].join("\n");
+-}
+-
+-export interface AccountSummary {
+-  readonly account: string;
+-  readonly entryCount: number;
+-  readonly income: Cents;
+-  readonly expenses: Cents;
+-  readonly balance: Cents;
+-}
+-
+-/** Groups entries by account and sums income (positive) and expenses (negative) separately. */
+-export function summarizeAccounts(entries: readonly Entry[]): AccountSummary[] {
+-  const byAccount = new Map<string, { count: number; income: Cents; expenses: Cents }>();
+-  for (const entry of entries) {
+-    const current = byAccount.get(entry.account) ?? { count: 0, income: 0, expenses: 0 };
+-    current.count += 1;
+-    if (entry.amount >= 0) {
+-      current.income += entry.amount;
+-    } else {
+-      current.expenses += entry.amount;
+-    }
+-    byAccount.set(entry.account, current);
+-  }
+-  return [...byAccount.entries()]
+-    .map(([account, totals]) => ({
+-      account,
+-      entryCount: totals.count,
+-      income: totals.income,
+-      expenses: totals.expenses,
+-      balance: totals.income + totals.expenses,
+-    }))
+-    .sort((left, right) => left.account.localeCompare(right.account));
+-}
+-
+-export interface MonthSummary {
+-  readonly month: string;
+-  readonly entryCount: number;
+-  readonly total: Cents;
+-  /** The single largest expense of the month, or undefined when the month has no expense. */
+-  readonly largestExpense: Entry | undefined;
+-}
+-
+-/** Month keys "YYYY-MM" in chronological order, with the largest expense of each month. */
+-export function summarizeMonths(entries: readonly Entry[]): MonthSummary[] {
+-  const byMonth = new Map<string, Entry[]>();
+-  for (const entry of entries) {
+-    const month = entry.date.slice(0, 7);
+-    const list = byMonth.get(month);
+-    if (list === undefined) {
+-      byMonth.set(month, [entry]);
+-    } else {
+-      list.push(entry);
+-    }
+-  }
+-  return [...byMonth.keys()].sort().map((month) => {
+-    const list = byMonth.get(month) ?? [];
+-    let largestExpense: Entry | undefined;
+-    for (const entry of list) {
+-      if (entry.amount < 0 && (largestExpense === undefined || entry.amount > largestExpense.amount)) {
+-        largestExpense = entry;
+-      }
+-    }
+-    return {
+-      month,
+-      entryCount: list.length,
+-      total: list.reduce((sum, entry) => sum + entry.amount, 0),
+-      largestExpense,
+-    };
+-  });
+-}
+-
+-/** Percentage share of `part` in `whole`, rounded to one decimal; 0 when `whole` is zero. */
+-export function share(part: Cents, whole: Cents): number {
+-  if (whole === 0) {
+-    return 0;
+-  }
+-  return Math.round((Math.abs(part) / Math.abs(whole)) * 1000) / 10;
+-}
+-
+-export interface CategoryRule {
+-  readonly category: string;
+-  /** Case-insensitive substring of the description. */
+-  readonly keyword: string;
+-}
+-
+-export const DEFAULT_CATEGORY_RULES: readonly CategoryRule[] = [
+-  { category: "Housing", keyword: "rent" },
+-  { category: "Housing", keyword: "electricity" },
+-  { category: "Food", keyword: "groceries" },
+-  { category: "Food", keyword: "restaurant" },
+-  { category: "Transport", keyword: "train" },
+-  { category: "Transport", keyword: "fuel" },
+-  { category: "Income", keyword: "salary" },
+-];
+-
+-/** Returns the first matching category or "Other". */
+-export function categorize(entry: Entry, rules: readonly CategoryRule[] = DEFAULT_CATEGORY_RULES): string {
+-  const description = entry.description.toLowerCase();
+-  for (const rule of rules) {
+-    if (description.includes(rule.keyword.toLowerCase())) {
+-      return rule.category;
+-    }
+-  }
+-  return "Other";
+-}
+-
+-export interface CategorySummary {
+-  readonly category: string;
+-  readonly total: Cents;
+-  readonly shareOfExpenses: number;
+-}
+-
+-/** Expense totals per category, largest first. Income categories are excluded. */
+-export function summarizeCategories(
+-  entries: readonly Entry[],
+-  rules: readonly CategoryRule[] = DEFAULT_CATEGORY_RULES,
+-): CategorySummary[] {
+-  const totals = new Map<string, Cents>();
+-  let expenses: Cents = 0;
+-  for (const entry of entries) {
+-    if (entry.amount >= 0) {
+-      continue;
+-    }
+-    const category = categorize(entry, rules);
+-    totals.set(category, (totals.get(category) ?? 0) + entry.amount);
+-    expenses += entry.amount;
+-  }
+-  return [...totals.entries()]
+-    .map(([category, total]) => ({ category, total, shareOfExpenses: share(total, expenses) }))
+-    .sort((left, right) => left.total - right.total);
+-}
+-
+-/** The account report as printed by `ledger accounts`. */
+-export function renderAccountReport(entries: readonly Entry[]): string {
+-  const summaries = summarizeAccounts(entries);
+-  const columns: Column[] = [
+-    { header: "Account", align: "left" },
+-    { header: "Entries", align: "right" },
+-    { header: "Income", align: "right", minWidth: 10 },
+-    { header: "Expenses", align: "right", minWidth: 10 },
+-    { header: "Balance", align: "right", minWidth: 10 },
+-  ];
+-  const rows = summaries.map((summary) => [
+-    summary.account,
+-    String(summary.entryCount),
+-    formatAmount(summary.income),
+-    formatAmount(summary.expenses),
+-    formatAmount(summary.balance),
+-  ]);
+-  return renderTable(columns, rows);
+-}
+-
+-/** The month report as printed by `ledger months`. */
+-export function renderMonthReport(entries: readonly Entry[]): string {
+-  const summaries = summarizeMonths(entries);
+-  const columns: Column[] = [
+-    { header: "Month", align: "left" },
+-    { header: "Entries", align: "right" },
+-    { header: "Total", align: "right", minWidth: 10 },
+-    { header: "Largest expense", align: "left" },
+-  ];
+-  const rows = summaries.map((summary) => [
+-    summary.month,
+-    String(summary.entryCount),
+-    formatAmount(summary.total),
+-    summary.largestExpense === undefined
+-      ? "-"
+-      : `${summary.largestExpense.description} (${formatAmount(summary.largestExpense.amount)})`,
+-  ]);
+-  return renderTable(columns, rows);
+-}
+-
+-/** The category report as printed by `ledger categories`. */
+-export function renderCategoryReport(entries: readonly Entry[]): string {
+-  const summaries = summarizeCategories(entries);
+-  const columns: Column[] = [
+-    { header: "Category", align: "left" },
+-    { header: "Total", align: "right", minWidth: 10 },
+-    { header: "Share", align: "right" },
+-  ];
+-  const rows = summaries.map((summary) => [
+-    summary.category,
+-    formatAmount(summary.total),
+-    `${String(summary.shareOfExpenses)}%`,
+-  ]);
+-  return renderTable(columns, rows);
+-}
+-
+-/** Running balance after each entry, in the order given. */
+-export function runningBalance(entries: readonly Entry[]): readonly { entry: Entry; balance: Cents }[] {
+-  let balance: Cents = 0;
+-  return entries.map((entry) => {
+-    balance += entry.amount;
+-    return { entry, balance };
+-  });
+-}
+-
+-/** Entries whose description and amount recur in at least `minMonths` distinct months. */
+-export function recurringEntries(entries: readonly Entry[], minMonths = 2): readonly Entry[] {
+-  const months = new Map<string, Set<string>>();
+-  for (const entry of entries) {
+-    const key = `${entry.description.toLowerCase()}|${String(entry.amount)}`;
+-    const set = months.get(key) ?? new Set<string>();
+-    set.add(entry.date.slice(0, 7));
+-    months.set(key, set);
+-  }
+-  const seen = new Set<string>();
+-  const result: Entry[] = [];
+-  for (const entry of entries) {
+-    const key = `${entry.description.toLowerCase()}|${String(entry.amount)}`;
+-    if ((months.get(key)?.size ?? 0) >= minMonths && !seen.has(key)) {
+-      seen.add(key);
+-      result.push(entry);
+-    }
+-  }
+-  return result;
+-}
+diff --git a/tsconfig.json b/tsconfig.json
+deleted file mode 100644
+index a8a6afe..0000000
+--- a/tsconfig.json
++++ /dev/null
+@@ -1,21 +0,0 @@
+-{
+-  "compilerOptions": {
+-    "target": "es2024",
+-    "module": "nodenext",
+-    "moduleResolution": "nodenext",
+-    "lib": ["es2024"],
+-    "types": ["node"],
+-    "strict": true,
+-    "noUncheckedIndexedAccess": true,
+-    "exactOptionalPropertyTypes": true,
+-    "noImplicitOverride": true,
+-    "noFallthroughCasesInSwitch": true,
+-    "verbatimModuleSyntax": true,
+-    "erasableSyntaxOnly": true,
+-    "allowImportingTsExtensions": true,
+-    "rewriteRelativeImportExtensions": false,
+-    "noEmit": true,
+-    "skipLibCheck": true
+-  },
+-  "include": ["src/**/*.ts", "eslint.config.mjs"]
+-}

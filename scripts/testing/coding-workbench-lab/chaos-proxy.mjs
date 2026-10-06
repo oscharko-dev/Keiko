@@ -14,13 +14,17 @@
 //   {"mode":"stall","afterBytes":400,"stallMs":420000,"count":1} stop sending mid-body, then cut
 //   {"mode":"hang","count":1}                                    accept the call and never answer
 // `count` and `durationMs` end a fault; without either it lasts until the next POST /__chaos.
+//
+// Responses are fixed: a client never receives an error object, an error message or a stack of this
+// process, only a fixed status line or a closed reason code. The diagnostic (error name and message,
+// no stack) goes to this process's own stderr.
 import { Buffer } from "node:buffer";
 import { randomInt } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { setTimeout } from "node:timers";
 import { URL } from "node:url";
 import { isMainModule } from "../../lib/is-main-module.mjs";
-import { UsageError, errorMessage, parseCli, runMain } from "./lab-common.mjs";
+import { UsageError, parseCli, runMain } from "./lab-common.mjs";
 
 const USAGE = [
   "usage: node chaos-proxy.mjs [--listen-port 11500] [--host 127.0.0.1] [--upstream 127.0.0.1:11434]",
@@ -31,60 +35,84 @@ const USAGE = [
 ].join("\n");
 
 const CHAOS_MODES = new Set(["pass", "status", "latency", "drop", "stall", "hang"]);
-const NUMERIC_FIELDS = [
-  "status",
-  "count",
-  "probability",
-  "delayMs",
-  "afterBytes",
-  "stallMs",
-  "durationMs",
-];
+const MAX_TIMER_MS = 2_147_483_647;
+const FIELD_LIMITS = {
+  status: { min: 400, max: 599, integer: true },
+  count: { min: 0, max: Number.MAX_SAFE_INTEGER, integer: true },
+  probability: { min: 0, max: 1 },
+  delayMs: { min: 0, max: MAX_TIMER_MS },
+  afterBytes: { min: 0, max: Number.MAX_SAFE_INTEGER, integer: true },
+  stallMs: { min: 0, max: MAX_TIMER_MS },
+  durationMs: { min: 0, max: MAX_TIMER_MS },
+};
 const MODEL_CALL = /\/chat\/completions$/u;
 const DEFAULT_STATUS = 503;
 const DEFAULT_DELAY_MS = 60_000;
 const DEFAULT_STALL_MS = 420_000;
 const JSON_HEADERS = { "content-type": "application/json" };
+const TEXT_HEADERS = { "content-type": "text/plain; charset=utf-8" };
+const UPSTREAM_FAILURE_LINE = "502 chaos-proxy upstream failure";
+
+const stamp = () => new Date().toISOString().slice(11, 23);
 
 function proxyLog(message) {
-  console.log(`${new Date().toISOString().slice(11, 23)} ${message}`);
+  console.log(`${stamp()} ${message}`);
+}
+
+/** Diagnostics for the operator of the proxy: stderr, never a response. */
+function proxyErrorLog(message) {
+  console.error(`${stamp()} ${message}`);
 }
 
 const cryptoRandom = () => randomInt(0, 1_000_000) / 1_000_000;
 
-/** Validates a POST /__chaos body; an empty body means `pass`. */
-export function parseChaosSpec(text) {
-  const spec = text.trim() === "" ? { mode: "pass" } : JSON.parse(text);
-  if (spec === null || typeof spec !== "object" || !CHAOS_MODES.has(spec.mode)) {
-    throw new TypeError(`"mode" must be one of ${[...CHAOS_MODES].join(", ")}`);
+function fieldIsValid(value, { min, max, integer }) {
+  return (
+    Number.isFinite(value) &&
+    value >= min &&
+    value <= max &&
+    (integer !== true || Number.isInteger(value))
+  );
+}
+
+/** Checks a decoded POST /__chaos body: `{ spec }`, or `{ reason }` from a closed vocabulary. */
+export function checkChaosSpec(value) {
+  if (value === null || typeof value !== "object" || !CHAOS_MODES.has(value.mode)) {
+    return { reason: "invalid-mode" };
   }
-  for (const field of NUMERIC_FIELDS) {
-    const value = spec[field];
-    if (value !== undefined && !(Number.isFinite(value) && value >= 0)) {
-      throw new TypeError(`"${field}" must be a non-negative number`);
-    }
-  }
-  return spec;
+  const present = Object.keys(FIELD_LIMITS).filter((field) => value[field] !== undefined);
+  const invalid = present.find((field) => !fieldIsValid(value[field], FIELD_LIMITS[field]));
+  if (invalid !== undefined) return { reason: `invalid-${invalid}` };
+  // Only the closed field set is kept: nothing else from the request body enters the state.
+  return { spec: { mode: value.mode, ...Object.fromEntries(present.map((f) => [f, value[f]])) } };
 }
 
 /** The current fault and its statistics; consume() takes one fault for one model call. */
 export function createChaosState({ now = Date.now, random = cryptoRandom } = {}) {
   let chaos = { mode: "pass" };
   let expiresAt;
-  const stats = { forwarded: 0, injected: 0, byMode: {} };
+  let forwarded = 0;
+  let injected = 0;
+  const byMode = new Map();
   const reset = () => {
     chaos = { mode: "pass" };
     expiresAt = undefined;
   };
   return {
-    stats,
+    countForwarded() {
+      forwarded += 1;
+    },
     set(spec) {
       chaos = { ...spec };
       expiresAt = typeof spec.durationMs === "number" ? now() + spec.durationMs : undefined;
     },
     snapshot() {
       const remainingMs = expiresAt === undefined ? undefined : Math.max(0, expiresAt - now());
-      return { chaos, remainingMs, stats };
+      return {
+        chaos,
+        remainingMs,
+        stats: { forwarded, injected, byMode: Object.fromEntries(byMode) },
+      };
     },
     consume() {
       if (expiresAt !== undefined && now() >= expiresAt) reset();
@@ -95,8 +123,8 @@ export function createChaosState({ now = Date.now, random = cryptoRandom } = {})
         chaos.count -= 1;
         if (chaos.count <= 0) reset();
       }
-      stats.injected += 1;
-      stats.byMode[active.mode] = (stats.byMode[active.mode] ?? 0) + 1;
+      injected += 1;
+      byMode.set(active.mode, (byMode.get(active.mode) ?? 0) + 1);
       return active;
     },
   };
@@ -134,7 +162,7 @@ function relayResponse(upstreamResponse, res, upstream, fault, log) {
 }
 
 function forward(req, res, body, context, fault) {
-  const { upstream: target, log, state } = context;
+  const { upstream: target, log, logError, state } = context;
   const upstream = httpRequest(
     {
       host: target.host,
@@ -146,29 +174,47 @@ function forward(req, res, body, context, fault) {
     (upstreamResponse) => relayResponse(upstreamResponse, res, upstream, fault, log),
   );
   upstream.on("error", (error) => {
-    log(`upstream error ${error.message}`);
-    if (!res.headersSent) res.writeHead(502);
-    res.end();
-  });
-  upstream.end(body);
-  state.stats.forwarded += 1;
-}
-
-function handleControl(req, res, body, { log, state }) {
-  if (req.method === "POST") {
-    try {
-      state.set(parseChaosSpec(body.toString("utf8")));
-    } catch (error) {
-      res.writeHead(400, JSON_HEADERS);
-      res.end(JSON.stringify({ error: errorMessage(error) }));
+    logError(`upstream error: ${error.name}: ${error.message}`);
+    if (res.headersSent) {
+      res.end();
       return;
     }
+    res.writeHead(502, TEXT_HEADERS);
+    res.end(UPSTREAM_FAILURE_LINE);
+  });
+  upstream.end(body);
+  state.countForwarded();
+}
+
+function decodeControlBody(body, logError) {
+  const text = body.toString("utf8");
+  if (text.trim() === "") return { value: { mode: "pass" } };
+  try {
+    return { value: JSON.parse(text) };
+  } catch (error) {
+    logError(`control body is not JSON: ${error.name}: ${error.message}`);
+    return { reason: "invalid-json" };
+  }
+}
+
+function handleControl(req, res, body, { log, logError, state }) {
+  if (req.method === "POST") {
+    const decoded = decodeControlBody(body, logError);
+    const checked = decoded.reason === undefined ? checkChaosSpec(decoded.value) : decoded;
+    if (checked.reason !== undefined) {
+      logError(`control body rejected: ${checked.reason}`);
+      res.writeHead(400, TEXT_HEADERS);
+      res.end(`400 chaos-proxy invalid control body (${checked.reason})`);
+      return;
+    }
+    state.set(checked.spec);
     log(`chaos set ${JSON.stringify(state.snapshot().chaos)}`);
   }
   res.writeHead(200, JSON_HEADERS);
   res.end(JSON.stringify(state.snapshot()));
 }
 
+/** The error body of a provider failure, in the OpenAI error shape LiteLLM translates. */
 function answerStatus(res, fault) {
   const status = fault.status ?? DEFAULT_STATUS;
   res.writeHead(status, JSON_HEADERS);
@@ -207,8 +253,13 @@ function handleRequest(req, res, body, context) {
 }
 
 /** An http.Server that forwards to `upstream` ({ host, port }) and injects the state's faults. */
-export function createChaosProxy({ upstream, state = createChaosState(), log = proxyLog }) {
-  const context = { upstream, state, log };
+export function createChaosProxy({
+  upstream,
+  state = createChaosState(),
+  log = proxyLog,
+  logError = proxyErrorLog,
+}) {
+  const context = { upstream, state, log, logError };
   return createServer((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
