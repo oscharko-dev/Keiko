@@ -89,6 +89,15 @@ also reports the two previously recorded build-time advisories above:
 six affected dependency nodes, representing those two advisory IDs. Those findings are distinct
 from the patched source-map dependency and retain their existing scope and revisit conditions.
 
+The next required OSV scan reported a second newly reviewed advisory,
+[GHSA-r4xh-jqrq-34v2](https://github.com/advisories/GHSA-r4xh-jqrq-34v2), in `smol-toml`
+1.8.0. The identical local scan reproduced it. Version 1.9.0 fixes quadratic key parsing and
+is accepted by both existing consumers: the server Rust manifest validator and Knip.
+The targeted update changes only the shared resolution; the Rust validator retains its existing
+manifest-size and sensitive-path checks. The patched recursive OSV scan and production npm
+audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
+to accommodate this update.
+
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query
@@ -219,6 +228,7 @@ or peer graph).
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.9   | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.28  | current        | Root override; audit reports no known vulnerability.                                                                                                                                                                                                                                                         |
 | `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                         |
+| `smol-toml`                   | root                  | 1.9.0   | current        | Fix for GHSA-r4xh-jqrq-34v2; shared server Rust-manifest and Knip parser resolution.                                                                                                                                                                                                                         |
 | `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                                                                                                                                                                                                                                           |
 
 The live inventory command is `npm outdated --workspaces --include-workspace-root --json`; it

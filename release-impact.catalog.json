@@ -3151,7 +3151,7 @@
         "Support storage: replace the fixed 32-case display with bounded byte/age retention and release owned incident state after successful report preparation. Desktop reports are not accumulated in a permanent application archive. (#3687)",
         "Support operators: the canonical report reader validates the received file before analysis. Update legacy scripts to use a private output directory, omit former inclusion flags and sidecars, and read the versioned analysis envelope; regenerate retired legacy bundles on the originating installation. (#3679)",
         "Windows: ordinary local checkouts accept Git's canonical path spelling, including paths with spaces. The separate gateway-filtering work is a native test primitive; it does not yet enable production Windows Coding Workbench execution. (#3667) (#3668)",
-        "Dependencies: update the shared source-map-js resolution to 1.2.2, fixing denial of service from malicious indexed source maps (GHSA-68fv-2mgg-jv7q). Existing supply-chain checks and time-boxed build-only advisory dispositions remain enforced. (#3868)"
+        "Dependencies: update source-map-js to 1.2.2 and smol-toml to 1.9.0, fixing denial of service from malicious indexed source maps (GHSA-68fv-2mgg-jv7q) and quadratic TOML key parsing (GHSA-r4xh-jqrq-34v2). Existing supply-chain checks and time-boxed build-only advisory dispositions remain enforced. (#3868)"
       ],
       "review": {
         "status": "reviewed",
