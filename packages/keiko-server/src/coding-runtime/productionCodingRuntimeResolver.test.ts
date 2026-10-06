@@ -773,7 +773,7 @@ describe("production coding runtime resolver", () => {
         body: JSON.stringify({
           action: "edit",
           actionId: "action-1",
-          idempotencyKey: "idempotency-1",
+          idempotencyKey: "idem-1",
           changeset: {},
         }),
         capability: backend.minted.toolFacadeCapability,

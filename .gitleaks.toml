@@ -40,6 +40,15 @@ targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''rootToken: "0123456789abcdef",''']
 
+[[allowlists]]
+description = "PR #3876: the edit request fixture idempotency-1 in one immutable checkpoint of the coding runtime resolver test. It is test metadata (the idempotency key of a synthetic edit), not a credential; the generic-api-key rule matches the key name and an entropy of 3.55. Later commits use the non-secret-shaped idem-1. Only this exact historical fixture line in this one commit is exempt."
+condition = "AND"
+commits = ["b489d253239765a97535dfa530609d7db49b3bb3"]
+paths = ['''packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver\.test\.ts''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''idempotencyKey: "idempotency-1",''']
+
 [extend]
 useDefault = true
 
