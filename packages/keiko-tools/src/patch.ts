@@ -376,7 +376,9 @@ function isCreateOnlyModify(file: PatchFileChange): boolean {
   return (
     file.hunks.length > 0 &&
     file.hunks.every(
-      (hunk) => hunk.oldLines === 0 && hunk.lines.every((line) => line.startsWith("+")),
+      (hunk) =>
+        hunk.oldLines === 0 &&
+        hunk.lines.every((line) => line.startsWith("+") || line.startsWith("\\")),
     )
   );
 }

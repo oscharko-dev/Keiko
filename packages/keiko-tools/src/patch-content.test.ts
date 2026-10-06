@@ -12,6 +12,16 @@ function modify(lines: readonly string[], oldStart = 1): PatchFileChange {
   };
 }
 
+function create(lines: readonly string[]): PatchFileChange {
+  return {
+    path: "n",
+    kind: "create",
+    addedLines: lines.filter((l) => l.startsWith("+")).length,
+    removedLines: 0,
+    hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines }],
+  };
+}
+
 describe("computeFileContent — modify", () => {
   it("applies a matching hunk and preserves surrounding lines", () => {
     const out = computeFileContent(modify([" a", "-b", "+B", " c"]), "a\nb\nc\n");
@@ -111,5 +121,128 @@ describe("computeFileContent — create / delete", () => {
     expect(out.content).toBeNull();
     expect(out.conflicts).toHaveLength(1);
     expect(out.conflicts[0]?.reason).toContain("pre-image");
+  });
+});
+
+describe("computeFileContent — final line break (#3873)", () => {
+  // `\ No newline at end of file` annotates the body line before it. The engine reads it as Git
+  // does: a marked line is the file's last line without a line break, an unmarked line has one,
+  // and lines after the last hunk keep the current content's ending.
+  const MARKER = String.raw`\ No newline at end of file`;
+
+  it("keeps a missing final line break the patch names on both sides", () => {
+    const out = computeFileContent(
+      modify([" alpha", "-beta", MARKER, "+gamma", MARKER]),
+      "alpha\nbeta",
+    );
+    expect(out.conflicts).toEqual([]);
+    expect(out.content).toBe("alpha\ngamma");
+  });
+
+  it("adds the final line break the patch states", () => {
+    const out = computeFileContent(modify(["-beta", MARKER, "+beta"], 2), "alpha\nbeta");
+    expect(out.content).toBe("alpha\nbeta\n");
+  });
+
+  it("removes the final line break the patch states", () => {
+    const out = computeFileContent(modify(["-beta", "+beta", MARKER], 2), "alpha\nbeta\n");
+    expect(out.content).toBe("alpha\nbeta");
+  });
+
+  it("keeps the current ending for lines after the last hunk", () => {
+    expect(computeFileContent(modify(["-alpha", "+ALPHA"]), "alpha\nbeta").content).toBe(
+      "ALPHA\nbeta",
+    );
+    expect(computeFileContent(modify(["-alpha", "+ALPHA"]), "alpha\nbeta\n").content).toBe(
+      "ALPHA\nbeta\n",
+    );
+  });
+
+  it("gives an unmarked last line its line break, as Git does", () => {
+    const out = computeFileContent(modify([" alpha", "-beta", "+gamma"]), "alpha\nbeta");
+    expect(out.content).toBe("alpha\ngamma\n");
+  });
+
+  it("removes a marked last line and keeps the line break of the one before it", () => {
+    const out = computeFileContent(modify([" alpha", "-beta", MARKER]), "alpha\nbeta");
+    expect(out.content).toBe("alpha\n");
+  });
+
+  it.each([
+    [
+      "the current content ends with the line break the marker denies",
+      ["-beta", MARKER, "+gamma"],
+      "alpha\nbeta\n",
+      2,
+    ],
+    [
+      "the marked line is not the current last line",
+      ["-alpha", MARKER, "+gamma", " beta"],
+      "alpha\nbeta",
+      1,
+    ],
+    [
+      "a marked new line is followed by more hunk lines",
+      ["-alpha", "+gamma", MARKER, " beta"],
+      "alpha\nbeta",
+      1,
+    ],
+    [
+      "a marked new line is followed by untouched lines",
+      ["-alpha", "+gamma", MARKER],
+      "alpha\nbeta",
+      1,
+    ],
+    ["two markers name the new last line", ["-alpha", "+gamma", MARKER, MARKER], "alpha", 1],
+    ["the marker follows nothing", [MARKER, "-alpha", "+gamma"], "alpha", 1],
+  ])("conflicts when %s", (_name, lines, current, oldStart) => {
+    const out = computeFileContent(modify(lines, oldStart), current);
+    expect(out.content).toBeNull();
+    expect(out.conflicts).toHaveLength(1);
+    expect(out.conflicts[0]?.reason).toContain("no-newline marker");
+  });
+
+  it("conflicts when a marked hunk is followed by another hunk", () => {
+    const change: PatchFileChange = {
+      path: "x",
+      kind: "modify",
+      addedLines: 2,
+      removedLines: 2,
+      hunks: [
+        { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-a", "+A", MARKER] },
+        { oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ["-c", "+C"] },
+      ],
+    };
+    const out = computeFileContent(change, "a\nb\nc");
+    expect(out.content).toBeNull();
+    expect(out.conflicts.map((c) => c.hunkIndex)).toEqual([1]);
+  });
+
+  it("creates a file without a final line break when the marker names its last line", () => {
+    expect(computeFileContent(create(["+one", "+two", MARKER]), undefined).content).toBe(
+      "one\ntwo",
+    );
+  });
+
+  it.each([
+    ["is not on its last line", ["+one", MARKER, "+two"]],
+    ["follows nothing", [MARKER, "+one"]],
+  ])("conflicts when a created file's marker %s", (_name, lines) => {
+    const out = computeFileContent(create(lines), undefined);
+    expect(out.content).toBeNull();
+    expect(out.conflicts[0]?.reason).toContain("no-newline marker");
+  });
+
+  it("deletes a file without a final line break whose pre-image matches", () => {
+    const change: PatchFileChange = {
+      path: "d",
+      kind: "delete",
+      addedLines: 0,
+      removedLines: 2,
+      hunks: [
+        { oldStart: 1, oldLines: 2, newStart: 0, newLines: 0, lines: ["-one", "-two", MARKER] },
+      ],
+    };
+    expect(computeFileContent(change, "one\ntwo")).toEqual({ content: null, conflicts: [] });
   });
 });

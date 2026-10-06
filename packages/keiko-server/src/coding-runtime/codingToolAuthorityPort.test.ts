@@ -991,8 +991,9 @@ describe("CodingToolAuthorityPort", () => {
         actionId: "registry-edit",
         idempotencyKey: "registry-key",
         changeset: {
-          patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+          edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
           files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+          selectedFiles: ["src/a.ts"],
         },
       }),
       "utf8",
@@ -1097,8 +1098,9 @@ describe("CodingToolAuthorityPort", () => {
       actionId: "reconnect-edit",
       idempotencyKey: "reconnect-edit-key",
       changeset: {
-        patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+        edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
         files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+        selectedFiles: ["src/a.ts"],
       },
     });
 
@@ -1668,8 +1670,9 @@ describe("CodingToolAuthorityPort", () => {
           actionId: "catalog-edit",
           idempotencyKey: "catalog-edit-key",
           changeset: {
-            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
             files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+            selectedFiles: ["src/a.ts"],
           },
         }),
         capability: "runtime-capability-secret",
@@ -1718,8 +1721,9 @@ describe("CodingToolAuthorityPort", () => {
           actionId: "catalog-edit-denied",
           idempotencyKey: "catalog-edit-denied-key",
           changeset: {
-            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
             files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+            selectedFiles: ["src/a.ts"],
           },
         }),
         capability: "runtime-capability-secret",
@@ -1751,8 +1755,9 @@ describe("CodingToolAuthorityPort", () => {
           actionId: "catalog-edit-failed",
           idempotencyKey: "catalog-edit-failed-key",
           changeset: {
-            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
             files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+            selectedFiles: ["src/a.ts"],
           },
         }),
         capability: "runtime-capability-secret",

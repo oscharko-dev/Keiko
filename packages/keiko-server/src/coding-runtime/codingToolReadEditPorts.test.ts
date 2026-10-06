@@ -1011,7 +1011,12 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         level: "warn",
         correlationId: "run-stale",
         errorKind: "conflict",
-        extra: { reasonCode: "CONTENT_HASH_MISMATCH", completeness: "complete", loss: "none" },
+        extra: {
+          reasonCode: "CONTENT_HASH_MISMATCH",
+          completeness: "complete",
+          loss: "none",
+          editForm: "unified-diff",
+        },
       }),
     ]);
     expect(records).toEqual([]);
@@ -1378,7 +1383,12 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         expect.objectContaining({
           correlationId: "run-message-1",
           errorKind: "unavailable",
-          extra: { reasonCode: "NO_ACTIVE_SESSION", completeness: "complete", loss: "none" },
+          extra: {
+            reasonCode: "NO_ACTIVE_SESSION",
+            completeness: "complete",
+            loss: "none",
+            editForm: "unified-diff",
+          },
         }),
       ]);
       expect(records).toEqual([]);

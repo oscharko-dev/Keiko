@@ -139,13 +139,40 @@ const CHANGESET_EDIT_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
-        patch: {
-          type: "string",
-          minLength: 1,
-          maxLength: 65_536,
-          pattern: String.raw`^(?:(?:(?:diff --git [^\r\n]+ [^\r\n]+\r?\n)(?:index [^\r\n]+\r?\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\r\n]+\r?\n@@ )`,
+        // #3873: exact-text replacements are the only model-visible edit form; the server
+        // materializes them into the unified diff the governed editor path applies
+        // (codingToolReplacementEdits.ts). The managed-runtime dialect requires every declared
+        // argument, so a second, optional diff form cannot be offered beside them.
+        edits: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              file: {
+                type: "string",
+                minLength: 1,
+                maxLength: 512,
+                pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+              },
+              oldString: {
+                type: "string",
+                maxLength: 65_536,
+                description:
+                  "Exact current text to replace, copied byte for byte from the latest keiko_workspace_read. Empty only to create a new file.",
+              },
+              newString: { type: "string", maxLength: 65_536, description: "Replacement text." },
+              replaceAll: {
+                type: "boolean",
+                description: "Replace every occurrence instead of exactly one.",
+              },
+            },
+            required: ["file", "oldString", "newString"],
+          },
           description:
-            "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation.",
+            "Exact text replacements applied in order. Each oldString must occur exactly once in its file unless replaceAll is true.",
         },
         files: {
           type: "array",
@@ -169,7 +196,8 @@ const CHANGESET_EDIT_SCHEMA = {
             },
             required: ["file", "expectedContentHash"],
           },
-          description: "Every file changed by patch, bound to its last governed read digest.",
+          description:
+            "Every file changed by edits, bound to its last governed read digest (a new file uses the empty-content digest).",
         },
         selectedFiles: {
           type: "array",
@@ -185,7 +213,7 @@ const CHANGESET_EDIT_SCHEMA = {
           description: "Optional subset of files to apply; each entry must occur in files.",
         },
       },
-      required: ["patch", "files"],
+      required: ["edits", "files"],
     },
   },
   required: ["changeset"],

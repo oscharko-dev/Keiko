@@ -49,6 +49,7 @@ import {
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+  GATEWAY_CODING_OUTAGE_WINDOW_MS,
   GATEWAY_SILENCE_FLOOR_MS,
   providerRequestBudgetMs,
   codingWorkbenchRetryConfig,
@@ -616,10 +617,11 @@ const NON_PROVIDER_FAULTS = [
 function bufferedRetryConfig(
   request: GatewayCallRequest,
   provider: ModelProviderConfig,
+  codingOutageWindowMs: number,
 ): RetryConfig {
   return {
     ...(request.latencyProfile === "coding-workbench"
-      ? codingWorkbenchRetryConfig(provider)
+      ? codingWorkbenchRetryConfig(provider, codingOutageWindowMs)
       : providerRetryConfig(provider)),
     jitterProviderCooldown: true,
   };
@@ -1013,7 +1015,7 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        bufferedRetryConfig(request, route.provider),
+        bufferedRetryConfig(request, route.provider, this.codingOutageWindowMs()),
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -1776,8 +1778,14 @@ export class Gateway {
       signal: request.cancellationSignal,
       correlationId,
       jitterMs: (): number => Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
-      waitThroughOpenCircuit: request.latencyProfile === "coding-workbench",
+      waitThroughOpenCircuit:
+        request.latencyProfile === "coding-workbench" && this.codingOutageWindowMs() > 0,
     });
+  }
+
+  // #3873: the outage window of a coding-workbench call, from the gateway configuration.
+  private codingOutageWindowMs(): number {
+    return this.config.codingOutageWindowMs ?? GATEWAY_CODING_OUTAGE_WINDOW_MS;
   }
 
   // Fail-closed routing. Each of the three refusals is a DIFFERENT operator problem — an unknown

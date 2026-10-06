@@ -202,6 +202,11 @@ export interface GroundedAnswersConfig {
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
+  // #3873: how long a coding-workbench call keeps retrying a transiently unavailable provider and
+  // waits through an open breaker, in milliseconds. Absent means GATEWAY_CODING_OUTAGE_WINDOW_MS
+  // (10 minutes); 0 switches the policy off, so coding calls keep the provider's attempt count and
+  // the fail-fast breaker like every other surface.
+  readonly codingOutageWindowMs?: number | undefined;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
   readonly reranker?: RerankerConfig | undefined;

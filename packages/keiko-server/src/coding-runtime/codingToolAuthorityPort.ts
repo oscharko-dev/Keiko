@@ -25,6 +25,7 @@ import type {
   CodingToolProducerBinding,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
 import {
   createCodingToolGovernedDelegate,
   type CodingToolGovernedPorts,
@@ -959,7 +960,7 @@ function hasScope(actual: readonly string[], required: string): boolean {
 function delegationUsage(request: CodingToolActionRequest): CodingWorkbenchRuntimeDelegationUsage {
   return {
     toolCalls: 1,
-    patchBytes: request.action === "edit" ? Buffer.byteLength(request.changeset.patch, "utf8") : 0,
+    patchBytes: request.action === "edit" ? changesetPayloadBytes(request.changeset) : 0,
     promptTokens: 0,
   };
 }

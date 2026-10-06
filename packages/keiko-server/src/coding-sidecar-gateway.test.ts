@@ -414,10 +414,15 @@ describe("coding-sidecar gateway", () => {
           return Promise.reject(new Error("provider unavailable"));
         }),
       );
-      const initialConfig = configValue(
-        provider({ baseUrl: "https://initial-gateway.example/v1", maxRetries: 0 }),
-        capability(),
-      );
+      // #3873: the coding outage window is switched off so the dead provider fails at once; the
+      // pinned invariant is the gateway binding, and gateway.coding-outage.test.ts owns the policy.
+      const initialConfig = {
+        ...configValue(
+          provider({ baseUrl: "https://initial-gateway.example/v1", maxRetries: 0 }),
+          capability(),
+        ),
+        codingOutageWindowMs: 0,
+      };
       const runtimeConfig = probeVerifiedGatewayConfig(initialConfig);
       const deps = {
         ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-pinned" } })),
@@ -741,9 +746,12 @@ describe("coding-sidecar gateway", () => {
     resetGatewayInstanceCacheForTests();
     const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
     vi.stubGlobal("fetch", fetchMock);
+    // #3873: with the coding outage window switched off, the open breaker refuses the third call
+    // at once; the pinned invariant is the breaker state shared across separate requests.
     const config = {
       ...configValue(provider({ maxRetries: 0 }), capability()),
       circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 },
+      codingOutageWindowMs: 0,
     };
     const deps = depsValue(config);
     const request = (): RouteContext =>
@@ -894,7 +902,7 @@ describe("coding-sidecar gateway", () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
-      ["keiko_changeset_edit", "ed31a7b545d02b150eb3896ca88a2b6823a4b9c02f1c86bb425351334dc9a2e1"],
+      ["keiko_changeset_edit", "4120cf67cf3f10c1a023a460f20f9282f744abfed6361876933fd76f02d07859"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],

@@ -101,4 +101,35 @@ describe("parseUnifiedDiff", () => {
     expect(files.map((f) => f.path)).toEqual(["one.md", "two.md"]);
     expect(files[0]?.hunks[0]?.lines).toEqual(["-- old", "++ new"]);
   });
+
+  describe("no-newline marker", () => {
+    // #3873: `\ No newline at end of file` annotates the body line before it. The parser used to
+    // drop it, so every applied patch gave a file without a final line break one.
+    const MARKER = String.raw`\ No newline at end of file`;
+
+    it("keeps the marker on the body line it annotates, outside the line budget", () => {
+      const diff = `--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n alpha\n-beta\n${MARKER}\n+gamma\n${MARKER}\n`;
+      const { files } = parseUnifiedDiff(diff);
+      expect(files[0]?.hunks[0]?.lines).toEqual([" alpha", "-beta", MARKER, "+gamma", MARKER]);
+      expect(files[0]?.addedLines).toBe(1);
+      expect(files[0]?.removedLines).toBe(1);
+    });
+
+    it("keeps a marker that closes a hunk and still opens the next file header", () => {
+      const diff =
+        `--- a/one\n+++ b/one\n@@ -1,1 +1,1 @@\n-a\n+b\n${MARKER}\n` +
+        "--- a/two\n+++ b/two\n@@ -1,1 +1,1 @@\n-c\n+d\n";
+      const { files } = parseUnifiedDiff(diff);
+      expect(files.map((f) => f.path)).toEqual(["one", "two"]);
+      expect(files[0]?.hunks[0]?.lines).toEqual(["-a", "+b", MARKER]);
+    });
+
+    it.each([
+      ["right after the hunk header", `--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n${MARKER}\n-a\n+b\n`],
+      ["after another marker", `--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b\n${MARKER}\n${MARKER}\n`],
+      ["outside a hunk", `--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b\n\n${MARKER}\n`],
+    ])("rejects a marker %s", (_name, diff) => {
+      expect(() => parseUnifiedDiff(diff)).toThrow(/no-newline marker/);
+    });
+  });
 });

@@ -801,9 +801,16 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
 // still admits only its half-open probes, so waiting callers do not add load while it recovers.
 export const GATEWAY_CODING_OUTAGE_WINDOW_MS = 600_000;
 
-/** The retry policy of a coding-workbench call: the provider's budget, an outage-length window. */
-export function codingWorkbenchRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
-  return { ...providerRetryConfig(provider), retryWindowMs: GATEWAY_CODING_OUTAGE_WINDOW_MS };
+/**
+ * The retry policy of a coding-workbench call: the provider's budget, an outage-length window. A
+ * window of 0 (`codingOutageWindowMs: 0`) keeps the provider's attempt count instead.
+ */
+export function codingWorkbenchRetryConfig(
+  provider: ProviderRetryPolicy,
+  windowMs: number,
+): RetryConfig {
+  const config = providerRetryConfig(provider);
+  return windowMs > 0 ? { ...config, retryWindowMs: windowMs } : config;
 }
 
 export interface CircuitBreakerAdmission {

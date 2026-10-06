@@ -2219,6 +2219,23 @@ function assertUniqueProviderModelIds(providers: readonly { readonly modelId: st
   }
 }
 
+// #3873: the coding-workbench outage window, bounded so a typo cannot park a coding run for hours.
+// Present-only: an undeclared window keeps the gateway's default, 0 switches the policy off.
+const MAX_CODING_OUTAGE_WINDOW_MS = 3_600_000;
+
+function parseCodingOutageWindow(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const windowMs = optionalNonNegativeInt(value, "codingOutageWindowMs", 0);
+  if (windowMs > MAX_CODING_OUTAGE_WINDOW_MS) {
+    throw new ConfigInvalidError(
+      `codingOutageWindowMs must not exceed ${String(MAX_CODING_OUTAGE_WINDOW_MS)}`,
+    );
+  }
+  return windowMs;
+}
+
 function buildGatewayConfig(
   raw: Record<string, unknown>,
   providersRaw: readonly unknown[],
@@ -2241,9 +2258,11 @@ function buildGatewayConfig(
   const figma = parseFigmaConnectorConfig(raw);
   const branding = parseGatewayBrandingConfig(raw);
   const groundedAnswers = parseGroundedAnswersConfig(raw);
+  const codingOutageWindowMs = parseCodingOutageWindow(raw.codingOutageWindowMs);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
+    ...(codingOutageWindowMs === undefined ? {} : { codingOutageWindowMs }),
     ...(capabilities.length === 0 ? {} : { capabilities }),
     ...(grounding !== undefined ? { grounding } : {}),
     ...(reranker !== undefined ? { reranker } : {}),

@@ -180,6 +180,45 @@ describe("coding-workbench outage tolerance", () => {
     await expect(holder).resolves.toMatchObject({ content: "Synthetic answer" });
   });
 
+  it("bounds the retries by a configured window", async () => {
+    const clock = simulatedClock();
+    const provider = recoveringProvider(Number.POSITIVE_INFINITY);
+
+    await expect(
+      gatewayFor(provider.call, clock, { ...config(), codingOutageWindowMs: 60_000 }).chat(
+        request("coding-workbench"),
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+
+    expect(clock.elapsed()).toBeLessThanOrEqual(60_000);
+    expect(clock.elapsed()).toBeGreaterThan(30_000);
+  });
+
+  it("keeps the attempt count for a coding call when the window is switched off", async () => {
+    const provider = recoveringProvider(8);
+
+    await expect(
+      gatewayFor(provider.call, simulatedClock(), { ...config(), codingOutageWindowMs: 0 }).chat(
+        request("coding-workbench"),
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+    expect(provider.calls()).toBe(3);
+  });
+
+  it("refuses a coding call at once on an open breaker when the window is switched off", async () => {
+    const breaker = { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 };
+    const provider = recoveringProvider(3);
+    const gateway = gatewayFor(provider.call, simulatedClock(), {
+      ...config(breaker),
+      codingOutageWindowMs: 0,
+    });
+
+    await expect(gateway.chat(request("coding-workbench"))).rejects.toBeInstanceOf(
+      CircuitOpenError,
+    );
+    expect(provider.calls()).toBe(2);
+  });
+
   it("still refuses at once on an open breaker outside the coding profile", async () => {
     const breaker = { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 };
     const provider = recoveringProvider(3);

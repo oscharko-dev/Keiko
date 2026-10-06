@@ -30,6 +30,10 @@ import {
 } from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
+import {
+  isReplacementChangeset,
+  materializeReplacementChangeset,
+} from "./codingToolReplacementEdits.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
@@ -397,6 +401,10 @@ const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #3873: which of the two edit forms the model used; body-free evidence on the edit lines.
+const EDIT_FORMS = ["unified-diff", "replacements"] as const;
+type EditForm = (typeof EDIT_FORMS)[number];
+
 const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -416,6 +424,12 @@ const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperat
       dataClass: "closed-enum",
       required: true,
       values: ["edit"],
+    },
+    editForm: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...EDIT_FORMS],
     },
   },
   causal: "correlation",
@@ -471,6 +485,8 @@ const EDIT_PREPARE_CAUSES = [
   "binding-unavailable",
   "editor-context-unavailable",
   "lease-unavailable",
+  // #3873: the governed read a replacement edit is materialized against did not answer.
+  "replacement-read-failed",
 ] as const;
 type EditPrepareCause = (typeof EDIT_PREPARE_CAUSES)[number];
 
@@ -482,6 +498,7 @@ const EDIT_PREPARE_ERROR_KINDS: Readonly<Record<EditPrepareCause, ActivityLogErr
   "binding-unavailable": "authority-denied",
   "editor-context-unavailable": "unavailable",
   "lease-unavailable": "conflict",
+  "replacement-read-failed": "unavailable",
 };
 
 const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
@@ -505,6 +522,12 @@ const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [...EDIT_PREPARE_CAUSES],
+    },
+    editForm: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...EDIT_FORMS],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -809,44 +832,108 @@ async function executeEdit(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): Promise<EditOutcome> {
+  const materialized = await materializedEdit(deps, request, signal);
+  if ("outcome" in materialized) return materialized.outcome;
+  return executeMaterializedEdit(deps, materialized, signal, mutationGuard);
+}
+
+// #3873: a replacement edit becomes the unified-diff changeset the rest of this path validates,
+// reviews and applies; a refusal names the file and the reason the model can act on.
+async function materializedEdit(
+  deps: CodingToolReadEditPortDeps,
+  request: EditorChangesetRequest,
+  signal: AbortSignal | undefined,
+): Promise<
+  | { readonly request: EditorChangesetRequest; readonly editForm: EditForm }
+  | { readonly outcome: EditOutcome }
+> {
+  if (!("changeset" in request) || !isReplacementChangeset(request.changeset))
+    return { request, editForm: "unified-diff" };
+  const editForm = "replacements";
+  const result = await materializeReplacementChangeset(
+    deps.secureWorkspaceTextRead,
+    request.changeset,
+    signal,
+  );
+  if (result.status === "materialized")
+    return { request: { ...request, changeset: result.changeset }, editForm };
+  const correlationId = editContextCorrelationId(deps);
+  if (result.status === "read-failed") {
+    return {
+      outcome: editRefused(deps, correlationId, "EDIT_PREPARE_FAILED", {
+        prepareCause: "replacement-read-failed",
+        editForm,
+      }),
+    };
+  }
+  return {
+    outcome: editRefused(deps, correlationId, result.reasonCode, {
+      message: result.message,
+      editForm,
+    }),
+  };
+}
+
+// Binds the live editor session a prepared edit needs; a refusal here discards the mutation lease.
+async function bindPreparedEdit(
+  deps: CodingToolReadEditPortDeps,
+  prepared: PreparedEdit,
+  correlationId: string,
+  editForm: EditForm,
+): Promise<{ readonly action: EditorAgentAction } | { readonly refused: EditOutcome }> {
+  const action = await bindLiveEditorSession(
+    deps.editorAgentClient,
+    prepared.action,
+    prepared.workspaceRoot,
+    prepared.signal,
+  );
+  if (action === undefined) {
+    discardMutationLease(deps, prepared.leaseRequest);
+    return {
+      refused: editRefused(deps, correlationId, "NO_ACTIVE_SESSION", {
+        ...NO_ACTIVE_SESSION_DETAIL,
+        editForm,
+      }),
+    };
+  }
+  if (!hasLiveWorkspaceAccess(deps)) {
+    discardMutationLease(deps, prepared.leaseRequest);
+    return { refused: editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST", { editForm }) };
+  }
+  return { action };
+}
+
+async function executeMaterializedEdit(
+  deps: CodingToolReadEditPortDeps,
+  { request, editForm }: { readonly request: EditorChangesetRequest; readonly editForm: EditForm },
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): Promise<EditOutcome> {
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
   if ("refused" in prepared) {
     return editRefused(deps, editContextCorrelationId(deps), "EDIT_PREPARE_FAILED", {
       prepareCause: prepared.refused,
+      editForm,
     });
   }
   const correlationId = editCorrelationId(prepared.action);
   try {
-    const action = await bindLiveEditorSession(
-      deps.editorAgentClient,
-      prepared.action,
-      prepared.workspaceRoot,
-      prepared.signal,
-    );
-    if (action === undefined) {
-      discardMutationLease(deps, prepared.leaseRequest);
-      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION", NO_ACTIVE_SESSION_DETAIL);
-    }
-    if (!hasLiveWorkspaceAccess(deps)) {
-      discardMutationLease(deps, prepared.leaseRequest);
-      return editRefused(deps, correlationId, "WORKSPACE_ACCESS_LOST");
-    }
+    const bound = await bindPreparedEdit(deps, prepared, correlationId, editForm);
+    if ("refused" in bound) return bound.refused;
     // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
     const completion =
       prepared.leaseRequest === undefined
         ? undefined
         : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
-    const result = await deps.editorAgentClient.action(action, prepared.signal);
+    const result = await deps.editorAgentClient.action(bound.action, prepared.signal);
     if (result.ok && editorStatusCompleted(result.value.result.status)) {
-      return await completedEdit(deps, correlationId, completion);
+      return await completedEdit(deps, correlationId, completion, editForm);
     }
     discardMutationLease(deps, prepared.leaseRequest);
-    return editRefused(
-      deps,
-      correlationId,
-      editFailureReasonCode(result),
-      editFailureDetail(result),
-    );
+    return editRefused(deps, correlationId, editFailureReasonCode(result), {
+      ...editFailureDetail(result),
+      editForm,
+    });
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
     emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
@@ -869,6 +956,7 @@ async function completedEdit(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   completion: Promise<CodingRuntimeMutationOutcome> | undefined,
+  editForm: EditForm,
 ): Promise<EditOutcome> {
   if (completion === undefined) return { status: "completed" };
   const outcome = await completion;
@@ -881,24 +969,28 @@ async function completedEdit(
           ? {}
           : { level: "warn", errorKind: outcome === "cancelled" ? "cancelled" : "internal" }),
       },
-      { state: outcome, actionKind: "edit" },
+      { state: outcome, actionKind: "edit", editForm },
     ),
   );
   return outcome === "succeeded"
     ? { status: "completed" }
-    : editRefused(deps, correlationId, SETTLED_EDIT_REFUSALS[outcome]);
+    : editRefused(deps, correlationId, SETTLED_EDIT_REFUSALS[outcome], { editForm });
 }
 
 function editRefused(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
-  detail: { readonly message?: string; readonly prepareCause?: EditPrepareCause } = {},
+  detail: {
+    readonly message?: string;
+    readonly prepareCause?: EditPrepareCause;
+    readonly editForm?: EditForm;
+  } = {},
 ): EditOutcome {
-  const { message, prepareCause } = detail;
+  const { message, prepareCause, editForm } = detail;
   // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
   // the activity log, only the outcome returned to the caller.
-  logEditRefused(deps, correlationId, reasonCode, prepareCause);
+  logEditRefused(deps, correlationId, reasonCode, { prepareCause, editForm });
   return message === undefined
     ? { status: "failed", reasonCode }
     : { status: "failed", reasonCode, message };
@@ -970,7 +1062,13 @@ function logEditRefused(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
-  prepareCause: EditPrepareCause | undefined,
+  {
+    prepareCause,
+    editForm,
+  }: {
+    readonly prepareCause?: EditPrepareCause | undefined;
+    readonly editForm?: EditForm | undefined;
+  },
 ): void {
   const reason = editRefusalReason(reasonCode);
   const errorKind =
@@ -984,6 +1082,7 @@ function logEditRefused(
       {
         reasonCode: reason,
         ...(prepareCause === undefined ? {} : { prepareCause }),
+        ...(editForm === undefined ? {} : { editForm }),
         completeness: "complete",
         loss: "none",
       },

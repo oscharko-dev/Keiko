@@ -792,7 +792,7 @@ const EDIT_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
   CONTENT_HASH_MISMATCH:
     "The file changed after the read that produced expectedContentHash; an earlier successful edit of yours changes it too. Re-read the file with keiko_workspace_read and rebuild the patch against its current content and digest. Do not resend the same patch.",
   INVALID_EDITS:
-    "The unified diff does not apply to the file as it is now: a hunk's context or line numbers no longer match, the header is malformed, or a listed file is missing from the patch. Re-read the file, copy its exact current lines as context, and submit one fresh patch that declares every file it touches.",
+    "The edit does not apply to the file as it is now: an oldString is missing or not unique, or a unified-diff hunk's context, line numbers or header no longer match. Re-read the file, copy its exact current text into oldString (prefer edits over patch), and submit one fresh edit that declares every file it touches.",
   PRECONDITION_REQUIRED:
     "Read the file with keiko_workspace_read first and bind the edit to the digest that read returns.",
   OUT_OF_SCOPE:

@@ -313,6 +313,14 @@ file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). This is not git
 detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).
 
+The `\ No newline at end of file` marker is kept on the body line it annotates and applied as Git
+reads it (#3873): a marked line is the file's last line without a line break, an unmarked line has
+one, and lines after the last hunk keep the current file's ending. A marker that contradicts the
+current content (the file ends with a line break, or the marked line is not its last) or that is
+not on the new file's last line is a conflict; a marker anywhere but directly after a hunk body
+line is a parse error. Before this, the parser dropped the marker and every applied patch gave a
+file without a final line break one.
+
 **Validation rules (structured, non-throwing).** `validatePatch` returns a `PatchValidation` report
 for every outcome, including a parse failure: the parser's `PatchParseError` is caught internally
 and surfaced as a `malformed` entry in `reasons` (it is NOT re-thrown). The only error

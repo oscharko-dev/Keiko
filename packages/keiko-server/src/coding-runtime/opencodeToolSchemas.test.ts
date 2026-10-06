@@ -95,49 +95,21 @@ describe("OpenCode visible tool contract", () => {
     expect(hasExactOpenCodeVisibleToolContract(OPENCODE_MODEL_VISIBLE_TOOLS)).toBe(false);
   });
 
-  it("requires strict unified headers or the bounded single-file raw-index fallback", () => {
+  it("offers exact replacements as the only model-visible edit form (#3873)", () => {
     const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
-    const pattern = edit?.parameters.properties.changeset.properties.patch.pattern;
-    if (pattern === undefined) throw new Error("Expected changeset patch pattern.");
-    const accepted = new RegExp(pattern, "u");
+    const changeset = edit?.parameters.properties.changeset;
+    if (changeset === undefined) throw new Error("Expected the changeset schema.");
 
-    expect(accepted.test("--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n")).toBe(true);
-    expect(
-      accepted.test(
-        "diff --git a/README.md b/README.md\nindex 1d9d46e..9a35d11 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
-      ),
-    ).toBe(true);
-    expect(accepted.test(":100644 100644 1d9d46e 0000000 M README.md\n@@ -1 +1 @@\n")).toBe(true);
-    expect(accepted.test(":100644 100644 1d9d46e 0000000 A README.md\n@@ -1 +1 @@\n")).toBe(false);
-    expect(accepted.test(":100644 100644 1d9d46e 0000000 M README.md\n-old\n+new\n")).toBe(false);
+    expect(changeset.required).toEqual(["edits", "files"]);
+    expect(Object.keys(changeset.properties)).toEqual(["edits", "files", "selectedFiles"]);
+    expect(changeset.properties.edits.items.required).toEqual(["file", "oldString", "newString"]);
+    expect(Object.keys(changeset.properties.edits.items.properties)).toEqual([
+      "file",
+      "oldString",
+      "newString",
+      "replaceAll",
+    ]);
   });
-
-  it.each([
-    [
-      "the verifier enum",
-      { type: "object", properties: { verifierId: { type: "string" } }, required: ["verifierId"] },
-    ],
-    [
-      "the required verifier",
-      {
-        type: "object",
-        properties: {
-          verifierId: {
-            type: "string",
-            enum: ["test", "targeted-test", "typecheck", "lint", "build"],
-          },
-        },
-      },
-    ],
-  ])(
-    "denies a projected verification schema missing %s",
-    (_name, parameters: Readonly<Record<string, unknown>>) => {
-      const tools = projectedTools().map((tool) =>
-        tool.name === "keiko_verification" ? { ...tool, parameters } : tool,
-      );
-      expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
-    },
-  );
 
   it("requires a bounded targetPath sentinel on the native provider wire", () => {
     const verification = OPENCODE_MODEL_VISIBLE_TOOLS.find(

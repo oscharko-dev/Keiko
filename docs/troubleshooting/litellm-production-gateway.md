@@ -663,6 +663,9 @@ window ran out while it waited on an open breaker or a saturated probe slot, wit
 - A run that recovered needs nothing; the gap in its timeline is the outage.
 - A turn that still failed after the ten-minute window points at a sustained outage: check the
   gateway's and model server's health and capacity before retrying the task.
+- The window is `codingOutageWindowMs` in the gateway configuration (milliseconds; default
+  `600000`, at most `3600000`). Raise it where peak-time overloads last longer, or set `0` to
+  restore the fail-fast attempt count for coding turns as well.
 
 ---
 

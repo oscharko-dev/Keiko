@@ -731,9 +731,16 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
     return step === 0
       ? tool("keiko_changeset_edit", {
           changeset: {
-            patch:
-              "--- a/../outside.txt\n+++ b/../outside.txt\n@@ -1 +1 @@\n-OUTSIDE_SECRET_2258\n+owned\n",
+            edits: [
+              {
+                file: "../outside.txt",
+                oldString: "OUTSIDE_SECRET_2258",
+                newString: "owned",
+                replaceAll: false,
+              },
+            ],
             files: [{ file: "../outside.txt", expectedContentHash: "0".repeat(64) }],
+            selectedFiles: ["../outside.txt"],
           },
         })
       : normal();
@@ -818,11 +825,20 @@ function question(): Record<string, unknown> {
   };
 }
 
+// The model-visible edit form (#3873): one exact replacement, bound to the file's read digest.
 function edit(script: ScriptState): Record<string, unknown> {
   return {
     changeset: {
-      patch: `--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-${script.old}+${script.next}`,
+      edits: [
+        {
+          file: "src/example.ts",
+          oldString: script.old,
+          newString: script.next,
+          replaceAll: false,
+        },
+      ],
       files: [{ file: "src/example.ts", expectedContentHash: digest(script.old) }],
+      selectedFiles: ["src/example.ts"],
     },
   };
 }

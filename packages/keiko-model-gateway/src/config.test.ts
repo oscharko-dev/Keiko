@@ -3301,3 +3301,26 @@ describe("independent prompt-input limit", () => {
     },
   );
 });
+
+// #3873: the coding-workbench outage window is an operator setting; absent keeps the gateway's
+// default, 0 switches the policy off, and a typo cannot park a coding run for hours.
+describe("parseGatewayConfig — codingOutageWindowMs", () => {
+  function rawWithWindow(codingOutageWindowMs: unknown): unknown {
+    return {
+      ...(rawWithProvider((p) => ({ ...p })) as Record<string, unknown>),
+      codingOutageWindowMs,
+    };
+  }
+
+  it("is absent unless declared and keeps a declared value, including 0", () => {
+    expect(parseGatewayConfig(rawWithProvider((p) => ({ ...p })))).not.toHaveProperty(
+      "codingOutageWindowMs",
+    );
+    expect(parseGatewayConfig(rawWithWindow(120_000)).codingOutageWindowMs).toBe(120_000);
+    expect(parseGatewayConfig(rawWithWindow(0)).codingOutageWindowMs).toBe(0);
+  });
+
+  it.each([-1, 1.5, "600000", 3_600_001])("rejects %s", (value) => {
+    expect(() => parseGatewayConfig(rawWithWindow(value))).toThrow(/codingOutageWindowMs/);
+  });
+});

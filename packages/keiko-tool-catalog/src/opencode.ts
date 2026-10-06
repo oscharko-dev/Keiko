@@ -334,27 +334,41 @@ function repositorySearchSpec(): OpenCodeToolSpec {
   };
 }
 
-function changesetEditSpec(): OpenCodeToolSpec {
-  // The provider descriptor requires selectedFiles explicitly; the runtime source also accepts
-  // omission. Both preserve the closed nested objects. Dispatch-time changeset validation
-  // remains authoritative and never gains permissions from this advisory model projection.
-  const fileEntry = managedObjectSchema(
-    {
-      file: { type: "string", minLength: 1, maxLength: 512 },
-      // #3414 AC1: exact real wire pattern (opencodeToolSchemas.ts's `expectedContentHash`).
-      expectedContentHash: {
-        type: "string",
-        minLength: 64,
-        maxLength: 64,
-        pattern: "^[a-f0-9]{64}$",
-      },
+// #3873: the managed-runtime dialect requires every declared argument, so the model-visible edit
+// form is exactly one: ordered exact-text replacements. Dispatch materializes them into the unified
+// diff the governed editor path validates, reviews and applies (codingToolReplacementEdits.ts).
+const CHANGESET_FILE_ENTRY_SCHEMA = managedObjectSchema(
+  {
+    file: { type: "string", minLength: 1, maxLength: 512 },
+    // #3414 AC1: exact real wire pattern (opencodeToolSchemas.ts's `expectedContentHash`).
+    expectedContentHash: {
+      type: "string",
+      minLength: 64,
+      maxLength: 64,
+      pattern: "^[a-f0-9]{64}$",
     },
-    ["file", "expectedContentHash"],
-  );
+  },
+  ["file", "expectedContentHash"],
+);
+
+const REPLACEMENT_EDIT_SCHEMA = managedObjectSchema(
+  {
+    file: { type: "string", minLength: 1, maxLength: 512 },
+    oldString: { type: "string", maxLength: 65_536 },
+    newString: { type: "string", maxLength: 65_536 },
+    replaceAll: { type: "boolean" },
+  },
+  ["file", "newString", "oldString", "replaceAll"],
+);
+
+function changesetEditSpec(): OpenCodeToolSpec {
+  // The provider descriptor requires selectedFiles and replaceAll explicitly; the runtime source
+  // also accepts their omission. Both preserve the closed nested objects. Dispatch-time changeset
+  // validation remains authoritative and never gains permissions from this advisory projection.
   const changeset = managedObjectSchema(
     {
-      patch: { type: "string", minLength: 1, maxLength: 65_536 },
-      files: { type: "array", minItems: 1, maxItems: 50, items: fileEntry },
+      edits: { type: "array", minItems: 1, maxItems: 50, items: REPLACEMENT_EDIT_SCHEMA },
+      files: { type: "array", minItems: 1, maxItems: 50, items: CHANGESET_FILE_ENTRY_SCHEMA },
       selectedFiles: {
         type: "array",
         minItems: 1,
@@ -362,19 +376,21 @@ function changesetEditSpec(): OpenCodeToolSpec {
         items: { type: "string", minLength: 1, maxLength: 512 },
       },
     },
-    ["patch", "files", "selectedFiles"],
+    ["edits", "files", "selectedFiles"],
   );
   return {
     canonicalId: "keiko.changeset.edit",
     alias: "keiko_changeset_edit",
     description:
-      "Apply one strict unified-diff changeset through workspace governance. Supply changeset " +
-      "with patch, files, and selectedFiles; each files entry has file and expectedContentHash. " +
-      "For existing files, copy the exact whole-file digest from the most recent " +
-      "keiko_workspace_read. On a hash mismatch, re-read and rebuild the patch. For a new file, " +
-      `use a /dev/null source diff and the empty-content SHA-256 ${sha256Hex("")}. ` +
-      "Include every intended path in files and selectedFiles. Inspect the result and current " +
-      "files before retrying a failed edit.",
+      "Edit workspace files through workspace governance with exact text replacements. " +
+      "changeset.edits lists, in order, each file, its oldString copied byte for byte from the " +
+      "latest keiko_workspace_read (without the <text N ...> framing), the newString, and " +
+      "replaceAll (false replaces exactly one occurrence, which must then be unique; true " +
+      "replaces every occurrence). An empty oldString creates a new file. List every touched " +
+      "file in files with expectedContentHash and in selectedFiles. For an existing file copy " +
+      "the exact whole-file digest from its most recent keiko_workspace_read; for a new file " +
+      `use the empty-content SHA-256 ${sha256Hex("")}. On a hash mismatch or a missing ` +
+      "oldString, re-read the file and rebuild the edit from its current text.",
     inputSchema: managedObjectSchema({ changeset }, ["changeset"]),
     effects: ["workspace-write"],
     idempotency: "server-key-required",

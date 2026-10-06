@@ -52,6 +52,17 @@ describe("invertPatch", () => {
     expect(inverse).toContain(" one");
   });
 
+  it("round-trips a file without a final line break through the inverse (#3873)", () => {
+    write("src/bare.txt", "one\ntwo");
+    const diff =
+      "--- a/src/bare.txt\n+++ b/src/bare.txt\n@@ -1,2 +1,2 @@\n one\n-two\n" +
+      "\\ No newline at end of file\n+TWO\n\\ No newline at end of file\n";
+    applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+    expect(read("src/bare.txt")).toBe("one\nTWO");
+    applyPatch(info, invertPatch(diff), { applyEnabled: true, signal: liveSignal() });
+    expect(read("src/bare.txt")).toBe("one\ntwo");
+  });
+
   it("apply(diff) then apply(invert(diff)) restores the original create (round-trip)", () => {
     applyPatch(info, CREATE_DIFF, { applyEnabled: true, signal: liveSignal() });
     expect(read("src/new.test.ts")).toBe("created\n");

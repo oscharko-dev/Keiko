@@ -1,4 +1,5 @@
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { CodingToolReplacementChangeset } from "./codingToolReplacementEdits.js";
 import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
@@ -149,7 +150,7 @@ export type CodingToolActionRequest =
     })
   | (CodingToolRequestIdentity & {
       readonly action: "edit";
-      readonly changeset: EditorAgentChangeset;
+      readonly changeset: EditorAgentChangeset | CodingToolReplacementChangeset;
     })
   | (CodingToolRequestIdentity & {
       readonly action: "command";
@@ -513,11 +514,67 @@ function readWindowParameter(
 
 function editRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "changeset"]) &&
-    isExactEditorAgentChangeset(value.changeset)
-    ? { ...identity, action: "edit", changeset: value.changeset }
+  if (
+    identity === undefined ||
+    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "changeset"])
+  )
+    return undefined;
+  const changeset = value.changeset;
+  return isExactEditorAgentChangeset(changeset) || isExactReplacementChangeset(changeset)
+    ? { ...identity, action: "edit", changeset }
     : undefined;
+}
+
+const REPLACEMENT_EDIT_MAX_COUNT = 50;
+const REPLACEMENT_TEXT_MAX_LENGTH = 65_536;
+const CONTENT_HASH = /^[a-f0-9]{64}$/u;
+
+/** The exact-text replacement form of a governed edit (#3873); see codingToolReplacementEdits.ts. */
+export function isExactReplacementChangeset(
+  value: unknown,
+): value is CodingToolReplacementChangeset {
+  return (
+    isRecord(value) &&
+    hasAllowedKeys(value, ["edits", "files", "selectedFiles"]) &&
+    boundedArray(value.edits, REPLACEMENT_EDIT_MAX_COUNT) &&
+    value.edits.every(exactReplacementEdit) &&
+    boundedArray(value.files, REPLACEMENT_EDIT_MAX_COUNT) &&
+    value.files.every(exactReplacementFile) &&
+    (value.selectedFiles === undefined ||
+      (boundedArray(value.selectedFiles, REPLACEMENT_EDIT_MAX_COUNT) &&
+        value.selectedFiles.every((file) => typeof file === "string" && isGovernedReadPath(file))))
+  );
+}
+
+function boundedArray(value: unknown, maximum: number): value is readonly unknown[] {
+  return Array.isArray(value) && value.length >= 1 && value.length <= maximum;
+}
+
+function exactReplacementEdit(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasAllowedKeys(value, ["file", "oldString", "newString", "replaceAll"]) &&
+    typeof value.file === "string" &&
+    isGovernedReadPath(value.file) &&
+    boundedText(value.oldString) &&
+    boundedText(value.newString) &&
+    (value.replaceAll === undefined || typeof value.replaceAll === "boolean")
+  );
+}
+
+function exactReplacementFile(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["file", "expectedContentHash"]) &&
+    typeof value.file === "string" &&
+    isGovernedReadPath(value.file) &&
+    typeof value.expectedContentHash === "string" &&
+    CONTENT_HASH.test(value.expectedContentHash)
+  );
+}
+
+function boundedText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= REPLACEMENT_TEXT_MAX_LENGTH;
 }
 
 export function isExactEditorAgentChangeset(value: unknown): value is EditorAgentChangeset {
