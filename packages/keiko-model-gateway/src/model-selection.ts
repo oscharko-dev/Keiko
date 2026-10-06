@@ -34,7 +34,10 @@ import type {
   GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfileFromCapability,
+  type ContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   codingWorkbenchModelEligibility,
   conversationDefaultRank,
@@ -238,6 +241,39 @@ function codingSidecarStreams(config: GatewayConfig, capability: ModelCapability
   return capability.streaming && config.codingStreaming !== "off";
 }
 
+/**
+ * The output allowance a coding turn reserves when the provider declares no output limit (#3873,
+ * F17). The shared chat profile reserves 8k of a 128k window, and Gemma 4 31B with reasoning
+ * enabled spent exactly that on reasoning before its tool call, three turns in a row; a coding turn
+ * reasons about files and tool results, so its reserve starts at twice the chat reserve.
+ */
+export const CODING_OUTPUT_RESERVE_TOKENS = 16_384;
+
+// A reserve never takes more than this fraction of the window: the rest stays prompt input, the
+// same bound the shared profile applies to an undeclared reserve (`undeclaredOutputReserveTokens`).
+const CODING_OUTPUT_RESERVE_WINDOW_FRACTION = 4;
+
+/**
+ * The output allowance of a coding turn (`runMetadata.maxOutputTokens`), from which the sidecar
+ * derives the `maxOutputTokens` it sends (`admittedOutputTokens`) and OpenCode its context
+ * geometry. Where the provider declared its output limit (discovery's `max_output_tokens`, kept on
+ * `capability.maxOutputTokens`), that limit is the allowance; where it declared none, the coding
+ * reserve above, never below the shared chat profile's own reserve. Either is bounded to a quarter
+ * of the model's window so a prompt keeps three quarters of it, and the sidecar's admission
+ * arithmetic (`admissiblePromptTokens`, `admittedOutputTokens`) shrinks it further per request.
+ */
+export function codingOutputReserveTokens(
+  capability: Pick<ModelCapability, "maxOutputTokens">,
+  profile: Pick<ContextProfile, "maxInputTokens" | "reservedOutputTokens">,
+): number {
+  const preferred =
+    capability.maxOutputTokens > 0
+      ? capability.maxOutputTokens
+      : Math.max(profile.reservedOutputTokens, CODING_OUTPUT_RESERVE_TOKENS);
+  const windowBound = Math.floor(profile.maxInputTokens / CODING_OUTPUT_RESERVE_WINDOW_FRACTION);
+  return Math.max(1, Math.min(preferred, windowBound));
+}
+
 function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
@@ -256,7 +292,7 @@ function codingSidecarProjection(
       ...(contextProfile.inputTokenLimit === undefined
         ? {}
         : { inputTokenLimit: contextProfile.inputTokenLimit }),
-      maxOutputTokens: contextProfile.reservedOutputTokens,
+      maxOutputTokens: codingOutputReserveTokens(capability, contextProfile),
       // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
       // remains the hard memory bound, while 512 permits native compaction to run before ordinary
       // multi-turn coding sessions hit an unrelated record-count rejection.

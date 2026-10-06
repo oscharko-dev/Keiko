@@ -194,6 +194,16 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
     attempt: { type: "integer", dataClass: "count", required: true },
     maxRetries: { type: "integer", dataClass: "count", required: true },
     delayMs: { type: "number", dataClass: "duration", required: true },
+    // #3873 (F17): why a further attempt was scheduled — a retryable provider failure, or the one
+    // steered repair of an answer that exhausted its output budget, which is not a provider retry
+    // and must read as such. `required: false` only because a record written before this field
+    // existed lacks it; every line written since carries it.
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["retryable-error", "output-exhausted-repair"],
+    },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
     retryAfterHeader: {
@@ -351,6 +361,36 @@ export interface RetryConfig {
   // instead of stopping after `maxRetries`; a failure that reacts to the model's own output keeps
   // the attempt count (`decisionWindowMs`), and `timeoutMs` still bounds the whole call (#3873).
   readonly retryWindowMs?: number | undefined;
+  /**
+   * A steered repair of a TERMINAL failure the caller can correct (#3873, F17): consulted on every
+   * failed attempt; a reason schedules ONE further attempt at once, which receives the failure as
+   * its `previousError` and sends a corrected request. The repair is granted once per call and is
+   * not a provider retry: neither `maxRetries` nor the outage window applies to it, only what is
+   * left of `timeoutMs`. A second failure of the same class surfaces to the caller.
+   */
+  readonly repair?: ((error: Error) => RetryRepairReason | undefined) | undefined;
+}
+
+/** The one steered repair the loop knows: a model answer that exhausted its output budget. */
+export type RetryRepairReason = "output-exhausted-repair";
+
+/**
+ * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
+ * resumes after it, so the one steered repair of a streamed answer that exhausted its output budget
+ * after nothing but forwarded reasoning is decided, logged and bounded exactly like a repair before
+ * the first chunk. The failed attempt is the resumed loop's attempt 1.
+ */
+export interface RetryResume {
+  readonly failedAttempt: Error;
+}
+
+// The reason a further attempt was scheduled, on the scheduled line.
+type RetryScheduledReason = "retryable-error" | RetryRepairReason;
+
+// The gateway's own repair of an exhausted answer (#3873, F17): `Gateway` sends the corrected
+// request on the attempt that follows; the loop only grants that attempt, once.
+export function outputExhaustedRepair(error: Error): RetryRepairReason | undefined {
+  return error instanceof ProviderOutputExhaustedError ? "output-exhausted-repair" : undefined;
 }
 
 // Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
@@ -452,13 +492,37 @@ function retryDelayMs(
 type RetryStop =
   | { readonly stop: "terminal" | "max-retries" }
   | { readonly stop: "budget"; readonly delayMs: number; readonly remainingMs: number };
-type RetryDecision = { readonly sleepMs: number } | RetryStop;
+type RetryDecision =
+  { readonly sleepMs: number; readonly repair?: RetryRepairReason | undefined } | RetryStop;
 
+interface RetryBudget {
+  readonly remainingMs: number;
+  readonly elapsedMs: () => number;
+}
+
+// The one steered repair of a call (#3873, F17), decided before the ordinary retry rules: it runs at
+// once, is granted once, ignores the attempt count and the outage window, and only the budget can
+// refuse it — a refused repair ends the call as a budget stop, so the log says the loop wanted to go
+// on, not that the failure was terminal.
+function repairDecision(
+  lastError: Error,
+  config: RetryConfig,
+  budget: RetryBudget,
+  repairs: number,
+): RetryDecision | undefined {
+  const repair = repairs === 0 ? config.repair?.(lastError) : undefined;
+  if (repair === undefined) return undefined;
+  if (budget.remainingMs <= 0)
+    return { stop: "budget", delayMs: 0, remainingMs: budget.remainingMs };
+  return { sleepMs: 0, repair };
+}
+
+// `attempt` counts the provider attempts only: a steered repair is granted on top of them.
 function retryDecision(
   lastError: Error,
   attempt: number,
   config: RetryConfig,
-  budget: { readonly remainingMs: number; readonly elapsedMs: () => number },
+  budget: RetryBudget,
   random: () => number,
 ): RetryDecision {
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
@@ -663,8 +727,9 @@ function logRetryExhausted(input: RetryFailureLogInput, decision: RetryStop): vo
 
 function logRetryScheduled(
   input: RetryFailureLogInput,
-  decision: Readonly<{ sleepMs: number }>,
+  decision: Readonly<{ sleepMs: number; repair?: RetryRepairReason | undefined }>,
 ): void {
+  const reason: RetryScheduledReason = decision.repair ?? "retryable-error";
   input.sink.write(
     activityLogEvent(
       GATEWAY_RETRY_SCHEDULED_OPERATION,
@@ -681,6 +746,7 @@ function logRetryScheduled(
         attempt: input.attempt,
         maxRetries: input.maxRetries,
         delayMs: decision.sleepMs,
+        reason,
         ...providerErrorDetail(input.error),
         retryPolicy: input.retryPolicy,
       },
@@ -727,6 +793,9 @@ interface RetryState {
   readonly elapsed: () => number;
   readonly start: number;
   attempt: number;
+  // Steered repairs granted so far (#3873, F17): at most one per call. They sit on top of the
+  // provider attempts, so `attempt - repairs` is what the attempt count and the backoff ladder see.
+  repairs: number;
   lastError: Error | undefined;
 }
 
@@ -736,9 +805,12 @@ async function executeRetryAttempt<T>(
   operation: RetryOperation<T>,
   state: RetryState,
 ): Promise<RetryAttemptResult<T>> {
-  const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
+  const { config, clock, signal, context, sink, elapsed, start, attempt } = state;
   const maxAttempts = config.maxRetries + 1;
-  if (Number.isNaN(maxAttempts) || (config.retryWindowMs === undefined && attempt > maxAttempts))
+  if (
+    Number.isNaN(maxAttempts) ||
+    (config.retryWindowMs === undefined && attempt - state.repairs > maxAttempts)
+  )
     throw state.lastError ?? new CancelledError("request timeout budget exhausted after retries");
   assertNotAborted(signal);
   const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
@@ -754,32 +826,44 @@ async function executeRetryAttempt<T>(
     return { done: true, value };
   } catch (error) {
     rethrowTerminalAdmission(error);
-    state.lastError = asError(error);
-    const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
-    const decision = retryDecision(
-      state.lastError,
-      attempt,
-      config,
-      { remainingMs, elapsedMs: (): number => clock.now() - start },
-      random,
-    );
-    const failureLog: RetryFailureLogInput = {
-      sink,
-      context,
-      attempt,
-      maxRetries: config.maxRetries,
-      retryPolicy: retryPolicyFor(config, state.lastError),
-      error: state.lastError,
-      durationMs: elapsed(),
-    };
-    if (!("sleepMs" in decision)) {
-      logRetryExhausted(failureLog, decision);
-      throw state.lastError;
-    }
-    logRetryScheduled(failureLog, decision);
-    await sleepWithCancellation(clock, decision.sleepMs, signal);
-    return { done: false };
+    return recordFailedAttempt(state, asError(error));
   }
+}
+
+// What follows a failed attempt: the steered repair when one is due, else the retry rules; the
+// line that says which, and the sleep before the next attempt or the rethrow that ends the call.
+// Every path records the failure on the retry lines first, which is why the catch above may hand it
+// over (a `record` helper is the evidence call `check:error-observability` looks for).
+async function recordFailedAttempt<T>(
+  state: RetryState,
+  error: Error,
+): Promise<RetryAttemptResult<T>> {
+  const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
+  state.lastError = error;
+  const budget: RetryBudget = {
+    remainingMs: remainingBudgetMs(start, config.timeoutMs, clock),
+    elapsedMs: (): number => clock.now() - start,
+  };
+  const decision =
+    repairDecision(error, config, budget, state.repairs) ??
+    retryDecision(error, attempt - state.repairs, config, budget, random);
+  const failureLog: RetryFailureLogInput = {
+    sink,
+    context,
+    attempt,
+    maxRetries: config.maxRetries,
+    retryPolicy: retryPolicyFor(config, error),
+    error,
+    durationMs: elapsed(),
+  };
+  if (!("sleepMs" in decision)) {
+    logRetryExhausted(failureLog, decision);
+    throw error;
+  }
+  if (decision.repair !== undefined) state.repairs += 1;
+  logRetryScheduled(failureLog, decision);
+  await sleepWithCancellation(clock, decision.sleepMs, signal);
+  return { done: false };
 }
 
 // The admission wait of one attempt: the call's remaining budget, clipped by what is left of a
@@ -806,6 +890,7 @@ export function executeWithRetry<T>(
   signal?: AbortSignal,
   random: () => number = Math.random,
   logContext: RetryLogContext = {},
+  resume?: RetryResume,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const state: RetryState = {
@@ -818,6 +903,7 @@ export function executeWithRetry<T>(
       elapsed: logTimer(),
       start: clock.now(),
       attempt: 1,
+      repairs: 0,
       lastError: undefined,
     };
     const advance = (): void => {
@@ -831,7 +917,16 @@ export function executeWithRetry<T>(
         }
       }, reject);
     };
-    advance();
+    if (resume === undefined) {
+      advance();
+      return;
+    }
+    // The failed attempt is attempt 1: its repair or retry decision, and the line that says which,
+    // come first; a stop rejects with the failure itself, exactly as the loop would have.
+    void recordFailedAttempt(state, resume.failedAttempt).then(() => {
+      state.attempt += 1;
+      advance();
+    }, reject);
   });
 }
 
@@ -873,13 +968,16 @@ export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
 }
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
-// the budget derived from it bounds the call.
+// the budget derived from it bounds the call. Every chat call — buffered, and a stream before its
+// first content — derives its policy from here, so the one steered repair of an exhausted answer
+// (#3873, F17) is part of it rather than re-attached by each caller.
 export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
   return {
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     attemptTimeoutMs: chatAttemptTimeoutMs(provider),
     timeoutMs: providerRequestBudgetMs(provider),
+    repair: outputExhaustedRepair,
   };
 }
 

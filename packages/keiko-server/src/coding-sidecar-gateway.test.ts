@@ -38,7 +38,9 @@ import {
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
@@ -6459,5 +6461,399 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
     ).toMatchObject({ outcome: "output-limit", reasoningFrames: 0 });
+  });
+});
+
+// #3873 (F17): the allowance a coding turn actually sends, derived from the production entry points
+// — the coding profile's run metadata and the shared chat profile — never from a restated formula.
+// Gemma 4 31B behind LiteLLM (131,072-token window, no declared output limit) was sent the chat
+// surface's 8,192 and spent all of it on reasoning; a coding turn now reserves at least 16,384 unless
+// the declared `max_output_tokens` or the prompt-admission arithmetic is smaller.
+describe("admittedOutputTokens — coding turns reserve room for reasoning (#3873 F17)", () => {
+  const WINDOW = 131_072;
+  const PROMPT = 20_000;
+
+  function codingBounds(maxOutputTokens: number): CodingWorkbenchSidecarGatewayRunMetadata {
+    const result = resolveCodingSafeSidecarGatewayProfile(
+      configValue(provider(), capability({ contextWindow: WINDOW, maxOutputTokens })),
+      { modelId: "azure-coding-model" },
+    );
+    if (result.status !== "available") throw new Error("expected an available coding profile");
+    return result.runMetadata;
+  }
+
+  it("sends a coding turn 16,384 output tokens where the model declares no limit", () => {
+    expect(admittedOutputTokens(codingBounds(0), PROMPT)).toBe(16_384);
+  });
+
+  it("keeps the chat surface's own 8,192 reserve for the same window", () => {
+    const chat = deriveContextProfileFromCapability(
+      capability({ contextWindow: WINDOW, maxOutputTokens: 0 }),
+    );
+    expect(
+      admittedOutputTokens(
+        { maxPromptTokens: chat.maxInputTokens, maxOutputTokens: chat.reservedOutputTokens },
+        PROMPT,
+      ),
+    ).toBe(8_192);
+  });
+
+  it("lets a smaller declared max_output_tokens win", () => {
+    expect(admittedOutputTokens(codingBounds(4_096), PROMPT)).toBe(4_096);
+  });
+
+  it("shrinks the coding reserve to what the prompt leaves after the safety margin", () => {
+    // 131,072 window, 4,096 safety margin at that size: a 120,000-token prompt leaves 6,976.
+    expect(admittedOutputTokens(codingBounds(0), 120_000)).toBe(WINDOW - 120_000 - 4_096);
+  });
+});
+
+// #3873 (F17): run 324076066246415201273338647160811469441 — Gemma 4 31B with reasoning enabled
+// spent its whole output budget without a tool call, and the runtime retried the identical turn,
+// which ran away identically, three times. The gateway now steers one repaired attempt
+// (gateway.output-repair.test.ts); the turn's settlement lines say whether it ran and how it ended,
+// and a repair that exhausted the budget again is answered as final to the runtime.
+describe("coding sidecar gateway output-exhausted repair evidence (#3873 F17)", () => {
+  afterEach(resetServerLogger);
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 7 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const exhaustedAgain = (): ProviderOutputExhaustedError =>
+    Object.assign(new ProviderOutputExhaustedError("coding"), {
+      outputRepair: "exhausted-again",
+    });
+  const recovered = (): NormalizedResponse => ({
+    ...assistantResponse("azure-coding-model"),
+    outputRepair: "recovered",
+  });
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const bufferedDeps = (answer: () => Promise<NormalizedResponse>): UiHandlerDeps => ({
+    ...depsValue(configValue(provider(), capability()), () => answer),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+  const streamedDeps = (stream: () => AsyncGenerator<GatewayStreamChunk>): UiHandlerDeps => ({
+    ...runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-output-repair" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+        stream(),
+    ),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+  const streamedContext = (): RouteContext =>
+    authenticatedContext({
+      model: "coding",
+      stream: true,
+      messages: [{ role: "user", content: "synthetic turn" }],
+      tools: modelVisibleTools(),
+    });
+
+  it("refuses a runtime retry once the repaired buffered attempt exhausted the budget again", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(exhaustedAgain())),
+    );
+    // A final 400, which the runtime reads as the end of the turn, not a 503 it would retry.
+    expect(result).toMatchObject({ status: 400 });
+    const failed = lineOf(sink.events, "coding-sidecar.gateway.turn-failed");
+    expect(failed?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.turn-failed.emitted-line",
+        formatActivityLogProofLine(failed ?? {}),
+      ),
+    ).toMatchObject({ runtimeRetry: "refused", repairOutcome: "exhausted-again" });
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+  });
+
+  it("keeps a first exhaustion the call could not repair retryable, with no repair recorded", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(new ProviderOutputExhaustedError("coding"))),
+    );
+    expect(result).toMatchObject({ status: 503 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "allowed",
+      repairAttempted: false,
+    });
+    expect(
+      lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra?.repairOutcome,
+    ).toBeUndefined();
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: false,
+    });
+  });
+
+  it("records a recovered repair on the accepted buffered outcome", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.resolve(recovered())),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(JSON.stringify(result)).not.toContain("outputRepair");
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+  });
+
+  it("refuses a runtime retry once the repaired streamed attempt exhausted the budget again", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw exhaustedAgain();
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      { ...streamedContext(), res: response.res },
+      streamedDeps(stream),
+    );
+    expect(result).toBe(STREAMING);
+    // The final rejection chunk, never `finish_reason: "error"`, which the runtime would retry.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+  });
+
+  it("records a recovered repair on the accepted streamed outcome", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      { ...streamedContext(), res: response.res },
+      streamedDeps(() => streamedResponse(recovered())),
+    );
+    expect(result).toBe(STREAMING);
+    expect(response.body()).not.toContain("outputRepair");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+  });
+});
+
+// Owner decision 2026-10-06 (#3873 F17, option iii): with the reasoning display on, a live coding
+// turn has already shown its reasoning when the model exhausts the budget on it. The gateway's one
+// steered repair still runs — the runtime sees a second reasoning passage, never a duplicated answer
+// — and a second exhaustion is final for the runtime. Proven through the real gateway over the
+// provider's wire, as the Workbench runs it.
+describe("coding sidecar gateway output-exhausted repair after forwarded reasoning (#3873 F17, option iii)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 9 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+
+  // The provider's answer that spent its whole budget on reasoning: reasoning deltas, then
+  // `finish_reason: "length"` with no content.
+  function exhaustedReasoningAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Think " }),
+      sseDelta({ reasoning_content: "hard." }),
+      sseFinish("length"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 4_096,
+          completion_tokens_details: { reasoning_tokens: 4_096 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function repairedAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Briefly: " }),
+      sseDelta({ content: "Done." }),
+      sseFinish("stop"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 70,
+          completion_tokens: 12,
+          completion_tokens_details: { reasoning_tokens: 4 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function liveRepairDeps(runId: string): UiHandlerDeps {
+    return { ...liveDeps(runId), codingRuntimeOrchestrator: runningOrchestrator };
+  }
+
+  it("repairs a live turn that exhausted its budget after forwarded reasoning and delivers the second passage", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+        return Promise.resolve(bodies.length === 1 ? exhaustedReasoningAnswer() : repairedAnswer());
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-repair-live"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(bodies).toHaveLength(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Briefly: " },
+      { content: "Done." },
+    ]);
+    expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
+    // The repaired request is the original plus the fixed correction, never the reasoning quoted back.
+    const repaired = bodies[1] as { readonly messages?: readonly { readonly content?: unknown }[] };
+    expect(repaired.messages?.at(-1)).toMatchObject({ role: "system" });
+    expect(String(repaired.messages?.at(-1)?.content)).toContain("whole output budget");
+    expect(JSON.stringify(bodies[1])).not.toContain("Think ");
+    expect(lineOf(sink.events, "gateway.retry.scheduled")?.extra).toMatchObject({
+      reason: "output-exhausted-repair",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+      reasoningFrames: 3,
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  it("refuses a runtime retry once the repaired live turn exhausted the budget again after forwarded reasoning", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const fetchMock = vi.fn(() => Promise.resolve(exhaustedReasoningAnswer()));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-repair-exhausted"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+    ]);
+    // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+      reasoningFrames: 4,
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  // The forwarded-reasoning bound admits one passage per model attempt: the answer attempt and its
+  // one steered repair. Two passages that each fit one allowance are not an overgrown reasoning.
+  it("admits a second reasoning passage within the turn's two-attempt reasoning bound", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    // The fixture capability declares 4,096 output tokens: one passage of 15,000 bytes fits that
+    // allowance in bytes (16,384); two of them exceed it and fit two.
+    const passage = "r".repeat(15_000);
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-two-passages" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) =>
+        async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          yield { type: "reasoning", token: passage };
+          yield { type: "reasoning", token: passage };
+          yield { type: "delta", token: "ok" };
+          yield {
+            type: "done",
+            response: { ...assistantResponse("azure-coding-model"), outputRepair: "recovered" },
+          };
+        },
+    );
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).not.toContain('"finish_reason":"length"');
+    expect(response.body()).toContain('"content":"ok"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      reasoningFrames: 2,
+      repairAttempted: true,
+      repairOutcome: "recovered",
+    });
   });
 });

@@ -1014,3 +1014,141 @@ describe("circuit admission ownership", () => {
     },
   );
 });
+
+// #3873 (F17): a steered repair is one further attempt after a TERMINAL failure the caller can
+// correct (a model that spent its whole output budget without an answer). It is not a provider
+// retry: the attempt count and the outage window do not apply to it, the call's budget does, and it
+// is granted once per call, so a second failure of the same class surfaces to the caller.
+describe("executeWithRetry — steered repair (#3873 F17)", () => {
+  const repairable = (): Error =>
+    Object.assign(new AuthenticationError("terminal, but repairable once"), { repairable: true });
+  const repair = (error: Error): "output-exhausted-repair" | undefined =>
+    "repairable" in error ? "output-exhausted-repair" : undefined;
+
+  function recorder(): {
+    events: ModelGatewayLogEvent[];
+    sink: { write(e: ModelGatewayLogEvent): void };
+  } {
+    const events: ModelGatewayLogEvent[] = [];
+    return { events, sink: { write: (event): void => void events.push(event) } };
+  }
+
+  it("re-invokes the operation once with the failure, at once, under the attempt count 0", async () => {
+    const { clock, sleeps } = stubClock();
+    const log = recorder();
+    const seen: (Error | undefined)[] = [];
+    let calls = 0;
+    const value = await executeWithRetry(
+      (_attemptMs, _remainingMs, previousError) => {
+        seen.push(previousError);
+        calls += 1;
+        return calls === 1 ? Promise.reject(repairable()) : Promise.resolve("repaired");
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, timeoutMs: 60_000, repair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: log.sink, modelId: "m" },
+    );
+    expect(value).toBe("repaired");
+    expect(calls).toBe(2);
+    expect(seen[1]).toBeInstanceOf(AuthenticationError);
+    expect(sleeps).toEqual([0]);
+    const scheduled = log.events.filter((event) => event.op === "gateway.retry.scheduled");
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]?.extra).toMatchObject({
+      attempt: 1,
+      maxRetries: 0,
+      delayMs: 0,
+      reason: "output-exhausted-repair",
+    });
+  });
+
+  it("surfaces the second failure of the repaired attempt without a third attempt", async () => {
+    const { clock } = stubClock();
+    const log = recorder();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(repairable());
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000, repair },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink },
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(calls).toBe(2);
+    expect(log.events.map((event) => event.op)).toEqual([
+      "gateway.retry.scheduled",
+      "gateway.retry.exhausted",
+    ]);
+    expect(log.events[1]?.extra).toMatchObject({ attempt: 2, reason: "terminal" });
+  });
+
+  it("labels an ordinary retry as a retryable error on its scheduled line", async () => {
+    const { clock } = stubClock();
+    const log = recorder();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new TransportError("upstream reset"))
+          : Promise.resolve("ok");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500, repair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: log.sink },
+    );
+    expect(log.events[0]?.extra).toMatchObject({ reason: "retryable-error" });
+  });
+
+  it("does not count the repair against the provider's attempts", async () => {
+    const { clock } = stubClock();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(repairable());
+        if (calls === 2) return Promise.reject(new TransportError("upstream reset"));
+        return Promise.resolve("recovered");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500, repair },
+      clock,
+      undefined,
+      () => 0.5,
+    );
+    // One repair plus the one configured retry: three attempts, the retry still available.
+    expect(value).toBe("recovered");
+    expect(calls).toBe(3);
+  });
+
+  it("refuses the repair when the budget is spent and reports the budget stop", async () => {
+    const { clock, advance } = stubClock();
+    const log = recorder();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(10_000);
+          return Promise.reject(repairable());
+        },
+        { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 10_000, repair },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink },
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(calls).toBe(1);
+    expect(log.events.map((event) => event.op)).toEqual(["gateway.retry.exhausted"]);
+    expect(log.events[0]?.extra).toMatchObject({ reason: "budget", delayMs: 0, remainingMs: 0 });
+  });
+});

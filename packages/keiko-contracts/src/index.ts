@@ -2079,6 +2079,7 @@ export type {
   NormalizedToolCall,
   UsageMetadata,
   NormalizedResponse,
+  GatewayOutputRepairOutcome,
   FinishReason,
   StreamDelta,
   StreamEvent,

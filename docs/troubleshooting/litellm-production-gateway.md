@@ -125,6 +125,73 @@ log, then send the task again.
 
 ---
 
+## Coding Workbench turn reasons until its output budget is exhausted
+
+| Field             | Value                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                        |
+| Surface           | Coding Workbench                                                                            |
+| Stable identifier | `coding-sidecar.gateway.turn-failed failureCode=output-exhausted` under the run correlation |
+
+**Symptom**
+
+A run with a reasoning model (Gemma 4 31B with reasoning enabled behind LiteLLM in the live
+qualification) reads a few files, then a turn shows "Working" for minutes and ends without a tool
+call or an answer; the next turn does the same. Each attempt lasts about as long as the model needs
+to emit its whole output allowance (seven minutes for 8k tokens at 20 tokens per second), and the
+run burns its envelope duration without progress.
+
+**Root Cause**
+
+The model spent its whole output budget on reasoning before producing a tool call or a final
+answer: the provider answered HTTP 200 with `finish_reason: "length"` and no content
+(`chat.response.streamed outcome=failed outputExhausted=true`, `gateway.chat.failed` or
+`gateway.stream.failed` with `outputExhausted=true`). Before #3873 (F17) the turn failed at once and
+the coding runtime retried the identical turn, which ran away identically.
+
+The gateway now steers one repaired attempt before the exhaustion surfaces: the same request plus a
+fixed system message that tells the model its previous answer used the whole budget and asks for the
+tool call or the final answer directly, with reasoning kept to a few sentences. The repair is
+granted once per call, counts against neither the provider's attempt count nor the coding outage
+window, and never against the circuit breaker. If the repaired attempt exhausts the budget again,
+the turn is final for the runtime (`runtimeRetry: refused`), so the run settles with an honest cause
+instead of looping. With the reasoning display on (the default), the first attempt's reasoning has
+already reached the Workbench when the repair runs: the timeline then shows a second reasoning
+passage, followed by the tool call or the answer. The forwarded reasoning of a turn is bounded by
+two output allowances in bytes — one per model attempt — so the second passage is not cut as
+`output-limit`; a turn that exhausted the budget twice shows both passages, then the final cause.
+
+The output allowance a coding turn sends (`maxOutputTokens` on `coding-sidecar.gateway.request-validated`)
+is the provider-declared output limit where the model declares one, otherwise 16k (before this change
+the shared chat profile's 8k of a 128k window), both bounded to a quarter of the model's window and
+shrunk per request to what the prompt leaves free (`admittedOutputTokens`, `coding-sidecar-gateway.ts`;
+`codingOutputReserveTokens`, `model-selection.ts` in keiko-model-gateway).
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>` shows, per exhausted turn, the first
+read ending with `outputExhausted=true`, one `gateway.retry.scheduled reason=output-exhausted-repair
+delayMs=0`, the repaired attempt's own read, and the turn's settlement: a recovered turn records
+`coding-sidecar.gateway.outcome outcome=accepted repairAttempted=true repairOutcome=recovered`; a turn
+that exhausted the budget again records `coding-sidecar.gateway.turn-failed
+failureCode=output-exhausted runtimeRetry=refused repairAttempted=true repairOutcome=exhausted-again`
+and the matching `outcome=failed` line. `repairAttempted=false` on an `output-exhausted` failure means
+the call's budget could not hold a repair. None of these lines carries the model's reasoning.
+
+**Resolution**
+
+- A recovered turn needs nothing; the repair line is the evidence of what the model was told.
+- A turn that exhausted the budget twice points at a model that reasons past any allowance on this
+  task: lower the reasoning effort for the run, or pick a model that declares a larger output limit
+  (the allowance follows the declared limit up to a quarter of the window).
+- Where the provider declares no output limit and the model needs more than 16k, add the limit to the
+  LiteLLM model info (`max_output_tokens`) so discovery carries it; the coding turn then reserves it.
+- Check the time arithmetic before raising allowances further: a whole-body (non-streaming) attempt is
+  bounded by the ten-minute buffered floor, so at 20 tokens per second about 12k tokens fit one
+  attempt; a streamed read is bounded by the call budget instead.
+
+---
+
 ## Coding Workbench refuses to start a run with the selected model
 
 | Field             | Value                                                                       |

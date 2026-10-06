@@ -117,6 +117,21 @@ requires a fresh accepted run and preserves its workspace through normal recover
 deliberately for a constrained deployment; the former 200,000-token / 30-minute defaults ended
 ordinary multi-file work on a slow self-hosted model.
 
+The output allowance of one model request (`maxOutputTokens` on
+`coding-sidecar.gateway.request-validated`, and OpenCode's `limit.output`) is not an operator
+setting; it is derived by this rule (#3873, F17): a coding turn reserves at least 16,384 output
+tokens unless the provider-declared `max_output_tokens` (LiteLLM's `/model/info`, or the operator's
+model configuration) or the prompt-admission arithmetic (`maxPromptTokens` minus the estimated
+prompt minus the safety margin) is smaller, and never more than a quarter of the model's window.
+Before this rule a coding turn was sent the shared chat profile's reserve (one sixteenth of the
+window, 8,192 of 131,072 tokens), which a reasoning model spent before its first tool call; chat and
+every other surface keep that chat reserve. A reasoning model that spends the whole
+allowance without a tool call gets one steered repair from the gateway
+(`gateway.retry.scheduled reason=output-exhausted-repair`); a second exhaustion ends the turn as
+final (`coding-sidecar.gateway.turn-failed failureCode=output-exhausted runtimeRetry=refused
+repairOutcome=exhausted-again`). See the LiteLLM troubleshooting entry "Coding Workbench turn
+reasons until its output budget is exhausted".
+
 ## Repository working instructions
 
 A run's initial turn carries the task workspace's own `AGENTS.md` (workspace root only, exact name,

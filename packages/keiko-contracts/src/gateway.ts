@@ -830,6 +830,16 @@ export interface UsageMetadata {
 export type FinishReason =
   "stop" | "tool_calls" | "length" | "content_filter" | "error" | "cancelled";
 
+/**
+ * How the gateway's one steered repair of an answer that exhausted its output budget without a
+ * tool call or a final answer ended (#3873, F17). `recovered` rides on the repaired response
+ * (`NormalizedResponse.outputRepair`); `exhausted-again` (the model spent the whole budget once
+ * more) and `failed` (the repaired attempt failed for another reason) ride on the error the
+ * repaired attempt surfaced (`GatewayError.outputRepair` in keiko-security). A call whose first
+ * answer was usable, or whose budget could not hold a repair, carries neither.
+ */
+export type GatewayOutputRepairOutcome = "recovered" | "exhausted-again" | "failed";
+
 export interface NormalizedResponse {
   readonly modelId: string;
   readonly content: string;
@@ -846,6 +856,11 @@ export interface NormalizedResponse {
    * everywhere else).
    */
   readonly reasoning?: string | undefined;
+  /**
+   * Set by the gateway, never by a provider: this answer came from the one steered repair of a
+   * preceding answer that exhausted its output budget (#3873, F17). Absent on every first answer.
+   */
+  readonly outputRepair?: Extract<GatewayOutputRepairOutcome, "recovered"> | undefined;
 }
 
 // ─── Streaming (schema only — Wave 1 adapter does not process chunked streams) ─

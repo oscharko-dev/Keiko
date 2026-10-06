@@ -46,6 +46,7 @@ import {
   type CircuitBreakerAdmission,
   type RetryConfig,
   type RetryPolicy,
+  type RetryResume,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
@@ -654,6 +655,7 @@ interface PreparedStream {
   // The outage window this call retries for, measured from `start` (#3873); 0 for every call
   // that keeps the provider's attempt count.
   readonly outageWindowMs: number;
+  readonly outputRepair: OutputRepairState;
 }
 
 // How long a streamed call has already run (its first admission included) and what is left of its
@@ -687,17 +689,88 @@ function streamStartupRetryConfig(
   };
 }
 
+// The one steered repair of an answer that exhausted its output budget (#3873, F17): the answer
+// the repaired attempt corrects, set the moment that attempt starts and absent until then. Shared by
+// the buffered attempt state and the prepared stream, and read once the call settles.
+interface OutputRepairState {
+  exhaustion?: ProviderOutputExhaustedError | undefined;
+}
+
 interface BufferedChatAttempt {
   readonly route: RoutedCall;
   readonly adapter: ProviderAdapter;
   readonly originalRequest: GatewayCallRequest;
   readonly promptAdmission: GatewayPromptAdmission;
   readonly correlationId: string;
-  readonly state: {
+  readonly state: OutputRepairState & {
     request: GatewayCallRequest;
     attemptNumber: number;
     repair?: GatewayToolCatalogError["repair"];
   };
+}
+
+/**
+ * What the model is told after it spent its whole output budget without a tool call or a final
+ * answer (#3873, F17: Gemma 4 31B with reasoning enabled reasoned for 8k tokens on a plain file-read
+ * turn, three times in a row). Fixed and body-free: it names the budget outcome, never the reasoning.
+ * Module-level export (not part of the package surface) so the sentence can be pinned directly.
+ */
+export const OUTPUT_EXHAUSTED_REPAIR_MESSAGE =
+  "Your previous answer used the whole output budget without producing a tool call or a final answer. Reply now with the tool call or the final answer directly; keep any reasoning to a few sentences.";
+
+// The steered request: the ORIGINAL request plus one system correction, like the schema repair —
+// one correction at a time, and never the exhausted answer quoted back.
+function outputExhaustedRepairRequest(original: GatewayCallRequest): GatewayCallRequest {
+  return {
+    ...original,
+    messages: [...original.messages, { role: "system", content: OUTPUT_EXHAUSTED_REPAIR_MESSAGE }],
+  };
+}
+
+// Marks the error that ended a steered attempt (attach-at-throw-site, like `requestId`): the model
+// exhausted its budget once more, or the repaired attempt failed for another reason — including the
+// first exhaustion itself resurfacing because the repair was refused admission. A call that never
+// started a repair leaves the error unmarked.
+function attachOutputRepair(error: unknown, state: OutputRepairState): void {
+  if (state.exhaustion === undefined || !(error instanceof GatewayError)) return;
+  if (error.outputRepair !== undefined) return;
+  error.outputRepair =
+    error instanceof ProviderOutputExhaustedError && error !== state.exhaustion
+      ? "exhausted-again"
+      : "failed";
+}
+
+// The answer a steered attempt recovered, marked so the caller's own evidence can say so.
+function recoveredResponse(
+  response: NormalizedResponse,
+  state: OutputRepairState,
+): NormalizedResponse {
+  return state.exhaustion === undefined ? response : { ...response, outputRepair: "recovered" };
+}
+
+interface OpenedStream {
+  readonly first: GatewayStreamChunk;
+  readonly iterator: AsyncGenerator<GatewayStreamChunk>;
+}
+
+// A chunk that commits a stream, after which nothing may be replayed: answer text or the terminal
+// answer. An empty delta does not, and neither does a forwarded reasoning chunk (`streamFrom`).
+function commitsStream(chunk: GatewayStreamChunk): boolean {
+  return chunk.type === "done" || (chunk.type === "delta" && chunk.token.length > 0);
+}
+
+// The request of a streamed attempt: the prepared request, or — from the attempt that follows an
+// exhausted answer on — its steered repair. The retry loop grants that attempt exactly once
+// (`outputExhaustedRepair`, resilience.ts); a later provider retry keeps the steer.
+function steeredStreamRequest(
+  state: PreparedStream,
+  previousError: Error | undefined,
+): GatewayCallRequest {
+  if (previousError instanceof ProviderOutputExhaustedError)
+    state.outputRepair.exhaustion = previousError;
+  return state.outputRepair.exhaustion === undefined
+    ? state.prepared
+    : outputExhaustedRepairRequest(state.prepared);
 }
 
 function admissionBudget(
@@ -1076,20 +1149,16 @@ export class Gateway {
         { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
       );
     } catch (error) {
+      attachOutputRepair(error, attempt.state);
       this.settleFailedCall(ids, route, elapsed(), error);
       throw error;
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
-    return {
-      ...withReasoningPolicy(result, forwardsReasoning),
-      usage: {
-        ...result.usage,
-        requestId,
-        latencyMs: Math.max(1, this.clock.now() - start),
-        costClass: route.capability.costClass,
-      },
-    };
+    return recoveredResponse(
+      this.enrich(withReasoningPolicy(result, forwardsReasoning), requestId, start, route),
+      attempt.state,
+    );
   }
 
   private async invokeBufferedAttempt(
@@ -1100,6 +1169,13 @@ export class Gateway {
     admissionBudgetMs?: number,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
+    if (previousError instanceof ProviderOutputExhaustedError) {
+      // The attempt the retry loop granted as the one steered repair (#3873, F17): the original
+      // request plus the fixed correction, in place of any pending schema correction.
+      attempt.state.repair = undefined;
+      attempt.state.request = outputExhaustedRepairRequest(attempt.originalRequest);
+      attempt.state.exhaustion = previousError;
+    }
     const provider = {
       ...attempt.route.provider,
       ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
@@ -1223,6 +1299,7 @@ export class Gateway {
       settled = true;
     } catch (error) {
       settled = true;
+      attachOutputRepair(error, state.outputRepair);
       this.failStream(ids, route, chunkCount, elapsed(), error);
     } finally {
       admission.settle("non-provider-fault");
@@ -1249,7 +1326,10 @@ export class Gateway {
     // Close the provider, settle spend/circuit state and emit the outcome before handing it off.
     if (terminalResponse !== undefined) {
       yield this.enrichDone(
-        withReasoningPolicy(terminalResponse, forwardsReasoning),
+        recoveredResponse(
+          withReasoningPolicy(terminalResponse, forwardsReasoning),
+          state.outputRepair,
+        ),
         ids.requestId,
         start,
         route,
@@ -1300,6 +1380,7 @@ export class Gateway {
       admission,
       promptAdmission: this.promptAdmission(route, ids),
       outageWindowMs,
+      outputRepair: {},
     };
   }
 
@@ -1556,10 +1637,12 @@ export class Gateway {
     );
   }
 
-  private async openRetriedStream(state: PreparedStream): Promise<{
-    first: GatewayStreamChunk;
-    iterator: AsyncGenerator<GatewayStreamChunk>;
-  }> {
+  // The startup retries of a streamed call, or — resumed after an attempt that exhausted its output
+  // budget on forwarded reasoning alone (#3873 F17, option iii) — the one steered repair of it.
+  private async openRetriedStream(
+    state: PreparedStream,
+    resume?: RetryResume,
+  ): Promise<OpenedStream> {
     const {
       adapter,
       prepared: request,
@@ -1570,13 +1653,15 @@ export class Gateway {
     } = state;
     const budget = streamStartupBudget(state, this.clock.now());
     let admission = initialAdmission;
-    let attempt = 0;
+    // Under a resumed loop every attempt follows the exhausted one, so each needs its own admission.
+    let attempt = resume === undefined ? 0 : 1;
     return executeWithRetry(
       async (_attemptMs, remainingMs, previousError, admissionBudgetMs) => {
+        const current = steeredStreamRequest(state, previousError);
         if (attempt++ > 0) {
           const allowed = await this.admitAttempt(
             route.provider,
-            request,
+            current,
             ids.correlationId,
             remainingMs ?? budget.remainingMs,
             previousError,
@@ -1587,7 +1672,7 @@ export class Gateway {
         }
         return this.openStreamAttempt(
           adapter,
-          request,
+          current,
           route,
           ids,
           remainingMs,
@@ -1601,16 +1686,51 @@ export class Gateway {
       request.cancellationSignal,
       this.random,
       { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
+      resume,
     );
   }
 
+  // A delivered chunk commits the stream: nothing may be replayed after it. Forwarded reasoning is
+  // the one owner-decided exception (#3873 F17, option iii, 2026-10-06): an answer that exhausts its
+  // output budget after nothing but reasoning still gets the one steered repair, through the same
+  // retry loop resumed after the exhausted attempt — the caller then sees a second reasoning
+  // passage, and no answer text or tool call is ever duplicated. A delivered answer delta or `done`,
+  // and a repair that already ran, close the window: the exhaustion then surfaces at once.
   private async *streamFrom(state: PreparedStream): AsyncGenerator<GatewayStreamChunk> {
-    const opened = await this.openRetriedStream(state);
+    let opened = await this.openRetriedStream(state);
     try {
-      yield opened.first;
-      yield* opened.iterator;
+      for (;;) {
+        const exhaustion = yield* this.deliverUntilCommitted(state, opened);
+        if (exhaustion === undefined) return;
+        await opened.iterator.return(undefined);
+        opened = await this.openRetriedStream(state, { failedAttempt: exhaustion });
+      }
     } finally {
       await opened.iterator.return(undefined);
+    }
+  }
+
+  // Delivers an opened stream. Returns the exhaustion a stream of nothing but reasoning ended with —
+  // the one failure the repair window stays open for — and rethrows every other failure.
+  private async *deliverUntilCommitted(
+    state: PreparedStream,
+    opened: OpenedStream,
+  ): AsyncGenerator<GatewayStreamChunk, ProviderOutputExhaustedError | undefined> {
+    let committed = commitsStream(opened.first);
+    try {
+      yield opened.first;
+      for await (const chunk of opened.iterator) {
+        committed ||= commitsStream(chunk);
+        yield chunk;
+      }
+      return undefined;
+    } catch (error) {
+      const repairable =
+        !committed &&
+        state.outputRepair.exhaustion === undefined &&
+        error instanceof ProviderOutputExhaustedError;
+      if (!repairable) throw error;
+      return error;
     }
   }
 

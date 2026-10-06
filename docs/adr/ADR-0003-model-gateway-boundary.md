@@ -645,6 +645,34 @@ following error types are never retried: `AuthenticationError`, `ModelRefusalErr
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
+**Steered repair of an exhausted answer (#3873, F17).** A `ProviderOutputExhaustedError` — an HTTP
+200 answer whose `finish_reason` is `length` with neither a tool call nor content, the model having
+spent its whole output budget on reasoning — is never retried as is, but it is not surfaced at once
+either. The retry loop (`RetryConfig.repair`, `resilience.ts`) grants exactly one further attempt
+per call, at once, which the gateway sends as the ORIGINAL request plus one fixed system message
+(`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told that its previous answer used the
+whole budget without a tool call or a final answer and asked to reply with that directly, keeping any
+reasoning to a few sentences. The repair works like the tool-schema repair above — one correction at a
+time, never the exhausted answer quoted back — and applies to a buffered call, to a stream before its
+first content, and (owner decision 2026-10-06, option iii) to a stream that has delivered nothing but
+forwarded reasoning alike: the retry loop is resumed after the exhausted attempt
+(`executeWithRetry`'s `resume`), the caller then sees a second reasoning passage, and no answer text
+or tool call is ever duplicated. A delivered answer delta or tool call, and a repair that already ran,
+close the window for good, so a later exhaustion surfaces at once. It is not a provider retry: neither `maxRetries` nor the coding outage window
+counts it, only what is left of the call's budget can refuse it (the call then ends as a budget stop
+rather than a terminal one), and the breaker never counts either answer. Its scheduled line is
+`gateway.retry.scheduled` with `reason: "output-exhausted-repair"` and `delayMs: 0` (and
+`retryPolicy: "attempts"`, D6: the outage window never extends a repair); an ordinary retry
+carries `reason: "retryable-error"`. A repaired attempt that exhausts the budget again surfaces that
+second `ProviderOutputExhaustedError` once, marked `outputRepair: "exhausted-again"` on the error; one
+that fails for another reason carries `outputRepair: "failed"`; a recovered answer carries
+`outputRepair: "recovered"` on the `NormalizedResponse`. The coding sidecar route reads those marks for
+its own evidence and answers a repaired-and-exhausted-again turn as final to the runtime (ADR-0173).
+Live qualification of 1.1.x with Gemma 4 31B behind LiteLLM (run
+`324076066246415201273338647160811469441`) motivated this: the fourth turn reasoned for its whole 8k
+budget, the runtime retried the identical turn twice, and every attempt cost seven minutes at 20
+tokens per second with nothing steering the model.
+
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
 all configured attempts and exponential backoff windows. A provider cooldown above 30 s consumes
@@ -696,7 +724,11 @@ and only while the configuration's `codingReasoningDisplay` is not `"off"` (owne
 2026-10-06: on by default, opt-out only); every other surface keeps its answer without reasoning.
 Discarded reasoning chunks are dropped where the provider stream is read, below the commit point:
 a discarded thought is never a delivered chunk, so it neither starts the caller's answer nor ends
-the startup retries, while forwarded reasoning commits the stream exactly like a content delta.
+the startup retries, while forwarded reasoning commits the stream exactly like a content delta —
+with one owner-decided exception (2026-10-06, #3873 F17, option iii): an answer that exhausts its
+output budget after forwarded reasoning alone still receives the one steered repair described under
+"Bounded retry", so the caller sees a second reasoning passage; every other failure after forwarded
+reasoning stays terminal, and nothing is ever replayed after answer text or a tool call.
 Reasoning is a body: `chat.response.streamed` records its events and bytes, and
 `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
 and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.

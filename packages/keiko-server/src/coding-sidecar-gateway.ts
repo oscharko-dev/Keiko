@@ -54,6 +54,7 @@ import {
 import {
   MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
+  type GatewayOutputRepairOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   currentGateway,
@@ -444,6 +445,21 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #3873 (F17): the gateway's one steered repair of an answer that exhausted its output budget, on
+// every settlement line of a turn — whether it ran, and how it ended — so an `output-exhausted`
+// turn the runtime may not retry names its cause, and a recovered turn shows the repair that saved
+// it. `required: false` only because a record written before these fields existed lacks them; every
+// line written since carries `repairAttempted`, and `repairOutcome` whenever a repair ran.
+const OUTPUT_REPAIR_FIELDS = {
+  repairAttempted: { type: "boolean", dataClass: "closed-enum", required: false },
+  repairOutcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["recovered", "exhausted-again", "failed"],
+  },
+} as const;
+
 const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -488,13 +504,15 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
       ],
     },
     // Whether the answer to the runtime lets it retry the turn: `refused` for a provider rejection
-    // no retry can change, which the runtime reads as final (lab 2026-09-26).
+    // no retry can change, which the runtime reads as final (lab 2026-09-26), and for an exhausted
+    // answer whose one steered repair exhausted the budget again (#3873, F17).
     runtimeRetry: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["allowed", "refused"],
     },
+    ...OUTPUT_REPAIR_FIELDS,
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
     // where its frames live.
@@ -603,6 +621,7 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
     },
+    ...OUTPUT_REPAIR_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1446,6 +1465,23 @@ const NO_GATEWAY_OUTPUT: GatewayOutcomeMetrics = {
   reasoningFrames: 0,
 };
 
+// The gateway's one steered repair of an exhausted answer (#3873, F17), read off what the call
+// settled with: `recovered` rides on the response (`NormalizedResponse.outputRepair`), the two
+// failures on the error the repaired attempt surfaced. Absent when no repair ran.
+function outputRepairOf(error: unknown): GatewayOutputRepairOutcome | undefined {
+  return error instanceof GatewayError ? error.outputRepair : undefined;
+}
+
+function repairEvidence(repair: GatewayOutputRepairOutcome | undefined): {
+  readonly repairAttempted: boolean;
+  readonly repairOutcome?: GatewayOutputRepairOutcome;
+} {
+  return {
+    repairAttempted: repair !== undefined,
+    ...(repair === undefined ? {} : { repairOutcome: repair }),
+  };
+}
+
 function recordGatewayOutcome(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1453,6 +1489,7 @@ function recordGatewayOutcome(
   cancellation: GatewayRequestCancellation,
   outcome: CodingSidecarGatewayRunOutcome,
   metrics: GatewayOutcomeMetrics,
+  repair?: GatewayOutputRepairOutcome,
 ): void {
   const { completionTokens, outputBytes } = metrics;
   getServerLogger().info(
@@ -1467,6 +1504,7 @@ function recordGatewayOutcome(
         reasoningFrames: metrics.reasoningFrames,
         deadlineMs: cancellation.deadlineMs,
         ...gatewayOutcomeCancellationCause(cancellation, outcome),
+        ...repairEvidence(repair),
         completeness: "complete",
         loss: "none",
       },
@@ -1665,7 +1703,10 @@ function gatewayDiagnosticCorrelation(
 // ran out, or a tool call that never parsed or matched its schema -- is the model's answer, not a
 // server fault: the warn-level turn-failed line names it. An error-level diagnostic opened a support
 // incident for every such turn; a lab run of the 1.1.8 candidate behind a LiteLLM hosted_vllm route
-// opened one on its first empty answer.
+// opened one on its first empty answer. The runtime may retry these, with one exception: an
+// exhausted answer whose steered gateway repair exhausted the budget again is answered as final
+// (`runtimeRetryFor`, #3873 F17) — the identical turn ran away identically, and a third attempt
+// would only burn the envelope's duration.
 const MODEL_ANSWER_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode> = new Set([
   "output-exhausted",
   "empty-answer",
@@ -1792,6 +1833,7 @@ function logGatewayTurnFailure(
         published: publicationReason === "published",
         publicationReason,
         runtimeRetry,
+        ...repairEvidence(outputRepairOf(error)),
         ...(error === undefined || frames === undefined ? {} : { frames }),
         ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
         completeness: "complete",
@@ -1858,14 +1900,33 @@ function runtimeRetryFor(
   failureCode: CodingWorkbenchTurnFailureCode,
 ): RuntimeRetry {
   if (gatewaySpendRejectionReason(error) !== undefined) return "refused";
-  const final =
+  if (repairExhaustedAgain(error, failureCode)) return "refused";
+  return isFinalProviderRejection(error, failureCode) ? "refused" : "allowed";
+}
+
+// #3873 (F17): the gateway already steered the one repair an exhausted answer gets, and the model
+// spent the whole budget again. A runtime retry of the identical turn would run away identically
+// (run 324076066246415201273338647160811469441: three seven-minute attempts, no progress), so the
+// turn is final. A first exhaustion the call's budget could not repair stays retryable.
+function repairExhaustedAgain(
+  error: unknown,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): boolean {
+  return failureCode === "output-exhausted" && outputRepairOf(error) === "exhausted-again";
+}
+
+function isFinalProviderRejection(
+  error: unknown,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): boolean {
+  return (
     failureCode === "provider-failed" &&
     error instanceof GatewayError &&
     !error.retryable &&
     !(error instanceof CircuitOpenError) &&
     !(error instanceof CancelledError) &&
-    !(error instanceof ProviderError && runtimeRetriesStatus(error.httpStatus));
-  return final ? "refused" : "allowed";
+    !(error instanceof ProviderError && runtimeRetriesStatus(error.httpStatus))
+  );
 }
 
 // The provider statuses OpenCode 2.0.10 retries on its own (408, 409, 429, 5xx): a rejection with one
@@ -2605,6 +2666,7 @@ function settleFailedGatewayChat(
     cancellation,
     cancelled ? "cancelled" : "failed",
     NO_GATEWAY_OUTPUT,
+    outputRepairOf(error),
   );
   const spendReason = gatewaySpendRejectionReason(error);
   const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
@@ -2651,9 +2713,7 @@ async function executeBufferedGatewayChat(
     usage.source,
     promptSettlement,
   );
-  const record: RecordBufferedOutcome = (outcome, reasoningFrames = 0) => {
-    recordGatewayOutcome(ctx, deps, runId, cancellation, outcome, { ...metrics, reasoningFrames });
-  };
+  const record = bufferedOutcomeRecorder(ctx, dispatch, metrics, response);
   if (cancellation.signal.aborted) {
     record("cancelled");
     return stream === undefined
@@ -2677,6 +2737,28 @@ type RecordBufferedOutcome = (
   outcome: CodingSidecarGatewayRunOutcome,
   reasoningFrames?: number,
 ) => void;
+
+// The outcome line of a buffered turn: the answer's counts, the reasoning frames it carried to the
+// runtime (#3878) and, when the answer came from the gateway's steered repair, that repair (#3873).
+function bufferedOutcomeRecorder(
+  ctx: RouteContext,
+  dispatch: GatewayChatDispatchContext,
+  metrics: Pick<GatewayOutcomeMetrics, "completionTokens" | "outputBytes">,
+  response: NormalizedResponse,
+): RecordBufferedOutcome {
+  const { deps, runId, cancellation } = dispatch;
+  return (outcome, reasoningFrames = 0): void => {
+    recordGatewayOutcome(
+      ctx,
+      deps,
+      runId,
+      cancellation,
+      outcome,
+      { ...metrics, reasoningFrames },
+      response.outputRepair,
+    );
+  };
+}
 
 function deliverBufferedGatewayAnswer(
   ctx: RouteContext,
@@ -2709,7 +2791,15 @@ async function streamGatewayChat(
       modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
-    recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", NO_GATEWAY_OUTPUT);
+    recordGatewayOutcome(
+      ctx,
+      deps,
+      runId,
+      dispatch.cancellation,
+      "failed",
+      NO_GATEWAY_OUTPUT,
+      outputRepairOf(error),
+    );
     const failureCode = gatewayTurnFailureCode(error);
     const runtimeRetry = runtimeRetryFor(error, failureCode);
     const turnFailureRecorded = reportGatewayTurnFailure(ctx, deps, runId, {
@@ -2772,7 +2862,7 @@ async function pumpGatewayStreamWithCancellation(
       session.runId,
       turnFailureRecorded,
     );
-    settleGatewayStreamError(session, runtimeRetry);
+    settleGatewayStreamError(session, runtimeRetry, outputRepairOf(error));
   } finally {
     stopHeartbeat();
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -2855,13 +2945,22 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
 function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
+  repair?: GatewayOutputRepairOutcome,
 ): void {
   const { ctx, deps, runId, cancellation, metrics } = session;
-  recordGatewayOutcome(ctx, deps, runId, cancellation, outcome, {
-    completionTokens: metrics.completionTokens,
-    outputBytes: metrics.outputBytes,
-    reasoningFrames: metrics.reasoningFrames,
-  });
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    cancellation,
+    outcome,
+    {
+      completionTokens: metrics.completionTokens,
+      outputBytes: metrics.outputBytes,
+      reasoningFrames: metrics.reasoningFrames,
+    },
+    repair,
+  );
 }
 
 function writeSessionTerminal(
@@ -2926,10 +3025,16 @@ function streamGatewayDelta(session: GatewayStreamSession, token: string): Promi
   return forwardStreamText(session, { content: token }, overBudget);
 }
 
+// The reasoning passages one turn may carry: the answer attempt's and, after an answer that
+// exhausted its budget on reasoning alone, its one steered repair's (#3873 F17, option iii) —
+// the second passage is the repair working, not an overgrown reasoning.
+const REASONING_PASSAGES_PER_TURN = 2;
+
 // #3878: the model's reasoning reaches the coding runtime as `delta.reasoning_content`, the field
 // OpenCode's OpenAI-compatible provider turns into a reasoning part, as it arrives. It is bounded
-// apart from the answer, by the same byte allowance, so a reasoning model keeps its whole answer
-// budget and a provider that ignores its output limit still cannot stream without end.
+// apart from the answer, by the same byte allowance per model attempt for the attempts a turn may
+// carry, so a reasoning model keeps its whole answer budget and a provider that ignores its output
+// limit still cannot stream without end.
 async function streamGatewayReasoning(
   session: GatewayStreamSession,
   token: string,
@@ -2939,7 +3044,8 @@ async function streamGatewayReasoning(
   metrics.forwardedReasoningBytes += counted.bytes;
   metrics.previousReasoningEndedWithHighSurrogate = counted.endsWithHighSurrogate;
   const overBudget =
-    metrics.forwardedReasoningBytes > outputByteBudget(request.maxOutputTokens ?? 1);
+    metrics.forwardedReasoningBytes >
+    outputByteBudget(request.maxOutputTokens ?? 1) * REASONING_PASSAGES_PER_TURN;
   const forwarded = await forwardStreamText(session, { reasoning_content: token }, overBudget);
   if (forwarded) metrics.reasoningFrames += 1;
   return forwarded;
@@ -2990,7 +3096,7 @@ async function streamGatewayResponse(
   settleStreamCompletionUsage(session, response, outcome, promptSettlement);
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
-    recordSessionOutcome(session, "output-limit");
+    recordSessionOutcome(session, "output-limit", response.outputRepair);
     writeSessionTerminal(session, "length");
     return;
   }
@@ -3009,7 +3115,7 @@ async function streamGatewayResponse(
     if (!wrote) {
       ctx.res.destroy();
       await iterator.return?.();
-      recordSessionOutcome(session, "cancelled");
+      recordSessionOutcome(session, "cancelled", response.outputRepair);
       return;
     }
   }
@@ -3017,6 +3123,7 @@ async function streamGatewayResponse(
   recordSessionOutcome(
     session,
     ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
+    response.outputRepair,
   );
 }
 
@@ -3129,12 +3236,16 @@ function logGatewayCompletionUsage(
   );
 }
 
-function settleGatewayStreamError(session: GatewayStreamSession, runtimeRetry: RuntimeRetry): void {
+function settleGatewayStreamError(
+  session: GatewayStreamSession,
+  runtimeRetry: RuntimeRetry,
+  repair?: GatewayOutputRepairOutcome,
+): void {
   if (session.cancellation.signal.aborted) {
-    recordSessionOutcome(session, "cancelled");
+    recordSessionOutcome(session, "cancelled", repair);
     return;
   }
-  recordSessionOutcome(session, "failed");
+  recordSessionOutcome(session, "failed", repair);
   if (runtimeRetry === "refused") {
     const { ctx, id, created, modelId, cancellation } = session;
     writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport });

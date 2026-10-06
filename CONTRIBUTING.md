@@ -144,6 +144,14 @@ records `contentBytes`, `reasoningBytes` and `reasoningTokens` beside `outputByt
 `coding-sidecar.gateway.outcome` records the `reasoningFrames` forwarded to the coding runtime; and
 `coding-runtime.history-projection` the `reasoningSignalCount` that reached the timeline. The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
+A model answer that exhausted its output budget without a tool call or a final answer gets one
+steered repair from the gateway (#3873, F17), and the log records it in closed words only:
+`gateway.retry.scheduled` names it with `reason=output-exhausted-repair` (`retryable-error` on
+every ordinary retry), and `coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed`
+record `repairAttempted` and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`,
+`failed`); a repaired turn that exhausted the budget again is final for the coding runtime
+(`runtimeRetry=refused`). The correction the model receives is one fixed sentence, and the
+exhausted reasoning is never recorded.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

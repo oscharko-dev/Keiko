@@ -2,6 +2,7 @@
 // `error.code`; they never parse `error.message`. Every message is redacted at construction
 // so errors are always safe to log or surface across trust boundaries (ADR-0003).
 
+import type { GatewayOutputRepairOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { RedactingError } from "./base.js";
 
 export const ERROR_CODES = {
@@ -58,6 +59,12 @@ export abstract class GatewayError extends RedactingError {
   // as requestId above): optional so no constructor changes and no existing
   // GatewayError construction/test is affected. Counts only, never content.
   partialUsage?: PartialStreamUsage;
+  // #3873 (F17): set by the gateway when this error ended the one steered repair of an answer that
+  // had exhausted its output budget — `exhausted-again` when the repaired attempt did so once more,
+  // `failed` when it failed for another reason — so the caller can tell a repaired-and-failed turn
+  // from a first exhaustion the budget never allowed to repair. Same attach-at-throw-site pattern as
+  // requestId above; a recovered repair rides on the response instead. A closed word, never content.
+  outputRepair?: Exclude<GatewayOutputRepairOutcome, "recovered">;
 }
 
 export class AuthenticationError extends GatewayError {
@@ -173,6 +180,9 @@ export class ProviderError extends GatewayError {
 // token answers with HTTP 200, `finish_reason: "length"` and no content. That is neither a broken
 // stream nor a provider refusal; it is a budget the caller can raise. It keeps the provider error
 // code (no wire change) and is never retried as is — the same request would exhaust the same budget.
+// The gateway instead steers ONE repaired attempt, the same request plus a fixed system correction
+// (#3873, F17); only a second exhaustion, or the repaired attempt's own failure, surfaces to the
+// caller, marked on `outputRepair`.
 export class ProviderOutputExhaustedError extends ProviderError {
   // Overrides ProviderError's inherited GATEWAY_PROVIDER_ERROR: the chat surfaces map on `.code`,
   // and this failure needs a distinct, actionable message (#3591) — httpStatus/retryable are still

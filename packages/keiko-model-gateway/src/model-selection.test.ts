@@ -1000,3 +1000,41 @@ describe("resolveCodingSafeSidecarGatewayProfile — tool-calling proof age", ()
     ).toMatchObject({ status: "unavailable", reason: "non-coding-capable" });
   });
 });
+
+// #3873 (F17): the coding turn's output allowance. Gemma 4 31B behind LiteLLM declared no output
+// limit, so the run reserved the shared chat profile's 8k of its 128k window and spent all of it on
+// reasoning before the tool call; a coding turn now reserves 16k where the provider declares no
+// limit, the declared limit where it does, and never more than a quarter of the window.
+describe("resolveCodingSafeSidecarGatewayProfile — coding output allowance (#3873 F17)", () => {
+  function outputAllowance(overrides: Partial<ModelCapability>): number {
+    const result = resolveCodingSafeSidecarGatewayProfile(
+      config(["reasoning-coder"], [codingSidecarCapability("reasoning-coder", overrides)]),
+    );
+    if (result.status !== "available") throw new Error("expected an available profile");
+    return result.runMetadata.maxOutputTokens;
+  }
+
+  it("reserves 16k for an undeclared output limit on a 128k window, up from the chat profile's 8k", () => {
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 0 })).toBe(16_384);
+    expect(outputAllowance({ contextWindow: 128_000, maxOutputTokens: 0 })).toBe(16_384);
+  });
+
+  it("keeps the provider-declared output limit when the window can hold it", () => {
+    expect(outputAllowance({ contextWindow: 128_000, maxOutputTokens: 4_096 })).toBe(4_096);
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 32_768 })).toBe(32_768);
+  });
+
+  it("bounds a large declared limit to a quarter of the window so the prompt keeps three quarters", () => {
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 131_072 })).toBe(32_768);
+  });
+
+  it("never reserves more than a quarter of a small undeclared window", () => {
+    expect(outputAllowance({ contextWindow: 32_000, maxOutputTokens: 0 })).toBe(8_000);
+    expect(outputAllowance({ contextWindow: 4_096, maxOutputTokens: 0 })).toBe(1_024);
+  });
+
+  it("never reserves less than the shared chat profile does for a very large undeclared window", () => {
+    // The shared profile scales its reserve with the window (62,500 of a million tokens).
+    expect(outputAllowance({ contextWindow: 1_000_000, maxOutputTokens: 0 })).toBe(62_500);
+  });
+});

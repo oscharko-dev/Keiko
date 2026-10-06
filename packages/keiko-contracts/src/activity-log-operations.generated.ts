@@ -9297,6 +9297,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
       },
+      repairAttempted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      repairOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["recovered", "exhausted-again", "failed"],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -9703,6 +9714,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["allowed", "refused"],
+      },
+      repairAttempted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      repairOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["recovered", "exhausted-again", "failed"],
       },
       frames: {
         type: "string-array",
@@ -15130,6 +15152,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "number",
         dataClass: "duration",
         required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["retryable-error", "output-exhausted-repair"],
       },
       httpStatus: {
         type: "integer",
