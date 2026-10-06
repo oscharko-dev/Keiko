@@ -208,8 +208,18 @@ throwaway clone below; only after mounting your working checkout directly re-run
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
   decide; before that, an overrun destroyed the evidence that would have shown it.
 - **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
-  cap budgets; the dev machine's VM is configured at 48 GiB / 14 CPUs
-  (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`).
+  cap budgets, and every writer mode of the tool-catalog evidence (`--rebind-case-identity`,
+  `--recalibrate`, `--extend-managed-runtime`, `--write-measurement`) requires the container to
+  report exactly the committed reference environment: 16 logical cores and `totalMemoryBytes`
+  67302940672 (a 64 GiB VM), as recorded in `docs/release/3415-tool-catalog-calibration.json`.
+  Configure the VM at 64 GiB / 16 CPUs
+  (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`) and
+  verify it before a rebind; an 8 GiB VM fails with
+  `catalog case-identity rebind reference environment differs`:
+
+  ```bash
+  docker run --rm --platform linux/arm64 <pinned node image> node -e 'const o=require("os");console.log(o.totalmem(),o.cpus().length)'
+  ```
 
 **Reference environment.** These budgets are absolute numbers, calibrated on the pinned container as
 run on a developer machine: `platform: linux`, `architecture: arm64`, >=14 logical cores. Every
