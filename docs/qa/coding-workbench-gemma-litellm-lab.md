@@ -49,5 +49,16 @@ delivery. It carries deliberate defects:
 Results are recorded per run with the run correlation id and the Activity Log operations that
 reconstruct it. Bodies (prompts, code, model output) are never recorded here.
 
-| Run | Task | Mode | Head | Outcome | Evidence |
-| --- | ---- | ---- | ---- | ------- | -------- |
+| Run               | Task | Mode             | Head        | Outcome                                                                                | Evidence                                                                                                                 |
+| ----------------- | ---- | ---------------- | ----------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `run-1485…124789` | T1   | Ask for approval | `b6bbe5a95` | Succeeded in 3 min; all planted defects plus two genuine extra defects found; no edits | 9 model turns, one tool call each (`finishReason=tool_calls`), `gateway.prompt.admission` with `counterStatus=available` |
+
+## Findings
+
+Findings are recorded when a run exposes them and link to the child issue that owns the fix.
+
+| Id  | Finding                                                                                                                                                                                | Owner |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| F1  | The Workbench reports a repository below a denied read-surface path (for example `.claude/`) as "may not be a Git repository" although the Git window names the actual `DENIED` cause. | #3873 |
+| F2  | Answers are buffered end to end: the sidecar model profile does not stream, so a slow self-hosted model shows only "Working" until the whole answer exists.                            | #3873 |
+| F3  | Model answers that use LaTeX notation (`$\rightarrow$`) are rendered verbatim in the Workbench timeline.                                                                               | #3874 |
