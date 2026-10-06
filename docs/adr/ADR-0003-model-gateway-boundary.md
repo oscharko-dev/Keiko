@@ -84,17 +84,51 @@ production the clock delegates to `Date.now()` and `setTimeout`. In tests the cl
 deterministic stub — no `vi.useFakeTimers`, no actual delays. This makes resilience tests fast and
 mutation-robust.
 
-A call marked with the `coding-workbench` latency profile is an autonomous agent turn, not an
-interactive answer a person waits on, so it tolerates an outage instead of failing fast (#3873). It
-keeps retrying a transiently unavailable provider (408, 429, 5xx, a refused connection, a silent
-attempt) for the gateway configuration's `codingOutageWindowMs` (default
-`GATEWAY_CODING_OUTAGE_WINDOW_MS`, 10 minutes; at most one hour) rather than stopping after the
-provider's `maxRetries`, and it waits through an open circuit breaker's cooldown and probe slot
-instead of receiving `CircuitOpenError` at once. The capped exponential backoff with jitter, any
-provider-announced `Retry-After`, the half-open probe limit, and the call's end-to-end budget all
-still apply, so waiting callers never add load to a recovering provider. Every other surface keeps its
-configured attempt count and fail-fast breaker, and `codingOutageWindowMs: 0` restores that
-behaviour for coding calls as well.
+An autonomous coding turn is not an interactive answer a person waits on, so it tolerates an outage
+instead of failing fast (#3873). The policy is an explicit request signal,
+`outagePolicy: "outage-window"` on the `GatewayCallRequest`, and only the coding sidecar route sets
+it, on its buffered and its streamed model calls alike. The `coding-workbench` latency profile does
+not select it: that profile only raises the timeout floors, and the interactive commit-message
+draft borrows it (#3591) while a person waits on the answer. A call with the signal keeps retrying a
+transiently unavailable provider (429, a retryable 5xx, a refused connection, a silent attempt) for
+the gateway configuration's `codingOutageWindowMs` (default `GATEWAY_CODING_OUTAGE_WINDOW_MS`, 10
+minutes; at most one hour) rather than stopping after the provider's `maxRetries`, and it waits
+through an open circuit breaker's cooldown and probe slot instead of receiving `CircuitOpenError`
+at once. The window extends only the retries after a failure the breaker counts against the
+provider (`isNonProviderFault` is false); a retry that reacts to the model's own output, a rejected
+tool-call shape and its schema-repair correction, keeps the provider's attempt count and reports
+`retryPolicy=attempts`. One policy covers both call shapes: a buffered call's retry loop and a
+streamed call's retries before its first content run under the same window, measured from the
+start of the call, and every admission wait, a streamed call's first admission included, is clipped
+to what is left of it. After a failed half-open probe, a streamed coding turn waits for the next
+probe just as a buffered one does. The capped exponential backoff with jitter, any
+provider-announced `Retry-After` and the half-open probe limit all still apply, so waiting callers
+never add load to a recovering provider.
+
+The window is the operator's explicit bound, not the provider's attempt budget. Under the outage
+policy the call's end-to-end budget is the window plus one attempt bound, and never less than the
+provider's own budget (`bufferedCallBudgetMs` / `streamedCallBudgetMs`): the configured window holds
+even at `maxRetries: 0`, where the provider budget alone is ten minutes, and the attempt the window
+admits last keeps its full bound, so a healthy answer is not cut at the window's edge. The sidecar
+route's deadline sits behind that budget, from the same derivation. Each attempt keeps its own
+bound: a silent attempt ends at the silence floor (at least five minutes without data) when the
+answer is read over a stream, otherwise at the buffered floor (at least ten minutes), and it is
+retried only while the window still has room. With the default window and floors a silent streamed
+attempt is therefore retried once and a silent whole-body attempt not at all; a longer
+`codingOutageWindowMs` buys more attempts. A call that outlasts the window ends with
+`gateway.retry.exhausted reason=budget`.
+
+A refused connection counts as transient on purpose: while a gateway restarts or sheds load its
+listener can refuse connections for a while, which is exactly the outage the window rides out. A
+misconfigured route (a wrong host or port) is caught before any coding turn by Gateway Setup's
+probe, so a Workbench turn that faces an unreachable gateway waits up to the window
+(`codingOutageWindowMs`) before it fails. Every other surface, the commit draft and interactive
+chat included, keeps its configured attempt count and fail-fast breaker, and
+`codingOutageWindowMs: 0` restores that behaviour for coding calls as well. Gateway Setup keeps the
+configured value, an explicit `0` included, through every rebuild of the configuration. The retry
+and breaker lines `gateway.retry.scheduled`, `gateway.retry.exhausted` and `gateway.circuit.wait`
+carry the applied policy as the closed field `retryPolicy` (`attempts` or `outage-window`), so the
+Activity Log tells a deliberate outage window from a retry loop that ignored its attempt count.
 
 ### D7 — Secret redaction at the boundary
 

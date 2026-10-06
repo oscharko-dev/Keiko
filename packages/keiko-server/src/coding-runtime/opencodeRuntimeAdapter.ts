@@ -18,6 +18,10 @@ import {
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { GOVERNED_TOOL_MODEL_CONTENT_SOURCE } from "./governedToolModelContent.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 
 import {
   createFixedOpenCodeConfig,
@@ -210,7 +214,23 @@ export function openCodeToolClientTimeoutMs(settlementBudgetMs: number): number 
     ? settlementBudgetMs + 2 * GOVERNED_TOOL_SETTLEMENT_GRACE_MS + 5_000
     : OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS;
 }
-export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
+/**
+ * Backstop for one submitted task's WHOLE agent loop (every model turn until the session is idle)
+ * when the run supplies no ceiling: the default Authority Envelope duration. A minted run supplies
+ * its own `budget.maxRuntimeMs` through `OpenCodeRuntimeAdapterPorts.maxTurnWaitMs`, so a
+ * configured longer envelope (`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`) is never cut short by a
+ * stale fixed turn wall (#3873). The envelope's own expiry stays the primary bound: it fails the
+ * run's next delegation closed, and this deadline only settles a session that hangs without one.
+ */
+export const OPEN_CODE_MAX_TURN_WAIT_MS = runtimeMaxDurationMs(
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+);
+
+function boundedTurnWaitMs(value: number | undefined): number {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0
+    ? value
+    : OPEN_CODE_MAX_TURN_WAIT_MS;
+}
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
 
@@ -250,6 +270,8 @@ export interface GeneratedOpenCodeBundle {
 export interface OpenCodeRuntimeAdapterPorts {
   readonly activityLog?: ServerLogSink | undefined;
   readonly correlationId?: string | undefined;
+  /** The run's envelope duration (`budget.maxRuntimeMs`); absent keeps the default backstop. */
+  readonly maxTurnWaitMs?: number | undefined;
   readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
@@ -334,6 +356,7 @@ export function createOpenCodeRuntimeAdapter(
     reconciler: createOpenCodeReconciler(),
     reconciliationTail: Promise.resolve(),
   };
+  const maxTurnWaitMs = boundedTurnWaitMs(ports.maxTurnWaitMs);
   let ready: OpenCodeAdapterReady | undefined;
   let cleanupRequested = false;
   let activeIterator: AsyncIterator<OpenCodeSyncHint> | undefined;
@@ -506,7 +529,7 @@ export function createOpenCodeRuntimeAdapter(
     const deadline = new AbortController();
     const timer = setTimeout(() => {
       deadline.abort();
-    }, OPEN_CODE_MAX_TURN_WAIT_MS);
+    }, maxTurnWaitMs);
     timer.unref();
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     try {

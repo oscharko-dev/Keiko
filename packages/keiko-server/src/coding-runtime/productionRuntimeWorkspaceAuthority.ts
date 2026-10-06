@@ -36,9 +36,21 @@ import {
   type CodingRuntimeLaunchResolutionFailureReason,
 } from "./launchFailure.js";
 
-const RUNTIME_TTL_MS = 30 * 60_000;
-const DEFAULT_RUNTIME_PROMPT_TOKENS = 200_000;
-const MAX_RUNTIME_PROMPT_TOKENS = 2_000_000;
+// The two hard bounds of a minted Authority Envelope (ADR-0137 D2). Both are operator settings with
+// fail-closed parsing, read once at composition (deps.ts) and copied into every newly minted
+// envelope; neither can alter a live envelope or reset its usage. The defaults were re-sized by the
+// live Gemma qualification (#3873): an ordinary multi-file task on a slow self-hosted model
+// (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per turn) re-sends its
+// whole conversation every turn, so 17 turns grew from 4,128 to 18,520 prompt tokens each and
+// summed to 200,000 in 27.5 minutes with every edit applied first time — the former 200,000-token /
+// 30-minute envelope ended ordinary work, not only a refused-edit loop. Exhaustion of either bound
+// still fails the run's next delegation closed; nothing here bypasses that.
+const MINUTE_MS = 60_000;
+export const DEFAULT_RUNTIME_PROMPT_TOKENS = 2_000_000;
+export const MAX_RUNTIME_PROMPT_TOKENS = 20_000_000;
+export const DEFAULT_RUNTIME_MAX_DURATION_MINUTES = 120;
+export const MAX_RUNTIME_MAX_DURATION_MINUTES = 480;
+const POSITIVE_DECIMAL_INTEGER = /^[1-9]\d*$/u;
 
 function checkedRuntimePromptTokenBudget(value: number): number {
   if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RUNTIME_PROMPT_TOKENS) {
@@ -47,12 +59,40 @@ function checkedRuntimePromptTokenBudget(value: number): number {
   return value;
 }
 
+/** Parses `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`; absent keeps the default, invalid throws. */
 export function configuredRuntimePromptTokenBudget(value: string | undefined): number {
   if (value === undefined) return DEFAULT_RUNTIME_PROMPT_TOKENS;
-  if (!/^[1-9]\d*$/u.test(value)) {
+  if (!POSITIVE_DECIMAL_INTEGER.test(value)) {
     throw new RangeError("Coding runtime prompt token budget must be a positive integer.");
   }
   return checkedRuntimePromptTokenBudget(Number(value));
+}
+
+function checkedRuntimeMaxDurationMinutes(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_RUNTIME_MAX_DURATION_MINUTES) {
+    throw new RangeError("Coding runtime maximum duration is outside the supported range.");
+  }
+  return value;
+}
+
+/** Parses `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`; absent keeps the default, invalid throws. */
+export function configuredRuntimeMaxDurationMinutes(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_RUNTIME_MAX_DURATION_MINUTES;
+  if (!POSITIVE_DECIMAL_INTEGER.test(value)) {
+    throw new RangeError(
+      "Coding runtime maximum duration must be a positive integer number of minutes.",
+    );
+  }
+  return checkedRuntimeMaxDurationMinutes(Number(value));
+}
+
+/**
+ * The envelope duration in milliseconds for a validated minute setting: the single source of
+ * `budget.maxRuntimeMs`, `expiresAt`, the OpenCode turn-wait backstop and the safe-activity
+ * retention floor, so none of those bounds can be shorter than the run they serve.
+ */
+export function runtimeMaxDurationMs(minutes: number): number {
+  return checkedRuntimeMaxDurationMinutes(minutes) * MINUTE_MS;
 }
 
 type LaunchResolutionInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
@@ -65,6 +105,11 @@ export interface ProductionWorkspaceAuthorityInput {
   readonly deploymentCeiling: CodingWorkbenchMode;
   /** Trusted deployment ceiling for a newly minted run; never changes an existing envelope. */
   readonly promptTokenBudget?: number | undefined;
+  /**
+   * Trusted envelope duration (minutes) for a newly minted run; `budget.maxRuntimeMs` and
+   * `expiresAt` both derive from it. Absent keeps the default; out of range fails closed.
+   */
+  readonly maxDurationMinutes?: number | undefined;
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly now?: (() => Date) | undefined;
   // When the deployment activates read-only public research (#2387), the base envelope admits the
@@ -136,6 +181,9 @@ function contextFromActive(
 ): CodingRuntimeTrustedContext {
   const branch = instance.taskBranch;
   const now = input.now?.() ?? new Date();
+  const maxRuntimeMs = runtimeMaxDurationMs(
+    input.maxDurationMinutes ?? DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  );
   const runtimeProfile = trustedRuntimeProfile(input, request);
   // ADR-0124 D2: authority is the fail-closed MINIMUM of the requested mode and the deployment
   // ceiling. Every capability below is derived from that minimum, never from the request. Deriving
@@ -183,14 +231,14 @@ function contextFromActive(
     networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, input.researchEgressEnabled),
     gates: ["human-approval"],
     budget: {
-      maxRuntimeMs: RUNTIME_TTL_MS,
+      maxRuntimeMs,
       maxToolCalls: 256,
       maxPromptTokens: checkedRuntimePromptTokenBudget(
         input.promptTokenBudget ?? DEFAULT_RUNTIME_PROMPT_TOKENS,
       ),
       maxPatchBytes: 262_144,
     },
-    expiresAt: new Date(now.getTime() + RUNTIME_TTL_MS).toISOString(),
+    expiresAt: new Date(now.getTime() + maxRuntimeMs).toISOString(),
   };
 }
 

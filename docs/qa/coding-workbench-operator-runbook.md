@@ -91,15 +91,31 @@ Evidence must not contain:
 
 The selected model's context allowance limits one model request. OpenCode compaction reduces
 conversation history for subsequent requests; it does not erase the prompt tokens already consumed
-by a run. The run's Authority Envelope independently accounts for cumulative prompt usage.
+by a run. The run's Authority Envelope independently accounts for cumulative prompt usage and for
+elapsed time. Every turn re-sends the whole conversation, so cumulative usage grows with the square
+of the turn count: in the live Gemma qualification (#3873) an ordinary six-file ESLint repair on a
+slow self-hosted model reached 200,000 cumulative tokens in 17 turns and 27.5 minutes with no
+refused edit.
 
-A deployment operator may set `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server.
-The default remains 200,000; an explicit decimal integer from 1 through 2,000,000 is accepted.
-Invalid values fail closed. This setting is copied into each newly minted envelope and reported as
-`maxPromptTokens` on the existing `coding-runtime.authority.minted` activity event. It does not
-change a live or exhausted envelope, the 30-minute duration, the tool/patch ceilings, or a configured
-Model Gateway spend limit. A larger accepted task can start with a deliberately configured allowance;
-an exhausted run requires a fresh accepted run and preserves its workspace through normal recovery.
+Two operator settings bound every newly minted envelope. Set them before starting the server; both
+are read once when the coding runtime is composed, before it activates, and an invalid value stops
+that composition with a `RangeError` instead of minting a silently defaulted envelope (fail closed):
+
+| Setting                                     | Meaning                                            | Default   | Accepted values                       |
+| ------------------------------------------- | -------------------------------------------------- | --------- | ------------------------------------- |
+| `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`    | Cumulative prompt-token allowance of one run       | 2,000,000 | decimal integer 1 through 20,000,000  |
+| `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` | Envelope duration (`maxRuntimeMs` and `expiresAt`) | 120       | decimal integer 1 through 480 minutes |
+
+Both are copied into each newly minted envelope and reported body-free as `maxPromptTokens` and
+`maxRuntimeMs` on the existing `coding-runtime.authority.minted` activity event. Neither changes a
+live or exhausted envelope, the tool/patch ceilings, or a configured Model Gateway spend limit. The
+safe-activity feed is retained for the configured duration plus a margin, and one submitted task's
+whole agent loop is bounded by the same duration; per-request provider deadlines are unchanged. A
+run that exhausts either bound fails closed at its next delegation
+(`coding-sidecar.gateway.rejected` with `runtime-prompt-budget-denied`, or an expired authority); it
+requires a fresh accepted run and preserves its workspace through normal recovery. Lower a bound
+deliberately for a constrained deployment; the former 200,000-token / 30-minute defaults ended
+ordinary multi-file work on a slow self-hosted model.
 
 ## Repository working instructions
 

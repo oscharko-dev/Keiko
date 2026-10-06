@@ -6505,44 +6505,58 @@ describe("handleGatewaySetup", () => {
   });
 
   // PR #3678: a setup rebuild produces providers and capabilities only; the operator's grounded-
-  // answer policy and PR branding must survive it verbatim, never fall back to the defaults.
-  it("keeps the grounded-answer policy and the branding through a preserve-mode rebuild", async () => {
-    const uiDir = await tempDir("keiko-gw-ui-policy-blocks-");
-    const evidenceDir = await tempDir("keiko-gw-ev-policy-blocks-");
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir,
-      env: { ...VAULT_ENV },
-      uiDbPath: join(uiDir, "keiko-ui.db"),
-      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
-      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
-    });
-    const gatewayConfig = deps.gatewayConfig;
-    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
-    gatewayConfig.set(
-      parseGatewayConfig({
-        providers: [
-          { modelId: "example-chat", baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        groundedAnswers: { ownAssessment: "disabled" },
-        branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
-      }),
-      true,
-    );
+  // answer policy and PR branding must survive it verbatim, never fall back to the defaults. The
+  // coding outage window is the same kind of operator block (#3873): 0 is the explicit fail-fast
+  // opt-out, so a falsy check that drops it would silently restore the ten-minute default.
+  it.each([0, 1_800_000])(
+    "keeps the grounded-answer policy, the branding and a coding outage window of %i ms through a preserve-mode rebuild",
+    async (codingOutageWindowMs) => {
+      const uiDir = await tempDir("keiko-gw-ui-policy-blocks-");
+      const evidenceDir = await tempDir("keiko-gw-ev-policy-blocks-");
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+      });
+      const gatewayConfig = deps.gatewayConfig;
+      if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+      gatewayConfig.set(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: "example-chat",
+              baseUrl: "https://llm.example.com/v1",
+              apiKey: "chat-token",
+            },
+          ],
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+          codingOutageWindowMs,
+          groundedAnswers: { ownAssessment: "disabled" },
+          branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+        }),
+        true,
+      );
 
-    const result = await handleGatewaySetup(
-      ctx({ preserveExisting: true, imageInputModelIds: [] }),
-      deps,
-    );
+      const result = await handleGatewaySetup(
+        ctx({ preserveExisting: true, imageInputModelIds: [] }),
+        deps,
+      );
 
-    expect(result.status).toBe(200);
-    expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
-    expect(currentGatewayConfig(deps)?.branding).toEqual({
-      logoUrl: "https://assets.example.invalid/keiko.svg",
-    });
-    deps.store.close();
-  });
+      expect(result.status).toBe(200);
+      expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+      expect(currentGatewayConfig(deps)?.branding).toEqual({
+        logoUrl: "https://assets.example.invalid/keiko.svg",
+      });
+      expect(currentGatewayConfig(deps)).toHaveProperty(
+        "codingOutageWindowMs",
+        codingOutageWindowMs,
+      );
+      deps.store.close();
+    },
+  );
 
   it("restores stored OCR providers verbatim through preserve-mode rebuilds", async () => {
     // Review finding on #3031 (P1): the rebuild only re-derives chat and embedding providers, so

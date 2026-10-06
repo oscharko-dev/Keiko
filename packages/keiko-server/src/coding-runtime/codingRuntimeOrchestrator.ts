@@ -2429,7 +2429,8 @@ export class CodingRuntimeOrchestrator {
    * stop passes through — `stopping` here; from every other live state this ingest rejects it, so
    * it used to fail closed SILENTLY — no transition, no evidence record, no SSE frame — and a dead
    * runtime kept presenting as `running` until the separate task-settlement wait gave up
-   * (OPEN_CODE_MAX_TURN_WAIT_MS, 30 minutes). A runtime that exits under a live run terminates that
+   * (the run's envelope duration, OPEN_CODE_MAX_TURN_WAIT_MS by default). A runtime that exits
+   * under a live run terminates that
    * run, the same terminal projection a non-zero exit already produces through `failure-redacted`;
    * the exit code itself reaches the operator diagnostic sink, not this content-free lifecycle
    * projection.

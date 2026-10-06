@@ -203,6 +203,11 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
+  /**
+   * The run's envelope duration (`budget.maxRuntimeMs`), bounding one submitted task's whole agent
+   * loop in the adapter (#3873); absent keeps the adapter's default backstop.
+   */
+  readonly maxTurnWaitMs?: number | undefined;
   /** The run correlation every governed tool result's model-facing rendering is recorded under. */
   readonly toolResultCorrelationId?: string | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
@@ -860,6 +865,7 @@ async function handshake(
     });
     const adapter = createOpenCodeRuntimeAdapter({
       correlationId: request.runId,
+      maxTurnWaitMs: input.maxTurnWaitMs,
       contextGeometry: input.contextGeometry,
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
       readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),

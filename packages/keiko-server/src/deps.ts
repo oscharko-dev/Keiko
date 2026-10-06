@@ -19,7 +19,11 @@ import {
 // pass unchanged; the handlers degrade gracefully (no config → 400 NO_MODEL on a run, null config on
 // the inspector; no store → an empty evidence list).
 
-import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import {
+  configuredRuntimeMaxDurationMinutes,
+  configuredRuntimePromptTokenBudget,
+  runtimeMaxDurationMs,
+} from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
   assumedChatCapability,
   findConfiguredCapability,
@@ -5648,6 +5652,28 @@ function unqualifiedComposition(
   return { resolver: undefined, unavailableReason, evidenceClass: undefined };
 }
 
+/**
+ * ADR-0137 D2 (#3873): the two Authority Envelope bounds are operator settings. Both are parsed
+ * ONCE here, before runtime activation, so an invalid value fails the composition closed at
+ * startup, and the same numbers reach every newly minted envelope and the safe-activity
+ * retention that must outlive it.
+ */
+interface RuntimeEnvelopeBounds {
+  readonly promptTokenBudget: number;
+  readonly maxDurationMinutes: number;
+}
+
+function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
+  return {
+    promptTokenBudget: configuredRuntimePromptTokenBudget(
+      env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
+    ),
+    maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
+      env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
+    ),
+  };
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -5655,6 +5681,7 @@ function resolveProductionRuntimePorts(
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   readiness: OpenCodeGatewayReadinessRegistry,
   workspaceLifecycle: WorkspaceLifecycleService,
+  envelopeBounds: RuntimeEnvelopeBounds,
 ): ProductionRuntimePortResolution {
   const injectedPorts = args.options.codingRuntimeProductionPorts;
   if (injectedPorts !== undefined) {
@@ -5673,6 +5700,7 @@ function resolveProductionRuntimePorts(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
     gatewayReadiness: readiness,
+    runtimeMaxDurationMs: runtimeMaxDurationMs(envelopeBounds.maxDurationMinutes),
     resolveGatewayRunMetadata: (modelId) => {
       const result = resolveCodingSafeSidecarGatewayProfile(args.runtimeConfig.current(), {
         modelId,
@@ -5732,14 +5760,14 @@ function runtimeWorkspaceAuthority(
   workspaceLifecycle: NonNullable<UiHandlerDepsAssemblyArgs["bundle"]["workspaceLifecycle"]>,
   managedTaskWorkspaceRoot: string,
   deploymentCeiling: CodingWorkbenchMode,
+  envelopeBounds: RuntimeEnvelopeBounds,
 ): Parameters<typeof createProductionCodingRuntimeResolver>[0]["workspaceAuthority"] {
   return {
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
-    promptTokenBudget: configuredRuntimePromptTokenBudget(
-      args.options.env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
-    ),
+    promptTokenBudget: envelopeBounds.promptTokenBudget,
+    maxDurationMinutes: envelopeBounds.maxDurationMinutes,
     readWorkspaceHead: readProductionWorkspaceHead,
     verifiedCommitResult: (runId) =>
       args.bundle.codingRuntimeSnapshotStore?.getLastSuccessfulVerifiedCommit?.(runId),
@@ -5775,12 +5803,14 @@ function productionRuntimeResolver(
   if (workspaceLifecycle === undefined || managedTaskWorkspaceRoot === undefined) {
     return unqualifiedComposition("runtime-unqualified");
   }
+  const envelopeBounds = configuredRuntimeEnvelopeBounds(args.options.env);
   const readiness = createOpenCodeGatewayReadinessRegistry();
   const resolution = resolveProductionRuntimePorts(
     args,
     runtimeEvidence,
     readiness,
     workspaceLifecycle,
+    envelopeBounds,
   );
   const ports = resolution.ports;
   if (ports === undefined) {
@@ -5794,6 +5824,7 @@ function productionRuntimeResolver(
     qualifiedRuntimeResolver({
       args,
       deploymentCeiling,
+      envelopeBounds,
       managedTaskWorkspaceRoot,
       ports,
       activated: resolution.activated,
@@ -5813,6 +5844,7 @@ function productionRuntimeResolver(
 interface QualifiedRuntimeResolverInput {
   readonly args: UiHandlerDepsAssemblyArgs;
   readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly envelopeBounds: RuntimeEnvelopeBounds;
   readonly managedTaskWorkspaceRoot: string;
   readonly ports: ProductionCodingRuntimePorts;
   readonly activated: boolean;
@@ -5839,6 +5871,7 @@ function qualifiedRuntimeResolver(
       input.workspaceLifecycle,
       input.managedTaskWorkspaceRoot,
       input.deploymentCeiling,
+      input.envelopeBounds,
     ),
     ...input.ports,
     commandRunner: input.commandRunner,

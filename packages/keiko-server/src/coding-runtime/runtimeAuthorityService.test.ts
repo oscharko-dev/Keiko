@@ -383,6 +383,9 @@ describe("CodingRuntimeAuthorityService", () => {
         connectorScopes: trusted.connectorScopes,
         networkPolicyMode: "deny-all",
         maxPromptTokens: trusted.budget.maxPromptTokens,
+        // #3873: the minted duration is reported beside the allowance, so a run that later fails
+        // closed on expiry can be reconstructed from this one line without the envelope body.
+        maxRuntimeMs: trusted.budget.maxRuntimeMs,
       },
     });
     const mintedEvent = activity.find((event) => event.op === "coding-runtime.authority.minted");

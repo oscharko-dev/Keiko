@@ -15,6 +15,10 @@ import {
   createGeneratedOpenCodeBundle,
   openCodeToolClientTimeoutMs,
 } from "./opencodeRuntimeAdapter.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import { ScriptedGovernedTools } from "./opencodeFunctionalHarness/_governedTools.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -145,6 +149,7 @@ interface OpenCodeRuntimeAdapterModule {
 interface OpenCodeRuntimeAdapterPorts {
   readonly activityLog?: ServerLogSink;
   readonly correlationId?: string;
+  readonly maxTurnWaitMs?: number;
   readonly contextGeometry?: {
     readonly contextWindowTokens: number;
     readonly maxInputTokens: number;
@@ -692,8 +697,46 @@ describe("OpenCode runtime adapter readiness", () => {
     });
   });
 
-  it("bounds a turn at thirty minutes while allowing caller cancellation to shorten it", async () => {
-    expect((await adapterModule()).OPEN_CODE_MAX_TURN_WAIT_MS).toBe(30 * 60_000);
+  // #3873: this wait bounds one submitted task's WHOLE agent loop (every model turn until the
+  // session is idle), not one model call, so a fixed thirty minutes cut a legitimate run short once
+  // the envelope duration became an operator setting with a longer default. Without a run-bound
+  // ceiling the backstop is the default envelope duration, derived from the producer that owns it.
+  it("bounds a turn by the default envelope duration when the run supplies no ceiling", async () => {
+    expect((await adapterModule()).OPEN_CODE_MAX_TURN_WAIT_MS).toBe(
+      runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES),
+    );
+  });
+
+  it("bounds a turn by the run-supplied ceiling while caller cancellation can still shorten it", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = readinessPorts();
+      harness.ports.control.status = (): Promise<"activity"> => Promise.resolve("activity");
+      const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+        ...harness.ports,
+        maxTurnWaitMs: 1_000,
+      });
+
+      await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+      expect(adapter.armTurn()).toBe(true);
+      let settled: boolean | undefined;
+      const waiting = adapter.waitForTerminal(new AbortController().signal).then((result) => {
+        settled = result;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(false);
+      await expect(waiting).resolves.toBe(false);
+      // KEIKO-0240: the deadline settled the turn, so the next turn can still be armed.
+      expect(adapter.armTurn()).toBe(true);
+      adapter.cancelTurn();
+      await adapter.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("orders attested readiness through history before exposing a fixed session", async () => {

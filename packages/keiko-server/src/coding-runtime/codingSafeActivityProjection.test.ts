@@ -9,10 +9,16 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
+  codingSafeActivityTtlMs,
   createCodingSafeActivityProjection,
   type CodingSafeActivityContent,
   type CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 
 const RUN_ID = "run-safe-activity";
 const WORKSPACE_ID = "workspace-safe-activity";
@@ -646,6 +652,49 @@ describe("bounded coding safe-activity projection", () => {
       workspaceIsCurrent: () => true,
     });
     expect(throwing).toHaveBeenCalledOnce();
+  });
+
+  // #3873: the Authority Envelope duration is an operator setting (KEIKO_CODING_RUNTIME_MAX_
+  // DURATION_MINUTES, formerly a fixed 30 minutes), and this projection's TTL is a hard cap that
+  // wins over a longer authority (the expiry tests below). A default of 30 minutes therefore evicted
+  // a live run's feed at minute 30 of a 120-minute envelope. The default now follows the default
+  // envelope duration and production derives a configured TTL through `codingSafeActivityTtlMs`;
+  // both outlive the envelope by the retention margin, so the authority expiry — not the cap — ends
+  // a live run's feed.
+  it("retains a live run for the whole envelope duration by default and for a configured one", () => {
+    const start = 1_721_323_200_000;
+    let now = start;
+    const defaultEnvelopeMs = runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES);
+    const projection = createCodingSafeActivityProjection({ now: () => now });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: new Date(start + defaultEnvelopeMs).toISOString(),
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    now = start + defaultEnvelopeMs - 1;
+    expect(projection.currentContent()?.feed.runId).toBe(RUN_ID);
+    now = start + defaultEnvelopeMs;
+    expect(projection.currentContent()).toBeNull();
+
+    const configuredEnvelopeMs = runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES);
+    expect(codingSafeActivityTtlMs(configuredEnvelopeMs)).toBeGreaterThan(configuredEnvelopeMs);
+    const configured = createCodingSafeActivityProjection({
+      now: () => now,
+      ttlMs: codingSafeActivityTtlMs(configuredEnvelopeMs),
+    });
+    const configuredStart = now;
+    configured.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: new Date(configuredStart + configuredEnvelopeMs).toISOString(),
+      workspaceIsCurrent: () => true,
+    });
+    now = configuredStart + configuredEnvelopeMs - 1;
+    expect(configured.currentContent()?.feed.runId).toBe(RUN_ID);
+    now = configuredStart + configuredEnvelopeMs;
+    expect(configured.currentContent()).toBeNull();
   });
 
   it("physically expires retained activity without requiring a reader", async () => {

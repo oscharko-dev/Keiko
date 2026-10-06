@@ -1341,11 +1341,16 @@ export function rawConfigFromCurrent(
 }
 
 // Operator-declared blocks no setup step produces: they survive every rebuild verbatim, so a
-// capability update never drops the grounded-answer policy or the PR branding (PR #3678).
+// capability update never drops the grounded-answer policy, the PR branding (PR #3678) or the
+// coding outage window (#3873). Present-only, never truthy: an explicit `codingOutageWindowMs: 0`
+// is the operator's fail-fast opt-out and must survive a save as well.
 function operatorPolicyBlocks(config: GatewayConfig | undefined): Record<string, unknown> {
   return {
     ...(config?.groundedAnswers === undefined ? {} : { groundedAnswers: config.groundedAnswers }),
     ...(config?.branding === undefined ? {} : { branding: config.branding }),
+    ...(config?.codingOutageWindowMs === undefined
+      ? {}
+      : { codingOutageWindowMs: config.codingOutageWindowMs }),
   };
 }
 

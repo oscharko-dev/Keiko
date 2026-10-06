@@ -644,10 +644,31 @@ attempts within about two seconds) and, once the circuit breaker opened, every f
 refused at once. The coding runtime then gave up after about ten of its own retries, so a three-minute
 overload failed the whole run although the gateway recovered.
 
-A coding-workbench call now keeps retrying a transiently unavailable provider for up to ten minutes
-with capped, jittered backoff and any announced `Retry-After`, and waits through an open breaker's
-cooldown instead of being refused. The breaker still admits only its half-open probes, so waiting runs
-do not add load while the gateway recovers. Interactive chat keeps its fail-fast behavior.
+A coding turn now keeps retrying a transiently unavailable provider for the outage window (ten
+minutes by default) with capped, jittered backoff and any announced `Retry-After`, and waits
+through an open breaker's cooldown instead of being refused. The coding sidecar route asks for this
+with an explicit outage policy on each of its model calls, buffered and streamed alike, so a turn
+behaves the same whether or not the model streams. The breaker still admits only its half-open
+probes, so waiting runs do not add load while the gateway recovers. Only an unavailable provider is
+waited for: a model that keeps answering with an invalid tool-call shape gets the configured
+attempt count and its schema-repair corrections, then the turn fails with the invalid-shape
+rejection as before.
+
+The window applies as configured: the turn's own budget is extended to the window plus one attempt,
+so `maxRetries: 0`, which LiteLLM routes commonly use, no longer caps it at ten minutes. Each
+attempt keeps its own bound. A silent attempt ends after at least five minutes without data when the
+answer is read over a stream, otherwise after at least ten minutes, and is retried only while the
+window still has room: with the default window a silent streamed attempt is retried once and a
+silent whole-body attempt not at all.
+
+A refused connection counts as transient on purpose: a restarting or overloaded gateway can refuse
+connections for a while. Gateway Setup's probe catches a misconfigured route before any coding turn
+runs, so a Workbench turn that faces an unreachable gateway waits up to the window before it fails.
+
+The commit-message draft and interactive chat keep their fail-fast behavior: a person waits on them,
+and they never carry the outage policy, although the draft borrows the coding timeout floors. While
+the gateway answers 429 or 503 or refuses connections, the draft still fails after the provider's
+attempt count, within seconds, with `GIT_DELIVERY_COMMIT_DRAFT_FAILED`.
 
 **Diagnostic Steps**
 
@@ -658,14 +679,24 @@ do not add load while the gateway recovers. Interactive chat keeps its fail-fast
 window ran out while it waited on an open breaker or a saturated probe slot, with
 `gateway.circuit.wait outcome=budget-refused`.
 
+Each of these retry and wait lines names the policy it ran under in `retryPolicy`. `outage-window`
+is a coding turn riding out the outage, so retries beyond the provider's `maxRetries` are expected.
+`attempts` is a retry that keeps the provider's attempt count: a commit draft, interactive chat, a
+coding turn with the window switched off, or a coding turn's retry of the model's own invalid
+tool-call shape. Retries beyond `maxRetries` under `retryPolicy=attempts` point at a retry-loop
+defect, not at the window.
+
 **Resolution**
 
 - A run that recovered needs nothing; the gap in its timeline is the outage.
-- A turn that still failed after the ten-minute window points at a sustained outage: check the
-  gateway's and model server's health and capacity before retrying the task.
+- A turn that still failed after the window (ten minutes by default) points at a sustained outage:
+  check the gateway's and model server's health and capacity before retrying the task.
 - The window is `codingOutageWindowMs` in the gateway configuration (milliseconds; default
-  `600000`, at most `3600000`). Raise it where peak-time overloads last longer, or set `0` to
-  restore the fail-fast attempt count for coding turns as well.
+  `600000`, at most `3600000`). Raise it where peak-time overloads last longer or where a silent
+  attempt should be retried, or set `0` to restore the fail-fast attempt count for coding turns as
+  well. Gateway Setup keeps the value, `0` included, when it rewrites the configuration.
+- A Workbench turn whose retries after a 429, a 5xx, a timeout or a refused connection carry
+  `retryPolicy=attempts` ran with the window switched off (`codingOutageWindowMs: 0`).
 
 ---
 

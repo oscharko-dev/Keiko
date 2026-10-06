@@ -915,17 +915,27 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
   return deps.codingSidecarGatewayChatFactory ?? defaultChatFactoryFor(gateway);
 }
 
+// How every model call of a coding turn reaches the gateway, buffered or streamed: under the
+// coding-workbench timeout floors (#3591) and the explicit outage policy (#3873), which rides out a
+// gateway overload for the configured `codingOutageWindowMs` instead of failing the autonomous run.
+// This route is the only one that sets the outage policy: an interactive surface that borrows the
+// latency profile (the commit draft) keeps the fail-fast attempt count.
+const CODING_TURN_GATEWAY_POLICY = {
+  latencyProfile: "coding-workbench",
+  outagePolicy: "outage-window",
+} as const satisfies Pick<GatewayCallRequest, "latencyProfile" | "outagePolicy">;
+
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
   return (_config, modelId) => {
     return (request: GatewayRequest) =>
-      gateway.chat({ ...request, modelId, latencyProfile: "coding-workbench" });
+      gateway.chat({ ...request, modelId, ...CODING_TURN_GATEWAY_POLICY });
   };
 }
 
 function defaultChatStreamFactoryFor(gateway: Gateway): CodingSidecarGatewayChatStreamFactory {
   return (_config, modelId) => {
     return (request: GatewayRequest) =>
-      gateway.chatStream({ ...request, modelId, latencyProfile: "coding-workbench" });
+      gateway.chatStream({ ...request, modelId, ...CODING_TURN_GATEWAY_POLICY });
   };
 }
 
@@ -2369,8 +2379,14 @@ export function codingSidecarGatewayRequestDeadlineMs(
   modelId: string,
 ): number {
   // The sidecar reaches the gateway both ways — a buffered `chat()` answer or a `chatStream()`
-  // read — so its backstop sits behind the longer of the two budgets.
-  return gatewayRouteDeadlineMs(config, modelId, ["buffered", "streamed"]);
+  // read — so its backstop sits behind the longer of the two budgets, each extended by the outage
+  // window these calls ride out (#3873 review): the route must not cut the configured window short.
+  return gatewayRouteDeadlineMs(
+    config,
+    modelId,
+    ["buffered", "streamed"],
+    CODING_TURN_GATEWAY_POLICY.outagePolicy,
+  );
 }
 
 function gatewayRequestCancellation(

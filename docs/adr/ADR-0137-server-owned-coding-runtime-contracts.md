@@ -97,15 +97,31 @@ opaque run id and envelope digest cross into the adapter seam.
 
 Minting requires a server-issued, action-bound, one-use human confirmation. The Authority Envelope
 itself is retained for the complete run so the existing registry remains the sole source of
-cumulative runtime/tool/patch budgets. The deployment may configure the cumulative prompt-token
-allowance for newly minted envelopes with `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default
-200,000; positive decimal integers up to 2,000,000). Invalid values fail closed; this cannot alter
-an existing envelope or reset its usage. Native context compaction changes subsequent request
-size, not cumulative accounting. The allowance is the only default per-run token bound: a Model
-Gateway spend ceiling is enforced only where an operator configures one. In the live Gemma
-qualification (#3873) an ordinary two-file bug fix consumed 67,032 cumulative prompt tokens once
-governed tool text reached the model verbatim; the same task exhausted 200,000 only while a loop of
-refused edits resent its growing context, so the default stays and the loop is fixed instead.
+cumulative runtime/tool/patch budgets. Two of those bounds are operator settings, read once at
+composition and copied into every newly minted envelope: the cumulative prompt-token allowance
+`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default 2,000,000; positive decimal integers up to
+20,000,000) and the envelope duration `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` (default 120;
+positive decimal integers from 1 to 480), from which both `budget.maxRuntimeMs` and `expiresAt`
+derive. An invalid value fails the composition closed; neither setting can alter an existing
+envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
+delegation. Native context compaction changes subsequent request size, not cumulative accounting.
+The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
+only where an operator configures one. The former defaults (200,000 tokens and a fixed 30 minutes)
+rested on the premise that only a refused-edit loop exhausts them; the live Gemma qualification
+(#3873, run `run-65084062444586162471229658028402064666`, Supervised workspace, Gemma 4 31B behind
+LiteLLM) disproved it. An ordinary task — fix 13 ESLint findings across six files, then run
+`npm run check` — ran 17 model turns in 27.5 minutes with all three replacement edits applied first
+time and no refused edit, yet every turn re-sends the whole conversation, so the prompt grew from
+4,128 to 18,520 tokens per turn, the cumulative sum reached 200,000, the gateway rejected turn 18
+(`coding-sidecar.gateway.rejected`, `runtime-prompt-budget-denied`) and the run settled `failed`.
+A slow self-hosted model (about 24 tokens/s, 1,600 to 4,400 mostly-reasoning completion tokens per
+turn) likewise turns a fixed 30-minute duration into a wall that ordinary multi-file tasks hit. The
+minted allowance and duration are reported body-free as `maxPromptTokens` and `maxRuntimeMs` on
+`coding-runtime.authority.minted`. Every other bound that must not be shorter than the run follows
+the configured duration: the safe-activity projection retains a run's feed for the duration plus a
+margin, and the OpenCode adapter bounds one submitted task's whole agent loop by the run's
+`maxRuntimeMs`. Per-request provider deadlines (the gateway floors and the child's chunk watchdog)
+are unchanged because they bound one model request, not the run.
 Each adapter delegation has a fresh idempotency/replay
 identity. Before every delegation, the BFF re-resolves live facts and rejects task, workspace,
 project, branch, action/connector scope, budget, runtime source, or model source drift. Expiry,

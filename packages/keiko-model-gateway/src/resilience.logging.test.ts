@@ -82,6 +82,7 @@ describe("executeWithRetry — activity log", () => {
       modelId: "example-chat-model",
       attempt: 1,
       maxRetries: 2,
+      retryPolicy: "attempts",
     });
     expect(typeof scheduled.extra?.delayMs).toBe("number");
     // TransportError carries neither an HTTP status nor a server-supplied retry delay, so
@@ -97,6 +98,7 @@ describe("executeWithRetry — activity log", () => {
       modelId: "example-chat-model",
       attempt: 1,
       maxRetries: 2,
+      retryPolicy: "attempts",
     });
     expect(typeof persisted.delayMs).toBe("number");
     expect(persisted.httpStatus).toBeUndefined();
@@ -184,6 +186,65 @@ describe("executeWithRetry — activity log", () => {
     expect(eventFor(log.events, "gateway.retry.exhausted").extra).toMatchObject({
       attempt: 3,
       maxRetries: 2,
+      reason: "max-retries",
+      retryPolicy: "attempts",
+    });
+  });
+
+  // #3873: an outage-window loop retries past its attempt count by design, so its lines name the
+  // policy — an analyst must be able to tell that window from a loop that ignored `maxRetries`.
+  it("labels an outage-window loop's scheduled and exhausted lines with its retry policy", async () => {
+    const log = recorder();
+    let now = 0;
+    const clock: Clock = {
+      now: (): number => now,
+      sleep: (ms: number): Promise<void> => {
+        now += ms;
+        return Promise.resolve();
+      },
+    };
+    let attempts = 0;
+    const attempt = (): Promise<never> => {
+      attempts += 1;
+      return Promise.reject(new ProviderError("upstream overloaded", 503));
+    };
+    await expect(
+      executeWithRetry(
+        attempt,
+        { maxRetries: 2, retryBaseDelayMs: 10, timeoutMs: 10_000, retryWindowMs: 100 },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink, modelId: "m", correlationId: "corr-window" },
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+
+    // Backoff 8 + 15 + 30 ms fits the 100 ms window; the fourth failure's 60 ms does not.
+    expect(attempts).toBe(4);
+    expect(ops(log.events)).toEqual([
+      "gateway.retry.scheduled",
+      "gateway.retry.scheduled",
+      "gateway.retry.scheduled",
+      "gateway.retry.exhausted",
+    ]);
+    for (const line of log.events) expect(line.extra?.retryPolicy).toBe("outage-window");
+    const scheduled = expectActivityLogProof(
+      "gateway.retry.scheduled.emitted-line",
+      formatActivityLogProofLine(eventFor(log.events, "gateway.retry.scheduled")),
+    );
+    expect(scheduled).toMatchObject({ attempt: 1, maxRetries: 2, retryPolicy: "outage-window" });
+    const exhausted = expectActivityLogProof(
+      "gateway.retry.exhausted.emitted-line",
+      formatActivityLogProofLine(eventFor(log.events, "gateway.retry.exhausted")),
+    );
+    expect(exhausted).toMatchObject({
+      attempt: 4,
+      maxRetries: 2,
+      reason: "budget",
+      delayMs: 60,
+      remainingMs: 47,
+      httpStatus: 503,
+      retryPolicy: "outage-window",
     });
   });
 
@@ -211,6 +272,47 @@ describe("executeWithRetry — activity log", () => {
     ).rejects.toBeInstanceOf(CancelledError);
     expect(ops(log.events)).toEqual(["gateway.retry.exhausted"]);
     expect(eventFor(log.events, "gateway.retry.exhausted").extra).toMatchObject({ attempt: 1 });
+  });
+
+  // #3873 review: an attempt that outlives the outage window (a silent one runs to its own bound)
+  // leaves the window with nothing left. The stop line must still be written and valid: with a
+  // negative `remainingMs` the registry rejected it, and the line naming the stop was lost.
+  it("keeps the exhausted line valid when the last attempt outlives the outage window", async () => {
+    const log = recorder();
+    let now = 0;
+    const clock: Clock = {
+      now: (): number => now,
+      sleep: (ms: number): Promise<void> => {
+        now += ms;
+        return Promise.resolve();
+      },
+    };
+    const attempt = (): Promise<never> => {
+      now += 150;
+      return Promise.reject(new ProviderError("upstream overloaded", 503));
+    };
+    await expect(
+      executeWithRetry(
+        attempt,
+        { maxRetries: 0, retryBaseDelayMs: 10, timeoutMs: 10_000, retryWindowMs: 100 },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink, modelId: "m", correlationId: "corr-window-edge" },
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+
+    expect(ops(log.events)).toEqual(["gateway.retry.exhausted"]);
+    const persisted = expectActivityLogProof(
+      "gateway.retry.exhausted.emitted-line",
+      formatActivityLogProofLine(eventFor(log.events, "gateway.retry.exhausted")),
+    );
+    expect(persisted).toMatchObject({
+      attempt: 1,
+      reason: "budget",
+      remainingMs: 0,
+      retryPolicy: "outage-window",
+    });
   });
 
   it("distinguishes a spent deadline from a failing provider on the budget-exhausted line", async () => {
@@ -502,6 +604,63 @@ describe("CircuitBreaker — activity log", () => {
     expect(saturated[0]?.extra).toMatchObject({
       reason: "probe-saturated",
       probesInFlight: 1,
+    });
+  });
+
+  // #3873: a wait through an open breaker is the outage window at work; a wait on an announced
+  // provider cooldown is the ordinary attempt policy. Each wait line names which one it is.
+  it("reports the waiting call's retry policy on every wait line", async () => {
+    const log = recorder();
+    let now = 0;
+    const clock: Clock = {
+      now: (): number => now,
+      sleep: (ms: number): Promise<void> => {
+        now += ms;
+        return Promise.resolve();
+      },
+    };
+    const opened = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
+    opened.assertAllowed().settle("failure");
+    opened.assertAllowed().settle("failure");
+    const probe = await opened.waitForAdmission({
+      remainingMs: 5_000,
+      jitterMs: 1,
+      correlationId: "run-window",
+      retryPolicy: "outage-window",
+    });
+    expect(probe.admission.halfOpen).toBe(true);
+    const cooling = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
+    cooling.assertAllowed().settle("failure", new ProviderError("overloaded", 503, [], 200));
+    await cooling.waitForAdmission({
+      remainingMs: 5_000,
+      jitterMs: 1,
+      correlationId: "chat-call-0001",
+    });
+
+    const waits = log.events.filter((event) => event.op === "gateway.circuit.wait");
+    expect(
+      waits.map((event) => [event.correlationId, event.extra?.reason, event.extra?.outcome]),
+    ).toEqual([
+      ["run-window", "circuit-cooldown", "started"],
+      ["run-window", "circuit-cooldown", "timer"],
+      ["chat-call-0001", "provider-cooldown", "started"],
+      ["chat-call-0001", "provider-cooldown", "timer"],
+    ]);
+    expect(waits.map((event) => event.extra?.retryPolicy)).toEqual([
+      "outage-window",
+      "outage-window",
+      "attempts",
+      "attempts",
+    ]);
+    const persisted = expectActivityLogProof(
+      "gateway.circuit.wait.emitted-line",
+      formatActivityLogProofLine(waits[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      reason: "circuit-cooldown",
+      outcome: "started",
+      delayMs: 1000,
+      retryPolicy: "outage-window",
     });
   });
 

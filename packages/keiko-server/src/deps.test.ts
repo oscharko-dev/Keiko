@@ -3144,6 +3144,18 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     });
   }
 
+  // #3873: both Authority Envelope bounds are operator settings parsed once at composition, before
+  // runtime activation; an invalid value fails the composition closed instead of minting a silently
+  // defaulted envelope later, whether or not the runtime activates on this host.
+  it("fails closed at composition on an invalid envelope bound setting", () => {
+    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES: "0" })).toThrow(
+      RangeError,
+    );
+    expect(() => depsWithEnv({ KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS: "1.5" })).toThrow(
+      RangeError,
+    );
+  });
+
   it("resolves the ceiling from the option, then the environment, then all-mode availability", () => {
     const fromOption = depsWithEnv(
       { KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },

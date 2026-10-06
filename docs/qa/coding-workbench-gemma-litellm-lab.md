@@ -127,6 +127,7 @@ Observations:
   result. A turn whose answer is a tool call without preceding reasoning arrives as one block after
   20 to 25 s of silence (`dataEvents=3`, `maxGapMs` up to 24 s): the upstream buffers tool-call
   tokens until the call is complete, so a streaming display shows nothing for such turns.
+- `reasoning_effort` is not a lever on this route. A direct probe through LiteLLM (same prompt, temperature 0, `max_tokens` 4096) answered identically without the field, with `low` and with `high`: 350 to 365 completion tokens, about 1,200 characters of `reasoning_content` and 27 characters of answer each time, no `reasoning_tokens` in the usage. The OpenAI-compatible Ollama route behind LiteLLM ignores the field, and `completion_tokens` includes the reasoning. The levers that remain are the output reserve of a coding turn, the steered repair after an exhausted turn, and the prompt's output-budget discipline (F17 package).
 - `coding-runtime.run.settled` carries no turn count, model time, token totals or operator wait, so
   these numbers need every child correlation today (gap: run-level roll-up, in progress).
 

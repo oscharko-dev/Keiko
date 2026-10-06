@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5d582d94f2b585bc59a884c51fe5220f095e4efe65d74665d0c17cc3ff75ba9f"
+    "catalogDigest": "11b8100dc0afb9e83e3a3afef3c00e92114430b5d98afffde5e9268f3def250a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1647,7 +1647,8 @@
     ],
     "gateway.circuit.wait.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
-      "packages/keiko-model-gateway/src/resilience.admission.test.ts"
+      "packages/keiko-model-gateway/src/resilience.admission.test.ts",
+      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
@@ -1714,7 +1715,10 @@
     "gateway.retry.budget-exhausted.emitted-line": [
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
-    "gateway.retry.exhausted.emitted-line": ["packages/keiko-model-gateway/src/resilience.test.ts"],
+    "gateway.retry.exhausted.emitted-line": [
+      "packages/keiko-model-gateway/src/resilience.logging.test.ts",
+      "packages/keiko-model-gateway/src/resilience.test.ts"
+    ],
     "gateway.retry.scheduled.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.test.ts",
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"

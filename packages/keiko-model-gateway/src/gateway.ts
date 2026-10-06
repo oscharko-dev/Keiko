@@ -11,12 +11,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
-  CancelledError,
-  ConfigInvalidError,
   ContextOverflowError,
   GatewayError,
-  MalformedToolCallError,
-  ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   TransportError,
   UnknownModelError,
@@ -43,17 +39,21 @@ import { OpenAiAdapter } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import {
+  admissionBudgetFor,
+  bufferedCallBudgetMs,
+  callOutageWindowMs,
   CircuitBreaker,
   type CircuitBreakerAdmission,
   type RetryConfig,
+  type RetryPolicy,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
-  GATEWAY_CODING_OUTAGE_WINDOW_MS,
   GATEWAY_SILENCE_FLOOR_MS,
+  isNonProviderFault,
   providerRequestBudgetMs,
   codingWorkbenchRetryConfig,
-  providerRetryConfig,
+  streamedCallBudgetMs,
   streamRequestBudgetMs,
   systemClock,
 } from "./resilience.js";
@@ -139,8 +139,20 @@ export interface ContextWindowReport {
 // this one.
 export interface GatewayCallRequest extends GatewayRequest {
   readonly logContext?: ModelGatewayLogContext | undefined;
-  /** A closed local profile; never serialized into a provider request body. */
+  /**
+   * A closed local profile; never serialized into a provider request body. It selects only the
+   * coding-workbench timeout floors, never the retry policy: an interactive surface may borrow the
+   * floors (the commit draft does, #3591) and still fails fast.
+   */
   readonly latencyProfile?: "coding-workbench" | undefined;
+  /**
+   * The explicit outage policy of an autonomous coding turn (#3873); local, never serialized into a
+   * provider request body. `outage-window` keeps retrying a transiently unavailable provider and
+   * waits through an open circuit breaker for the configuration's `codingOutageWindowMs`, for a
+   * buffered and a streamed call alike. Only the coding sidecar route sets it; every other call
+   * keeps the provider's attempt count and the fail-fast breaker.
+   */
+  readonly outagePolicy?: "outage-window" | undefined;
 }
 
 // The two ids a single gateway call carries.
@@ -579,56 +591,19 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
   }
 }
 
-// Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
-// configuration, the gateway's own redaction pass refusing to walk a pathologically deep response
-// body (review finding on PR #3394 — an untyped RangeError from that last case used to slip past
-// this list and trip the breaker for an otherwise healthy model; ResponseRedactionError is now
-// thrown instead, see openai-adapter.ts's redactUnknown), or a ProviderOutputExhaustedError (an
-// HTTP 200 with `finish_reason: "length"` and no content — the model answered, it just spent its
-// budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
-// failing), or a ProviderEmptyAnswerError (#3610: an HTTP 200 answer that completed with neither
-// content nor a tool call — the provider answered, the model produced nothing usable; counting it
-// let three such answers lock every caller of a healthy model out), or a MalformedToolCallError
-// (the model's own tool call did not parse or did not match the tool's schema: the gateway retries
-// it, and the provider answered every time; a lab run of 1.1.8 behind a LiteLLM hosted_vllm route
-// opened the breaker after five such calls and failed the run on CircuitOpenError). It covers the
-// redaction-depth refusal (ResponseRedactionError) and the catalog's schema rejection
-// (GatewayToolCatalogError), both of which extend it. A named, extensible list rather than a
-// growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
-//
-// TimeoutError is deliberately NOT here (review finding on PR #3602 — it was, briefly, during
-// #3591's development). Excluding every timeout disabled the breaker's own outage guard: an
-// upstream that never responds at all would cost every caller a full (multi-minute, with the new
-// floors) attempt before failing, and the breaker would never open for it, no matter how many
-// callers piled up. With `GATEWAY_SILENCE_FLOOR_MS`/`GATEWAY_BUFFERED_BUDGET_FLOOR_MS` this
-// generous, a `TimeoutError` means the provider produced nothing for minutes — an outage-class
-// signal, not the noise of a slow-but-alive gateway (which stays inside the floor and never times
-// out at all) — so it counts as a provider failure again, exactly as it did before this PR.
-const NON_PROVIDER_FAULTS = [
-  CancelledError,
-  ConfigInvalidError,
-  MalformedToolCallError,
-  ProviderOutputExhaustedError,
-  ProviderEmptyAnswerError,
-] as const;
-
-// #3873: a coding-workbench call keeps retrying a transiently unavailable provider for an outage
-// window (and waits through an open breaker); every other buffered call keeps its attempt count.
-function bufferedRetryConfig(
-  request: GatewayCallRequest,
+// #3873: ONE retry policy for both call shapes. A call that asked for the outage window
+// (`outageWindowMs` > 0) keeps retrying for what is left of it since the call started — `elapsedMs`
+// is the time a streamed call already spent on its initial admission, 0 for a buffered call whose
+// loop starts with the call — and waits through an open breaker; every other call keeps the
+// provider's attempt count (`codingWorkbenchRetryConfig` with a window of 0). Never below one
+// millisecond, so a window spent on admission still ends, and reports, as an outage-window call.
+function callRetryConfig(
   provider: ModelProviderConfig,
-  codingOutageWindowMs: number,
+  outageWindowMs: number,
+  elapsedMs = 0,
 ): RetryConfig {
-  return {
-    ...(request.latencyProfile === "coding-workbench"
-      ? codingWorkbenchRetryConfig(provider, codingOutageWindowMs)
-      : providerRetryConfig(provider)),
-    jitterProviderCooldown: true,
-  };
-}
-
-function isNonProviderFault(error: unknown): boolean {
-  return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
+  const windowMs = outageWindowMs > 0 ? Math.max(1, outageWindowMs - elapsedMs) : 0;
+  return { ...codingWorkbenchRetryConfig(provider, windowMs), jitterProviderCooldown: true };
 }
 
 // The admission owns exactly one outcome; cancellations and local refusal release only its own
@@ -659,20 +634,39 @@ interface PreparedStream {
   readonly adapter: ProviderAdapter;
   readonly admission: CircuitBreakerAdmission;
   readonly promptAdmission: GatewayPromptAdmission;
+  // The outage window this call retries for, measured from `start` (#3873); 0 for every call
+  // that keeps the provider's attempt count.
+  readonly outageWindowMs: number;
 }
 
+// How long a streamed call has already run (its first admission included) and what is left of its
+// budget, the outage window's extension included (#3873): the two inputs of its startup retries.
+function streamStartupBudget(
+  state: PreparedStream,
+  now: number,
+): { readonly remainingMs: number; readonly elapsedMs: number } {
+  const elapsedMs = now - state.start;
+  const budgetMs = streamedCallBudgetMs(state.route.provider, state.outageWindowMs);
+  return { remainingMs: Math.max(0, budgetMs - elapsedMs), elapsedMs };
+}
+
+// The startup retries of a streamed call run under the same policy as a buffered call
+// (`callRetryConfig`), with what is left of the stream budget and of the outage window. Under the
+// attempt policy a failed half-open probe ends the call; under the outage window the next attempt
+// waits through the re-opened breaker for the next probe, exactly as a buffered call does (#3873).
 function streamStartupRetryConfig(
   state: PreparedStream,
   admission: () => CircuitBreakerAdmission,
-  remainingMs: number,
+  budget: { readonly remainingMs: number; readonly elapsedMs: number },
 ): RetryConfig {
+  const config = callRetryConfig(state.route.provider, state.outageWindowMs, budget.elapsedMs);
+  const probeEndsCall = config.retryWindowMs === undefined;
   return {
-    ...providerRetryConfig(state.route.provider),
-    jitterProviderCooldown: true,
-    maxRetries: state.admission.halfOpen ? 0 : state.route.provider.maxRetries,
+    ...config,
+    maxRetries: probeEndsCall && state.admission.halfOpen ? 0 : state.route.provider.maxRetries,
     shouldRetry: (error): boolean =>
-      !admission().halfOpen && !(error instanceof GatewayToolCatalogError),
-    timeoutMs: remainingMs,
+      !(probeEndsCall && admission().halfOpen) && !(error instanceof GatewayToolCatalogError),
+    timeoutMs: budget.remainingMs,
   };
 }
 
@@ -1004,18 +998,12 @@ export class Gateway {
       correlationId: ids.correlationId,
       state: { request, attemptNumber: 0 },
     };
-    this.logCallStarted(
-      ids,
-      route,
-      false,
-      request.reasoningEffort,
-      readsOverStream(route, adapter),
-    );
+    this.logCallStarted(ids, route, false, request, readsOverStream(route, adapter));
     let result;
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        bufferedRetryConfig(request, route.provider, this.codingOutageWindowMs()),
+        callRetryConfig(route.provider, this.outageWindowMs(request)),
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -1203,14 +1191,23 @@ export class Gateway {
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
-    this.logCallStarted(
-      ids,
-      route,
-      true,
-      prepared.reasoningEffort,
-      adapter.callStream !== undefined,
+    const outageWindowMs = this.outageWindowMs(prepared);
+    this.logCallStarted(ids, route, true, prepared, adapter.callStream !== undefined);
+    // The admission before the first attempt waits under the same window clip as the admission
+    // of every retry (#3873): an open breaker cannot hold a streamed call past its outage window,
+    // and the window, not the stream budget, is what bounds that wait (#3873 review).
+    const admissionBudgetMs = admissionBudgetFor(
+      callRetryConfig(route.provider, outageWindowMs),
+      streamedCallBudgetMs(route.provider, outageWindowMs),
+      (): number => this.clock.now() - start,
     );
-    const { admission } = await this.initialStreamAdmission(route, prepared, ids, elapsed);
+    const { admission } = await this.initialStreamAdmission(
+      route,
+      prepared,
+      ids,
+      elapsed,
+      admissionBudgetMs,
+    );
     return {
       route,
       prepared,
@@ -1220,6 +1217,7 @@ export class Gateway {
       adapter,
       admission,
       promptAdmission: this.promptAdmission(route, ids),
+      outageWindowMs,
     };
   }
 
@@ -1228,13 +1226,14 @@ export class Gateway {
     request: GatewayCallRequest,
     ids: CallIds,
     elapsed: () => number,
+    admissionBudgetMs: number,
   ): ReturnType<CircuitBreaker["waitForAdmission"]> {
     try {
       return await this.providerAdmission(
         route.provider,
         request,
         ids.correlationId,
-        streamRequestBudgetMs(route.provider),
+        admissionBudgetMs,
       );
     } catch (error) {
       attachGatewayRequestId(error, ids.requestId);
@@ -1290,15 +1289,17 @@ export class Gateway {
   // outcome is a wedge, not a slow provider. `timeoutMs` reports the bound THIS call's transport
   // actually applies (PR #3602 review) — the silence floor for a call that reads incrementally
   // (`upstreamStreaming`), the larger buffered floor for a whole-body read or `chatStream()`'s
-  // degraded fallback, never a value the transport itself does not honour.
+  // degraded fallback, never a value the transport itself does not honour. `requestBudgetMs` is the
+  // budget the buffered call really runs under, the outage window's extension included (#3873).
   private logCallStarted(
     ids: CallIds,
     route: RoutedCall,
     streaming: boolean,
-    reasoningEffort: GatewayCallRequest["reasoningEffort"],
+    request: GatewayCallRequest,
     upstreamStreaming = false,
   ): void {
     if (!logLevelEnabled(this.log, "info")) return;
+    const { reasoningEffort } = request;
     const endpoint = logEndpointHost(route.provider.baseUrl);
     const endpointDigest = endpoint === undefined ? undefined : sha256Hex(endpoint);
     const commonFields = {
@@ -1331,7 +1332,7 @@ export class Gateway {
         { level: "info", correlationId: ids.correlationId },
         {
           ...commonFields,
-          requestBudgetMs: providerRequestBudgetMs(route.provider),
+          requestBudgetMs: bufferedCallBudgetMs(route.provider, this.outageWindowMs(request)),
           upstreamStreaming,
           streaming: false,
         },
@@ -1479,21 +1480,19 @@ export class Gateway {
       admission: initialAdmission,
       promptAdmission,
     } = state;
-    const remainingBudgetMs = Math.max(
-      0,
-      streamRequestBudgetMs(route.provider) - (this.clock.now() - state.start),
-    );
+    const budget = streamStartupBudget(state, this.clock.now());
     let admission = initialAdmission;
     let attempt = 0;
     return executeWithRetry(
-      async (_attemptMs, remainingMs, previousError) => {
+      async (_attemptMs, remainingMs, previousError, admissionBudgetMs) => {
         if (attempt++ > 0) {
-          const allowed = await this.providerAdmission(
+          const allowed = await this.admitAttempt(
             route.provider,
             request,
             ids.correlationId,
-            remainingMs ?? remainingBudgetMs,
+            remainingMs ?? budget.remainingMs,
             previousError,
+            admissionBudgetMs,
           );
           admission = allowed.admission;
           remainingMs = allowed.remainingMs;
@@ -1509,7 +1508,7 @@ export class Gateway {
         );
       },
       // A catalog rejection needs an explicit repair, not replay of the same streamed request.
-      streamStartupRetryConfig(state, () => admission, remainingBudgetMs),
+      streamStartupRetryConfig(state, () => admission, budget),
       this.clock,
       request.cancellationSignal,
       this.random,
@@ -1703,9 +1702,10 @@ export class Gateway {
     const { adapter, correlationId } = attempt;
     const { capability } = attempt.route;
     const request = attempt.state.request;
-    const { admission, remainingMs } = await this.admitBufferedAttempt(
-      attempt,
+    const { admission, remainingMs } = await this.admitAttempt(
       provider,
+      request,
+      correlationId,
       admissionBudget(provider, bounds, remainingBudgetMs),
       previousError,
       admissionBudgetMs,
@@ -1742,11 +1742,12 @@ export class Gateway {
     }
   }
 
-  // The admission wait is clipped to the retry window; the attempt keeps the call's own budget,
-  // less only the time it actually waited (#3873).
-  private async admitBufferedAttempt(
-    attempt: BufferedChatAttempt,
+  // The admission of a retry, buffered or streamed: the wait is clipped to the retry window, and
+  // the attempt keeps the call's own budget, less only the time it actually waited (#3873).
+  private async admitAttempt(
     provider: ModelProviderConfig,
+    request: GatewayCallRequest,
+    correlationId: string,
     budgetMs: number,
     previousError: Error | undefined,
     admissionBudgetMs: number | undefined,
@@ -1754,8 +1755,8 @@ export class Gateway {
     const waitBudgetMs = Math.min(budgetMs, admissionBudgetMs ?? budgetMs);
     const admitted = await this.providerAdmission(
       provider,
-      attempt.state.request,
-      attempt.correlationId,
+      request,
+      correlationId,
       waitBudgetMs,
       previousError,
     );
@@ -1778,14 +1779,21 @@ export class Gateway {
       signal: request.cancellationSignal,
       correlationId,
       jitterMs: (): number => Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
-      waitThroughOpenCircuit:
-        request.latencyProfile === "coding-workbench" && this.codingOutageWindowMs() > 0,
+      retryPolicy: this.retryPolicy(request),
     });
   }
 
-  // #3873: the outage window of a coding-workbench call, from the gateway configuration.
-  private codingOutageWindowMs(): number {
-    return this.config.codingOutageWindowMs ?? GATEWAY_CODING_OUTAGE_WINDOW_MS;
+  // #3873: the outage window a call retries for. Only a call that carries the explicit
+  // `outagePolicy: "outage-window"` signal — the coding sidecar route's buffered and streamed calls
+  // — gets the configured `codingOutageWindowMs`. Every other call gets 0, the provider's attempt
+  // count and the fail-fast breaker: the commit draft and interactive chat included, even where
+  // they borrow the coding-workbench timeout floors (`latencyProfile`).
+  private outageWindowMs(request: GatewayCallRequest): number {
+    return callOutageWindowMs(this.config, request.outagePolicy);
+  }
+
+  private retryPolicy(request: GatewayCallRequest): RetryPolicy {
+    return this.outageWindowMs(request) > 0 ? "outage-window" : "attempts";
   }
 
   // Fail-closed routing. Each of the three refusals is a DIFFERENT operator problem — an unknown

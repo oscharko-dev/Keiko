@@ -38,8 +38,29 @@ import {
 } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 
-const DEFAULT_TTL_MS = 30 * 60_000;
+// Retention outlives the Authority Envelope by this margin, so a run that fails closed at expiry
+// still shows its last activity while it settles.
+const SAFE_ACTIVITY_RETENTION_MARGIN_MS = 5 * 60_000;
+
+/**
+ * The TTL that keeps a run's feed for its whole envelope. The TTL is a hard cap that wins over a
+ * longer authority expiry, and the envelope duration is an operator setting
+ * (`KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`, #3873): a fixed 30-minute cap evicted a live run's
+ * feed at minute 30 of a 120-minute envelope. Production derives `ttlMs` from the configured
+ * duration through this one formula, and the default below follows the default duration.
+ */
+export function codingSafeActivityTtlMs(runtimeMaxDurationMs: number): number {
+  return runtimeMaxDurationMs + SAFE_ACTIVITY_RETENTION_MARGIN_MS;
+}
+
+const DEFAULT_TTL_MS = codingSafeActivityTtlMs(
+  runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES),
+);
 const DEFAULT_MAX_SUBSCRIBERS = 32;
 const DEFAULT_MAX_SIGNAL_IDENTITIES = 32_768;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;

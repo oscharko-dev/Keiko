@@ -10,6 +10,7 @@ import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  Gateway,
   ProviderError,
   ResponseRedactionError,
   resolveCodingSafeSidecarGatewayProfile,
@@ -398,6 +399,49 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 
 describe("coding-sidecar gateway", () => {
   afterEach(resetServerLogger);
+
+  // #3873 review: the outage window is an explicit request signal that only this route sets, on its
+  // buffered AND its streamed model calls; the commit draft borrows the latency profile alone. The
+  // coding profile does not stream upstream today (`supportsStreaming: false`), so a streamed
+  // request is answered as buffered SSE: whichever gateway call serves the turn carries the policy.
+  it.each([
+    { label: "buffered", stream: false },
+    { label: "streamed", stream: true },
+  ])("gives the gateway call of a $label coding turn the outage policy", async ({ stream }) => {
+    resetGatewayInstanceCacheForTests();
+    const captured: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      captured.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    const chatStream = vi.spyOn(Gateway.prototype, "chatStream").mockImplementation((request) => {
+      captured.push(request);
+      return streamedResponse(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          stream,
+          messages: [{ role: "user", content: "continue" }],
+          tools: [],
+        }),
+        depsValue(configValue(provider(), capability())),
+      );
+
+      if (stream) expect(result).toBe(STREAMING);
+      else expect(result).toMatchObject({ status: 200 });
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        latencyProfile: "coding-workbench",
+        outagePolicy: "outage-window",
+      });
+    } finally {
+      chat.mockRestore();
+      chatStream.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
 
   it.each([
     { label: "buffered", stream: false },
@@ -2251,11 +2295,33 @@ describe("coding-sidecar gateway", () => {
   // 1,800 s stream floor, and the route adds its one-second grace behind the LONGER of the two
   // budgets — with no retries the buffered budget is the shorter one, and a deadline derived from
   // it alone cancelled a healthy stream the gateway was still reading (PR #3602 review).
+  // #3873: the arithmetic above is the one without an outage window, so this pin switches the window
+  // off; the window's own extension of the budgets is pinned in the next test.
   it("keeps a slow Coding Workbench turn alive past a 30-second provider spike", () => {
     const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
     expect(
-      codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
+      codingSidecarGatewayRequestDeadlineMs(
+        { ...configValue(slow, capability()), codingOutageWindowMs: 0 },
+        slow.modelId,
+      ),
     ).toBe(1_801_000);
+  });
+
+  // #3873 review: the sidecar's calls ride out a gateway outage, and their budgets extend to the
+  // window plus one attempt (the stream's own 1,800 s read for a streamed call), so the backstop
+  // must sit behind that extension or it would cut the configured window short: 1,800 s + 600 s
+  // default window + 1 s grace, and 1,800 s + 1,800 s + 1 s for a 30-minute window.
+  it("keeps the route deadline behind the outage window the coding turn rides out", () => {
+    const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
+    expect(
+      codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
+    ).toBe(2_401_000);
+    expect(
+      codingSidecarGatewayRequestDeadlineMs(
+        { ...configValue(slow, capability()), codingOutageWindowMs: 1_800_000 },
+        slow.modelId,
+      ),
+    ).toBe(3_601_000);
   });
 
   // The sidecar reaches the gateway both ways (`chat()` buffered, `chatStream()` streamed), so the

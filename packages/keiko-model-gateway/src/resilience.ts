@@ -5,8 +5,12 @@
 import {
   CancelledError,
   CircuitOpenError,
+  ConfigInvalidError,
   GatewayError,
+  MalformedToolCallError,
+  ProviderEmptyAnswerError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -91,6 +95,24 @@ export function streamRequestBudgetMs(provider: { readonly timeoutMs: number }):
   return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS, GATEWAY_STREAM_BUDGET_FLOOR_MS);
 }
 
+/**
+ * The retry policy a call runs under (#3873): `attempts` keeps the provider's `maxRetries` and the
+ * fail-fast breaker; `outage-window` keeps retrying a transiently unavailable provider for an
+ * outage window and waits through an open breaker.
+ */
+export type RetryPolicy = "attempts" | "outage-window";
+
+// The applied policy on every retry and breaker-wait line, so an analyst can tell a deliberate
+// outage window from a retry loop that ignored its attempt count. `required: false` only because a
+// record written before this field existed lacks it (as with `outputExhausted`, PR #3602 review);
+// every line written since carries it.
+const RETRY_POLICY_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: ["attempts", "outage-window"],
+} as const;
+
 const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -150,6 +172,7 @@ const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["absent", "valid", "unparseable", "elapsed"],
     },
+    retryPolicy: RETRY_POLICY_FIELD,
   },
   causal: "none",
   lifecycle: "failure",
@@ -179,6 +202,7 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["absent", "valid", "unparseable", "elapsed"],
     },
+    retryPolicy: RETRY_POLICY_FIELD,
   },
   causal: "none",
   lifecycle: "state",
@@ -323,9 +347,66 @@ export interface RetryConfig {
   // left of `timeoutMs`, so an attempt that hangs ends in time for its retry and no attempt
   // outlives the end-to-end budget.
   readonly attemptTimeoutMs?: number | undefined;
-  // When set, the call keeps scheduling retries after transient provider failures for this long
-  // instead of stopping after `maxRetries`; `timeoutMs` still bounds the whole call (#3873).
+  // When set, the call keeps scheduling retries after a transient provider failure for this long
+  // instead of stopping after `maxRetries`; a failure that reacts to the model's own output keeps
+  // the attempt count (`decisionWindowMs`), and `timeoutMs` still bounds the whole call (#3873).
   readonly retryWindowMs?: number | undefined;
+}
+
+// Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
+// configuration, the gateway's own redaction pass refusing to walk a pathologically deep response
+// body (review finding on PR #3394 — an untyped RangeError from that last case used to slip past
+// this list and trip the breaker for an otherwise healthy model; ResponseRedactionError is now
+// thrown instead, see openai-adapter.ts's redactUnknown), or a ProviderOutputExhaustedError (an
+// HTTP 200 with `finish_reason: "length"` and no content — the model answered, it just spent its
+// budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
+// failing), or a ProviderEmptyAnswerError (#3610: an HTTP 200 answer that completed with neither
+// content nor a tool call — the provider answered, the model produced nothing usable; counting it
+// let three such answers lock every caller of a healthy model out), or a MalformedToolCallError
+// (the model's own tool call did not parse or did not match the tool's schema: the gateway retries
+// it, and the provider answered every time; a lab run of 1.1.8 behind a LiteLLM hosted_vllm route
+// opened the breaker after five such calls and failed the run on CircuitOpenError). It covers the
+// redaction-depth refusal (ResponseRedactionError) and the catalog's schema rejection
+// (GatewayToolCatalogError), both of which extend it. A named, extensible list rather than a
+// growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
+//
+// TimeoutError is deliberately NOT here (review finding on PR #3602 — it was, briefly, during
+// #3591's development). Excluding every timeout disabled the breaker's own outage guard: an
+// upstream that never responds at all would cost every caller a full (multi-minute, with the new
+// floors) attempt before failing, and the breaker would never open for it, no matter how many
+// callers piled up. With `GATEWAY_SILENCE_FLOOR_MS`/`GATEWAY_BUFFERED_BUDGET_FLOOR_MS` this
+// generous, a `TimeoutError` means the provider produced nothing for minutes — an outage-class
+// signal, not the noise of a slow-but-alive gateway (which stays inside the floor and never times
+// out at all) — so it counts as a provider failure again, exactly as it did before this PR.
+//
+// The one classification of "does this failure say the provider is unhealthy": the breaker counts
+// only failures outside this list (`gateway.ts`), and the outage window extends only their retries
+// (`decisionWindowMs`, #3873 review).
+const NON_PROVIDER_FAULTS = [
+  CancelledError,
+  ConfigInvalidError,
+  MalformedToolCallError,
+  ProviderOutputExhaustedError,
+  ProviderEmptyAnswerError,
+] as const;
+
+export function isNonProviderFault(error: unknown): boolean {
+  return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
+}
+
+// The window a retry decision runs under (#3873 review). The outage window replaces the attempt
+// count only after a failure that says the provider is unavailable (a timeout, a refused
+// connection, a retryable 5xx, a rate limit). A retry that reacts to the model's own output (a
+// rejected tool-call shape and its schema-repair correction) keeps the attempt count, window or
+// not: the provider answered every time, and waiting longer cannot make the model's answer valid.
+function decisionWindowMs(config: RetryConfig, error: Error): number | undefined {
+  return isNonProviderFault(error) ? undefined : config.retryWindowMs;
+}
+
+// The policy one retry decision applies, derived from the window it actually runs under, so a
+// retry line can never name a policy the loop did not apply (#3873).
+function retryPolicyFor(config: RetryConfig, error: Error): RetryPolicy {
+  return decisionWindowMs(config, error) === undefined ? "attempts" : "outage-window";
 }
 
 // Equal jitter over the capped exponential ladder: half the delay is fixed, half
@@ -382,8 +463,8 @@ function retryDecision(
 ): RetryDecision {
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
     return { stop: "terminal" };
-  if (config.retryWindowMs === undefined && attempt > config.maxRetries)
-    return { stop: "max-retries" };
+  const windowMs = decisionWindowMs(config, lastError);
+  if (windowMs === undefined && attempt > config.maxRetries) return { stop: "max-retries" };
   const delayMs = retryDelayMs(
     lastError,
     attempt,
@@ -391,10 +472,13 @@ function retryDecision(
     random,
     config.jitterProviderCooldown,
   );
+  // Never below zero: an attempt that outlives the window (a silent one runs to its own bound)
+  // ends it with nothing left, and a negative duration would make its exhausted line invalid, so
+  // the very line that says the window ran out was dropped (#3873 review).
   const remainingMs =
-    config.retryWindowMs === undefined
+    windowMs === undefined
       ? budget.remainingMs
-      : Math.min(budget.remainingMs, config.retryWindowMs - budget.elapsedMs());
+      : Math.max(0, Math.min(budget.remainingMs, windowMs - budget.elapsedMs()));
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
   return { sleepMs: delayMs };
 }
@@ -548,6 +632,7 @@ interface RetryFailureLogInput {
   readonly context: RetryLogContext;
   readonly attempt: number;
   readonly maxRetries: number;
+  readonly retryPolicy: RetryPolicy;
   readonly error: Error;
   readonly durationMs: number;
 }
@@ -570,6 +655,7 @@ function logRetryExhausted(input: RetryFailureLogInput, decision: RetryStop): vo
         maxRetries: input.maxRetries,
         ...retryStopDetail(decision),
         ...providerErrorDetail(input.error),
+        retryPolicy: input.retryPolicy,
       },
     ),
   );
@@ -596,6 +682,7 @@ function logRetryScheduled(
         maxRetries: input.maxRetries,
         delayMs: decision.sleepMs,
         ...providerErrorDetail(input.error),
+        retryPolicy: input.retryPolicy,
       },
     ),
   );
@@ -681,6 +768,7 @@ async function executeRetryAttempt<T>(
       context,
       attempt,
       maxRetries: config.maxRetries,
+      retryPolicy: retryPolicyFor(config, state.lastError),
       error: state.lastError,
       durationMs: elapsed(),
     };
@@ -697,7 +785,9 @@ async function executeRetryAttempt<T>(
 // The admission wait of one attempt: the call's remaining budget, clipped by what is left of a
 // retry window. Never below one millisecond, so an attempt at the window's edge refuses at once.
 // The clock is read only for a windowed call, so every other call keeps its exact clock reads.
-function admissionBudgetFor(
+// Exported for the one admission that precedes the loop: a streamed call's initial admission
+// (`gateway.ts`), which waits under the same clip as every retry's admission (#3873).
+export function admissionBudgetFor(
   config: RetryConfig,
   remainingMs: number,
   elapsedMs: () => number,
@@ -793,24 +883,77 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
   };
 }
 
-// #3873: how long a coding-workbench call keeps retrying a transiently unavailable provider (408,
-// 429, 5xx, a refused connection, a silent attempt) and waits through an open breaker, instead of
-// failing after the provider's configured attempt count. At peak load a customer's LiteLLM gateway
-// sheds load for minutes, and an autonomous coding run that gave up after three attempts within two
-// seconds failed outright although the gateway recovered (live chaos qualification). The breaker
-// still admits only its half-open probes, so waiting callers do not add load while it recovers.
+// #3873: how long an autonomous coding turn keeps retrying a transiently unavailable provider (429,
+// a retryable 5xx, a refused connection, a silent attempt) and waits through an open breaker,
+// instead of failing after the provider's configured attempt count. At peak load a customer's
+// LiteLLM gateway sheds load for minutes, and an autonomous coding run that gave up after three
+// attempts within two seconds failed outright although the gateway recovered (live chaos
+// qualification). The breaker still admits only its half-open probes, so waiting callers do not
+// add load while it recovers.
+// Only a call that carries the explicit `outagePolicy: "outage-window"` request signal (the coding
+// sidecar route's buffered and streamed calls) runs under it; see `gateway.ts`.
 export const GATEWAY_CODING_OUTAGE_WINDOW_MS = 600_000;
 
 /**
- * The retry policy of a coding-workbench call: the provider's budget, an outage-length window. A
- * window of 0 (`codingOutageWindowMs: 0`) keeps the provider's attempt count instead.
+ * The outage window a call runs under (#3873): the configuration's `codingOutageWindowMs`
+ * (`GATEWAY_CODING_OUTAGE_WINDOW_MS` when absent) for a call that asked for the outage policy, 0
+ * for every other call and whenever the window is switched off. The one resolution the gateway and
+ * the route deadline behind a coding call share.
+ */
+export function callOutageWindowMs(
+  config: { readonly codingOutageWindowMs?: number | undefined },
+  outagePolicy: "outage-window" | undefined,
+): number {
+  return outagePolicy === "outage-window"
+    ? (config.codingOutageWindowMs ?? GATEWAY_CODING_OUTAGE_WINDOW_MS)
+    : 0;
+}
+
+// #3873 review: under the outage window it is the WINDOW, not the provider's attempt budget, that
+// bounds how long a call keeps scheduling retries and waiting for admission. The call's end-to-end
+// budget must therefore never cut the window short: it is the window plus one full attempt bound
+// (the attempt the window admits last keeps that bound, so a healthy answer is never cut at the
+// window's edge), and never less than the budget the call has without a window. Without this, the
+// window was silently clipped to the provider budget: 600 s at `maxRetries: 0`, whatever was set.
+function outageCallBudgetMs(budgetMs: number, windowMs: number, attemptBoundMs: number): number {
+  if (windowMs <= 0) return budgetMs;
+  return Math.min(Math.max(budgetMs, windowMs + attemptBoundMs), MAX_TIMER_DELAY_MS);
+}
+
+/** The end-to-end budget of a buffered call (`Gateway.chat()`) under an outage window (0: none). */
+export function bufferedCallBudgetMs(provider: ProviderRetryPolicy, windowMs: number): number {
+  return outageCallBudgetMs(
+    providerRequestBudgetMs(provider),
+    windowMs,
+    chatAttemptTimeoutMs(provider),
+  );
+}
+
+/**
+ * The end-to-end budget of a streamed call (`Gateway.chatStream()`) under an outage window (0:
+ * none). A streamed attempt's own bound is the whole stream budget its read may spend.
+ */
+export function streamedCallBudgetMs(
+  provider: { readonly timeoutMs: number },
+  windowMs: number,
+): number {
+  const budgetMs = streamRequestBudgetMs(provider);
+  return outageCallBudgetMs(budgetMs, windowMs, budgetMs);
+}
+
+/**
+ * The retry policy of a call that asked for the outage window: retries for the window, inside a
+ * budget the window cannot outrun (`bufferedCallBudgetMs`). A window of 0 (`codingOutageWindowMs:
+ * 0`, or a call without the outage signal) keeps the provider's attempt count and budget instead.
  */
 export function codingWorkbenchRetryConfig(
   provider: ProviderRetryPolicy,
   windowMs: number,
 ): RetryConfig {
   const config = providerRetryConfig(provider);
-  return windowMs > 0 ? { ...config, retryWindowMs: windowMs } : config;
+  return windowMs > 0
+    ? { ...config, retryWindowMs: windowMs, timeoutMs: bufferedCallBudgetMs(provider, windowMs) }
+    : config;
 }
 
 export interface CircuitBreakerAdmission {
@@ -824,9 +967,10 @@ interface CircuitAdmissionWait {
   readonly signal?: AbortSignal | undefined;
   readonly correlationId?: string | undefined;
   readonly jitterMs: number | (() => number);
-  // Wait for an open breaker's cooldown and probe slot even without a provider-announced cooldown,
-  // instead of refusing at once (the coding-workbench outage policy, #3873).
-  readonly waitThroughOpenCircuit?: boolean | undefined;
+  // The waiting call's retry policy (#3873). `outage-window` waits for an open breaker's cooldown
+  // and probe slot even without a provider-announced cooldown, instead of refusing at once; absent
+  // means `attempts`, the fail-fast breaker. Every wait line reports it.
+  readonly retryPolicy?: RetryPolicy | undefined;
 }
 
 type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
@@ -854,6 +998,7 @@ const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
     },
     delayMs: { type: "number", dataClass: "duration", required: true },
     remainingMs: { type: "number", dataClass: "duration", required: false },
+    retryPolicy: RETRY_POLICY_FIELD,
   },
   diagnosticWhen: [{ field: "outcome", values: ["cancelled", "failed", "budget-refused"] }],
   causal: "none",
@@ -957,7 +1102,7 @@ export class CircuitBreaker {
       const announced = this.providerCooldownUntil > start;
       const recovering =
         announced ||
-        options.waitThroughOpenCircuit === true ||
+        options.retryPolicy === "outage-window" ||
         (options.previousError !== undefined &&
           providerErrorDetail(options.previousError).retryAfterMs !== undefined);
       const advance = async (): Promise<void> => {
@@ -992,7 +1137,7 @@ export class CircuitBreaker {
       blocked.reason === "probe-saturated"
         ? remainingMs
         : Math.min(blocked.delayMs, MAX_TIMER_DELAY_MS),
-      options.correlationId,
+      options,
       remainingMs,
     );
     return new CircuitAdmissionRefusal(options.previousError);
@@ -1038,20 +1183,20 @@ export class CircuitBreaker {
       this.waiters.add(notify);
     });
     try {
-      this.logWait(reason, "started", delayMs, options.correlationId);
+      this.logWait(reason, "started", delayMs, options);
       assertNotAborted(options.signal);
       const outcome = await Promise.race([
         changed,
         this.clock.sleep(delayMs, controller.signal).then(() => "timer" as const),
       ]);
       assertNotAborted(options.signal);
-      this.logWait(reason, outcome, delayMs, options.correlationId);
+      this.logWait(reason, outcome, delayMs, options);
     } catch (error) {
       this.logWait(
         reason,
         options.signal?.aborted === true ? "cancelled" : "failed",
         delayMs,
-        options.correlationId,
+        options,
       );
       if (options.signal?.aborted === true)
         throw new CancelledError("request cancelled while waiting for provider admission");
@@ -1067,9 +1212,10 @@ export class CircuitBreaker {
     reason: CircuitWaitReason,
     outcome: "started" | "changed" | "timer" | "cancelled" | "failed" | "budget-refused",
     delayMs: number,
-    correlationId: string | undefined,
+    options: CircuitAdmissionWait,
     remainingMs?: number,
   ): void {
+    const { correlationId } = options;
     this.log.write(
       activityLogEvent(
         GATEWAY_CIRCUIT_WAIT_OPERATION,
@@ -1080,6 +1226,7 @@ export class CircuitBreaker {
           outcome,
           delayMs,
           ...(remainingMs === undefined ? {} : { remainingMs }),
+          retryPolicy: options.retryPolicy ?? "attempts",
         },
       ),
     );

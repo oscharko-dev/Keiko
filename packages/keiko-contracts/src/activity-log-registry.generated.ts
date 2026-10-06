@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5d582d94f2b585bc59a884c51fe5220f095e4efe65d74665d0c17cc3ff75ba9f" as const;
+  "11b8100dc0afb9e83e3a3afef3c00e92114430b5d98afffde5e9268f3def250a" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -6000,6 +6000,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "maxRuntimeMs",
+              type: "integer",
+              dataClass: "duration",
+              required: true,
+            },
+            {
               name: "networkPolicyMode",
               type: "string",
               dataClass: "closed-enum",
@@ -6016,6 +6022,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "loss-state",
             "opaque-id",
           ],
@@ -17219,6 +17226,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "duration",
               required: false,
             },
+            {
+              name: "retryPolicy",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
@@ -18742,6 +18755,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "duration",
               required: false,
             },
+            {
+              name: "retryPolicy",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
@@ -18807,6 +18826,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "retryAfterMs",
               type: "number",
               dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "retryPolicy",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
           ],

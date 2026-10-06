@@ -1005,6 +1005,33 @@ describe("commit draft — explicit model-backed generation", () => {
     }
   });
 
+  // #3873 review: the coding outage window extends the budgets of the coding sidecar's calls only.
+  // The draft keeps its own fail-fast backstop, however long the configured window is.
+  it("keeps the draft's route deadline free of the coding outage window", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const result = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: { ...DRAFT_GATEWAY_CONFIG, codingOutageWindowMs: 3_600_000 },
+          modelPortFactory: () =>
+            draftModelPort(() => draftResponse({ subject: "fix: repair", body: "Detail." })),
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(timeoutSpy).toHaveBeenCalledWith(DRAFT_ROUTE_DEADLINE_MS);
+      expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("requests the raised reasoning-model output budget under the coding-workbench latency profile", async () => {
     let captured: GatewayCallRequest | undefined;
     const handler = createHandleCommitDraft({
@@ -1028,6 +1055,34 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(res.status).toBe(200);
     expect(captured?.maxOutputTokens).toBe(COMMIT_DRAFT_MAX_OUTPUT_TOKENS);
     expect(captured?.latencyProfile).toBe("coding-workbench");
+  });
+
+  // #3873 review: a person waits on this draft, so a gateway outage must keep failing it fast
+  // (GIT_DELIVERY_COMMIT_DRAFT_FAILED within seconds). The latency profile borrows only the timeout
+  // floors; the coding outage window is a separate signal the draft must never carry.
+  it("keeps the commit draft fail-fast: its model request carries no coding outage policy", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured).toBeDefined();
+    expect(captured).not.toHaveProperty("outagePolicy");
   });
 
   // Review of #3591: the raised budget must not exceed what the model declares — the spend-budget

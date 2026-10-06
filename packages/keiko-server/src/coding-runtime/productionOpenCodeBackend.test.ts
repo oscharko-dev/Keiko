@@ -25,6 +25,7 @@ import {
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
 import { stageDevLaneFixture } from "./devLaneFixture/_support.js";
+import { codingSafeActivityTtlMs } from "./codingSafeActivityProjection.js";
 import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support.js";
 import {
   createProductionOpenCodeBackend,
@@ -49,7 +50,11 @@ describe("production OpenCode backend composition", () => {
         ...backendInput(root, windowsDevLaneRuntime(root)),
         historyCapture,
       });
-      const run = backend.createRun(runInput(root));
+      const input = runInput(root);
+      const run = backend.createRun(input);
+      // #3873: the composition bounds one submitted task's whole agent loop by the run's own
+      // envelope duration, never by a fixed turn wall shorter than the envelope.
+      expect(compose.mock.calls[0]?.[0].maxTurnWaitMs).toBe(input.context.budget.maxRuntimeMs);
       const activity = compose.mock.calls[0]?.[0].safeActivity;
       if (activity?.captureMessages === undefined) throw new Error("Missing history capture port");
       const messages = [{ messageId: "msg_user", role: "user" as const, content: "Task" }];
@@ -63,6 +68,37 @@ describe("production OpenCode backend composition", () => {
       expect(historyCapture).toHaveBeenCalledOnce();
       await run.dispose?.();
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // #3873: a configured envelope duration reaches the safe-activity retention, which must outlive
+  // the envelope (`codingSafeActivityTtlMs`) instead of evicting a live run at a fixed 30 minutes.
+  it("retains safe activity for the configured envelope duration plus the retention margin", () => {
+    vi.useFakeTimers();
+    const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-retention-"));
+    try {
+      const start = Date.parse("2026-10-06T12:00:00.000Z");
+      vi.setSystemTime(start);
+      const runtimeMaxDurationMs = 1_000;
+      const projection = createProductionOpenCodeBackend({
+        ...backendInput(root, scriptedFunctionalPortable(root)),
+        runtimeMaxDurationMs,
+      }).safeActivityProjection;
+      if (projection === undefined) throw new Error("expected a safe-activity projection");
+      projection.open({
+        runId: "run-retention",
+        workspaceId: "workspace-retention",
+        authorityExpiresAt: new Date(start + 86_400_000).toISOString(),
+        workspaceIsCurrent: () => true,
+      });
+
+      vi.setSystemTime(start + codingSafeActivityTtlMs(runtimeMaxDurationMs) - 1);
+      expect(projection.currentContent()?.feed.runId).toBe("run-retention");
+      vi.setSystemTime(start + codingSafeActivityTtlMs(runtimeMaxDurationMs));
+      expect(projection.currentContent()).toBeNull();
+    } finally {
+      vi.useRealTimers();
       rmSync(root, { recursive: true, force: true });
     }
   });

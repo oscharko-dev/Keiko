@@ -15,7 +15,14 @@ import {
 } from "../store/index.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
-import { createCodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
+import {
+  codingSafeActivityTtlMs,
+  createCodingSafeActivityProjection,
+} from "./codingSafeActivityProjection.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -173,7 +180,10 @@ describe("paired coding conversation history", () => {
       const signal = native.takeSignal(event);
       if (signal !== undefined) display.ingest(runId, signal);
     }
-    now += 31 * 60_000;
+    // The display's default retention follows the default Authority Envelope duration plus its
+    // margin (#3873); derived from the producers rather than restated, so the pin keeps proving
+    // that display expiry never erases the native history whatever the default becomes.
+    now += codingSafeActivityTtlMs(runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES));
     expect(display.currentContent()?.feed.availability).not.toBe("available");
     const retained = history.detail(id, "read-native-history");
     expect(retained?.messages).toHaveLength(80);

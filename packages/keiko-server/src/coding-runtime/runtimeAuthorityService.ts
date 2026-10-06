@@ -247,6 +247,9 @@ const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
       values: ["deny-all", "governed-egress", "connector-scoped-egress"],
     },
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    // #3873: the minted envelope duration beside the allowance, so a run that later fails closed on
+    // expiry is reconstructable from this one line (both are operator settings, ADR-0137 D2).
+    maxRuntimeMs: { type: "integer", dataClass: "duration", required: true },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -853,6 +856,7 @@ export class CodingRuntimeAuthorityService {
           connectorScopes: envelope.authority.connectorScopes,
           networkPolicyMode: envelope.authority.networkPolicy.mode,
           maxPromptTokens: envelope.authority.budget.maxPromptTokens,
+          maxRuntimeMs: envelope.authority.budget.maxRuntimeMs,
         },
       ),
     );
