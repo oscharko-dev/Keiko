@@ -176,6 +176,29 @@ describe("CodingWorkbenchRepositorySelector recovery notices", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  // #3873 F1 (live Gemma qualification): a repository below a denied read-surface path — a worktree
+  // under a tool's state directory such as `.claude/` — read "may not be a Git repository" although
+  // the Git window named the server's `DENIED` refusal. The notice names that policy decision, and
+  // like every notice here it echoes no part of the path.
+  it("names a read-surface refusal as a policy decision, not a missing Git repository", async () => {
+    const root = "/repos/tooling/.claude/worktrees/task";
+    selectableRepositories.mockResolvedValue([project(root)]);
+    listBranches.mockRejectedValue(
+      new ApiError("DENIED", "The requested path is excluded from the read surface.", 403),
+    );
+    renderSelector({ root });
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent(/excluded from the read surface/iu);
+    expect(notice).toHaveTextContent(/policy decision, not a missing Git repository/iu);
+    expect(notice).not.toHaveTextContent(/may not be a Git repository/iu);
+    for (const segment of ["/repos", "tooling", ".claude", "worktrees", "task"]) {
+      expect(notice).not.toHaveTextContent(segment);
+    }
+    expect(screen.getByRole("button", { name: "Open Git" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toBeDisabled();
+  });
+
   it("#C reports a catalog failure with closed errorKind, correlationId and error evidence", async () => {
     const failure = new ApiError("SERVICE_UNAVAILABLE", "redacted", 503);
     failure.correlationId = "corr-repo-1";

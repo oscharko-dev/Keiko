@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "bbd48b120502ec422d961d28adadaaf94a8c4f133bd39a533551c3498217cc7b" as const;
+  "fffc18413608cf08c03c346ede3aa3cf841153dcaa4cd72a1e63d9cf5b99ed74" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8410,17 +8410,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-runtime-run-settlement",
       requirementContract: "coding-runtime-run-settlement",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end", "state"],
+      lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
         state: ["coding-runtime.event.late-terminal"],
         end: ["coding-runtime.run.settled"],
-        failure: [],
+        failure: ["coding-runtime.run.refusal-escalated"],
         loss: [],
       },
       causalEdges: [
         {
           op: "coding-runtime.event.late-terminal",
+          mode: "correlation",
+        },
+        {
+          op: "coding-runtime.run.refusal-escalated",
           mode: "correlation",
         },
         {
@@ -8459,6 +8463,66 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.event.late-terminal.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.run.refusal-escalated",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "bound",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "consecutiveCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "failureCode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reasonCode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "refusalClass",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.run.refusal-escalated.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -8588,6 +8652,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "promptTokensTotal",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "refusalReasonCode",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -39417,6 +39487,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.run.issue-context-attached": "tools-workflows",
     "coding-runtime.run.operator-decision": "tools-workflows",
     "coding-runtime.run.recovery-acknowledged": "tools-workflows",
+    "coding-runtime.run.refusal-escalated": "tools-workflows",
     "coding-runtime.run.settled": "tools-workflows",
     "coding-runtime.run.shutdown": "tools-workflows",
     "coding-runtime.run.started": "tools-workflows",

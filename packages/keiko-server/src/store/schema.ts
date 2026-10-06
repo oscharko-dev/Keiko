@@ -1435,14 +1435,17 @@ CREATE TRIGGER chat_history_revision_delete AFTER DELETE ON chat_messages BEGIN
 END;
 `;
 
-// V40 (F9, #3873): admits `prompt-allowance-exhausted`, `envelope-duration-exhausted`,
-// `output-exhausted-repeated`, `provider-unavailable` and `model-turn-failed`, the codes a run
-// settles with when its prompt allowance refused its last model call, its Authority Envelope ran
-// out of time, its model exhausted the output budget again after a repair, the provider could not
-// be reached, or its last model call failed for a cause the failed turn names — instead of the
-// `runtime-failed` the Workbench renders as an internal error. The `codingRuntimeSnapshotStore`
-// round-trip over `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` was red on the five literals before this
-// migration.
+// V40 (F9 and F5, #3873 live Gemma qualification): admits the causes a failed run now settles with
+// instead of the `runtime-failed` the Workbench renders as an internal error, or of a loop an operator
+// had to stop. F9: `prompt-allowance-exhausted`, `envelope-duration-exhausted`,
+// `output-exhausted-repeated`, `provider-unavailable` and `model-turn-failed` — its prompt allowance
+// refused its last model call, its Authority Envelope ran out of time, its model exhausted the
+// output budget again after a repair, the provider could not be reached, or its last model call
+// failed for a cause the failed turn names. F5: `edits-blocked` and `edit-retries-exhausted` — its
+// governed edits were refused again and again with the same closed reason. Each change first added
+// a V40 rebuild of its own; they are folded into this one migration so no installation can reach a
+// V40 that admits only half of the codes. The `codingRuntimeSnapshotStore` round-trip over
+// `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` was red on the seven literals before this migration.
 //
 // Mechanically identical to V37: SQLite cannot ALTER a table-level CHECK, so the table is rebuilt
 // with its current shape and every column CHECK carried over unchanged. No column is added or
@@ -1529,7 +1532,7 @@ CREATE TABLE coding_runtime_snapshots_v40 (
     AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
     AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
     AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')
-    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted','issue-context-unavailable','question-answer-rejected','delivery-not-evidenced','model-unavailable','workspace-unqualified','prompt-allowance-exhausted','envelope-duration-exhausted','output-exhausted-repeated','provider-unavailable','model-turn-failed'))
+    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted','issue-context-unavailable','question-answer-rejected','delivery-not-evidenced','model-unavailable','workspace-unqualified','prompt-allowance-exhausted','envelope-duration-exhausted','output-exhausted-repeated','provider-unavailable','model-turn-failed','edits-blocked','edit-retries-exhausted'))
     AND revision >= 0
     AND tool_call_count BETWEEN 0 AND 1000000
     AND patch_byte_count BETWEEN 0 AND 1073741824

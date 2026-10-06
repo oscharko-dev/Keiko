@@ -21,6 +21,7 @@ import {
 import type {
   CodingToolAuthorityPort,
   CodingToolDelegatePort,
+  CodingToolEditOutcome,
   CodingToolFacade,
   CodingToolMutationGuard,
 } from "./codingToolFacadePorts.js";
@@ -1709,5 +1710,106 @@ describe("CodingToolFacade", () => {
         extra: { status: "failed", reason: "handler-failed" },
       });
     });
+  });
+});
+
+// F5 (#3873, live Gemma qualification): a run whose edits were refused NO_ACTIVE_SESSION eleven
+// times was never stopped, because nothing above the edit port saw the refusals. The facade tells
+// the run's orchestration each applied or refused edit, as the model received it, so the run can
+// bound consecutive refusals; everything else it answers stays unobserved.
+describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
+  function observedFacade(
+    delegateOutcome: unknown,
+    admitted = true,
+  ): { readonly subject: CodingToolFacade; readonly outcomes: CodingToolEditOutcome[] } {
+    const ports = facade(admitted);
+    ports.delegate.execute = vi.fn(() => Promise.resolve(delegateOutcome));
+    const outcomes: CodingToolEditOutcome[] = [];
+    const subject = createCodingToolFacade(ports, {
+      observeEditOutcome: (outcome) => void outcomes.push(outcome),
+    });
+    return { subject, outcomes };
+  }
+
+  it("reports a refused edit under the closed code the model received", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "NO_ACTIVE_SESSION",
+      message: "no Coding Workbench is connected for this workspace; keep the Workbench open",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "NO_ACTIVE_SESSION" }]);
+  });
+
+  it("reports an applied edit", async () => {
+    const { subject, outcomes } = observedFacade({ outcome: "completed" });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "applied" }]);
+  });
+
+  it("reports the exposed reason of a CI observation refusal", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "ci-observation-required",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "ci-observation-required" }]);
+  });
+
+  it("reports a refusal whose code the facade withheld as UNCLASSIFIED, never the raw code", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "SENTINEL_UNVETTED_CODE",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "UNCLASSIFIED" }]);
+    expect(JSON.stringify(outcomes)).not.toContain("SENTINEL_");
+  });
+
+  it("does not report a human decision, a refused admission or a call that is not an edit", async () => {
+    const declined = observedFacade({ outcome: "failed", reasonCode: "CHANGE_REJECTED" });
+    await declined.subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+    const unadmitted = observedFacade(
+      { outcome: "failed", reasonCode: "NO_ACTIVE_SESSION" },
+      false,
+    );
+    await unadmitted.subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+    const read = observedFacade({ outcome: "failed", reasonCode: "workspace-read-denied" });
+    await read.subject.execute({
+      body: requestBody({ action: "read", relativePath: "src/file.ts" }),
+      capability,
+    });
+
+    expect([...declined.outcomes, ...unadmitted.outcomes, ...read.outcomes]).toEqual([]);
+  });
+
+  it("reports an edit the catalog bridge answered", async () => {
+    const outcomes: CodingToolEditOutcome[] = [];
+    const subject = createCodingToolFacade(facade(), {
+      catalogBridge: {
+        covers: () => true,
+        recordUnbound: vi.fn(),
+        execute: () => Promise.resolve({ status: "failed", evidence: [] }),
+      },
+      observeEditOutcome: (outcome) => void outcomes.push(outcome),
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "UNCLASSIFIED" }]);
   });
 });

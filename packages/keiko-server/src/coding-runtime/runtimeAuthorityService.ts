@@ -414,6 +414,8 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "output-exhausted-repeated",
         "provider-unavailable",
         "model-turn-failed",
+        "edits-blocked",
+        "edit-retries-exhausted",
       ],
     },
   },

@@ -51,6 +51,7 @@ import {
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
 import { humanDecisionToolResult } from "./codingToolFacade.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
@@ -1063,6 +1064,82 @@ describe("production managed worktree tools", () => {
       expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
     },
   );
+
+  // F5 (#3873, live Gemma qualification): the run's orchestration bounds consecutive refused edits,
+  // so the production facade reports every applied or refused edit — through the real edit port and
+  // the facade's own projection, as the model received it.
+  it("reports each applied or refused edit of the managed facade to the run's observer", async () => {
+    const outcomes: CodingToolEditOutcome[] = [];
+    const editorResult = (
+      status: "queued" | "conflict",
+    ): Awaited<ReturnType<ProductionManagedWorktreeToolInput["editorAgentClient"]["action"]>> => ({
+      ok: true as const,
+      value: {
+        result: {
+          schemaVersion: "1" as const,
+          actionId: "edit-1",
+          sessionId: "session-1",
+          status,
+          ...(status === "conflict"
+            ? { conflict: { code: "NO_ACTIVE_SESSION" as const, message: "no live session" } }
+            : {}),
+        },
+      },
+    });
+    const action = vi
+      .fn()
+      .mockResolvedValueOnce(editorResult("conflict"))
+      .mockResolvedValueOnce(editorResult("queued"));
+    // The model's edit form (#3873): exact replacements bound to the digest of the governed read.
+    const current = "export const value = 1;\n";
+    const facade = createProductionManagedWorktreeToolFacade({
+      ...baseEditAdmissionInput(),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text: current }) },
+      editorAgentClient: { action },
+      onRuntimeEvent: vi.fn(),
+      observeEditOutcome: (outcome) => void outcomes.push(outcome),
+    });
+
+    const results: unknown[] = [];
+    for (const attempt of [1, 2]) {
+      results.push(
+        await facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "edit",
+            actionId: `edit-${String(attempt)}`,
+            idempotencyKey: `edit-key-${String(attempt)}`,
+            changeset: {
+              edits: [
+                {
+                  file: "src/a.ts",
+                  oldString: "value = 1",
+                  newString: "value = 2",
+                  replaceAll: false,
+                },
+              ],
+              deletions: [],
+              renames: [],
+              files: [
+                { file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(current) },
+              ],
+            },
+          }),
+        }),
+      );
+    }
+
+    // What the model received, and what the run's orchestration was told: the same two outcomes.
+    expect(results).toMatchObject([
+      { status: "failed", evidence: [{ kind: "governed-delegate", code: "NO_ACTIVE_SESSION" }] },
+      { status: "completed" },
+    ]);
+    expect(action).toHaveBeenCalledTimes(2);
+    expect(outcomes).toEqual([
+      { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" },
+      { kind: "applied" },
+    ]);
+  });
 
   it("completes a governed command through production wiring", async () => {
     const execute = vi.fn((): Promise<CommandTaskRunResult> =>

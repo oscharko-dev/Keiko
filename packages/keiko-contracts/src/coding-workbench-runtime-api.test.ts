@@ -952,6 +952,37 @@ describe("Coding Workbench runtime API failure branches", () => {
     ).toBe(false);
   });
 
+  // F5 (#3873): a run whose edits were refused again and again settles with the refusal class.
+  // Each cause is a durable run failure — on the snapshot and on its terminal status frame — while
+  // the edit refusal reasons themselves stay off the contract.
+  it.each(["edits-blocked", "edit-retries-exhausted"] as const)(
+    "carries the %s refusal cause on a failed snapshot and its status frame",
+    (failureCode) => {
+      const status = {
+        schemaVersion: "1",
+        cursor: "run-1:5",
+        sequence: 5,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        failureCode,
+      };
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, state: "failed", failureCode }).ok,
+      ).toBe(true);
+      expect(validateCodingWorkbenchRuntimeSseEvent(status).ok).toBe(true);
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...snapshot,
+          state: "failed",
+          failureCode: "NO_ACTIVE_SESSION",
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
   // #2637 (review #2646): the SSE boundary enforces the research/outcome binding, not just the field
   // type. Every invalid combination below would let the timeline misstate what a run took in.
   it("binds the #2637 contentTrust marker to an accepted research-performed frame", () => {

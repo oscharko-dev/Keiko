@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bbd48b120502ec422d961d28adadaaf94a8c4f133bd39a533551c3498217cc7b"
+    "catalogDigest": "fffc18413608cf08c03c346ede3aa3cf841153dcaa4cd72a1e63d9cf5b99ed74"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 522,
-    "proofCount": 529,
-    "resolvedProofCount": 529,
+    "operationCount": 523,
+    "proofCount": 530,
+    "resolvedProofCount": 530,
     "failureClassCount": 337,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -330,6 +330,7 @@
         "coding-runtime.run.issue-context-attached",
         "coding-runtime.run.operator-decision",
         "coding-runtime.run.recovery-acknowledged",
+        "coding-runtime.run.refusal-escalated",
         "coding-runtime.run.settled",
         "coding-runtime.run.shutdown",
         "coding-runtime.run.started",
@@ -765,7 +766,7 @@
     "coding-runtime-readiness": ["tools-workflows.dependency-failure"],
     "coding-runtime-recovery-acknowledgement": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
-    "coding-runtime-run-settlement": ["tools-workflows.dependency-failure"],
+    "coding-runtime-run-settlement": ["tools-workflows.rejection"],
     "coding-runtime-run-start": ["tools-workflows.dependency-failure"],
     "coding-runtime-session-continuity": ["tools-workflows.dependency-failure"],
     "coding-runtime-shutdown": ["tools-workflows.crash"],
@@ -1387,6 +1388,10 @@
     ],
     "coding-runtime.run.recovery-acknowledged.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.run.refusal-escalated.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.test.ts"
     ],
     "coding-runtime.run.settled.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"

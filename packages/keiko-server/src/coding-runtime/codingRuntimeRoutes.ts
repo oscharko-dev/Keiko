@@ -95,6 +95,8 @@ const RUNTIME_REFUSAL_REASONS = [
   "output-exhausted-repeated",
   "provider-unavailable",
   "model-turn-failed",
+  "edits-blocked",
+  "edit-retries-exhausted",
   "payload-too-large",
 ] as const satisfies readonly RuntimeMutationRefusalReason[];
 

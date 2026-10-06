@@ -330,6 +330,18 @@ describe("eventDetail auxiliary outcome", () => {
       eventDetail(runtimeEvent({ failureCode: "runtime-crashed", auxiliaryOutcome: "stopped" }), t),
     ).toBe("codingWorkbench.event.failure.generic codingWorkbench.event.detailOutcome");
   });
+
+  // F5 (#3873, live Gemma qualification): a run whose edits were refused again and again now
+  // settles with the refusal class; the Workbench names that class and its next step instead of
+  // the generic "could not be completed" sentence.
+  it.each([
+    ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
+    ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
+  ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
+    const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
+    expect(eventDetail(settled, t)).toBe(key);
+  });
 });
 
 // #2637: the operator approved a destination, never what the page would say. An accepted research

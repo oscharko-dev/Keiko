@@ -71,6 +71,20 @@ export interface CodingToolFacadePorts {
   readonly delegate: CodingToolDelegatePort;
 }
 
+/**
+ * What one answered governed edit says, as the model received it (F5, #3873): applied, or refused
+ * under the closed reason code the facade forwarded (`UNCLASSIFIED` when it forwarded none). A human
+ * decision, a cancellation, a busy or a malformed call is neither and is not reported. Body-free.
+ */
+export type CodingToolEditOutcome =
+  { readonly kind: "applied" } | { readonly kind: "refused"; readonly reasonCode: string };
+
+/** The run-scoped form the run's orchestration receives an edit outcome in (F5, #3873). */
+export type CodingRuntimeEditOutcomeObserver = (
+  runId: string,
+  outcome: CodingToolEditOutcome,
+) => void;
+
 export interface CodingToolFacadeOptions {
   readonly maxBodyBytes?: number | undefined;
   readonly maxInFlight?: number | undefined;
@@ -85,6 +99,11 @@ export interface CodingToolFacadeOptions {
   readonly onToolSettled?:
     | ((action: CodingToolAction | undefined, status: CodingToolResult["status"]) => void)
     | undefined;
+  /**
+   * F5 (#3873): told every applied or refused edit this facade answered, so the run's orchestration
+   * can bound consecutive refusals instead of letting the model resend an edit that cannot apply.
+   */
+  readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
 }
 
 export interface CodingToolFacadeInput {

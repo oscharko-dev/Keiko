@@ -61,6 +61,11 @@ import {
 } from "./launchFailure.js";
 import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
+import {
+  REPAIRABLE_EDIT_REFUSAL_BOUND,
+  UNREPAIRABLE_EDIT_REFUSAL_BOUND,
+} from "./codingRuntimeRefusalEscalation.js";
+import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -4579,6 +4584,233 @@ describe("approval challenge lifetime ceiling", () => {
 
     expect(ingested).toEqual({ ok: false, failureCode: "invalid-intent" });
     expect(f.orchestrator.getSnapshot("run-1")?.state).not.toBe("awaiting-approval");
+  });
+});
+
+// F5 (#3873, live Gemma qualification): a run whose workspace had no connected Workbench logged
+// eleven `coding-runtime.edit.refused reasonCode=NO_ACTIVE_SESSION` lines until the operator stopped
+// it — nothing counted the refusals, so the model resent the edit and the run burned its envelope.
+// The orchestrator bounds consecutive same-reason refusals and settles the run with the refusal
+// class as its cause; the escalation and the settlement each leave one body-free line.
+describe("consecutive edit refusals (F5, #3873)", () => {
+  const NO_SESSION: CodingToolEditOutcome = { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" };
+  const INVALID: CodingToolEditOutcome = { kind: "refused", reasonCode: "INVALID_EDITS" };
+  const APPLIED: CodingToolEditOutcome = { kind: "applied" };
+  // Long enough for the canonical correlation shape, as a production `run-<decimal>` id always is,
+  // so the lines carry the run's own correlation instead of the unknown-correlation stand-in.
+  const RUN_ID = "run-f5-0001";
+
+  function refusalFixture(activityLog: ServerLogSink) {
+    return fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      activityLog,
+      undefined,
+      undefined,
+      undefined,
+      () => RUN_ID,
+    );
+  }
+
+  async function runningRun() {
+    const captured = captureActivityLog();
+    const f = refusalFixture(captured.activityLog);
+    expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+      state: "running",
+      runId: RUN_ID,
+    });
+    return { f, records: captured.records };
+  }
+
+  function observe(
+    f: ReturnType<typeof fixture>,
+    outcome: CodingToolEditOutcome,
+    times: number,
+    runId = RUN_ID,
+  ): void {
+    for (let index = 0; index < times; index += 1)
+      f.orchestrator.observeEditOutcome(runId, outcome);
+  }
+
+  function opLines(records: readonly ServerLogEvent[], op: string): readonly ServerLogEvent[] {
+    return records.filter((event) => event.op === op);
+  }
+
+  function settledLine(records: readonly ServerLogEvent[]): ServerLogEvent {
+    return requireLoggedEvent(
+      opLines(records, "coding-runtime.run.settled").find(
+        (event) => event.extra?.terminal === true,
+      ),
+      "expected a terminal coding-runtime.run.settled line",
+    );
+  }
+
+  it("settles a run whose edits are refused for want of a Workbench at the bound of three", async () => {
+    const { f, records } = await runningRun();
+
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
+    expect(f.manager.stop).not.toHaveBeenCalled();
+
+    observe(f, NO_SESSION, 1);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edits-blocked",
+      });
+    });
+    expect(f.manager.stop).toHaveBeenCalledExactlyOnceWith(RUN_ID, "failed");
+    expect(f.eventHub.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "status", state: "failed", failureCode: "edits-blocked" }),
+    );
+    const [escalated, ...more] = opLines(records, "coding-runtime.run.refusal-escalated");
+    expect(more).toEqual([]);
+    const line = requireLoggedEvent(escalated, "expected the refusal-escalated line");
+    expect(line).toMatchObject({ level: "warn", correlationId: RUN_ID, errorKind: "unavailable" });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.refusal-escalated.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({
+      runId: RUN_ID,
+      reasonCode: "NO_ACTIVE_SESSION",
+      refusalClass: "unrepairable",
+      consecutiveCount: UNREPAIRABLE_EDIT_REFUSAL_BOUND,
+      bound: UNREPAIRABLE_EDIT_REFUSAL_BOUND,
+      failureCode: "edits-blocked",
+    });
+    const settled = settledLine(records);
+    expect(settled).toMatchObject({ correlationId: RUN_ID, errorKind: "unavailable" });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({
+      state: "failed",
+      failureCode: "edits-blocked",
+      failureBasis: "refusal-escalation",
+      refusalReasonCode: "NO_ACTIVE_SESSION",
+    });
+    expect(JSON.stringify(records)).not.toContain(start.taskIntent);
+  });
+
+  it("bounds refusals the model can repair at the higher bound of six", async () => {
+    const { f, records } = await runningRun();
+
+    observe(f, INVALID, REPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
+
+    observe(f, INVALID, 1);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edit-retries-exhausted",
+      });
+    });
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([
+      expect.objectContaining({
+        errorKind: "validation-failed",
+        extra: expect.objectContaining({
+          reasonCode: "INVALID_EDITS",
+          refusalClass: "repairable",
+          consecutiveCount: REPAIRABLE_EDIT_REFUSAL_BOUND,
+          bound: REPAIRABLE_EDIT_REFUSAL_BOUND,
+          failureCode: "edit-retries-exhausted",
+        }) as unknown,
+      }),
+    ]);
+    expect(settledLine(records)).toMatchObject({
+      errorKind: "validation-failed",
+      extra: {
+        failureCode: "edit-retries-exhausted",
+        failureBasis: "refusal-escalation",
+        refusalReasonCode: "INVALID_EDITS",
+      },
+    });
+  });
+
+  it("restarts the streak on another reason and ends it on an applied edit", async () => {
+    const { f, records } = await runningRun();
+
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+    observe(f, APPLIED, 1);
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+    observe(f, { kind: "refused", reasonCode: "WORKSPACE_ACCESS_LOST" }, 1);
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
+    expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("running");
+  });
+
+  it("counts only the active run's edits", async () => {
+    const { f, records } = await runningRun();
+
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND * 2, "run-other");
+
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("running");
+  });
+
+  // A paused run is the operator's to resume or stop; refusals that land meanwhile are not counted,
+  // and the streak goes on from where it stood once the run runs again.
+  it("does not count a refusal that lands while the operator has the run paused", async () => {
+    const { f, records } = await runningRun();
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+    await f.orchestrator.pause(RUN_ID, { requestId: RUN_ID });
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("paused");
+
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND);
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
+
+    await f.orchestrator.resume(RUN_ID, { requestId: RUN_ID });
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("running");
+    observe(f, NO_SESSION, 1);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edits-blocked",
+      });
+    });
+  });
+
+  it("keeps the escalation's cause when the stopped turn then settles on its own", async () => {
+    const captured = captureActivityLog();
+    const f = refusalFixture(captured.activityLog);
+    let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<CodingRuntimeTaskOutcome>((resolve) => {
+        finish = resolve;
+      }),
+    });
+    await f.orchestrator.start(start);
+
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND);
+    // The stop the escalation asked for ends the turn, which then reports itself cancelled.
+    finish?.("cancelled");
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edits-blocked",
+      });
+    });
+    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND);
+
+    expect(f.manager.stop).toHaveBeenCalledExactlyOnceWith(RUN_ID, "failed");
+    expect(opLines(captured.records, "coding-runtime.run.refusal-escalated")).toHaveLength(1);
+    expect(opLines(captured.records, "coding-runtime.run.settled")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({
+          state: "failed",
+          failureCode: "edits-blocked",
+        }) as unknown,
+      }),
+    ]);
   });
 });
 

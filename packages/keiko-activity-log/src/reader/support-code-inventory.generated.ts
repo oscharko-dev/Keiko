@@ -1057,6 +1057,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/coding-runtime/codingRuntimeProcessIo",
   "keiko-server/coding-runtime/codingRuntimeProjectMemory",
   "keiko-server/coding-runtime/codingRuntimeQuestionPort",
+  "keiko-server/coding-runtime/codingRuntimeRefusalEscalation",
   "keiko-server/coding-runtime/codingRuntimeRepositoryInstructions",
   "keiko-server/coding-runtime/codingRuntimeRoutes",
   "keiko-server/coding-runtime/codingRuntimeRunEffort",

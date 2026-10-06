@@ -466,6 +466,7 @@ beforeEach(() => {
     response: null,
     loading: false,
     error: null,
+    denied: false,
     branches: [],
     currentBranch: root === null ? null : "dev",
     refresh: vi.fn(() => Promise.resolve()),

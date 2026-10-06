@@ -12,6 +12,7 @@ import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.j
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { GitDeliveryDescriptionAuthorityScope } from "../gitDelivery/runBoundAuthority.js";
+import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
 
 describe("coding runtime control plane", () => {
   it("constructs one fail-closed aggregate when no runtime host is qualified", async () => {
@@ -333,6 +334,35 @@ describe("coding runtime control plane", () => {
     const notifySpy = vi.spyOn(control.orchestrator, "notifyVerifiedHeadAdvanced");
     attached?.("run-1");
     expect(notifySpy).toHaveBeenCalledExactlyOnceWith("run-1");
+  });
+
+  // F5 (#3873, live Gemma qualification): a run's tool facade is composed deep inside the runtime
+  // resolver, long before this orchestrator exists, so its refused edits reached nothing that
+  // counted them and the run looped on NO_ACTIVE_SESSION until an operator stopped it.
+  it("fills a runtime host's edit outcome slot with the orchestrator's real observeEditOutcome", () => {
+    let attached: ((runId: string, outcome: CodingToolEditOutcome) => void) | undefined;
+    const runtimeHost: CodingRuntimeHost = {
+      createManager: () => unqualifiedManager(),
+      launchResolver: { resolve: () => qualifiedLaunch() },
+      approvalAuthority: {
+        issue: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+      },
+      cancellationRegistry: { signalFor: () => undefined },
+      attachEditOutcomeObserver: (observe): void => {
+        attached = observe;
+      },
+    };
+    const control = createCodingRuntimeControlPlane({
+      ...minimalControlPlaneSnapshots(),
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+    });
+    expect(attached).toBeDefined();
+    const observeSpy = vi.spyOn(control.orchestrator, "observeEditOutcome");
+    const outcome: CodingToolEditOutcome = { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" };
+    attached?.("run-1", outcome);
+    expect(observeSpy).toHaveBeenCalledExactlyOnceWith("run-1", outcome);
   });
 });
 

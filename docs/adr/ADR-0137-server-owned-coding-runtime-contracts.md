@@ -145,6 +145,29 @@ The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, 
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
 
+**A run whose edits keep being refused settles instead of looping** (F5 of the live Gemma
+qualification, #3873). A run whose workspace had no connected Workbench logged eleven
+`coding-runtime.edit.refused` lines with `NO_ACTIVE_SESSION` until the operator stopped it: nothing
+above the edit port counted the refusals, and the model resent an edit no change of its own could
+make apply. Each run's tool facade now reports every applied or refused governed edit, as the model
+received it, to the orchestrator, which counts the run's consecutive refusals with the same closed
+reason code. Other tool calls between two refused edits do not interrupt the count — re-reading the
+file is exactly what the refusal guidance asks for — while an applied edit or a refusal with another
+reason restarts it, and a human's rejection of a change in its review is a decision, never a refusal
+(ADR-0124 D6). Refusals that land while an operator has the run paused are not counted. A refusal the model cannot repair by changing its edit — no connected Workbench editor
+(`NO_ACTIVE_SESSION`, `NO_ACTIVE_BRIDGE`), lost workspace access, a denied path or policy
+(`OUT_OF_SCOPE`, `POLICY_DENIED`, `APPROVAL_REQUIRED`), a buffer only the operator can save, an
+editor or transport fault — settles the run `failed` with `edits-blocked` at the third consecutive
+occurrence (`UNREPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal the model can repair — an edit that does
+not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
+precondition, or a refusal that carried no closed code — keeps its guidance and settles the run with
+`edit-retries-exhausted` at the sixth (`REPAIRABLE_EDIT_REFUSAL_BOUND`). The escalation writes one
+`coding-runtime.run.refusal-escalated` line (`reasonCode`, `refusalClass`, `consecutiveCount`,
+`bound`, `failureCode`); the run then settles through the same path as a failed turn, its runtime
+stopped and its changes kept in the task workspace, and `coding-runtime.run.settled` carries the
+cause with `failureBasis: "refusal-escalation"` and `refusalReasonCode`. The bounds are fixed: every
+refused attempt resends the run's growing context, so a loop spends the prompt allowance on nothing.
+
 **A paused run says what it is waiting for.** `paused` covers two different situations and the
 operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
 closed vocabulary. Absent means an operator paused the run from the Workbench, which is what
@@ -216,10 +239,13 @@ ends a run only after the gateway's one steered repair or the runtime's retries 
 again), `provider-unavailable` (the gateway's `stream-incomplete`: a timeout, a refused or dropped
 connection, a stream that broke before the answer completed), or `model-turn-failed` (any other
 failed-call cause, which the failed turn's own frame names), and `runtime-failed` (the runtime
-crashed or failed internally) only when no such cause is on record. A run the operator stopped
+crashed or failed internally) only when no such cause is on record. A run whose refused edits
+escalated (above) comes before all of these facts: it settles `edits-blocked` or
+`edit-retries-exhausted` whatever its last model call reported. A run the operator stopped
 settles `cancelled`, as before, and the Workbench says the operator stopped it. Nothing is read
 from OpenCode's error text. `coding-runtime.run.settled` records the cause with `failureBasis`
-(`prompt-allowance`, `envelope-duration`, `model-call-failure`, `no-model-call-failure`) and
+(`prompt-allowance`, `envelope-duration`, `model-call-failure`, `no-model-call-failure`, or
+`refusal-escalation` for an escalated run) and
 `modelCallFailure`, and an error class that matches it instead of `internal`. The gateway reports a
 provider that stayed unavailable past the outage window (a 5xx, 408 or 429, an open breaker) with the
 same `provider-failed` code as a 4xx rejection, so such a run settles `model-turn-failed` until the

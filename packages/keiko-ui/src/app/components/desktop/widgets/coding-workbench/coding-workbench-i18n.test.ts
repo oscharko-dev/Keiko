@@ -177,6 +177,48 @@ describe("Coding Workbench translations", () => {
     );
   });
 
+  // #3873 F1: a repository whose location the server's read surface excludes is a policy decision,
+  // and both catalogs say so instead of suggesting the folder is not a Git repository.
+  it("names a read-surface refusal as a policy decision in both catalogs", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.repository.deniedHelp");
+    const de = translateCodingWorkbench("de", "codingWorkbench.repository.deniedHelp");
+    expect(en).toContain("excluded from the read surface");
+    expect(en).toContain("not a missing Git repository");
+    expect(en).not.toMatch(/may not be a Git repository/iu);
+    expect(de).toContain("von der Leseoberfläche ausgeschlossen");
+    expect(de).toContain("kein fehlendes Git-Repository");
+    expect(de).not.toMatch(/möglicherweise ist er kein Git-Repository/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  // F5 (#3873): a run its repeated edit refusals ended names the refusal class with a next step in
+  // both catalogs, German in the informal du-form, and never as an internal error.
+  it.each([
+    "codingWorkbench.event.failure.edits-blocked",
+    "codingWorkbench.event.failure.edit-retries-exhausted",
+  ] as const)("explains %s with a next step and never as an internal error", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).not.toBe(key);
+    expect(de).not.toBe(key);
+    expect(en).toMatch(/refused several times in a row/iu);
+    expect(de).toMatch(/mehrmals hintereinander/iu);
+    expect(en).toMatch(/start the task again/iu);
+    expect(de).toMatch(/starte die Aufgabe/iu);
+    expect(en).not.toMatch(/internal error/iu);
+    expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("names the missing Workbench among the causes an edit block has", () => {
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.failure.edits-blocked")).toContain(
+      "no Coding Workbench is connected for this workspace",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.failure.edits-blocked")).toContain(
+      "keine Coding Workbench für diesen Arbeitsbereich verbunden",
+    );
+  });
+
   // The retired identity bound only the inode, so a same-path replacement reproduces it exactly:
   // the operator's approval — not a proof Keiko holds — is what re-registers the tree. The card is
   // the only place that judgement is made, so both catalogs must state the caveat the

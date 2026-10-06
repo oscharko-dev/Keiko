@@ -58,6 +58,7 @@ import {
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
   CodingToolAdmission,
+  CodingToolEditOutcome,
   CodingToolFacade,
   CodingToolFacadeInput,
   CodingToolFacadeOptions,
@@ -98,7 +99,9 @@ const EDIT_PORT_REFUSAL_REASON_CODES = [
   "WORKSPACE_ACCESS_LOST",
   "EDIT_MUTATION_FAILED",
 ] as const;
-const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
+// Exported so the run's edit refusal bound (codingRuntimeRefusalEscalation.ts) can pin that it
+// classifies every code this facade forwards to the model (F5, #3873).
+export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_CONFLICT_CODES,
   ...EDITOR_AGENT_FAILURE_CODES,
   ...EDIT_TRANSPORT_REASON_CODES,
@@ -188,6 +191,7 @@ export function createCodingToolFacade(
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
     catalogBridge: options.catalogBridge,
     onToolSettled: options.onToolSettled,
+    observeEditOutcome: options.observeEditOutcome,
     inFlight: { count: 0 },
   };
   return {
@@ -203,6 +207,7 @@ interface ExecutionContext {
   readonly requireInvocationRegistryForEdits: boolean;
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
   readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
+  readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly inFlight: { count: number };
 }
 
@@ -268,20 +273,60 @@ async function executeParsed(
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;
   try {
-    if (context.catalogBridge?.covers(request) === true) {
-      return await executeCatalogRequest(context, input, request);
-    }
-    context.catalogBridge?.recordUnbound(request, input);
-    return await executeAdmitted(
-      context.ports,
-      input,
-      request,
-      context.invocationRegistry,
-      context.requireInvocationRegistryForEdits,
-    );
+    const result = await routeParsed(context, input, request);
+    if (request.action === "edit") observeEditResult(context.observeEditOutcome, result);
+    return result;
   } finally {
     context.inFlight.count -= 1;
   }
+}
+
+// An admitted request's one path: the canonical catalog bridge for a covered action, else the
+// governed delegate.
+function routeParsed(
+  context: ExecutionContext,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+): Promise<CodingToolResult> {
+  if (context.catalogBridge?.covers(request) === true) {
+    return executeCatalogRequest(context, input, request);
+  }
+  context.catalogBridge?.recordUnbound(request, input);
+  return executeAdmitted(
+    context.ports,
+    input,
+    request,
+    context.invocationRegistry,
+    context.requireInvocationRegistryForEdits,
+  );
+}
+
+// F5 (#3873): the run's refusal bound counts the edit as the model received it, whatever path
+// answered it — the catalog bridge or the admitted delegate.
+function observeEditResult(
+  observe: ((outcome: CodingToolEditOutcome) => void) | undefined,
+  result: CodingToolResult,
+): void {
+  if (observe === undefined) return;
+  const outcome = codingToolEditOutcome(result);
+  if (outcome !== undefined) observe(outcome);
+}
+
+/**
+ * An answered edit's outcome: applied, or refused under the closed code the model was given — the
+ * `reasonCode` the result exposes, else its governed-delegate evidence code, which carries the same
+ * closed vocabulary (`projectEditFailure`). A refusal whose code the facade withheld reads as
+ * `UNCLASSIFIED`; a human decision, cancellation or busy answer is not an outcome to count.
+ */
+function codingToolEditOutcome(result: CodingToolResult): CodingToolEditOutcome | undefined {
+  if (result.status === "completed") return { kind: "applied" };
+  if (result.status !== "failed") return undefined;
+  const code =
+    result.reasonCode ?? result.evidence.find((item) => item.kind === "governed-delegate")?.code;
+  return {
+    kind: "refused",
+    reasonCode: code === undefined || code === "failed" ? "UNCLASSIFIED" : code,
+  };
 }
 
 async function executeAdmitted(

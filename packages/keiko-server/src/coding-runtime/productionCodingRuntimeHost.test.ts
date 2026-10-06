@@ -132,6 +132,19 @@ describe("production coding runtime host", () => {
     expect(host).not.toHaveProperty("attachVerifiedHeadNotifier");
   });
 
+  // F5 (#3873): the edit outcome slot travels the same optional pass-through, so the control plane
+  // can attach the orchestrator's refusal bound to the facades the resolver composes per run.
+  it("forwards a qualified runtime's edit outcome attach setter only when it carries one", () => {
+    const attach = vi.fn();
+    const host = createProductionCodingRuntimeHost({
+      resolve: () => ({ ...qualifiedRuntime(), attachEditOutcomeObserver: attach }),
+    });
+    expect(host?.attachEditOutcomeObserver).toBe(attach);
+    expect(
+      createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() }),
+    ).not.toHaveProperty("attachEditOutcomeObserver");
+  });
+
   it("forwards context usage only when the qualified runtime supplies it", () => {
     const contextUsage = { read: vi.fn(() => undefined) };
     const withUsage = createProductionCodingRuntimeHost({

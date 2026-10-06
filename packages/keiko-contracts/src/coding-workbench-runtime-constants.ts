@@ -116,7 +116,15 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "envelope-duration-exhausted"
   | "output-exhausted-repeated"
   | "provider-unavailable"
-  | "model-turn-failed";
+  | "model-turn-failed"
+  // F5 (#3873, live Gemma qualification): a run whose edits were refused again and again settles
+  // with the refusal class instead of looping until an operator stops it. `edits-blocked`: the same
+  // refusal the model cannot repair by changing its edit — no connected Workbench, lost workspace
+  // access, a denied path or policy — repeated at the bound of three consecutive refusals.
+  // `edit-retries-exhausted`: the same refusal the model could repair (an edit that does not apply,
+  // a stale base) repeated at the bound of six. The settlement line names the closed reason.
+  | "edits-blocked"
+  | "edit-retries-exhausted";
 
 /** Redacted per-turn gateway causes. These are SSE-only, not durable run failure states. */
 export type CodingWorkbenchTurnFailureCode =
@@ -164,4 +172,6 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "output-exhausted-repeated",
     "provider-unavailable",
     "model-turn-failed",
+    "edits-blocked",
+    "edit-retries-exhausted",
   ] as const);

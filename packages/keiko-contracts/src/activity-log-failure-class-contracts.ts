@@ -1980,12 +1980,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: [],
       state: ["coding-runtime.event.late-terminal"],
       end: ["coding-runtime.run.settled"],
-      failure: [],
+      // F5 (#3873): consecutive refused edits met their bound and end the run with that cause.
+      failure: ["coding-runtime.run.refusal-escalated"],
       loss: [],
     },
-    requiredCausalOperations: ["coding-runtime.event.late-terminal", "coding-runtime.run.settled"],
+    requiredCausalOperations: [
+      "coding-runtime.event.late-terminal",
+      "coding-runtime.run.refusal-escalated",
+      "coding-runtime.run.settled",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["coding-runtime.event.late-terminal", "coding-runtime.run.settled"],
+    requiredProofOperations: [
+      "coding-runtime.event.late-terminal",
+      "coding-runtime.run.refusal-escalated",
+      "coding-runtime.run.settled",
+    ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-runtime.event.late-terminal",

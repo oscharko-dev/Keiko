@@ -376,6 +376,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
+  "codingWorkbench.repository.deniedHelp":
+    "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
     "Repositories could not be loaded. Refresh the list and try again.",
   "codingWorkbench.repository.retryLoad": "Retry",
@@ -980,6 +982,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
+  "codingWorkbench.event.failure.edits-blocked":
+    "Keiko stopped the run because its edits were refused several times in a row for a reason the model cannot fix by changing the edit: for example, no Coding Workbench is connected for this workspace, access to the workspace was lost, or the path is protected by policy. Fix that condition, for example by keeping the Coding Workbench open for this workspace, then start the task again; your changes so far stay in the task workspace.",
+  "codingWorkbench.event.failure.edit-retries-exhausted":
+    "Keiko stopped the run because the model's edits were refused several times in a row for the same reason, for example because they no longer matched the file. Start the task again, rephrase or split it, or choose another model; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.runtime":
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
   "codingWorkbench.event.failure.generic":

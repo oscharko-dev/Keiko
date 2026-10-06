@@ -69,6 +69,7 @@ import {
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type {
+  CodingToolEditOutcome,
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
@@ -602,6 +603,11 @@ export interface ProductionManagedWorktreeToolInput {
   // and says so; it is never a denied call.
   readonly repositorySemanticSearch?:
     { readonly current: RepositorySemanticSearchResolver | undefined } | undefined;
+  /**
+   * F5 (#3873): told every applied or refused edit this run's facade answered, as the model received
+   * it, so the run's orchestration can bound consecutive refusals. Absent, nothing is reported.
+   */
+  readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -764,6 +770,9 @@ export function createProductionManagedWorktreeToolFacade(
       ...(input.diagnostics === undefined ? {} : { catalogDiagnostics: input.diagnostics }),
       ...(input.onToolSettled === undefined ? {} : { onToolSettled: input.onToolSettled }),
       unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
+      ...(input.observeEditOutcome === undefined
+        ? {}
+        : { observeEditOutcome: input.observeEditOutcome }),
     },
   );
 }

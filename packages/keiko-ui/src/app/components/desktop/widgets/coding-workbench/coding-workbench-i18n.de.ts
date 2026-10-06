@@ -396,6 +396,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
+  "codingWorkbench.repository.deniedHelp":
+    "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
   "codingWorkbench.repository.retryLoad": "Erneut versuchen",
@@ -1014,6 +1016,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Fehler: {failure}",
+  "codingWorkbench.event.failure.edits-blocked":
+    "Keiko hat den Lauf beendet, weil seine Änderungen mehrmals hintereinander aus einem Grund abgelehnt wurden, den das Modell durch eine andere Änderung nicht beheben kann: etwa weil keine Coding Workbench für diesen Arbeitsbereich verbunden ist, der Zugriff auf den Arbeitsbereich verloren ging oder der Pfad durch eine Richtlinie geschützt ist. Behebe diese Ursache, halte zum Beispiel die Coding Workbench für diesen Arbeitsbereich geöffnet, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.failure.edit-retries-exhausted":
+    "Keiko hat den Lauf beendet, weil die Änderungen des Modells mehrmals hintereinander aus demselben Grund abgelehnt wurden, etwa weil sie nicht mehr zur Datei passten. Starte die Aufgabe erneut, formuliere sie um oder teile sie auf, oder wähle ein anderes Modell; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.failure.runtime":
     "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
   "codingWorkbench.event.failure.generic":

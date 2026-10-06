@@ -37,6 +37,8 @@ const FAILURE_CODES = new Set([
   "output-exhausted-repeated",
   "provider-unavailable",
   "model-turn-failed",
+  "edits-blocked",
+  "edit-retries-exhausted",
   "provider-failed",
   "stream-incomplete",
   "turn-rejected",

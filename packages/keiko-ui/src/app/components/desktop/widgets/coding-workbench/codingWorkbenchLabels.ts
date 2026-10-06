@@ -303,7 +303,8 @@ export function eventDetail(
 
 // The run failures with a sentence of their own. F9 (#3873): the internal-error sentence belongs
 // to `runtime-failed` alone; a run that ended on one of its bounds or on a model call names that
-// cause instead.
+// cause instead. F5 (#3873): a run whose edits were refused again and again names its refusal
+// class and the next step, never the generic sentence.
 const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map<
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchMessageKey
@@ -314,6 +315,8 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
   ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
   ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+  ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
+  ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
 ]);
 
 // F9 (#3873): a run settles `cancelled` only from the stop the operator asked for, so its terminal

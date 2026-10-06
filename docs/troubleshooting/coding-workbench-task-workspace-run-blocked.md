@@ -786,3 +786,65 @@ A `failed` line with a closed code is a defect in the named helper or a reposito
 fit; file it with the timeline. Do not widen the admission rule to admit a path the change list does
 not name: the candidate digest binds exactly the bytes reviewed, and a directory or an unlisted path
 would stage content nobody reviewed.
+
+---
+
+## A run fails with `edits-blocked` or `edit-retries-exhausted`
+
+| Field             | Value                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                            |
+| Surface           | Local server / Coding Workbench                                                                   |
+| Stable identifier | `edits-blocked`, `edit-retries-exhausted`, `coding-runtime.run.refusal-escalated`, `failureBasis` |
+
+**Symptom**
+
+A run ends as failed and the Workbench says Keiko stopped it because its edits were refused several
+times in a row. Before #3873 such a run never ended on its own: in the live Gemma qualification a
+run whose workspace had no connected Workbench logged eleven `coding-runtime.edit.refused
+reasonCode=NO_ACTIVE_SESSION` lines until the operator stopped it.
+
+**Root Cause**
+
+The run's orchestration counts each run's consecutive governed edit refusals with the same closed
+reason. Reads, searches and other tool calls between two refused edits do not interrupt the count;
+an applied edit or a refusal with another reason restarts it; a human's rejection of a change in its
+review never counts (ADR-0124 D6), nor does a refusal that lands while the run is paused. At the
+reason's bound the run writes one
+`coding-runtime.run.refusal-escalated` line and settles `failed` (ADR-0137 D3):
+
+- `edits-blocked` — three consecutive refusals the model cannot repair by changing its edit: no
+  connected Workbench editor (`NO_ACTIVE_SESSION`, `NO_ACTIVE_BRIDGE`), lost workspace access, a denied
+  path or policy (`OUT_OF_SCOPE`, `POLICY_DENIED`, `APPROVAL_REQUIRED`), an editor buffer only the
+  operator can save (`DIRTY`), an editor or transport fault.
+- `edit-retries-exhausted` — six consecutive refusals the model could have repaired: edits that do
+  not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
+  precondition, or a refusal without a closed code (`UNCLASSIFIED`).
+
+**Diagnostic Steps**
+
+1. Reconstruct the run and read its `coding-runtime.run.refusal-escalated` line: `reasonCode`,
+   `refusalClass` (`unrepairable` or `repairable`), `consecutiveCount` and `bound`.
+
+   ```bash
+   keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
+   ```
+
+2. The `coding-runtime.run.settled` line repeats the cause: `failureCode`, `failureBasis`
+   (`refusal-escalation`) and `refusalReasonCode`.
+3. The `coding-runtime.edit.refused` lines before the escalation show each refused edit; for
+   `EDIT_PREPARE_FAILED` their `prepareCause` names which preparation step refused.
+
+**Resolution**
+
+- `edits-blocked` with `NO_ACTIVE_SESSION` or `NO_ACTIVE_BRIDGE`: edits are applied through the live
+  Coding Workbench editor in the browser. Keep the Workbench open for the run's workspace — a run
+  started over the API needs one too — then start the task again; the changes already made stay in
+  the task workspace.
+- `edits-blocked` with a policy or authority reason: the edit targets a path or action the run may
+  not change. Adjust the task, or start it in a workspace where the path is permitted.
+- `edit-retries-exhausted`: the model could not produce an edit that applies. Start the task again,
+  rephrase or split it, or choose another model.
+
+The bounds are fixed and deliberately small: each refused attempt resends the run's growing context to
+the model, so a run that loops on a refusal spends its prompt allowance on nothing (ADR-0137).

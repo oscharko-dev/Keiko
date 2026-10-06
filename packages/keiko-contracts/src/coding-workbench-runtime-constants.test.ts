@@ -50,4 +50,13 @@ describe("CODING_WORKBENCH_RUNTIME_FAILURE_CODES", () => {
       CODING_WORKBENCH_RUNTIME_FAILURE_CODES;
     expect(values.length).toBeGreaterThan(0);
   });
+
+  // F5 (#3873): a run whose edits were refused again and again settles with the refusal class —
+  // unrepairable (`edits-blocked`) or repairable but exhausted (`edit-retries-exhausted`).
+  it.each(["edits-blocked", "edit-retries-exhausted"] as const)(
+    "carries the %s refusal cause",
+    (failureCode) => {
+      expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain(failureCode);
+    },
+  );
 });

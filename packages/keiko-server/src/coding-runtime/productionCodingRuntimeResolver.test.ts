@@ -58,6 +58,26 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
   };
 });
 
+// F5 (#3873): the edit outcome observer the resolver hands each run's managed tool facade, captured
+// at the one production composition site so a test can play the facade's part.
+const editOutcomeCapture = vi.hoisted(() => ({
+  observers: [] as ((outcome: { readonly kind: "refused"; readonly reasonCode: string }) => void)[],
+}));
+
+vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./productionManagedWorktreeTools.js")>();
+  return {
+    ...original,
+    createProductionManagedWorktreeToolFacade: (
+      ...args: Parameters<typeof original.createProductionManagedWorktreeToolFacade>
+    ): ReturnType<typeof original.createProductionManagedWorktreeToolFacade> => {
+      const observe = args[0].observeEditOutcome;
+      if (observe !== undefined) editOutcomeCapture.observers.push(observe);
+      return original.createProductionManagedWorktreeToolFacade(...args);
+    },
+  };
+});
+
 const roots: string[] = [];
 
 afterEach(() => {
@@ -364,6 +384,37 @@ describe("production coding runtime resolver", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledExactlyOnceWith("run-1");
+  });
+
+  // F5 (#3873, live Gemma qualification): every edit a run's facade answered stayed inside that
+  // facade, so eleven NO_ACTIVE_SESSION refusals reached nothing that could stop the run. The
+  // facade the resolver composes per run reports each outcome, with the run's own id, through the
+  // slot the control plane fills with the orchestrator's refusal bound.
+  it("routes a run's edit outcomes through the latest attached observer with the run's id", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const first = vi.fn();
+    const latest = vi.fn();
+    host.attachEditOutcomeObserver?.(first);
+    editOutcomeCapture.observers.length = 0;
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    host.attachEditOutcomeObserver?.(latest);
+
+    const outcome = { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" } as const;
+    expect(editOutcomeCapture.observers).toHaveLength(1);
+    editOutcomeCapture.observers[0]?.(outcome);
+
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
   });
 
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {

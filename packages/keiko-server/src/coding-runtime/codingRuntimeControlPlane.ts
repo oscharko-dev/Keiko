@@ -40,6 +40,7 @@ import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import type { ToolBridgeApprovalRejection } from "./opencodeV2ApprovalRequests.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import type { CodingRuntimeEditOutcomeObserver } from "./codingToolFacadePorts.js";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
 
 /**
@@ -136,6 +137,15 @@ export interface CodingRuntimeHost {
   // .notifyVerifiedHeadAdvanced` once it does. Consumed internally by
   // `createCodingRuntimeControlPlane` below -- never forwarded past this module.
   readonly attachVerifiedHeadNotifier?: ((notify: (runId: string) => void) => void) | undefined;
+  /**
+   * F5 (#3873): called exactly once, right after this control plane builds its orchestrator, with
+   * the orchestrator's `observeEditOutcome`. Late-bound for the reason `attachVerifiedHeadNotifier`
+   * is: each run's tool facade is composed inside the runtime resolver, before the orchestrator
+   * exists, and reports every applied or refused edit through this slot so the run's consecutive
+   * refusals are bounded. Consumed internally by `createCodingRuntimeControlPlane` below.
+   */
+  readonly attachEditOutcomeObserver?:
+    ((observe: CodingRuntimeEditOutcomeObserver) => void) | undefined;
   /**
    * Binds the repository semantic index this server can open (#3416). Late-bound for the same
    * reason `attachVerifiedHeadNotifier` is: the lease is derived from the assembled deps graph,
@@ -253,6 +263,7 @@ export function createCodingRuntimeControlPlane(
     void orchestrator.ingest(event);
   };
   attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
+  attachEditOutcomeObserver(input.runtimeHost, orchestrator);
   orchestrator.startupReconcileNow();
   return {
     orchestrator,
@@ -343,6 +354,17 @@ function attachVerifiedHeadNotifier(
 ): void {
   runtimeHost?.attachVerifiedHeadNotifier?.((runId: string): void => {
     orchestrator.notifyVerifiedHeadAdvanced(runId);
+  });
+}
+
+// F5 (#3873): fills the runtime host's edit outcome slot with the orchestrator's real, public
+// `observeEditOutcome` seam, so the refusal bound counts what each run's facade answered.
+function attachEditOutcomeObserver(
+  runtimeHost: CodingRuntimeHost | undefined,
+  orchestrator: CodingRuntimeOrchestrator,
+): void {
+  runtimeHost?.attachEditOutcomeObserver?.((runId, outcome): void => {
+    orchestrator.observeEditOutcome(runId, outcome);
   });
 }
 

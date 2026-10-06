@@ -364,6 +364,15 @@ describe("Coding Workbench runtime contracts", () => {
     expect(
       validateCodingWorkbenchRuntimeState({ ...active, failureCode: "runtime-failed" }),
     ).toMatchObject({ ok: false });
+    // F5 (#3873): the refusal causes are failures of a settled run only, never of a live one.
+    for (const failureCode of ["edits-blocked", "edit-retries-exhausted"]) {
+      expect(validateCodingWorkbenchRuntimeState({ ...active, failureCode })).toMatchObject({
+        ok: false,
+      });
+      expect(
+        validateCodingWorkbenchRuntimeState({ ...active, state: "failed", failureCode }),
+      ).toMatchObject({ ok: true });
+    }
     expect(
       validateCodingWorkbenchRuntimeState({ ...active, updatedAt: "2026-07-11 12:00:00" }),
     ).toMatchObject({ ok: false });
