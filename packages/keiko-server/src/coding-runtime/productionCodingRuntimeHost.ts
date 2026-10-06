@@ -99,6 +99,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
   "contextUsage",
+  "secureWorkspaceTextRead",
 ] as const;
 
 type OptionalRuntimeCapabilities = Pick<

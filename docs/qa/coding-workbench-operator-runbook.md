@@ -101,6 +101,23 @@ change a live or exhausted envelope, the 30-minute duration, the tool/patch ceil
 Model Gateway spend limit. A larger accepted task can start with a deliberately configured allowance;
 an exhausted run requires a fresh accepted run and preserves its workspace through normal recovery.
 
+## Repository working instructions
+
+A run's initial turn carries the task workspace's own `AGENTS.md` (workspace root only, exact name,
+no symlink) as bounded, labelled, untrusted context beside the project memory: the window
+`keiko_workspace_read` would answer for the first 800 lines, cut at a line boundary to 32,768 bytes
+and to the turn's remaining prompt budget, with one explicit truncation line when cut, read through
+the same secure read helper, and framed so it grants no authority and cannot change the tool rules
+or the autonomy mode (ADR-0137 D1). It is on by default; an operator sets
+`KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` before starting the server to disable it, and
+any other explicit value fails closed at composition. The existing
+`coding-runtime.repository-instructions.context` activity event records the outcome per run
+(`attached`, `truncated`, `absent`, `disabled`, `refused`) with the attached byte and line counts,
+the file's total counts when cut, and the whole-file digest the read tool reports, never the
+content. The helper's content ceiling of 65,536 bytes is pinned in its wire protocol and native
+binary: a larger `AGENTS.md` is refused as `too-large` (at `warn`, the run proceeds) until the
+helper protocol gains a bounded window, so keep the file under 64 KiB for it to reach the model.
+
 ## Review Commands
 
 Run focused closeout checks:

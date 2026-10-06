@@ -418,6 +418,9 @@ function composeRuntime(
     permissionPort: createProductionRuntimePermissionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
     contextUsage: { read: shared.contextUsage.read },
+    // The same verified secure-read helper every run's `keiko_workspace_read` goes through, so the
+    // control plane's repository-instructions loader never opens a second filesystem path.
+    secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs),
     ...deliveryAuthorityPorts(authority, input),
     // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.

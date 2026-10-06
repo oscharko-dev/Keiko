@@ -32,6 +32,7 @@ import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import type { CodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 
 export interface CodingRuntimeLaunchResolver {
   /** Bounded server-only reads before the existing start-confirmation claim is consumed. */
@@ -92,6 +93,12 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  /**
+   * The task workspace's own `AGENTS.md`, attached as bounded untrusted initial context beside the
+   * project memory (ADR-0137 D1). Composed by `deps.ts` for every production control plane; a
+   * fixture that omits it starts its runs without repository instructions and without the line.
+   */
+  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**
    * Server-level read-only research grant registry (#2387). The grant is exposed only through the

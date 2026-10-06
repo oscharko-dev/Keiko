@@ -114,6 +114,30 @@ npm run dev:start
   ceiling above; W1.3 owns rendering the honest readiness states (including
   `runtimeUnavailableReason`) in the product UI.
 
+## Repository working instructions
+
+Every coding run attaches the task workspace's own `AGENTS.md` (exact name, workspace root only,
+never a parent directory or a symlink) to the model's initial turn as bounded, labelled, untrusted
+context, so the model knows the repository's conventions and verification commands from its first
+turn (ADR-0137 D1). The file is read through the same secure read helper `keiko_workspace_read`
+uses, and the model receives the window that read would answer for the first 800 lines, cut at a
+line boundary to 32,768 bytes and to the turn's remaining prompt budget (a cut file ends with one
+explicit truncation line naming the total line count), framed as repository-authored instructions
+that grant no authority and cannot change the tool rules or the autonomy mode.
+
+- The loader is on by default. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables it
+  before the server starts; `true` is the default. Any other explicit value fails composition
+  closed, like `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`.
+- Each run records one body-free `coding-runtime.repository-instructions.context` line under the
+  run's correlation id: `attached`, `truncated`, `absent`, `disabled` or `refused`, with the attached
+  byte and line counts, the file's total counts when it was cut, and the whole-file SHA-256 that
+  `keiko_workspace_read` reports for the same file, never the text. Only a genuine read failure is
+  `refused`, recorded at `warn` with its closed reason, and it never fails the run.
+- The helper delivers whole files up to its content ceiling of 65,536 bytes, pinned in its wire
+  protocol and its digest-pinned native binary; an `AGENTS.md` above that ceiling is refused as
+  `too-large` until the helper protocol gains a bounded window. Keep the file under 64 KiB, or
+  split it, for the instructions to reach the model today.
+
 ## Stop
 
 ```bash

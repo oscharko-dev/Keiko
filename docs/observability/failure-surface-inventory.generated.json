@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0856b162704ad839ee2de63479b42717c60ce7e8d90f12b920cce736a900861a"
+    "catalogDigest": "5d582d94f2b585bc59a884c51fe5220f095e4efe65d74665d0c17cc3ff75ba9f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 521,
-    "proofCount": 528,
-    "resolvedProofCount": 528,
-    "failureClassCount": 336,
+    "operationCount": 522,
+    "proofCount": 529,
+    "resolvedProofCount": 529,
+    "failureClassCount": 337,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -320,6 +320,7 @@
         "coding-runtime.read-only-child.runner-failed",
         "coding-runtime.readiness.failed",
         "coding-runtime.readiness.phase",
+        "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-rerank",
         "coding-runtime.run.delivery-continuation-refused",
         "coding-runtime.run.delivery-continued",
@@ -757,6 +758,7 @@
     "coding-runtime-operation-refusal": ["tools-workflows.rejection"],
     "coding-runtime-operator-decision": ["tools-workflows.dependency-failure"],
     "coding-runtime-project-memory": ["tools-workflows.dependency-failure"],
+    "coding-runtime-repository-instructions": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-list": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-revision-rebound": ["tools-workflows.dependency-failure"],
@@ -1355,6 +1357,9 @@
     ],
     "coding-runtime.readiness.phase.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
+    ],
+    "coding-runtime.repository-instructions.context.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.test.ts"
     ],
     "coding-runtime.repository-rerank.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"

@@ -87,6 +87,7 @@ import {
   composeCodingRuntimeInitialContext,
   renderCodingRuntimeProjectMemoryContext,
 } from "./codingRuntimeProjectMemory.js";
+import { repositoryInstructionsContentBudget } from "./codingRuntimeRepositoryInstructions.js";
 import type {
   CodingRuntimeDescriptionJobStore,
   WorkbenchDescriptionScope,
@@ -3341,11 +3342,15 @@ export class CodingRuntimeOrchestrator {
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
-    return composeCodingRuntimeInitialContext([
-      issueContext,
-      memoryContext,
-      this.deps.history?.initialContext(runId),
-    ]);
+    const historyContext = this.deps.history?.initialContext(runId);
+    // The repository's own AGENTS.md leads the context so its conventions frame the task; it is
+    // loaded last so it can yield to the parts above under the sidecar prompt ceiling.
+    const otherParts = [issueContext, memoryContext, historyContext];
+    const repositoryInstructions = await this.deps.repositoryInstructions?.loadForRun({
+      runId,
+      contentByteBudget: repositoryInstructionsContentBudget(request.taskIntent, otherParts),
+    });
+    return composeCodingRuntimeInitialContext([repositoryInstructions, ...otherParts]);
   }
 
   private async projectMemoryInitialContext(

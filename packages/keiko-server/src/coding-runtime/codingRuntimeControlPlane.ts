@@ -26,6 +26,8 @@ import {
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
+import type { CodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -78,6 +80,10 @@ export interface CodingRuntimeHost {
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
+  // The one secure workspace read the governed `keiko_workspace_read` tool answers through, exposed
+  // so `deps.ts` can compose the repository-instructions loader (ADR-0137 D1) over the SAME helper
+  // instead of a second filesystem path. Present once a qualified runtime host is composed.
+  readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   readonly contextUsage?:
     { readonly read: (runId: string) => CodingWorkbenchContextUsage | undefined } | undefined;
   readonly runtimeCapabilityAuthenticator?:
@@ -176,6 +182,7 @@ export interface CodingRuntimeControlPlaneInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -280,6 +287,9 @@ function createControlPlaneOrchestrator(
       ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
     ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
+    ...(input.repositoryInstructions
+      ? { repositoryInstructions: input.repositoryInstructions }
+      : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
   });

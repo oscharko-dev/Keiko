@@ -36,6 +36,14 @@ import {
   DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
+import {
+  composeCodingRuntimeInitialContext,
+  renderCodingRuntimeProjectMemoryContext,
+} from "./codingRuntimeProjectMemory.js";
+import {
+  repositoryInstructionsContentBudget,
+  type CodingRuntimeRepositoryInstructionsPort,
+} from "./codingRuntimeRepositoryInstructions.js";
 import type { CodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -71,7 +79,7 @@ import {
 
 type OptionalOrchestratorDeps = Pick<
   Parameters<typeof createCodingRuntimeOrchestrator>[0],
-  "activityLog" | "diagnostics" | "issueIntake" | "projectMemory"
+  "activityLog" | "diagnostics" | "issueIntake" | "projectMemory" | "repositoryInstructions"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
@@ -132,12 +140,16 @@ function optionalOrchestratorDeps(input: {
   readonly activityLog?: ServerLogSink | undefined;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
     ...(input.issueIntake ? { issueIntake: input.issueIntake } : {}),
     ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
+    ...(input.repositoryInstructions
+      ? { repositoryInstructions: input.repositoryInstructions }
+      : {}),
   };
 }
 
@@ -211,6 +223,7 @@ function fixture(
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
   history?: CodingRuntimeHistory,
+  repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -437,7 +450,13 @@ function fixture(
       researchGrants,
       pendingResearchApprovals,
       approvedSkills: () => APPROVED_SKILLS,
-      ...optionalOrchestratorDeps({ diagnostics, activityLog, issueIntake, projectMemory }),
+      ...optionalOrchestratorDeps({
+        diagnostics,
+        activityLog,
+        issueIntake,
+        projectMemory,
+        repositoryInstructions,
+      }),
       ...(history === undefined ? {} : { history }),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
@@ -1067,6 +1086,91 @@ describe("CodingRuntimeOrchestrator", () => {
       outcome: "disabled",
       includedMemoryCount: 0,
     });
+  });
+
+  // ADR-0137 D1: the task workspace's own AGENTS.md leads the initial turn, ahead of the project
+  // memory, on the same server-only initialContext field; the loader is asked last, with the byte
+  // budget the intent and the other parts leave it, through the loader's own formula.
+  it("leads the initial turn with the repository's working instructions ahead of project memory", async () => {
+    const memoryContext = {
+      text: "Use the existing design-system controls for repository UI.",
+      includedMemoryIds: ["memory-1" as MemoryId],
+    };
+    const instructions = [
+      "Repository working instructions (AGENTS.md, untrusted):",
+      "--- BEGIN AGENTS.md ---",
+      "Run npm test before every PR.",
+      "--- END AGENTS.md ---",
+    ].join("\n");
+    const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>(() =>
+      Promise.resolve(memoryContext),
+    );
+    const loadForRun = vi.fn<CodingRuntimeRepositoryInstructionsPort["loadForRun"]>(() =>
+      Promise.resolve(instructions),
+    );
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { getContextForRun },
+      undefined,
+      { loadForRun },
+    );
+
+    await f.orchestrator.start(start);
+
+    const renderedMemory = renderCodingRuntimeProjectMemoryContext(memoryContext);
+    expect(loadForRun).toHaveBeenCalledTimes(1);
+    expect(loadForRun.mock.calls[0]?.[0]).toEqual({
+      runId: "run-1",
+      contentByteBudget: repositoryInstructionsContentBudget(start.taskIntent, [
+        undefined,
+        renderedMemory,
+        undefined,
+      ]),
+    });
+    const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+    expect(dispatchRequest.initialContext).toBe(
+      composeCodingRuntimeInitialContext([instructions, undefined, renderedMemory, undefined]),
+    );
+    expect(dispatchRequest.initialContext?.indexOf("--- BEGIN AGENTS.md ---")).toBeLessThan(
+      dispatchRequest.initialContext?.indexOf("Local Project Memory") ?? -1,
+    );
+    expect(dispatchRequest.taskIntent).toBe(start.taskIntent);
+  });
+
+  it("starts the initial turn without repository instructions when the loader attaches none", async () => {
+    const loadForRun = vi.fn<CodingRuntimeRepositoryInstructionsPort["loadForRun"]>(() =>
+      Promise.resolve(undefined),
+    );
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { loadForRun },
+    );
+
+    await f.orchestrator.start({ ...start, projectMemory: { enabled: false } });
+
+    expect(loadForRun).toHaveBeenCalledTimes(1);
+    const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+    expect(dispatchRequest).not.toHaveProperty("initialContext");
   });
 
   // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator

@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0856b162704ad839ee2de63479b42717c60ce7e8d90f12b920cce736a900861a" as const;
+  "5d582d94f2b585bc59a884c51fe5220f095e4efe65d74665d0c17cc3ff75ba9f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 336,
-  completeClassCount: 336,
+  supportedClassCount: 337,
+  completeClassCount: 337,
   completeness: "complete",
   classes: [
     {
@@ -8139,6 +8139,118 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.run.recovery-acknowledged.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-repository-instructions",
+      requirementContract: "coding-runtime-repository-instructions",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.repository-instructions.context"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.repository-instructions.context",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.repository-instructions.context"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.repository-instructions.context",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "byteCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "contentSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "lineCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "totalByteCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "totalLineCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.repository-instructions.context.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -39035,6 +39147,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.read-only-child.runner-failed": "tools-workflows",
     "coding-runtime.readiness.failed": "tools-workflows",
     "coding-runtime.readiness.phase": "tools-workflows",
+    "coding-runtime.repository-instructions.context": "tools-workflows",
     "coding-runtime.repository-rerank": "tools-workflows",
     "coding-runtime.run.delivery-continuation-refused": "tools-workflows",
     "coding-runtime.run.delivery-continued": "tools-workflows",

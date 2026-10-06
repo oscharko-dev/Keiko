@@ -386,6 +386,12 @@ import {
   createCodingRuntimeProjectMemoryPort,
   type CodingRuntimeProjectMemoryPort,
 } from "./coding-runtime/codingRuntimeProjectMemory.js";
+import {
+  configuredCodingRuntimeRepositoryInstructionsEnabled,
+  createCodingRuntimeRepositoryInstructionsPort,
+  KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV,
+  type CodingRuntimeRepositoryInstructionsPort,
+} from "./coding-runtime/codingRuntimeRepositoryInstructions.js";
 import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import {
   createCodingRuntimeControlPlane,
@@ -4724,6 +4730,10 @@ function buildUiCodingRuntimeControlPlane(
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
+  const repositoryInstructions = createUiCodingRuntimeRepositoryInstructions(
+    args,
+    codingRuntimeHost,
+  );
   return createCodingRuntimeControlPlane({
     historyStore: args.bundle.uiStore,
     issueIntake: createProductionCodingRuntimeIssueIntake({
@@ -4741,6 +4751,7 @@ function buildUiCodingRuntimeControlPlane(
       ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
     projectMemory,
+    repositoryInstructions,
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.
     // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
@@ -4759,6 +4770,24 @@ function createUiCodingRuntimeProjectMemory(
     vault: memoryVault,
     evidenceStore: args.evidenceStore,
     redactString: args.redactString,
+  });
+}
+
+// The task workspace's own AGENTS.md as bounded untrusted initial context (ADR-0137 D1). Default
+// on; the explicit `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` opt-out is read once here,
+// and any other explicit value fails composition closed exactly like the neighbouring
+// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`. The loader reads through the runtime host's own secure
+// workspace read helper, never a second filesystem path; an unqualified host leaves it no source.
+function createUiCodingRuntimeRepositoryInstructions(
+  args: UiHandlerDepsAssemblyArgs,
+  codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
+): CodingRuntimeRepositoryInstructionsPort {
+  return createCodingRuntimeRepositoryInstructionsPort({
+    enabled: configuredCodingRuntimeRepositoryInstructionsEnabled(
+      args.options.env[KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV],
+    ),
+    source: codingRuntimeHost?.secureWorkspaceTextRead,
+    activityLog: processServerLogSink(),
   });
 }
 

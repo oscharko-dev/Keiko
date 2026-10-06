@@ -618,7 +618,8 @@ function completedRead(
 }
 
 // One formula for the digest a read reports and the pre-ask base check compares against (#3612).
-function wholeFileDigest(text: string): string {
+// Exported for the repository-instructions loader, whose `contentSha256` is this same digest.
+export function wholeFileDigest(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
@@ -704,8 +705,10 @@ function emitReadFailureDiagnostic(
 /**
  * Cuts the requested 1-based line window out of the full governed read. The whole file always
  * stays server-side; only the window travels back to the model (#2473 large-file reads).
+ * Exported for the repository-instructions loader, which attaches the first-lines window of
+ * AGENTS.md exactly as this read would answer it.
  */
-function readWindow(
+export function readWindow(
   text: string,
   startLine: number | undefined,
   maxLines: number | undefined,

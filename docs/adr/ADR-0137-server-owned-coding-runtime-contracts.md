@@ -61,6 +61,28 @@ feeds that composed string back into skill authorization. Follow-up turns carry 
 The existing body-free `coding-runtime.run.issue-context-attached` event records initial attachment;
 raw context stays absent from runtime snapshots, generated runtime configuration and activity logs.
 
+The same server-only `initialContext` field also carries the repository's own working instructions
+(2026-10-06). For every run the server reads exactly `AGENTS.md` at the task workspace root — no
+other file, no parent directory, no symlink — through the same secure workspace read helper that
+answers `keiko_workspace_read`, never a second filesystem path. The model receives the window that
+read would answer for the file's first 800 lines, cut at a line boundary to 32,768 bytes and to the
+bytes the turn still has under the sidecar prompt ceiling; a cut file ends with one explicit line
+naming the total line count. It is framed as repository-authored, untrusted instructions that the
+model follows for conventions and verification commands and that grant no authority: they cannot
+change the governed tool rules, the Authority Envelope or the autonomy mode, and when the human
+intent and the other context parts already fill the prompt ceiling the instructions yield first. The
+loader is on by default; `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables it and any
+other explicit value fails composition closed. The body-free
+`coding-runtime.repository-instructions.context` event records the outcome under the run's
+correlation id (`attached`, `truncated`, `absent`, `disabled`, `refused`) with the attached byte and
+line counts, the file's total counts when cut, and the whole-file SHA-256 the read tool reports for
+the same file; only a genuine read failure is `refused`, recorded at `warn` with its closed reason,
+and it never fails the run. The helper reports a missing root file and a denied one alike, so both
+are `absent` with the helper's own reason retained. The helper delivers whole files up to its
+content ceiling of 65,536 bytes, pinned in its wire protocol and its digest-pinned native binary, so
+a larger `AGENTS.md` is refused as `too-large` until that protocol gains a bounded window; lifting
+the ceiling is a helper-protocol decision, not a loader change.
+
 ### D2 — One server aggregate owns runtime authority
 
 The BFF resolves the authenticated local operator and the live active task workspace before minting.

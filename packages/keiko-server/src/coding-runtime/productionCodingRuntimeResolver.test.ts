@@ -150,6 +150,28 @@ describe("production coding runtime resolver", () => {
     expect(host.approvedSkills?.().catalogDigest).toBe(composed?.catalogDigest);
   });
 
+  // ADR-0137 D1: the control plane's repository-instructions loader reads AGENTS.md through the
+  // one secure read port the resolver was composed with — the port every run's governed
+  // `keiko_workspace_read` answers through — never a second filesystem path.
+  it("exposes the composed secure workspace read port to the control plane unchanged", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const secureWorkspaceTextRead = {
+      readText: () => Promise.resolve({ ok: false as const, reason: "denied" as const }),
+    };
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        vi.fn((input: ProductionRuntimeBackendInput) => backendRun(input.request.runId)),
+        confirmations.consumer,
+        undefined,
+        { secureWorkspaceTextRead },
+      ),
+    );
+
+    expect(host?.secureWorkspaceTextRead).toBe(secureWorkspaceTextRead);
+  });
+
   it("starts an approved research grant lifetime at operator approval time", async () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

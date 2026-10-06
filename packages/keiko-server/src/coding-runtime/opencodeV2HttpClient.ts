@@ -3,7 +3,13 @@ import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,256}$/u;
 const MAX_JSON_BYTES = OPENCODE_HISTORY_RESPONSE_MAX_BYTES;
-const MAX_TEXT_BYTES = 65_536;
+/**
+ * The ceiling on one prompt's text as the sidecar receives it: the initial context, the `\n\n`
+ * separator and the human task intent together. Exported so the server-side composition of that
+ * context (`codingRuntimeRepositoryInstructions.ts`) can yield before the client refuses the turn.
+ */
+export const OPENCODE_PROMPT_TEXT_MAX_BYTES = 65_536;
+const MAX_TEXT_BYTES = OPENCODE_PROMPT_TEXT_MAX_BYTES;
 // History reads share the sidecar's event loop with tool execution. A burst of parallel tools may
 // delay its local HTTP response without making the run unhealthy; keep a bounded scheduling margin.
 const DEFAULT_TIMEOUT_MS = 30_000;

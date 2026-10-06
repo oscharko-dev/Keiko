@@ -3188,6 +3188,19 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     const disabled = depsWithEnv({ KEIKO_CODING_SIDECAR_DISABLED: "1" });
     expect(disabled.codingRuntimeUnavailableReason).toBe("runtime-disabled");
   });
+
+  // ADR-0137 D1: the repository-instructions opt-out is parsed once at composition, next to the
+  // deployment ceiling; an explicit value that is neither true nor false fails the composition
+  // closed instead of silently picking a behaviour.
+  it("accepts the repository-instructions opt-out and rejects any other explicit value", () => {
+    expect(depsWithEnv({ KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED: "false" })).toBeDefined();
+    expect(depsWithEnv({ KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED: "true" })).toBeDefined();
+    for (const value of ["", "1", "yes", "off"]) {
+      expect(() => depsWithEnv({ KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED: value })).toThrow(
+        RangeError,
+      );
+    }
+  });
 });
 
 // Epic #2285 Wave 2 audit follow-up (#2628). The only production wiring of

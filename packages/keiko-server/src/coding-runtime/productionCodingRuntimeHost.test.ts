@@ -142,4 +142,19 @@ describe("production coding runtime host", () => {
     expect(withUsage?.contextUsage).toBe(contextUsage);
     expect(withoutUsage).not.toHaveProperty("contextUsage");
   });
+
+  // ADR-0137 D1: the repository-instructions loader reads through the host's own secure read port,
+  // so the host forwards exactly the port the resolver composed and never fabricates one.
+  it("forwards the secure workspace read port only when the qualified runtime supplies it", () => {
+    const secureWorkspaceTextRead = {
+      readText: vi.fn(() => Promise.resolve({ ok: false as const, reason: "denied" as const })),
+    };
+    const withRead = createProductionCodingRuntimeHost({
+      resolve: () => ({ ...qualifiedRuntime(), secureWorkspaceTextRead }),
+    });
+    const withoutRead = createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() });
+
+    expect(withRead?.secureWorkspaceTextRead).toBe(secureWorkspaceTextRead);
+    expect(withoutRead).not.toHaveProperty("secureWorkspaceTextRead");
+  });
 });
