@@ -37,6 +37,11 @@ the install's tunnels and refusals are counted on its summary and activity line 
 would install, and npm itself refuses what the proxy cannot see: `allow-remote=none`,
 `allow-file=none` and `allow-directory=root` join `allow-git=none` (2026-09-11).
 
+1.7 — #3873 (F14): D17's completion line makes the wall time of a verification run attributable from
+one persisted line — the report's total and per-step durations and statuses, the isolation probe's
+duration, the isolation backend and egress policy that applied, and the bootstrap's outcome —
+without recording a command, argument, path or output (2026-10-06).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -561,6 +566,25 @@ mandatory. The shared verification execution entry point holds the existing work
 dependency planning, installation and all verification steps, preventing another managed verification
 from modifying dependencies during execution. Admission, acquisition and release emit a correlated
 `editor.verification.workspace` event with a workspace digest.
+
+Where the wall time of a run went is attributable from one persisted line (F14, #3873). A Workbench
+run's targeted-test verification took 28.5 s while the same path measured 236 ms called directly,
+and the log held nothing between `editor.verification.workspace` `acquired` and `released`. The
+completion line — `editor.verification.execute` with `state: "completed"`, written for every run that
+produced a report whose audit evidence was written, whatever its status, while a run whose execution
+threw or whose evidence could not be written leaves its `refused` line with frames and cause chain
+instead — now carries the report's own `durationMs` and `outsideStepsMs` (what the dependency
+bootstrap's decision and installation and the orchestration took outside any step); each planned
+step kind's `<kind>Status` and `<kind>DurationMs` for `test`, `targetedTest`, `typecheck`, `lint` and
+`build`, with the slowest step's `maxStepDurationMs`; the isolation probe's `probeDurationMs`, which
+runs before the report's own clock starts; the isolation that applied (`isolationBackend`, a closed
+sandbox backend or `unknown`, and `isolationAvailable`); the egress policy the orchestrator ran under
+(`networkEnforcement`, `enforce-or-fail-closed` for every run of this primitive); and
+`dependencyBootstrap`, the bootstrap's outcome, present only when a bootstrap decision ran. Every
+value is a closed vocabulary, a boolean or a whole number of milliseconds; no command, argument,
+script name, path or output reaches the line. The time a run waited for the workspace is the gap
+between its `waiting` and `acquired` workspace lines, and the install's own duration stays on
+`editor.verification.dependencies`.
 
 The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
 `present`/`created`/`absent`, npm's exit code, duration, a short redacted detail, the tunnels

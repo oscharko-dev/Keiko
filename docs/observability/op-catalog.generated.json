@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9b953b81264d1c04475851d9daac534526aa61e9448c7259964e66c76e2ff09d",
+    "catalogDigest": "0856b162704ad839ee2de63479b42717c60ce7e8d90f12b920cce736a900861a",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8750,7 +8750,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:100",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:958"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:960"
         ]
       },
       {
@@ -10826,8 +10826,8 @@
         "failureClasses": ["verification-dependency-bootstrap"],
         "proofIds": ["editor.verification.dependencies.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:184",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:769"]
+        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:185",
+        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:779"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10919,6 +10919,160 @@
             "dataClass": "count",
             "required": false
           },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "outsideStepsMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "maxStepDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "probeDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "testStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "passed",
+              "failed",
+              "skipped",
+              "denied",
+              "timed-out",
+              "cancelled",
+              "resource-exceeded"
+            ]
+          },
+          "testDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "targetedTestStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "passed",
+              "failed",
+              "skipped",
+              "denied",
+              "timed-out",
+              "cancelled",
+              "resource-exceeded"
+            ]
+          },
+          "targetedTestDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "typecheckStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "passed",
+              "failed",
+              "skipped",
+              "denied",
+              "timed-out",
+              "cancelled",
+              "resource-exceeded"
+            ]
+          },
+          "typecheckDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "lintStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "passed",
+              "failed",
+              "skipped",
+              "denied",
+              "timed-out",
+              "cancelled",
+              "resource-exceeded"
+            ]
+          },
+          "lintDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "buildStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "passed",
+              "failed",
+              "skipped",
+              "denied",
+              "timed-out",
+              "cancelled",
+              "resource-exceeded"
+            ]
+          },
+          "buildDurationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "isolationBackend": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "bubblewrap",
+              "unshare",
+              "seatbelt",
+              "container-docker",
+              "container-podman",
+              "none",
+              "unknown"
+            ]
+          },
+          "isolationAvailable": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "networkEnforcement": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["inherit", "enforce-or-degrade", "enforce-or-fail-closed"]
+          },
+          "dependencyBootstrap": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "none",
+              "current",
+              "installed",
+              "refused",
+              "failed",
+              "timed-out",
+              "cancelled"
+            ]
+          },
           "reason": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -10974,11 +11128,11 @@
         "failureClasses": ["verification-runner-refusal", "verification-runner-failure"],
         "proofIds": ["editor.verification.execute.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:82",
+        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:88",
         "emitterSites": [
-          "packages/keiko-server/src/editor/verificationRunner.ts:748",
-          "packages/keiko-server/src/editor/verificationRunner.ts:803",
-          "packages/keiko-server/src/editor/verificationRunner.ts:831"
+          "packages/keiko-server/src/editor/verificationRunner.ts:758",
+          "packages/keiko-server/src/editor/verificationRunner.ts:821",
+          "packages/keiko-server/src/editor/verificationRunner.ts:850"
         ]
       },
       {
@@ -11018,8 +11172,8 @@
         "failureClasses": ["verification-runner-failure"],
         "proofIds": ["editor.verification.workspace.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/verificationExecution.ts:46",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationExecution.ts:75"]
+        "registrationSite": "packages/keiko-server/src/editor/verificationExecution.ts:47",
+        "emitterSites": ["packages/keiko-server/src/editor/verificationExecution.ts:76"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43262,6 +43416,7 @@
           "completeness-state",
           "count",
           "digest",
+          "duration",
           "error-kind",
           "loss-state",
           "opaque-id"
@@ -43290,6 +43445,7 @@
           "closed-enum",
           "completeness-state",
           "count",
+          "duration",
           "error-kind",
           "loss-state",
           "opaque-id"
@@ -81277,6 +81433,18 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "buildDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "buildStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "cancelledCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -81295,6 +81463,18 @@
                   "required": false
                 },
                 {
+                  "name": "dependencyBootstrap",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "failedCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -81307,9 +81487,57 @@
                   "required": false
                 },
                 {
+                  "name": "isolationAvailable",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "isolationBackend",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "lintDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "lintStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "maxStepDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "networkEnforcement",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outsideStepsMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "passedCount",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "probeDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
                   "required": false
                 },
                 {
@@ -81349,6 +81577,30 @@
                   "required": false
                 },
                 {
+                  "name": "targetedTestDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "targetedTestStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "testDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "testStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "timedOutCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -81367,6 +81619,18 @@
                   "required": false
                 },
                 {
+                  "name": "typecheckDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "typecheckStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "verificationStatus",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -81377,6 +81641,7 @@
                 "closed-enum",
                 "completeness-state",
                 "count",
+                "duration",
                 "error-kind",
                 "loss-state",
                 "opaque-id"
@@ -81454,6 +81719,18 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "buildDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "buildStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "cancelledCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -81472,6 +81749,18 @@
                   "required": false
                 },
                 {
+                  "name": "dependencyBootstrap",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "failedCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -81484,9 +81773,57 @@
                   "required": false
                 },
                 {
+                  "name": "isolationAvailable",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "isolationBackend",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "lintDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "lintStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "maxStepDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "networkEnforcement",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outsideStepsMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
                   "name": "passedCount",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "probeDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
                   "required": false
                 },
                 {
@@ -81526,6 +81863,30 @@
                   "required": false
                 },
                 {
+                  "name": "targetedTestDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "targetedTestStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "testDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "testStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "timedOutCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -81544,6 +81905,18 @@
                   "required": false
                 },
                 {
+                  "name": "typecheckDurationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "typecheckStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "verificationStatus",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -81554,6 +81927,7 @@
                 "closed-enum",
                 "completeness-state",
                 "count",
+                "duration",
                 "error-kind",
                 "loss-state",
                 "opaque-id"
@@ -85631,7 +86005,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1208",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1210",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -85644,7 +86018,7 @@
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1078",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1080",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -85682,14 +86056,14 @@
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:460",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:462",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:728",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:730",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -85948,14 +86322,14 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1750",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1742",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1831",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1823",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -86242,7 +86616,7 @@
     {
       "op": "editor.verification.dependencies",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:187",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:188",
       "package": "keiko-server"
     },
     {
@@ -86262,27 +86636,27 @@
     {
       "op": "editor.verification.execute",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:85",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:91",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:936",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:955",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1140",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1159",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.workspace",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:49",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:50",
       "package": "keiko-server"
     },
     {
@@ -88011,14 +88385,14 @@
     {
       "op": "verification.dependency-bootstrap",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:191",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:205",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "verification.isolation-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:101",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:102",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

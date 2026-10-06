@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SANDBOX_BACKENDS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { RunCommandDeps, RunCommandInput, CommandResult } from "@oscharko-dev/keiko-tools";
@@ -293,6 +294,40 @@ describe("composed verification dependency bootstrap", () => {
       state: "failed",
       completionRecorded: false,
     });
+  });
+
+  // F14 (#3873): the same composition, read back from the file the production writer produced. The
+  // completion line must carry the wall time of the run, the isolation that applied and the
+  // bootstrap outcome, and nothing a customer's workspace could contribute.
+  it("persists the run's wall-time attribution, isolation and bootstrap outcome on the completion line", async () => {
+    proxyStart.mockRejectedValue(failure());
+    await manager().runToReport(
+      { projectId: root, kinds: ["typecheck"], correlationId: "completion-attribution-request" },
+      new AbortController().signal,
+    );
+    const raw = readPersistedActivityLog(stateDir);
+    const completed = persistedActivityLogLines(raw, "editor.verification.execute")
+      .map((line) => expectActivityLogProof("editor.verification.execute.emitted-line", line))
+      .find((record) => record.state === "completed");
+    expect(completed).toMatchObject({
+      op: "editor.verification.execute",
+      correlationId: "completion-attribution-request",
+      verificationStatus: "failed",
+      stepCount: 1,
+      skippedCount: 1,
+      typecheckStatus: "skipped",
+      typecheckDurationMs: 0,
+      dependencyBootstrap: "failed",
+      networkEnforcement: "enforce-or-fail-closed",
+    });
+    // The host decides which backend it has: the line names a closed backend, never a free label.
+    expect(SANDBOX_BACKENDS).toContain(completed?.isolationBackend);
+    expect(typeof completed?.isolationAvailable).toBe("boolean");
+    for (const name of ["probeDurationMs", "durationMs", "outsideStepsMs"]) {
+      expect(Number.isSafeInteger(completed?.[name]), name).toBe(true);
+      expect(completed?.[name], name).toBeGreaterThanOrEqual(0);
+    }
+    expect(raw).not.toContain(root);
   });
 
   it("holds the workspace until verification settles and then admits the queued run", async () => {

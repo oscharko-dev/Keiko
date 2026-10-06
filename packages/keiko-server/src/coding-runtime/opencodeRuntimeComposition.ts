@@ -324,14 +324,16 @@ export function createOpenCodeRuntimeComposition(
   const runs = new Map<string, PreparedRun>();
   const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
-    input.capabilities.toolFacadeCapability,
-    input.toolFacade,
+    {
+      capability: input.capabilities.toolFacadeCapability,
+      facade: input.toolFacade,
+      settleTool: input.safeActivity?.settleTool,
+      diagnostics: input.diagnostics,
+      renderedResults: renderedResultLog(input),
+    },
     input.toolBridge,
-    input.safeActivity?.settleTool,
-    input.diagnostics,
     input.toolFacadeOrigin,
     { approvals, runs },
-    renderedResultLog(input),
   );
   const lifecycle = lifecycleAdapter(input, bridge, runs);
   const manager = createCodingRuntimeManager({
@@ -1425,29 +1427,18 @@ function renderedResultLog(input: OpenCodeRuntimeCompositionInput): RenderedResu
 // fake sidecar) owns its OWN tiny listener wrapping this SAME `handle` -- never a second
 // production path (see opencodeFunctionalHarness/_support.ts).
 function createToolBridge(
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
-  settleTool: SafeToolSettlement | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
   toolFacadeOrigin: string,
   v2: {
     readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
     readonly runs: ReadonlyMap<string, PreparedRun>;
   },
-  renderedResults?: RenderedResultLog,
 ): ToolBridgeController {
   const { approvals, runs } = v2;
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
-  const deps: ToolBridgeExecutionDeps = {
-    capability,
-    facade,
-    settleTool,
-    diagnostics,
-    renderedResults,
-  };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
   const publicPort: OpenCodeToolBridge = {
@@ -1686,7 +1677,7 @@ function preflightToolRequest(
     return { outcome: "rejected", status: 401, body: "" };
   }
   const declaredLength = declaredBodyLength(headers.get("content-length"));
-  if (declaredLength === "invalid" || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
+  if (declaredLength === undefined || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
     return { outcome: "rejected", status: 413, body: "" };
   }
   if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
@@ -1695,11 +1686,12 @@ function preflightToolRequest(
   return { outcome: "admitted" };
 }
 
-function declaredBodyLength(value: string | null): number | "invalid" {
+// The declared Content-Length, or `undefined` for a malformed declaration.
+function declaredBodyLength(value: string | null): number | undefined {
   if (value === null) return 0;
-  if (!/^(?:0|[1-9]\d*)$/u.test(value)) return "invalid";
+  if (!/^(?:0|[1-9]\d*)$/u.test(value)) return undefined;
   const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : "invalid";
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 async function executeToolRequest(

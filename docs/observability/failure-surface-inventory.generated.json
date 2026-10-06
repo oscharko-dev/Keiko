@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9b953b81264d1c04475851d9daac534526aa61e9448c7259964e66c76e2ff09d"
+    "catalogDigest": "0856b162704ad839ee2de63479b42717c60ce7e8d90f12b920cce736a900861a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1485,6 +1485,7 @@
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.execute.emitted-line": [
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.workspace.emitted-line": [

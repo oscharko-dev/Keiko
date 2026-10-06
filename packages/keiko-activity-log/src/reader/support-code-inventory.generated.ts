@@ -1304,6 +1304,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/editor/typescriptRefactoringProvider",
   "keiko-server/editor/verification-run-evidence",
   "keiko-server/editor/verificationExecution",
+  "keiko-server/editor/verificationExecutionLog",
   "keiko-server/editor/verificationRoutes",
   "keiko-server/editor/verificationRunner",
   "keiko-server/editor/verificationRunnerErrors",

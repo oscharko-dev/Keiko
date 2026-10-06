@@ -244,7 +244,7 @@ function occurrences(content: string, needle: string): number {
 }
 
 function withCrlf(text: string): string {
-  return text.replace(/\r?\n/gu, "\r\n");
+  return text.replaceAll(/\r?\n/gu, "\r\n");
 }
 
 function unifiedDiffSection(file: string, before: string | undefined, after: string): string {

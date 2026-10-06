@@ -1143,8 +1143,9 @@ function prepareEdit(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): PreparedEdit | { readonly refused: EditPrepareCause } {
-  const changeset = validatedChangeset(deps, request, signal, mutationGuard);
-  if (typeof changeset === "string") return { refused: changeset };
+  const validated = validatedChangeset(deps, request, signal, mutationGuard);
+  if ("refused" in validated) return validated;
+  const { changeset } = validated;
   const binding = mutationBinding(mutationGuard);
   if (binding === null || (binding === undefined && deps.enforceProducerBinding === true))
     return { refused: "binding-unavailable" };
@@ -1176,18 +1177,22 @@ function hasLiveWorkspaceAccess(deps: CodingToolReadEditPortDeps): boolean {
   }
 }
 
+type ValidatedChangeset =
+  { readonly changeset: EditorAgentChangeset } | { readonly refused: EditPrepareCause };
+
 function validatedChangeset(
   deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): EditorAgentChangeset | EditPrepareCause {
-  if (!hasLiveWorkspaceAccess(deps)) return "workspace-access-lost";
-  if (isAborted(signal)) return "cancelled";
-  if (!checkGuard(mutationGuard)) return "guard-denied";
+): ValidatedChangeset {
+  if (!hasLiveWorkspaceAccess(deps)) return { refused: "workspace-access-lost" };
+  if (isAborted(signal)) return { refused: "cancelled" };
+  if (!checkGuard(mutationGuard)) return { refused: "guard-denied" };
   if (!("changeset" in request) || !isExactEditorAgentChangeset(request.changeset))
-    return "changeset-invalid";
-  return normalizeRawSingleFilePatch(request.changeset) ?? "changeset-invalid";
+    return { refused: "changeset-invalid" };
+  const changeset = normalizeRawSingleFilePatch(request.changeset);
+  return changeset === undefined ? { refused: "changeset-invalid" } : { changeset };
 }
 
 function normalizeRawSingleFilePatch(

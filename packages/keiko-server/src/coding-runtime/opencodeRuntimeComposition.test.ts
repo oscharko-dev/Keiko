@@ -2569,6 +2569,50 @@ describe("private OpenCode tool bridge", () => {
     }
   });
 
+  describe("a declared Content-Length", () => {
+    // One request through the bridge: the status it answers and how often it ran the facade.
+    const declaredLengthOutcome = async (
+      declared: string,
+    ): Promise<{ readonly status: number; readonly executions: number }> => {
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+      const fixture = await startBridgeFixture(facade);
+      try {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers({ ...authorized, "content-length": declared }),
+          body: toolBody("call_declared_length"),
+        });
+        return { status: response.status, executions: vi.mocked(facade.execute).mock.calls.length };
+      } finally {
+        await fixture.stop();
+      }
+    };
+
+    it.each([
+      ["a non-numeric declaration", "abc"],
+      ["a negative declaration", "-1"],
+      ["a leading-zero declaration", "01"],
+      ["a fractional declaration", "1.5"],
+      ["an unsafe-integer declaration", "9007199254740993"],
+      ["a declaration over the byte budget", String(CODING_TOOL_MAX_BODY_BYTES + 1)],
+    ])("rejects %s with 413 before invoking the facade", async (_label, declared) => {
+      await expect(declaredLengthOutcome(declared)).resolves.toEqual({
+        status: 413,
+        executions: 0,
+      });
+    });
+
+    it.each(["0", String(CODING_TOOL_MAX_BODY_BYTES)])(
+      "admits the declaration %s within the byte budget",
+      async (declared) => {
+        await expect(declaredLengthOutcome(declared)).resolves.toEqual({
+          status: 200,
+          executions: 1,
+        });
+      },
+    );
+  });
+
   it("bounds admitted facade work before a second request is delegated", async () => {
     const releases: (() => void)[] = [];
     const facade: CodingToolFacade = {

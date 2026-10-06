@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9b953b81264d1c04475851d9daac534526aa61e9448c7259964e66c76e2ff09d" as const;
+  "0856b162704ad839ee2de63479b42717c60ce7e8d90f12b920cce736a900861a" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -37077,6 +37077,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "buildDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "buildStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "cancelledCount",
               type: "integer",
               dataClass: "count",
@@ -37095,6 +37107,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "dependencyBootstrap",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "durationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "failedCount",
               type: "integer",
               dataClass: "count",
@@ -37107,9 +37131,57 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "isolationAvailable",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "isolationBackend",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "lintDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "lintStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "maxStepDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "networkEnforcement",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "outsideStepsMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "passedCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "probeDurationMs",
+              type: "integer",
+              dataClass: "duration",
               required: false,
             },
             {
@@ -37149,6 +37221,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "targetedTestDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "targetedTestStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "testDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "testStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "timedOutCount",
               type: "integer",
               dataClass: "count",
@@ -37167,6 +37263,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "typecheckDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "typecheckStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "verificationStatus",
               type: "string",
               dataClass: "closed-enum",
@@ -37177,6 +37285,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "error-kind",
             "loss-state",
             "opaque-id",
@@ -37254,6 +37363,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "buildDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "buildStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "cancelledCount",
               type: "integer",
               dataClass: "count",
@@ -37272,6 +37393,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "dependencyBootstrap",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "durationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "failedCount",
               type: "integer",
               dataClass: "count",
@@ -37284,9 +37417,57 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "isolationAvailable",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "isolationBackend",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "lintDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "lintStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "maxStepDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "networkEnforcement",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "outsideStepsMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "passedCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "probeDurationMs",
+              type: "integer",
+              dataClass: "duration",
               required: false,
             },
             {
@@ -37326,6 +37507,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "targetedTestDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "targetedTestStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "testDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "testStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "timedOutCount",
               type: "integer",
               dataClass: "count",
@@ -37344,6 +37549,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "typecheckDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "typecheckStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "verificationStatus",
               type: "string",
               dataClass: "closed-enum",
@@ -37354,6 +37571,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "error-kind",
             "loss-state",
             "opaque-id",
