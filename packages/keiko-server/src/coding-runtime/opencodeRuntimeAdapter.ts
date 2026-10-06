@@ -1360,10 +1360,35 @@ function v2GovernedAskSource(): readonly string[] {
     "async function refusalResult(response) {",
     "  const text = await response.text();",
     '  if (text.length > MAX_RESPONSE_BYTES) throw new Error("keiko-tool-oversized");',
-    '  if (!validResult(JSON.parse(text))) throw new Error("keiko-tool-invalid");',
-    "  return text;",
+    "  const result = JSON.parse(text);",
+    '  if (!validResult(result)) throw new Error("keiko-tool-invalid");',
+    "  return modelContent(result, text);",
   ];
 }
+
+/**
+ * The model-facing rendering of a governed tool result (#3873). The tool facade answers in JSON,
+ * and JSON escapes every quote, backslash and line break of the file content a read returns. In the
+ * live Gemma qualification the model copied those escapes into its patches: context lines carrying
+ * `\"` no longer matched the file (INVALID_EDITS), and added lines wrote literal backslashes into
+ * it. Every string that carries such a character therefore moves verbatim into a numbered text block
+ * after the JSON envelope, which names the block in the string's place. A block is exactly the
+ * text between its opening line and its closing tag, so a missing final line break stays visible.
+ * A result without such a string reaches the model as the facade's own JSON text, unchanged.
+ */
+export const GOVERNED_TOOL_MODEL_CONTENT_SOURCE: readonly string[] = [
+  "function modelContent(result, text) {",
+  "  const blocks = [];",
+  "  const envelope = JSON.stringify(result, (_key, value) => {",
+  String.raw`    if (typeof value !== "string" || !/["\\\r\n\t]/.test(value)) return value;`,
+  "    blocks.push(value);",
+  '    return "<text " + blocks.length + ">";',
+  "  });",
+  "  if (blocks.length === 0) return text;",
+  String.raw`  const rendered = blocks.map((block, index) => "<text " + (index + 1) + ">\n" + block + "</text " + (index + 1) + ">");`,
+  String.raw`  return [envelope, ...rendered].join("\n");`,
+  "}",
+];
 
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
 function toolSource(
@@ -1396,6 +1421,7 @@ function toolSource(
     "  if (!Number.isSafeInteger(read.totalLines) || read.totalLines < 0) return false;",
     "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
+    ...GOVERNED_TOOL_MODEL_CONTENT_SOURCE,
     ...toolSourceRegistration(action, name, version),
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
@@ -1461,8 +1487,8 @@ function toolSource(
     "      const result = JSON.parse(text);",
     '      if (!validResult(result)) throw new Error("keiko-tool-invalid");',
     version === "v2"
-      ? "      return { content: text, metadata: {} };"
-      : "      return { title: action, output: text, metadata: {} };",
+      ? "      return { content: modelContent(result, text), metadata: {} };"
+      : "      return { title: action, output: modelContent(result, text), metadata: {} };",
     "    } finally {",
     "      clearTimeout(timeout);",
     ...(version === "v1" ? ['      context.abort.removeEventListener("abort", abort);'] : []),
