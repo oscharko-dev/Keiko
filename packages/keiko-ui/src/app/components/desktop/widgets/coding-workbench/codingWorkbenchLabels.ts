@@ -90,6 +90,8 @@ function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchT
   ) {
     return t("codingWorkbench.header.readyEvaluation");
   }
+  // #3873: a revision belongs to a run; with no run yet the state alone is the status.
+  if (snapshot.runId === undefined) return runStateLabel(snapshot.state, t);
   return t("codingWorkbench.announcement.runRevision", {
     state: runStateLabel(snapshot.state, t),
     revision: snapshot.revision,
@@ -113,38 +115,55 @@ function researchAnnouncement(
   return grant === null ? "" : t("codingWorkbench.announcement.researchActive");
 }
 
-export function lifecycleAnnouncement(
+function joinedAnnouncements(announcements: readonly string[]): string {
+  return announcements.filter((announcement) => announcement.length > 0).join(" ");
+}
+
+/**
+ * What the run itself is doing, for the live run status region: its state and revision, a
+ * completed recovery acknowledgement and an active research grant. #3873 live review: the region
+ * used to open with the readiness facts below, so a reader heard "Model source ready. …" before
+ * learning whether the run was still working; those facts now live in the readiness details.
+ */
+export function runStatusAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
   researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
 ): string {
   const snapshot = state.run.value;
-  // F-01: the spoken readiness must match the projected one — a source whose last probe failed is
-  // announced as unavailable, not ready, exactly as `projectReadiness` treats it.
+  const recovery =
+    snapshot?.state === "recovery-required" && snapshot.recoveryAcknowledged === true
+      ? t("codingWorkbench.announcement.recoveryComplete")
+      : "";
+  return joinedAnnouncements([
+    runAnnouncement(state, t),
+    recovery,
+    researchAnnouncement(researchGrant, t),
+  ]);
+}
+
+/** The technical readiness facts behind a start, shown in the collapsed readiness details. */
+export function readinessFacts(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  // F-01: the stated readiness must match the projected one — a source whose last probe failed is
+  // stated as unavailable, not ready, exactly as `projectReadiness` treats it.
   const sourceAvailable =
     state.source.value?.runtimePreference === state.runtimePreference &&
     state.source.value.available &&
     !gatewayVerificationContradictsReadiness(state.source.value.verification);
   const workspaceAvailable = state.workspace.value?.health === "healthy";
   const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
-  const recovery =
-    snapshot?.state === "recovery-required" && snapshot.recoveryAcknowledged === true
-      ? t("codingWorkbench.announcement.recoveryComplete")
-      : "";
-  return [
-    runAnnouncement(state, t),
+  return joinedAnnouncements([
     pairingAnnouncement(state, t),
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
     sourceReasonAnnouncement(state, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
     runtimeAssuranceAnnouncement(state, runtimeAvailable, t),
-    recovery,
-    researchAnnouncement(researchGrant, t),
     setupAnnouncement(state.codexSetup.status, t),
-  ]
-    .filter((announcement) => announcement.length > 0)
-    .join(" ");
+  ]);
 }
 
 // Release-audit F-08/RG-12: an unpaired window's run start is guaranteed to fail authority

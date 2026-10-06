@@ -53,6 +53,8 @@ export interface KeikoSelectProps {
   readonly ariaDescribedBy?: string | undefined;
   readonly ariaLabelledBy?: string | undefined;
   readonly triggerClassName?: string | undefined;
+  /** A native tooltip for the trigger, e.g. the full value of a chip that may ellipsize it. */
+  readonly triggerTitle?: string | undefined;
   readonly menuClassName?: string | undefined;
   readonly menuTitle?: string | undefined;
   readonly menuCountLabel?: string | undefined;
@@ -242,6 +244,16 @@ function buildTriggerClasses(params: {
     .join(" ");
 }
 
+// #3873 live review: an option's text sits two spans deep (the ellipsis and the overflow tooltip
+// measure the inner label), and the Coding Workbench listboxes appeared as nameless "option" nodes in
+// the accessibility tree. Every option therefore names itself with exactly its visible text: the
+// label, then its description and badge, which were part of its content-derived name before.
+function optionAccessibleName(option: KeikoSelectOption): string {
+  return [option.label, option.description, option.badge]
+    .filter((part): part is string => part !== undefined && part.trim().length > 0)
+    .join(", ");
+}
+
 function OverflowOptionButton({
   active,
   index,
@@ -308,6 +320,7 @@ function OverflowOptionButton({
         optionRef.current = element;
         setOptionRef(index, element);
       }}
+      aria-label={optionAccessibleName(option)}
       aria-selected={selected}
       className={`ksel-option${active ? " ksel-option-active" : ""}`}
       data-disabled={option.disabled === true ? "true" : undefined}
@@ -578,6 +591,7 @@ export default function KeikoSelect({
   ariaDescribedBy,
   ariaLabelledBy,
   triggerClassName,
+  triggerTitle,
   menuClassName,
   menuTitle,
   menuCountLabel,
@@ -973,6 +987,7 @@ export default function KeikoSelect({
         }}
         role="combobox"
         style={triggerStyle}
+        title={triggerTitle}
         type="button"
       >
         {leadingVisual !== undefined ? (

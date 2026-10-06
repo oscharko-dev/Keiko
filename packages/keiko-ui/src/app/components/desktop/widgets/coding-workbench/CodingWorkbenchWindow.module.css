@@ -793,8 +793,13 @@
   overflow-wrap: anywhere;
 }
 
-.modelControl {
-  flex: 0 0 9rem;
+/* #3873 live review: a fixed 9rem chip cut "gemma-4-31b-it" to "gemma-4-…". The chip grows with
+   the model identifier up to a readable bound and ellipsizes only beyond it; its title and
+   accessible name always carry the full identifier. */
+.composerConfiguration > .modelControl {
+  flex: 0 1 auto;
+  min-width: min(9rem, 100%);
+  max-width: min(22rem, 100%);
 }
 
 .modelControl :global(.cmp-model-select),

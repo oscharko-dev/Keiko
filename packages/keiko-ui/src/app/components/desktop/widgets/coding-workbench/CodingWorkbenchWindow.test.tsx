@@ -1,4 +1,5 @@
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
+import { CODING_MODEL_STORAGE_KEY } from "./codingModelPreference";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { journeyFixture } from "./_journeyOutcomeTestSupport";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -523,6 +524,143 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.queryByRole("region", { name: "Code setup" })).not.toBeInTheDocument();
     },
   );
+
+  // #3873 live review: after a reload a finished or failed run showed only "Previous conversation"
+  // and "0 changed files" — its timeline and the cause of its terminal state were gone, although the
+  // restored snapshot carries the outcome and Coding History holds the conversation it captured from
+  // the run's display projection. Mounted here against exactly such a restored run.
+  describe("a run restored after a reload", () => {
+    const SETTLED_AT = "2026-07-13T12:09:00.000Z";
+    type HistoryMessage = NonNullable<CodingTaskSession["detail"]>["messages"][number];
+
+    function historyMessage(
+      id: string,
+      runId: string,
+      role: "user" | "assistant",
+      text: string,
+    ): HistoryMessage {
+      return {
+        id,
+        chatId: "task-7",
+        role,
+        content: text,
+        timestamp: Date.parse(AT) + Number(id.slice(2)) * 60_000,
+        runId,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      };
+    }
+
+    function restoredSession(): CodingTaskSession {
+      return {
+        ...defaultTaskSession(),
+        conversationId: "task-7",
+        detail: {
+          task: {
+            id: "task-7",
+            title: "Repair the parser",
+            projectPath: "/repo",
+            modelId: "gemma-4-31b-it",
+            branch: "issue/7",
+            workspaceId: "workspace-1",
+            taskId: "task-1",
+            status: "active",
+            createdAt: Date.parse(AT),
+            updatedAt: Date.parse(SETTLED_AT),
+            latestRunId: "run-7",
+          },
+          messages: [
+            historyMessage("m-1", "run-6", "user", "Earlier request"),
+            historyMessage("m-2", "run-6", "assistant", "Earlier answer"),
+            historyMessage("m-3", "run-7", "user", "Repair the parser"),
+            historyMessage("m-4", "run-7", "assistant", "I read the parser and ran the tests."),
+          ],
+          truncated: false,
+        },
+      };
+    }
+
+    function restoredRun(
+      events: readonly CodingWorkbenchRuntimeSseEvent[] = [],
+    ): CodingWorkbenchRuntimeState {
+      return liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "failed",
+            runId: "run-7",
+            revision: 9,
+            updatedAt: SETTLED_AT,
+            failureCode: "runtime-failed",
+            conversationId: "task-7",
+          }),
+        },
+        events,
+      });
+    }
+
+    function settledRows(): readonly Element[] {
+      return [...document.querySelectorAll('[data-timeline-kind="event"]')].filter((row) =>
+        row.textContent?.includes("Coding run failed"),
+      );
+    }
+
+    it("renders the captured conversation and the terminal outcome in the timeline", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      renderWorkbench(restoredRun());
+
+      const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
+      expect(timeline).toHaveTextContent("Repair the parser");
+      expect(timeline).toHaveTextContent("I read the parser and ran the tests.");
+      expect(settledRows()).toHaveLength(1);
+      expect(settledRows()[0]).toHaveAttribute("data-event-tone", "attention");
+      expect(settledRows()[0]).toHaveTextContent("The coding run ended with an internal error");
+      const transcript = screen.getByRole("region", { name: "Previous conversation" });
+      expect(transcript).toHaveTextContent("Earlier request");
+      expect(transcript).not.toHaveTextContent("I read the parser");
+    });
+
+    it("keeps the server's own activity projection while it is still held", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({
+        ...IDLE_ACTIVITY,
+        status: "ended",
+        feed: { ...activityFeed(), runId: "run-7" },
+      });
+      renderWorkbench(restoredRun());
+
+      const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
+      expect(timeline).toHaveTextContent("Review the repository");
+      expect(timeline).not.toHaveTextContent("I read the parser and ran the tests.");
+      expect(settledRows()).toHaveLength(1);
+    });
+
+    it("adds no second settlement to a run whose settlement was streamed", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      renderWorkbench(
+        restoredRun([
+          {
+            schemaVersion: "1",
+            cursor: "run-7:8",
+            sequence: 8,
+            occurredAt: SETTLED_AT,
+            kind: "status",
+            runId: "run-7",
+            state: "failed",
+            revision: 9,
+            failureCode: "runtime-failed",
+          },
+        ]),
+      );
+
+      expect(settledRows()).toHaveLength(1);
+    });
+  });
 
   it.each(["running", "paused", "awaiting-approval", "recovery-required"] as const)(
     "does not offer a new issue while a run is %s",
@@ -1287,6 +1425,60 @@ describe("CodingWorkbenchWindow", () => {
     expect(alert.nextElementSibling).toHaveClass(sessionClass);
   });
 
+  // #3873 live review: the run status region opened with "Model source ready. Subscription
+  // authentication not selected. …" before saying what the run was doing. It now leads with the
+  // run's state and revision, then its elapsed time and phase; readiness sits in closed details.
+  it("leads the run status with the run itself and collapses the readiness facts", (): void => {
+    const verifying = activityFeed();
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: {
+        ...verifying,
+        turns: [
+          {
+            ...verifying.turns[0]!,
+            tools: [
+              { callId: "call-2", tool: "keiko_verification", state: "running", occurredAt: AT },
+            ],
+          },
+        ],
+      },
+    });
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1", revision: 4 }),
+        },
+        events: [
+          {
+            schemaVersion: "1",
+            cursor: "cursor-0",
+            sequence: 0,
+            occurredAt: AT,
+            kind: "status",
+            runId: "run-1",
+            state: "starting",
+            revision: 1,
+          },
+        ],
+      }),
+    );
+
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      /^Running\. Revision 4\.$/u,
+    );
+    expect(screen.getByRole("timer")).toHaveTextContent(/^Elapsed /u);
+    expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Running a verifier");
+    const readiness = screen.getByTestId("coding-runtime-readiness");
+    expect(readiness).toHaveTextContent("Model source ready.");
+    expect(readiness).toHaveTextContent("Workspace ready.");
+    expect(readiness.closest("details")).not.toHaveAttribute("open");
+  });
+
   // Release-audit F-01: the idle header pill is a READINESS claim, not a run state. It must
   // consume the same server-confirmed readiness the start action gates on — including the
   // sidecar gateway profile — so it can never say "Ready to start" over an unavailable source.
@@ -1338,11 +1530,16 @@ describe("CodingWorkbenchWindow", () => {
       };
     }
 
+    // #3873: the readiness facts moved out of the run status region into its readiness details,
+    // so every pin on them reads the details; the status line itself never claims readiness.
     it("never renders the plain Ready to start label over an evaluation runtime", (): void => {
       renderWorkbench(evaluationState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
+      );
+      expect(screen.getByTestId("coding-runtime-status")).not.toHaveTextContent(
+        /Ready to start|Runtime ready/u,
       );
     });
 
@@ -1350,12 +1547,12 @@ describe("CodingWorkbenchWindow", () => {
       renderWorkbench(evaluationState());
 
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
 
-    it("keeps runtime assurance in the lifecycle announcement", (): void => {
+    it("keeps runtime assurance in the run's readiness details", (): void => {
       renderWorkbench(evaluationState());
 
       openWorkbenchInformation();
@@ -1363,7 +1560,7 @@ describe("CodingWorkbenchWindow", () => {
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1385,7 +1582,7 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps a platform-qualified runtime rendering exactly as before", (): void => {
       renderWorkbench(liveState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent("Runtime ready");
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
       openWorkbenchInformation();
       expect(
@@ -1655,7 +1852,7 @@ describe("CodingWorkbenchWindow", () => {
         },
       }),
     );
-    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+    expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
       "Workspace unavailable",
     );
     openWorkbenchInformation();
@@ -3716,6 +3913,46 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
     expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+  });
+
+  // #3873 live review: after a run with "gemma-4-31b-it" the composer fell back to the first offered
+  // model on the next visit. Like the run authority, an explicit human choice is saved and restored
+  // while the gateway still offers it; the default the Workbench elects by itself is never saved.
+  describe("persisted coding model choice", () => {
+    afterEach(() => {
+      window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+    });
+
+    it("restores the model the operator chose last instead of the first offered model", () => {
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      const liveActions = renderWorkbench(liveState());
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+    });
+
+    it("falls back to the current default when the saved model is no longer offered", () => {
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "retired-model");
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      const liveActions = renderWorkbench(liveState());
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+      expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe("retired-model");
+    });
+
+    it("saves an explicit choice from the composer but never the elected default", async () => {
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      const liveActions = renderWorkbench(liveState({ selectedModelId: "model-a" }));
+      expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBeNull();
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Coding model: model-a" }));
+      await user.click(screen.getByRole("option", { name: "model-b" }));
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe("model-b");
+    });
   });
 
   it("still falls back once the refreshed catalog genuinely no longer offers the selected model", () => {

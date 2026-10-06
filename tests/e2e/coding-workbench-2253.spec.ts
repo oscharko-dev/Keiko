@@ -253,8 +253,14 @@ function confirmedSource(page: Page): Locator {
   return workbench(page).getByText(CONFIRMED_SOURCE, { exact: true });
 }
 
-function unavailableAnnouncement(surface: Locator): Locator {
-  return surface.locator('[role="status"]').filter({ hasText: UNAVAILABLE_ANNOUNCEMENT });
+// #3873: the readiness facts moved from the run status announcement into its collapsed details.
+// The announcement stays the polite, atomic live region; the facts are read by text content.
+function runStatusAnnouncement(surface: Locator): Locator {
+  return surface.locator('[data-testid="coding-runtime-announcement"]');
+}
+
+function readinessFacts(surface: Locator): Locator {
+  return surface.locator('[data-testid="coding-runtime-readiness"]');
 }
 
 async function expectUnapprovedProfile(page: Page): Promise<void> {
@@ -280,10 +286,11 @@ async function expectUnavailableSurface(page: Page): Promise<Locator> {
   const surface = workbench(page);
   await expect(surface).toBeVisible();
   await expect(confirmedSource(page)).toBeVisible();
-  const announcement = unavailableAnnouncement(surface);
+  const announcement = runStatusAnnouncement(surface);
   await expect(announcement).toBeAttached();
   await expect(announcement).toHaveAttribute("aria-live", "polite");
   await expect(announcement).toHaveAttribute("aria-atomic", "true");
+  await expect(readinessFacts(surface)).toContainText(UNAVAILABLE_ANNOUNCEMENT);
   await expect(surface.getByRole("radiogroup", { name: "Runtime model source" })).toHaveCount(0);
   await expect(surface.getByText("ChatGPT/Codex subscription", { exact: true })).toHaveCount(0);
   await expect(surface.getByText("Needs setup", { exact: true })).toHaveCount(0);
@@ -423,7 +430,7 @@ async function captureRecord(
     dataHc: await page.locator("html").getAttribute("data-hc"),
     forcedColors: mode.media.forcedColors,
     reducedMotion: mode.media.reducedMotion,
-    liveAnnouncement: await unavailableAnnouncement(surface).innerText(),
+    liveAnnouncement: await runStatusAnnouncement(surface).innerText(),
     profileStatus: "redistribution-unapproved",
     confirmedSource: await confirmedSource(page).innerText(),
     codexSourceAffordances: await surface

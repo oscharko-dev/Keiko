@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { ApiError } from "@/lib/api";
@@ -97,6 +98,44 @@ describe("branchOptions (#I)", () => {
       badge: "unavailable",
     });
     expect(options[1]).toEqual({ value: "main", label: "main" });
+  });
+});
+
+// #3873 live review: the Workbench's listboxes exposed nameless options in the accessibility tree.
+// The repository, branch and "Work in" selectors share the same select, so each is checked here.
+describe("CodingWorkbenchRepositorySelector option names", () => {
+  const AXE_OPTIONS = { rules: { region: { enabled: false } } } as const;
+
+  async function expectNamedOptions(names: readonly string[]): Promise<void> {
+    for (const name of names) {
+      expect(screen.getByRole("option", { name })).toHaveAttribute("aria-label", name);
+    }
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+  }
+
+  it("names every repository, branch and Work in option by its visible text", async () => {
+    const user = userEvent.setup();
+    selectableRepositories.mockResolvedValue([
+      project("/repos/plain-folder"),
+      project("/repos/archive", false),
+    ]);
+    listBranches.mockResolvedValue(branchList(["main", "feature/long-branch-name"]));
+    renderSelector({ placement: "composer" });
+
+    const repository = screen.getByRole("combobox", { name: "Choose coding repository" });
+    await waitFor(() => expect(repository).toBeEnabled());
+    await user.click(repository);
+    await expectNamedOptions(["plain-folder", "archive, unavailable"]);
+    await user.keyboard("{Escape}");
+
+    const branch = screen.getByRole("combobox", { name: "Choose coding branch" });
+    await waitFor(() => expect(branch).toBeEnabled());
+    await user.click(branch);
+    await expectNamedOptions(["main", "feature/long-branch-name"]);
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("combobox", { name: "Work in" }));
+    await expectNamedOptions(["Local", "New local worktree"]);
   });
 });
 

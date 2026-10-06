@@ -22,8 +22,9 @@ import {
   changesetDeliveryAlert,
   eventDetail,
   eventTitle,
-  lifecycleAnnouncement,
   modelSourceLabel,
+  readinessFacts,
+  runStatusAnnouncement,
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
@@ -78,7 +79,7 @@ describe("modelSourceLabel", () => {
   });
 });
 
-describe("lifecycleAnnouncement source reason", () => {
+describe("readinessFacts source reason", () => {
   // "Model source unavailable." alone left the operator with no way to learn that a readiness
   // check would have fixed it (workbench end-to-end run, 2026-09-03).
   it("names the sidecar's unavailable reason next to the source announcement", () => {
@@ -97,7 +98,7 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    const announcement = lifecycleAnnouncement(state, t);
+    const announcement = readinessFacts(state, t);
     expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
     expect(announcement).toContain("codingWorkbench.source.unavailableReason.no-tool-calling");
   });
@@ -120,7 +121,7 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    const announcement = lifecycleAnnouncement(state, t);
+    const announcement = readinessFacts(state, t);
     expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
     expect(announcement).toContain(
       "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
@@ -143,7 +144,7 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.source.unavailableReason.tool-calling-unverified",
     );
   });
@@ -164,21 +165,21 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    expect(lifecycleAnnouncement(state, t)).not.toContain("unavailableReason");
+    expect(readinessFacts(state, t)).not.toContain("unavailableReason");
   });
 });
 
-describe("lifecycleAnnouncement authentication truth", () => {
+describe("readinessFacts authentication truth", () => {
   it("announces authentication as not selected outside the codex preference", () => {
     const state = createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway");
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationNotSelected",
     );
   });
 
   it("announces checking while the profile resource loads", () => {
     const state = codexState({ status: "loading", value: null, error: null });
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationChecking",
     );
   });
@@ -187,7 +188,7 @@ describe("lifecycleAnnouncement authentication truth", () => {
     "announces unavailability when the profile resource is %s",
     (status) => {
       const state = codexState({ status, value: null, error: null });
-      expect(lifecycleAnnouncement(state, t)).toContain(
+      expect(readinessFacts(state, t)).toContain(
         "codingWorkbench.announcement.authenticationUnavailable",
       );
     },
@@ -195,28 +196,26 @@ describe("lifecycleAnnouncement authentication truth", () => {
 
   it("announces readiness for a connected profile", () => {
     const state = codexState(ready(subscriptionProfile("connected")));
-    expect(lifecycleAnnouncement(state, t)).toContain(
-      "codingWorkbench.announcement.authenticationReady",
-    );
+    expect(readinessFacts(state, t)).toContain("codingWorkbench.announcement.authenticationReady");
   });
 
   it("announces a required sign-in for a missing profile", () => {
     const state = codexState(ready(subscriptionProfile("missing")));
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationRequired",
     );
   });
 
   it("treats any other server profile status as unavailable", () => {
     const state = codexState(ready(subscriptionProfile("revoked")));
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationUnavailable",
     );
   });
 
   it("announces the unchecked state before any profile truth exists", () => {
     const state = codexState({ status: "idle", value: null, error: null });
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationNotChecked",
     );
   });
@@ -356,7 +355,7 @@ describe("eventDetail untrusted research content", () => {
   });
 });
 
-describe("lifecycleAnnouncement research grant", () => {
+describe("runStatusAnnouncement research grant", () => {
   const state: CodingWorkbenchRuntimeState = {
     ...createInitialCodingWorkbenchRuntimeState(),
     run: ready({
@@ -374,15 +373,37 @@ describe("lifecycleAnnouncement research grant", () => {
       domains: ["nodejs.org"],
       expiresAt: "2026-07-13T12:30:00.000Z",
     };
-    expect(lifecycleAnnouncement(state, t, grant)).toContain(
+    expect(runStatusAnnouncement(state, t, grant)).toContain(
       "codingWorkbench.announcement.researchActive",
     );
   });
 
   it("stays silent about research when no grant is present", () => {
-    expect(lifecycleAnnouncement(state, t, null)).not.toContain(
+    expect(runStatusAnnouncement(state, t, null)).not.toContain(
       "codingWorkbench.announcement.researchActive",
     );
+  });
+
+  // #3873 live review: the status region led with "Model source ready. …" before the run's own
+  // state. The run's status and the readiness facts are two separate texts now.
+  it("keeps every readiness fact out of the run's status and the run state out of readiness", () => {
+    const status = runStatusAnnouncement(state, t);
+    expect(status).toBe("codingWorkbench.announcement.runRevision");
+    const readiness = readinessFacts(state, t);
+    expect(readiness).toContain("codingWorkbench.announcement.modelSource.notChecked");
+    expect(readiness).toContain("codingWorkbench.announcement.workspace.notChecked");
+    expect(readiness).toContain("codingWorkbench.announcement.runtime.notChecked");
+    expect(readiness).toContain("codingWorkbench.announcement.authenticationNotSelected");
+    expect(readiness).not.toContain("codingWorkbench.announcement.runRevision");
+  });
+
+  it("states a ready Workbench without a run by its state alone, never by a revision", () => {
+    const idle: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      canStart: true,
+      run: ready({ schemaVersion: "1", state: "idle", revision: 0, updatedAt: AT }),
+    };
+    expect(runStatusAnnouncement(idle, t)).toBe("codingWorkbench.runState.idle");
   });
 });
 
@@ -487,12 +508,12 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
 
   // ADR-0141: an unpaired window's run start is guaranteed to fail authority resolution, so the
   // narration must name pairing as the missing input instead of narrating full readiness.
-  it("names the unpaired window in the lifecycle narration", () => {
-    expect(lifecycleAnnouncement(unpairedState(), t)).toContain("codingWorkbench.pairing.unpaired");
+  it("names the unpaired window in the readiness facts", () => {
+    expect(readinessFacts(unpairedState(), t)).toContain("codingWorkbench.pairing.unpaired");
   });
 
   it("does not claim pairing truth while it is still unconfirmed", () => {
-    expect(lifecycleAnnouncement(createInitialCodingWorkbenchRuntimeState(), t)).not.toContain(
+    expect(readinessFacts(createInitialCodingWorkbenchRuntimeState(), t)).not.toContain(
       "codingWorkbench.pairing.unpaired",
     );
   });
@@ -670,7 +691,7 @@ describe("startBlockedReason readiness chain", () => {
  * the header pill's plain "Ready to start" is on screen. The evaluation sentence SUBSTITUTES the
  * generic one; it never rides alongside it.
  */
-describe("lifecycleAnnouncement runtime assurance", () => {
+describe("readinessFacts runtime assurance", () => {
   function runtimeState(
     runtimeAvailable: boolean,
     runtimeEvidenceClass?: "platform-qualified" | "functional-not-platform-qualified",
@@ -690,22 +711,19 @@ describe("lifecycleAnnouncement runtime assurance", () => {
   }
 
   it("announces the evaluation runtime instead of a plain ready runtime", () => {
-    const announcement = lifecycleAnnouncement(
-      runtimeState(true, "functional-not-platform-qualified"),
-      t,
-    );
+    const announcement = readinessFacts(runtimeState(true, "functional-not-platform-qualified"), t);
     expect(announcement).toContain("codingWorkbench.announcement.runtime.evaluation");
     expect(announcement).not.toContain("codingWorkbench.announcement.runtime.ready");
   });
 
   it("keeps announcing a platform-qualified runtime as ready", () => {
-    const announcement = lifecycleAnnouncement(runtimeState(true, "platform-qualified"), t);
+    const announcement = readinessFacts(runtimeState(true, "platform-qualified"), t);
     expect(announcement).toContain("codingWorkbench.announcement.runtime.ready");
     expect(announcement).not.toContain("codingWorkbench.announcement.runtime.evaluation");
   });
 
   it("never claims the evaluation posture over an unavailable runtime", () => {
-    const announcement = lifecycleAnnouncement(
+    const announcement = readinessFacts(
       runtimeState(false, "functional-not-platform-qualified"),
       t,
     );

@@ -27,9 +27,12 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import type { GitCiCheckCounts } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 
 const WORKBENCH = 'section[aria-label="Coding Workbench"][data-state]';
-/** The window's own lifecycle announcement. Selected by element rather than by role: `<output>` has
- * the implicit `status` role, so several cards would otherwise match. */
-export const LIFECYCLE_STATUS = 'p.sr-only[role="status"]';
+/** The window's own run status announcement. Selected by its test id rather than by role: `<output>`
+ * has the implicit `status` role, so several cards would otherwise match. */
+export const LIFECYCLE_STATUS = '[data-testid="coding-runtime-announcement"]';
+/** The run's readiness facts (model source, authentication, workspace, runtime). #3873 moved them
+ * out of the status announcement into collapsed details, so they are read by text content. */
+export const RUN_READINESS = '[data-testid="coding-runtime-readiness"]';
 const CHECK_COUNTS = ["total", "passed", "failed", "pending", "blocked", "unknown"] as const;
 
 /** The card owning `testId` — its NEAREST enclosing section, never an outer one. Scoping by the
@@ -358,14 +361,14 @@ export async function observedJourney(page: Page): Promise<ObservedJourney | und
 
 /**
  * Waits for the Code task to report a coding runtime the operator could actually start a run with,
- * for the authority currently selected. Read from the window's own live status region — the one
+ * for the authority currently selected. Read from the window's own readiness facts — the one
  * surface that answers `runtimeAvailable` one-to-one. `Runtime ready.` is the platform-verified
  * runtime; the evaluation sentence is an unsigned but available one, which the product also allows
  * a run to start on. `Runtime unavailable.` and `Runtime refresh failed.` are neither.
  */
 export async function assertObservedRuntimeReady(page: Page): Promise<void> {
-  const status = page.locator(WORKBENCH).locator(LIFECYCLE_STATUS);
-  await expect(status, "coding runtime must report ready before a run may start").toContainText(
+  const readiness = page.locator(WORKBENCH).locator(RUN_READINESS);
+  await expect(readiness, "coding runtime must report ready before a run may start").toContainText(
     /Runtime ready\.|unverified evaluation runtime/u,
     { timeout: 60_000 },
   );
@@ -428,13 +431,16 @@ export async function observedRun(page: Page): Promise<ObservedRun> {
 export async function observedDiagnosis(page: Page): Promise<string> {
   const shell = page.locator(WORKBENCH);
   const status = (await textOf(shell.locator(LIFECYCLE_STATUS))).replace(/\s+/gu, " ");
+  const readiness = (await present(shell.locator(RUN_READINESS)))
+    ? (await textOf(shell.locator(RUN_READINESS))).replace(/\s+/gu, " ")
+    : "";
   const alert = shell.getByRole("alert");
   const message = (await present(alert)) ? (await textOf(alert)).replace(/\s+/gu, " ") : "";
   // The delivery card's own phase and reason: rehearsal run-15 ended "succeeded before creating a
   // draft pull request" while the card had been showing `recovery-required` / `ambiguous-remote`
   // all along -- the one fact that named the failure.
   const delivery = await observedDeliveryPhrase(page);
-  return [status, message, delivery].filter((part) => part.length > 0).join(" ");
+  return [status, readiness, message, delivery].filter((part) => part.length > 0).join(" ");
 }
 
 async function observedDeliveryPhrase(page: Page): Promise<string> {
