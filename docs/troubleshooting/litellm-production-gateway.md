@@ -654,8 +654,9 @@ do not add load while the gateway recovers. Interactive chat keeps its fail-fast
 `keiko support analyze <report.json> --correlation-id <runId>` shows each retry as
 `gateway.retry.scheduled` (`httpStatus`, `delayMs`, `retryAfterHeader`), a breaker transition as
 `gateway.circuit.opened` / `gateway.circuit.half-open`, and a wait as `gateway.circuit.wait`
-(`reason`, `outcome`). A call that outlasted the window ends with `gateway.retry.exhausted
-reason=budget`.
+(`reason`, `outcome`). A call that outlasted the window ends with `gateway.retry.exhausted reason=budget`, or, when the
+window ran out while it waited on an open breaker or a saturated probe slot, with
+`gateway.circuit.wait outcome=budget-refused`.
 
 **Resolution**
 
