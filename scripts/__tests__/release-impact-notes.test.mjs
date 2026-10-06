@@ -240,15 +240,16 @@ describe("release-impact release notes", () => {
     expect(result.notes).toContain("observable-internal-release-gate");
   });
 
-  it("adds portable-first wording for stable latest release promotion", () => {
+  it("describes existing portable installation without claiming a new feature", () => {
     const result = renderReleaseImpactNotes(catalog([entry()]), rootManifest(), {
       portableReleasePromotion: true,
     });
 
     expect(result.ok).toBe(true);
-    expect(result.notes).toContain("### Normal · New Additions");
+    expect(result.notes).toContain("### Normal · Update Notes");
+    expect(result.notes).not.toContain("Keiko now ships");
     expect(result.notes).toContain(
-      "Keiko now ships first-class portable downloads for Windows x64, Linux x64, macOS arm64, and macOS x64",
+      "Download Keiko for Windows x64, Linux x64, macOS arm64, and macOS x64",
     );
     expect(result.notes).toContain(
       "npm remains available for developer and compatibility workflows",
@@ -396,7 +397,7 @@ describe("release-impact release notes", () => {
     }
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "Keiko now ships first-class portable downloads for Windows x64, Linux x64, macOS arm64, and macOS x64",
+      "Download Keiko for Windows x64, Linux x64, macOS arm64, and macOS x64",
     );
     expect(output).toContain("npm remains available for developer and compatibility workflows");
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
