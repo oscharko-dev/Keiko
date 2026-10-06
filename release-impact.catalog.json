@@ -3057,6 +3057,117 @@
       "userActionRequired": true,
       "remediation": "restart-required",
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-05-keiko-1.2.0-connected-knowledge-and-private-support",
+      "packageVersion": "1.2.0",
+      "releaseTag": "v1.2.0",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Connected repositories and ordinary folders support recursive questions with model-aware context budgets, clearer source accounting and responsive cancellation. Files and the manual Editor preserve the selected workspace and unsaved changes. Errors offer a private, integrity-checked support report download. Windows checkout binding is corrected; Windows Coding Workbench execution remains unavailable without its required production confinement backend.",
+      "affectedStateStores": [
+        "gateway-config",
+        "ui-store-schema",
+        "editor-passive-buffer-state",
+        "activity-log",
+        "support-artifacts",
+        "task-workspaces"
+      ],
+      "stateImpact": [
+        {
+          "store": "gateway-config",
+          "description": "Existing model metadata gains optional assumed/reported context-window provenance; the exact legacy placeholder is recognized on load and provider statements can refine the effective window. The optional groundedAnswers.ownAssessment policy defaults to allowed and may be disabled by an operator. Existing credential-vault ownership is unchanged; no credential migration is required.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "ui-store-schema",
+          "description": "Grounded answers can retain optional body-free prompt-context metadata, and existing project/chat ownership is used for folder binding and model-specific metrics. Older stored answers remain readable; these additions do not require users to recreate chats or Knowledge Pods.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "editor-passive-buffer-state",
+          "description": "Browser-owned safety metadata for unsaved Editor buffers is persisted and recovered with tab-specific ownership. This safety state cannot make the manual Editor discoverable or executable as an agent. Save or deliberately discard unsaved edits before restarting; no customer source files are migrated by the update.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "New registered operations, closed failure facts and diagnostic-selection declarations change the catalog identity. Existing log records are not rewritten and retain normal byte/age retention. Supported historical canonical reports are validated with the exact bundled registry and producing-release code inventory; unknown identities remain explicitly unsupported. Incident candidates use bounded byte/age retention and exact owned cleanup rather than a fixed 32-case capacity.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "support-artifacts",
+          "description": "New exports use the canonical private schema-1 report with validated causal evidence and integrity metadata; checksums do not establish sender authenticity. Desktop attachments use an expiring memory cache, while explicitly saved browser files and CLI exports remain under user control. Existing artifacts are not rewritten. Operators with legacy export scripts must remove inclusion flags and sidecar handling, pass a private directory to --out instead of a filename, and consume the versioned analysis envelope; retired legacy bundles must be regenerated at the originating installation.",
+          "userActionRequired": true,
+          "remediation": "manual-review-required"
+        },
+        {
+          "store": "task-workspaces",
+          "description": "Windows local checkout binding compares canonical filesystem identities even when Git and Node spell path separators differently. Previously refused ordinary checkouts can be selected again after restart. Existing managed/private workspace restrictions and unsupported-runtime refusals remain enforced; no workspace migration is required.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Connected folders: ask questions across nested Git repositories and ordinary folders. Eligible text files up to 2 MiB are inspected without a default file-count, directory-depth or scan-deadline cutoff; explicit budgets, Stop, sensitive-path and binary exclusions remain enforced.",
+        "Grounded retrieval: preserve relevant excerpt bodies and physical citation locations, including supported declared legacy text encodings. Unavailable descendant folders do not suppress directly readable declared manifests; incomplete coverage remains explicit and root failures remain refused. Failed parallel retrieval releases owned work. (#3687) (#3868)",
+        "Chat test examples: when eligible connected-folder content fits the source budget, requests for a testing framework retain freshly read file evidence. Specific file and symbol searches remain targeted, and requested relationship or history searches still run. Generated code is returned in Chat. (#3868)",
+        "Context and models: use the selected deployment's input, output and context limits for source fitting, compaction and the context meter. Learn undeclared windows from provider statements; keep provider-measured usage separate from estimates and refresh attribution when switching models. (#3678) (#3687)",
+        "Knowledge Pods: source-backed answers can include a separately labelled model assessment when requested. Operators can disable this with groundedAnswers.ownAssessment; assessments are not presented as evidence from the attached sources. (#3678)",
+        "Source details: distinguish inspected files, selected excerpts, citations and references sent to the model. Uncalibrated citation scores are removed, and source/context labels follow the interface language. (#3687)",
+        "Files and Editor: keep the selected project or ordinary folder aligned with its tree and open files, recover after reload without duplicating connected folders, preserve unsaved-buffer ownership across tabs, and open citations at the actual file and range. (#3685) (#3687) (#3868)",
+        "Editor workflow: the ordinary Editor is now a manual file editor. Agent presence/history, incoming agent actions, agent patch review and Editor/Chat handoffs are removed; manual editing, saving, history and language tools remain, alongside the separate Coding Workbench. (#3685)",
+        "Gateways: respect delayed responses and provider cooldowns within the request budget, cancel pending retries when stopped, and avoid replaying a partially streamed answer. Active admitted work protects idle sessions without extending revoked or absolutely expired authority. (#3687)",
+        "Support: create and download one compressed, integrity-checked report directly from an error. Reports carry redacted causal diagnostics instead of complete logs; unavailable evidence stays explicit, failed regeneration preserves a usable attachment, and download initiation is not presented as proof of an operating-system save. (#3679) (#3685) (#3687)",
+        "Support storage: replace the fixed 32-case display with bounded byte/age retention and release owned incident state after successful report preparation. Desktop reports are not accumulated in a permanent application archive. (#3687)",
+        "Support operators: the canonical report reader validates the received file before analysis. Update legacy scripts to use a private output directory, omit former inclusion flags and sidecars, and read the versioned analysis envelope; regenerate retired legacy bundles on the originating installation. (#3679)",
+        "Windows: ordinary local checkouts accept Git's canonical path spelling, including paths with spaces. The separate gateway-filtering work is a native test primitive; it does not yet enable production Windows Coding Workbench execution. (#3667) (#3668)",
+        "Dependencies: update source-map-js to 1.2.2 and smol-toml to 1.9.0, fixing denial of service from malicious indexed source maps (GHSA-68fv-2mgg-jv7q) and quadratic TOML key parsing (GHSA-r4xh-jqrq-34v2). Existing supply-chain checks and time-boxed build-only advisory dispositions remain enforced. (#3868)"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-05",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3687#6001062264",
+        "rationale": "The product owner selected 1.2.0 and explicitly authorized autonomous release preparation and publication after verified #3687 integration, including README, release notes, all product versions via existing scripts, and actual qualification. This instruction is recorded in the referenced delivery decision comment; no separate GitHub approving review is claimed. Covers #3678, #3679, #3684, #3683, #3685, #3667, #3668 and #3687 integrated since v1.1.13. The signed release-preparation PR and exact allowlisted owner dispatch remain required, together with current-candidate checks, portable/customer-shape qualification and artifact alignment. The 155 deferred findings, full Gemma 65,536-token acceptance and Tool Catalog runtime follow-up #3865 are not claimed fixed or qualified. #3668 does not enable production Windows Coding execution. Published catalog rows are unchanged. The actual decision comment is https://github.com/oscharko-dev/Keiko/pull/3687#issuecomment-6001062264. Automatic carry-forward of retired support workflows is not verified; updater eligibility remains manual."
+      },
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "breakingException": {
+        "rationale": "The owner-selected 1.2.0 release intentionally replaces unsafe legacy support export and analysis inputs with the canonical private report boundary. v1.1.13 accepted inclusion flags, --out FILE and legacy sidecar/JSONL bundles; these inputs are now refused. Existing operator scripts and retired artifacts have no verified automatic conversion. Customer workspace files, chats and credentials are not migrated, but the release must not claim a verified one-click carry-forward for every supported workflow. This narrowly documented compatibility exception does not classify ordinary fixes as an emergency.",
+        "warningText": "Before updating to 1.2.0, review custom support scripts: remove legacy inclusion flags and sidecar handling, pass a private directory to --out, and consume the versioned analysis envelope. Regenerate retired legacy bundles at the originating installation. This release requires manual update review; no automatic conversion of those workflows is provided.",
+        "verifiedCarryForward": false
+      }
     }
   ]
 }

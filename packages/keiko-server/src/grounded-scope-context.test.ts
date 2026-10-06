@@ -221,10 +221,33 @@ describe("known-fit scope admission", () => {
     expect(completed?.scopeContextChargedBytes).toBeGreaterThan(128);
   });
 
+  it.each(["Trace callers of workflow", "Show the history of workflow"])(
+    "supplements %s without replacing requested retrieval rings",
+    async (question) => {
+      const { result, completed } = await retrieve({ "a.txt": "workflow step one\n" }, question);
+      expect(completed).toMatchObject({
+        scopeContextState: "applied",
+        scopeContextSelectedFileCount: 1,
+        executedRingKinds: result.plan.rings.map((ring) => ring.kind),
+        augmentationDisposition: "used",
+      });
+      expect(result.plan.rings.map((ring) => ring.kind)).toEqual(
+        expect.arrayContaining(["lexical", "git-history"]),
+      );
+      expect(completed?.ringSkipReasons).not.toContain("complete-exact-lookup");
+      expect(result.pack.files).toHaveLength(1);
+      expect(
+        result.pack.files[0]?.excerpts.some(
+          (excerpt) =>
+            excerpt.atom.provenance.kind === "file-listing" &&
+            excerpt.atom.provenance.tool === "repo.findFiles",
+        ),
+      ).toBe(true);
+    },
+  );
+
   it.each([
     "Why does the workflow fail with HTTP 503?",
-    "Trace callers of workflow",
-    "Show the history of workflow",
     'Find the exact literal "workflow"',
     "Explain WorkflowService",
   ])("records a refused enrichment gate for %s", async (question) => {

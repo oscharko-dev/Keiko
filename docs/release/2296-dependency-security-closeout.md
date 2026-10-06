@@ -35,12 +35,12 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
-| Source                     | Result                                                                        |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `npm audit --json`         | 0 vulnerabilities across 1,025 resolved packages (124 prod, 878 dev, 147 opt) |
-| OSV Scanner 2.6.0          | 0 unwaived findings; 2 time-boxed build-time waivers, recorded below          |
-| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                   |
-| Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout       |
+| Source                     | Result                                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `npm audit --json`         | Rechecked 2026-10-06: 6 dev-only nodes for 2 recorded advisories; production audit: 0 vulnerabilities |
+| OSV Scanner 2.6.0          | 0 unwaived findings; 2 time-boxed build-time waivers, recorded below                                  |
+| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                                           |
+| Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout                               |
 
 The 2026-09-30 OSV scan found newly reported advisories in the previous lockfile. The patched
 resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-address` 10.7.2.
@@ -77,6 +77,26 @@ unwithdrawn with no identified patched version. The
 [maintainer's dispute](https://github.com/kornelski/http-cache-semantics/issues/56#issuecomment-5975759591)
 does not establish a withdrawal or a fix in 4.3.0. The waiver retains its original dev-only scope,
 expiry, and revisit conditions.
+
+On 2026-10-06 the release-1.2.0 hygiene job and the same pinned OSV Scanner 2.6.0
+locally identified [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)
+in `source-map-js` 1.2.1. The advisory identifies 1.2.2 as patched. The targeted npm lockfile
+update moves only this shared transitive resolution, used by PostCSS, CSS-Tree, and magicast;
+all consumers already accept the compatible patch. No waiver or security threshold changes.
+After the update, the same recursive OSV scan reports zero unwaived findings and
+`npm audit --omit=dev --json` reports zero vulnerabilities. The current full npm audit feed
+also reports the two previously recorded build-time advisories above:
+six affected dependency nodes, representing those two advisory IDs. Those findings are distinct
+from the patched source-map dependency and retain their existing scope and revisit conditions.
+
+The next required OSV scan reported a second newly reviewed advisory,
+[GHSA-r4xh-jqrq-34v2](https://github.com/advisories/GHSA-r4xh-jqrq-34v2), in `smol-toml`
+1.8.0. The identical local scan reproduced it. Version 1.9.0 fixes quadratic key parsing and
+is accepted by both existing consumers: the server Rust manifest validator and Knip.
+The targeted update changes only the shared resolution; the Rust validator retains its existing
+manifest-size and sensitive-path checks. The patched recursive OSV scan and production npm
+audit pass, as do 53 targeted Rust-manifest, publishing, and pruning tests. No advisory is waived
+to accommodate this update.
 
 ### How this queue must be queried — and the trap in it
 
@@ -207,6 +227,8 @@ or peer graph).
 | `fallow`                      | root                  | 3.9.1   | patch-deferred | 3.20.0 available; backs `check:semantic-duplication`. Missed by the sweep — see below.                                                                                                                                                                                                                       |
 | `@napi-rs/canvas`             | keiko-local-knowledge | 1.0.9   | current        | Optional host-native backend; deduplicated to one node by the matching root override. Includes font-cache and CSS parser fixes.                                                                                                                                                                              |
 | `postcss`                     | root                  | 8.5.28  | current        | Root override; audit reports no known vulnerability.                                                                                                                                                                                                                                                         |
+| `source-map-js`               | root                  | 1.2.2   | current        | Patch for GHSA-68fv-2mgg-jv7q; shared transitive resolution used by PostCSS, CSS-Tree, and magicast.                                                                                                                                                                                                         |
+| `smol-toml`                   | root                  | 1.9.0   | current        | Fix for GHSA-r4xh-jqrq-34v2; shared server Rust-manifest and Knip parser resolution.                                                                                                                                                                                                                         |
 | `ws`                          | root                  | 8.21.3  | current        | WebSocket runtime.                                                                                                                                                                                                                                                                                           |
 
 The live inventory command is `npm outdated --workspaces --include-workspace-root --json`; it

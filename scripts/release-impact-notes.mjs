@@ -243,8 +243,8 @@ function addPortableReleasePromotion(groups, options) {
   if (options.portableReleasePromotion !== true) return;
   addGroupedBullet(
     groups,
-    "normal\u0000new-additions",
-    "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64 so users can download once and start from the bundled launcher; npm remains available for developer and compatibility workflows.",
+    "normal\u0000update-notes",
+    "Download Keiko for Windows x64, Linux x64, macOS arm64, and macOS x64 and start from the bundled launcher; npm remains available for developer and compatibility workflows.",
   );
 }
 

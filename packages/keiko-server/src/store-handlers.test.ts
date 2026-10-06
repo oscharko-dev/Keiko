@@ -37,7 +37,7 @@ import {
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { createInMemoryUiStore, type UiStore, type ChatConnectedScope } from "./store/index.js";
 import {
   clearAllGroundedContextIndexes,
   groundedContextIndexRegistry,
@@ -2280,6 +2280,87 @@ describe("PATCH /api/chats", () => {
     expect(body.chat.connectedScopes[0]?.root).toBe(realpathSync(realRoot));
     expect(body.chat.connectedScope?.root).toBe(realpathSync(realRoot));
   });
+
+  it("deduplicates canonical folder aliases across repeated persisted PATCHes", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const firstRoot = join(tmp, "alias-proof-root");
+    const linkedRoot = join(tmp, "alias-proof-link");
+    const otherRoot = join(tmp, "alias-proof-other");
+    mkdirSync(join(firstRoot, "docs"), { recursive: true });
+    mkdirSync(otherRoot);
+    symlinkSync(firstRoot, linkedRoot, "dir");
+    const canonical = realpathSync(firstRoot);
+    let retained: ChatConnectedScope[] = [
+      { kind: "workspace-root", relativePaths: [], connectedAtMs: 1, root: canonical },
+      { kind: "workspace-root", relativePaths: [], connectedAtMs: 2, root: otherRoot },
+      { kind: "directory", relativePaths: ["docs"], connectedAtMs: 3, root: canonical },
+    ];
+    for (const [connectedAtMs, root] of [
+      [4, linkedRoot],
+      [5, firstRoot],
+    ] as const) {
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          connectedScopes: [
+            ...retained,
+            {
+              kind: "workspace-root",
+              relativePaths: [],
+              connectedAtMs,
+              root,
+            },
+          ],
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { chat: { connectedScopes: ChatConnectedScope[] } };
+      retained = body.chat.connectedScopes;
+      expect(retained).toHaveLength(3);
+      expect(retained[0]).toEqual({
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs,
+        root: canonical,
+      });
+      expect(store.listChats(projDir).find((entry) => entry.id === c.id)?.connectedScopes).toEqual(
+        retained,
+      );
+    }
+    expect(retained[1]?.root).toBe(realpathSync(otherRoot));
+    expect(retained[2]?.relativePaths).toEqual(["docs"]);
+  });
+
+  it.each(["rooted-first", "rootless-first"] as const)(
+    "preserves rootless legacy scope identity when a matching rooted scope is %s",
+    async (order) => {
+      const project = store.createProject(realpathSync(projDir));
+      const created = store.createChat(project.path, "legacy identities", "m");
+      const rooted: ChatConnectedScope = {
+        kind: "files",
+        relativePaths: ["src/x"],
+        connectedAtMs: 1,
+        root: project.path,
+      };
+      const legacy: ChatConnectedScope = {
+        kind: "files",
+        relativePaths: ["src/x"],
+        connectedAtMs: 2,
+      };
+      const scopes = order === "rooted-first" ? [rooted, legacy] : [legacy, rooted];
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(created.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({ connectedScopes: scopes }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { chat: { connectedScopes: ChatConnectedScope[] } };
+      expect(body.chat.connectedScopes).toEqual(scopes);
+      expect(store.findChatById(created.id)?.connectedScopes).toEqual(scopes);
+    },
+  );
 
   it("rejects a connectedScopes list whose entry has a deny-listed root (.ssh)", async () => {
     store.createProject(projDir);

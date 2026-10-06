@@ -527,6 +527,68 @@ function currentFilesOwnedScope(
     : restored;
 }
 
+interface FilesPatchAcknowledgement {
+  chat?: Chat;
+  scope?: ChatConnectedScope;
+}
+
+function sameScopeSnapshot(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
+  if (a.connectedAtMs !== b.connectedAtMs) return false;
+  if (a.root === undefined || b.root === undefined) {
+    // Exact unchanged PATCH state only; a rootless snapshot never establishes binding ownership.
+    return (
+      a.root === b.root &&
+      a.kind === b.kind &&
+      JSON.stringify(a.relativePaths) === JSON.stringify(b.relativePaths)
+    );
+  }
+  return isScopeConnected([a], b);
+}
+
+/** Attribute canonicalization only to this exact PATCH, preserving all other requested scopes. */
+function canonicalFilesPatchScope(
+  submitted: readonly ChatConnectedScope[],
+  requested: ChatConnectedScope,
+  response: Chat,
+): ChatConnectedScope | undefined {
+  const scopes = effectiveScopes(response);
+  const candidates = scopes.filter(
+    (scope) =>
+      scope.root !== undefined &&
+      scope.connectedAtMs === requested.connectedAtMs &&
+      isScopeConnected([scope], { ...requested, root: scope.root }),
+  );
+  if (candidates.length !== 1) return undefined;
+  const accepted = candidates[0];
+  if (accepted === undefined) return undefined;
+  if (submitted.filter((scope) => sameScopeSnapshot(scope, requested)).length !== 1)
+    return undefined;
+  const others = submitted.filter((scope) => !sameScopeSnapshot(scope, requested));
+  const responseOthers = scopes.filter((scope) => scope !== accepted);
+  if (!responseOthers.every((scope) => others.some((other) => sameScopeSnapshot(scope, other))))
+    return undefined;
+  if (
+    !others.every(
+      (scope) =>
+        isScopeConnected([accepted], scope) ||
+        responseOthers.some((other) => sameScopeSnapshot(scope, other)),
+    )
+  )
+    return undefined;
+  return accepted;
+}
+
+function captureFilesPatchAcknowledgement(
+  acknowledgement: FilesPatchAcknowledgement,
+  submitted: readonly ChatConnectedScope[],
+  requested: ChatConnectedScope,
+  chat: Chat,
+): void {
+  acknowledgement.chat = chat;
+  const accepted = canonicalFilesPatchScope(submitted, requested, chat);
+  if (accepted !== undefined) acknowledgement.scope = accepted;
+}
+
 function acknowledgeFilesScope(input: {
   readonly correlationId: string;
   readonly edgeKey: string;
@@ -565,12 +627,14 @@ function applyAcknowledgedFilesConnection(
   accepted: boolean,
   target: ChatBindingTarget,
   connection: Connection,
+  requested: ChatConnectedScope,
   acknowledgements: ReadonlyMap<string, ChatConnectedScope>,
   api: WorkspaceApi,
 ): void {
   const acknowledged = acknowledgements.get(`${connection.id}\u0000${target.conversationId}`);
   if (accepted && target.isCurrent() && acknowledged !== undefined) {
-    api.updateConnBoundScope(connection.id, acknowledged);
+    if (requested.root === acknowledged.root) api.updateConnBoundScope(connection.id, acknowledged);
+    else api.updateConnBoundScope(connection.id, acknowledged, requested);
   }
 }
 
@@ -1746,14 +1810,11 @@ function AppShellInner(): ReactNode {
   // caller skips drawing the edge so no dangling ungrounded edge appears.
   const replaceFilesScopeNow = useCallback(
     async (
-      chatWindowId: string,
-      nextScope: ChatConnectedScope,
-      attempt: ChatMutationAttempt,
-      previousScope: ChatConnectedScope | null = null,
-      target?: ChatBindingTarget,
-      connectionId?: string,
-      automatic = false,
+      input: FilesScopeRequest,
+      previousScope: ChatConnectedScope | null,
+      acknowledgement: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
+      const { chatWindowId, nextScope, attempt, target, connectionId, automatic } = input;
       const observedFingerprint = wsConnectionsForBindingRef.current.find(
         (edge) => edge.id === connectionId,
       )?.boundScopeFingerprint;
@@ -1819,6 +1880,7 @@ function AppShellInner(): ReactNode {
         { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
       );
       if (persisted === undefined) return false;
+      captureFilesPatchAcknowledgement(acknowledgement, next, scope, persisted);
       session.replaceChat(persisted);
       setSourceConnectionNotice(null);
       // Epic #532 unification — also record the green edge as a governed reads-context
@@ -1855,37 +1917,21 @@ function AppShellInner(): ReactNode {
   const automaticFilesRequestsRef = useRef(new Map<string, symbol>());
   const applyFilesScopeRequest = useCallback(
     async (input: FilesScopeRequest): Promise<boolean> => {
-      const {
-        chatWindowId,
-        nextScope,
-        previousScope,
-        attempt,
-        target,
-        connectionId,
-        edgeKey,
-        chatKey,
-      } = input;
+      const { nextScope, previousScope, attempt, connectionId, edgeKey, chatKey } = input;
       const confirmed =
         edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
+      const acknowledgement: FilesPatchAcknowledgement = {};
       const accepted = await retryGroundingScopeIntent(async (): Promise<boolean> => {
         if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
-        return replaceFilesScopeNow(
-          chatWindowId,
-          nextScope,
-          attempt,
-          confirmed ?? previousScope,
-          target,
-          connectionId,
-          input.automatic,
-        );
+        return replaceFilesScopeNow(input, confirmed ?? previousScope, acknowledgement);
       }, attempt);
       if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
         return acknowledgeFilesScope({
           correlationId: attempt.correlationId,
           edgeKey,
           connectionId,
-          nextScope,
-          chat: confirmedGroundingChatsRef.current.get(chatKey),
+          nextScope: acknowledgement.scope ?? nextScope,
+          chat: acknowledgement.chat ?? confirmedGroundingChatsRef.current.get(chatKey),
           connections: wsConnectionsForBindingRef.current,
           scopes: acknowledgedFilesScopesRef.current,
           fingerprints: acknowledgedFilesFingerprintsRef.current,
@@ -2401,6 +2447,7 @@ function AppShellInner(): ReactNode {
           accepted,
           target,
           conn,
+          nextScope,
           acknowledgedFilesScopesRef.current,
           ws.api,
         ),

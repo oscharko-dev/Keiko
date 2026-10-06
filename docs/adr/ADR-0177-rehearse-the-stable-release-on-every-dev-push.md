@@ -163,26 +163,22 @@ publishes; it only has to be verifiable by it.
   workflow" in the Actions tab) and supplies nothing else. The `request` job runs only for a non-bot
   triggering actor in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`. It points `v<version>` at exactly the
   commit the button was pressed on (`scripts/release-candidate.mjs --request`, through the release tag
-  App) and fails, naming the reason, when that commit cannot be released: the version is not
-  approved, or a publish of the tag is still open. A successful request run is therefore the owner's
+  App) and fails, naming the reason, when that commit cannot be released: the version is already
+  published, is not approved, or a publish of the tag is still open. A successful request run is therefore the owner's
   authorization for exactly its head commit. GitHub records the dispatching account as the run's
   triggering actor, and no token can choose it.
-- **Preparing the next version.** When the current version is already published there is nothing to
-  request yet, and `release-impact.catalog.json` entries are already written ahead of time, during
-  the normal review of the change that needs them (KEIKO-0118) — so the next release needs no new
-  human judgment, only a mechanical version move. The request job moves the checkout to the lowest
-  stable version the catalog already carries a reviewed, non-correction entry for
-  (`scripts/lib/release-version-bump.mjs: nextReviewedVersion`), opens a `release/bump-<version>` pull
-  request to `dev` as the release App, and arms native auto-merge, instead of failing. Direct pushes to
-  `dev` stay forbidden, so the owner's authorization has to cross this one merge: a version-bump PR can
-  only have been opened by the release App's own identity — reachable only from this owner-gated job —
-  it targets `dev` from the reserved branch prefix, and it carries exactly the one mechanical commit
-  `set-version.mjs` produces (`readVersionBumpAuthorization`, `isVersionBumpAuthorizationPr`). Losing
-  any one of those checks is a safe failure: the bump does not auto-release, never a release it should
-  not have made. The candidate tag holds at that merge exactly like a direct button press
-  (`release-candidate.mjs`'s `releaseHeld`), and the advance evaluation recognizes it as a request
-  equivalent to a live owner dispatch (`release-automation.mjs`'s `versionBumpRequest`), tried first and
-  falling back to the classic dispatch-run request — including on any read failure — unchanged.
+- **Preparing the next version.** The pull request that declares a release carries its version
+  bump and reviewed release-impact metadata. `npm run set-version -- <version>` updates the product
+  manifests, internal pins, exported constants, lockfile and historical support registries; the
+  current README, public API document and evidence remain reviewed work. The catalog guard refuses
+  entries for a version newer than the root manifest. A feature PR may also be the release-cut PR,
+  so a second mechanical version-only PR is not required. It lands through the normal protected
+  `dev` path, with signed commits, current-head required checks and resolved conversations.
+  The button never prepares a version or opens a PR. If the current version is already published,
+  its request fails until the next version is integrated. A merged PR is not a release request:
+  the subsequent allowlisted owner dispatch authorizes the exact integrated commit. This replaces
+  the removed automatic version-bump PR path; no PR identity or branch-name convention grants
+  publication authority.
 - **The held tag.** A later `dev` push never moves a tag that a successful or still-running request
   holds; that push belongs to the next release, and the planner assigns it no build. Only a newer
   press moves the tag. A held tag can at most stop a tag move, never start a publish, so the planner
@@ -232,14 +228,12 @@ publishes; it only has to be verifiable by it.
   repository already discloses, and they cannot be removed.
 - `portable-release-signing` can take a `v*` deployment policy and a required approval without
   affecting `dev`.
-- A green rehearsal proves the chain for `v<version>` at that commit. After a version is published,
-  the next release still needs its reviewed release-impact approval on `dev` — written ahead of time
-  during normal feature review, never as a release-time step — before a press of the button can move
-  the version to it; readiness names that gap until the approval lands.
-- Releasing a version is one press of the release button, on a `dev` that already carries a reviewed
-  release-impact entry for whatever version comes next. No second human step, command, run id or
-  re-run is part of a release that succeeds, and no separate version-bump step is either: the button
-  prepares it.
+- A green rehearsal proves the chain for `v<version>` at that commit. It does not prepare the next
+  release. After publication, the next chosen version, its reviewed catalog entries and any required
+  regenerated evidence must land together through a protected PR before an owner requests it.
+- Once `dev` carries that reviewed, unpublished version, publication needs one owner button press.
+  The button does not change versions, and a successful request needs no second owner handoff,
+  copied run ID or manual publish dispatch.
 - Merges after the press are held back from the release they would otherwise have silently joined,
   and each requested commit is published at most once per press.
 - An owner-cut tag still releases as before; the candidate workflow keeps, moves, or leaves it by the
@@ -262,11 +256,11 @@ secrets and the step order of the candidate, the button and the event-driven sta
 place; `check-release-required-workflow-names.test.mjs` holds `release-advance.yml` to `release.yml`'s
 authority; `release-orchestration-integration.test.mjs` proves both build-owner scenarios, the held
 tag and the complete chain from the press to the authorized publish; and
-`release-publish-pipeline.test.mjs` stops a publish whose tag moved. `release-version-bump.test.mjs`
-proves the reviewed-version lookup, the authorization PR's identity check, and the branch/commit/PR/
-auto-merge sequence in-process; `release-candidate.test.mjs` and `release-automation.test.mjs` also
-cover the merged-PR hold and request paths, including every way a PR can fail to be one
-(`releaseHeld`, `versionBumpRequest`). `release-github-read-ceiling.test.mjs` reads a dispatch
+`release-publish-pipeline.test.mjs` stops a publish whose tag moved. `set-version.test.mjs` proves
+mechanical version propagation. `release-impact-governance.test.mjs` rejects catalog entries ahead
+of the product version; `release-candidate.test.mjs` proves that an already-published request fails
+without a version write; and `release-automation.test.mjs` proves that an absent owner request does
+not trigger a search for a merged version-bump PR. `release-github-read-ceiling.test.mjs` reads a dispatch
 history larger than 1 MiB through a real child, pins the output ceiling on every spawn of the
 release-chain scripts, and pins the named cause of a failed read.
 

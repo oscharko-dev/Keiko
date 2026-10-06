@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-in-11">What's in 1.1</a>
+  <a href="#whats-in-12">What's in 1.2</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -56,7 +56,7 @@ Keiko turns your repository, your documents and your models into one calm place 
 
 ## Download
 
-The desktop packages install in one step and include everything — runtime and coding sidecar bundled, nothing else to install.
+The desktop packages include the Node.js runtime and launch Keiko without a separate Node.js installation. Coding execution also requires a supported, verified platform runtime; a bundled executable alone does not make it available.
 
 **[Download the latest release →](https://github.com/oscharko-dev/Keiko/releases/latest)**
 
@@ -76,16 +76,31 @@ npm install -g @oscharko-dev/keiko
 ```
 
 ```bash
-keiko init && keiko start
+keiko start
 ```
 
-Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. The coding sidecar ships with the desktop packages and with repository checkouts — the npm install reports it honestly as unavailable rather than pretending.
+Connected folders do not need Git metadata or a `package.json`. Run `keiko init` only if you want to add optional commands to an existing Node.js project. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
 
 ## Honest limits
 
+- Updating to 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
+- Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/windows-gateway-runtime-progress.md).
+- Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's in 1.2
+
+1.2 brings the integrated changes since 1.1.13 to everyday chat, connected folders and support:
+
+- **Model-aware context.** Chat uses the selected model's available gateway metadata for context and output limits. Context displays distinguish estimates from provider-reported usage, and compaction keeps conversation history within its budget.
+- **Recursive source search.** Connected Git repositories and ordinary folders are searched through subfolders for eligible text files up to and including 2 MiB, with cancellation and workspace boundaries preserved. Unavailable subfolders do not discard directly readable declared manifests; incomplete coverage stays visible. Source links retain the correct folder and file identity, and coverage indicators distinguish files examined from excerpts used in the answer. Chat can draft test examples from freshly read, budgeted folder evidence and return the code for copying.
+- **A report at the error.** Download a private support report directly from an error message. The report carries bounded diagnostic evidence and can be validated offline; Keiko does not send it automatically. When server evidence is unavailable, the browser can retain available client failure facts in a limited report.
+- **Reliable workspace navigation.** Files and the ordinary Editor retain their selected roots through navigation and recovery. Reloaded file connections retain one copy of each selected folder. The ordinary Editor remains a manual file editor; agent actions belong to the separate Coding Workbench. Windows Git checkout binding uses canonical paths.
+- **Clearer outcomes under failure.** Model retries, stream completion, cancellation and support-report delivery preserve their failure evidence and release owned resources. A failed or superseded operation cannot silently claim the result of a newer action.
+
+See the [release notes and changelog](https://github.com/oscharko-dev/Keiko/releases) for the full change list, compatibility guidance and release-specific qualification limits.
 
 ## What's in 1.1
 
@@ -94,7 +109,7 @@ Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1
 - The activity log is now a strict machine-reconstruction contract: every record is validated against a versioned registry, support exports refuse unsafe filesystem targets and never silently overwrite, and support analysis explicitly classifies legacy, corrupt, truncated or incomplete evidence.
 - The Coding Workbench moves to OpenCode 2 and keeps per-conversation task history so a run's steps stay visible across restarts.
 - Voice conversations with the Digital Twin are turn-based, with a simpler audio setup.
-- Publishing a stable release is a single unattended button: when the current `dev` version is already published, the release automation prepares and requests the next reviewed version by itself instead of asking for a manual bump step.
+- The stable-release workflow gained an owner-authorized button and automatic publication after its prerequisites pass. The current workflow requires the chosen version and reviewed release metadata to land through a protected pull request before that button is pressed; it does not prepare a version bump itself.
 - Chat and workbench polish: the Chat History **New** button no longer flashes enabled during load, and the workbench composer chip row is removed.
 
 ## What's in 1.0
@@ -119,6 +134,7 @@ Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1
 ## Learn more
 
 - [oscharko.dev](https://www.oscharko.dev) — the product page
+- [Release notes and changelog](https://github.com/oscharko-dev/Keiko/releases) — published changes and compatibility guidance
 - [Documentation](https://github.com/oscharko-dev/Keiko/tree/dev/docs) — architecture decisions, design system, troubleshooting
 - [Operator runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md) — the full operator reference
 - [Contributing](https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md) — the quality bar and how changes land
