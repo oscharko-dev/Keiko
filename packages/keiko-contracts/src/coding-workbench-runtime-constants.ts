@@ -99,7 +99,24 @@ export type CodingWorkbenchRuntimeFailureCode =
   // could not be qualified for the run (non-canonical or symlinked path, inactive or drifted
   // workspace instance, repository identity unreadable).
   | "model-unavailable"
-  | "workspace-unqualified";
+  | "workspace-unqualified"
+  // F9 (#3873, live Gemma qualification): a run whose last turn ended on one of its own bounds or on
+  // a failed model call names that cause instead of `runtime-failed`, which the Workbench renders as
+  // an internal error. `prompt-allowance-exhausted`: the run's cumulative prompt allowance (the
+  // Authority Envelope's `maxPromptTokens`) refused its most recent model call.
+  // `envelope-duration-exhausted`: the run's Authority Envelope ran out of time (its `expiresAt`, or
+  // `maxRuntimeMs` since minting). `output-exhausted-repeated`: the most recent model call spent the
+  // whole output budget again without a tool call or an answer, after the gateway's steered repair
+  // or the runtime's retries. `provider-unavailable`: the model provider could not be reached or
+  // stopped answering on the most recent model call. `model-turn-failed`: the most recent model call
+  // failed for a cause the failed turn itself names (a provider or Workbench-guard rejection, an
+  // unusable model answer). `runtime-failed` stays the code of a run that ended with no such cause
+  // on record: the runtime crashed or failed internally.
+  | "prompt-allowance-exhausted"
+  | "envelope-duration-exhausted"
+  | "output-exhausted-repeated"
+  | "provider-unavailable"
+  | "model-turn-failed";
 
 /** Redacted per-turn gateway causes. These are SSE-only, not durable run failure states. */
 export type CodingWorkbenchTurnFailureCode =
@@ -142,4 +159,9 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "delivery-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
+    "prompt-allowance-exhausted",
+    "envelope-duration-exhausted",
+    "output-exhausted-repeated",
+    "provider-unavailable",
+    "model-turn-failed",
   ] as const);

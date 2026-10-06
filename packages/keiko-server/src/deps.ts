@@ -4474,6 +4474,11 @@ function gatewayOutcomeState(outcome: GatewayEvidenceOutcome): "running" | "canc
   return "failed";
 }
 
+// The provider answered: completely (`accepted`), or beyond the run's output budget (`output-limit`).
+function gatewayOutcomeAnswered(outcome: GatewayEvidenceOutcome): boolean {
+  return outcome === "accepted" || outcome === "output-limit";
+}
+
 function gatewayOutcomeFailureCode(
   outcome: GatewayEvidenceOutcome,
 ):
@@ -5161,14 +5166,30 @@ function buildRuntimeUiHandlerDeps(
     memoryDeploymentCeiling: resolveConfiguredDeploymentCeiling(args.options) ?? "governed-assist",
     ...buildRuntimeMutationLeaseDependency(args.options, services.runtimeComposition),
     ...codingRuntimeControlPlaneDeps,
-    codingSidecarGatewayEvidenceAggregator: {
-      record: ({ runId, outcome }): void => {
-        services.codingRuntimeEvidenceAggregator.observe(runId, {
-          kind: "model-request",
-          state: gatewayOutcomeState(outcome),
-          ...gatewayOutcomeFailureCode(outcome),
-        });
-      },
+    codingSidecarGatewayEvidenceAggregator: codingSidecarGatewayEvidenceRecorder(
+      services.codingRuntimeEvidenceAggregator,
+      services.codingRuntimeControlPlane?.eventHub,
+    ),
+  };
+}
+
+/**
+ * Records each sidecar gateway call outcome of a run: as content-free run evidence, and, for an
+ * answered call, on the run's event hub, where an answer supersedes an earlier failed call so a
+ * failed run never names a model-call cause it already recovered from (F9, #3873).
+ */
+export function codingSidecarGatewayEvidenceRecorder(
+  evidence: Pick<ReturnType<typeof createCodingRuntimeEvidenceAggregator>, "observe">,
+  eventHub: Pick<CodingRuntimeEventHub, "noteModelCallAnswered"> | undefined,
+): NonNullable<UiHandlerDeps["codingSidecarGatewayEvidenceAggregator"]> {
+  return {
+    record: ({ runId, outcome }): void => {
+      evidence.observe(runId, {
+        kind: "model-request",
+        state: gatewayOutcomeState(outcome),
+        ...gatewayOutcomeFailureCode(outcome),
+      });
+      if (gatewayOutcomeAnswered(outcome)) eventHub?.noteModelCallAnswered(runId);
     },
   };
 }

@@ -32,7 +32,18 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  type CodingWorkbenchTurnFailureCode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  classifyTerminalFailure,
+  terminalFailureErrorKind,
+  type CodingRuntimeTerminalFailure,
+  type CodingRuntimeTerminalFailureCode,
+} from "./codingRuntimeTerminalCause.js";
+import {
+  CodingRuntimeRunEffortLedger,
+  type CodingRuntimeRunEffortRollUp,
+} from "./codingRuntimeRunEffort.js";
 import type {
   CodingRuntimeApprovalIssueResult,
   CodingRuntimeFailureCode,
@@ -183,6 +194,11 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "delivery-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
+    "prompt-allowance-exhausted",
+    "envelope-duration-exhausted",
+    "output-exhausted-repeated",
+    "provider-unavailable",
+    "model-turn-failed",
   ],
 } as const;
 
@@ -594,6 +610,32 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
     ...CODING_RUNTIME_RUN_FIELDS,
     terminal: { type: "boolean", dataClass: "closed-enum", required: true },
     failureCode: CODING_RUNTIME_FAILURE_CODE_FIELD,
+    // F9 (#3873): on a failed task outcome, which fact named `failureCode`, and the gateway's cause
+    // for the run's last failed model call, so the classification is reconstructable from the log.
+    failureBasis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "prompt-allowance",
+        "envelope-duration",
+        "model-call-failure",
+        "no-model-call-failure",
+      ],
+    },
+    modelCallFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "provider-failed",
+        "stream-incomplete",
+        "turn-rejected",
+        "output-exhausted",
+        "empty-answer",
+        "invalid-tool-call",
+      ],
+    },
     taskOutcomeStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -609,6 +651,23 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
     diagnosticLineCount: { type: "integer", dataClass: "count", required: false },
     diagnosticDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     diagnosticTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // The run's effort roll-up (#3873), counted in process where each fact was observed
+    // (codingRuntimeRunEffort.ts): the wall time from creation to this line; the sidecar gateway's
+    // admitted-and-settled model calls, their summed duration and the prompt tokens the provider
+    // reported for them; the governed tool calls the run's facade answered; the verification
+    // summaries and human decisions this orchestrator settled, and the time the run waited on a
+    // human. A run this process did not start carries its wall time alone.
+    wallDurationMs: { type: "integer", dataClass: "duration", required: false },
+    modelTurnCount: { type: "integer", dataClass: "count", required: false },
+    modelDurationMs: { type: "integer", dataClass: "duration", required: false },
+    promptTokensTotal: { type: "integer", dataClass: "count", required: false },
+    toolInvocationCount: { type: "integer", dataClass: "count", required: false },
+    workspaceReadCount: { type: "integer", dataClass: "count", required: false },
+    editCount: { type: "integer", dataClass: "count", required: false },
+    editRefusedCount: { type: "integer", dataClass: "count", required: false },
+    verificationCount: { type: "integer", dataClass: "count", required: false },
+    operatorDecisionCount: { type: "integer", dataClass: "count", required: false },
+    operatorWaitMs: { type: "integer", dataClass: "duration", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -1355,11 +1414,12 @@ function isCompleteVerificationSummary(
   ].every((value) => value !== undefined);
 }
 
+// Whether the event was a complete verification summary, the one the run's roll-up counts (#3873).
 function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
-): void {
-  if (!isCompleteVerificationSummary(event)) return;
+): boolean {
+  if (!isCompleteVerificationSummary(event)) return false;
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION,
@@ -1389,15 +1449,21 @@ function recordRuntimeVerificationSummary(
       },
     ),
   );
+  return true;
 }
 
 function recordRuntimeRunSettled(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   state: CodingWorkbenchRuntimeStateName,
+  effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
   failureCode?: CodingWorkbenchRuntimeFailureCode,
+  terminalFailure?: CodingRuntimeTerminalFailure,
 ): void {
-  const errorKind = runtimeRunSettledErrorKind(state);
+  const errorKind =
+    terminalFailure === undefined
+      ? runtimeRunSettledErrorKind(state)
+      : terminalFailureErrorKind(terminalFailure);
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_SETTLED_OPERATION,
@@ -1414,10 +1480,27 @@ function recordRuntimeRunSettled(
         modelSource: snapshot.modelSource,
         terminal: TERMINAL_STATES.has(state),
         ...(failureCode === undefined ? {} : { failureCode }),
+        ...terminalFailureLogFields(terminalFailure),
         ...runtimeResultLogFields(snapshot.result),
+        ...effort,
       },
     ),
   );
+}
+
+// The classification evidence of a failed task outcome (F9): which fact named the cause, and the
+// gateway's closed cause of the last failed model call when one is on record. Body-free.
+function terminalFailureLogFields(failure: CodingRuntimeTerminalFailure | undefined): {
+  readonly failureBasis?: CodingRuntimeTerminalFailure["basis"];
+  readonly modelCallFailure?: CodingWorkbenchTurnFailureCode;
+} {
+  if (failure === undefined) return {};
+  return {
+    failureBasis: failure.basis,
+    ...(failure.modelCallFailure === undefined
+      ? {}
+      : { modelCallFailure: failure.modelCallFailure }),
+  };
 }
 
 function runtimeRunSettledErrorKind(
@@ -1663,6 +1746,9 @@ export class CodingRuntimeOrchestrator {
   private readonly approvals = new Map<string, ApprovalChallenge>();
   private readonly queuedApprovals = new Map<string, ApprovalChallenge[]>();
   private readonly approvalExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // #3873: the verifications, human decisions and human waits of the runs this process started,
+  // rolled up with the run host's counts on the settlement line.
+  private readonly effort = new CodingRuntimeRunEffortLedger();
   private readonly operations: CodingRuntimeOperationCoordinator;
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
@@ -2122,6 +2208,7 @@ export class CodingRuntimeOrchestrator {
         challenge.permission.requestId,
         decision,
       );
+      this.effort.decision(live.runId);
       return this.promoteQueuedApproval(live);
     });
   }
@@ -2397,6 +2484,7 @@ export class CodingRuntimeOrchestrator {
           "settled",
           event.auxiliaryOutcome,
         );
+        this.countHumanDecision(current.runId, event.auxiliaryOutcome);
       }
       return resumed;
     }
@@ -2410,6 +2498,15 @@ export class CodingRuntimeOrchestrator {
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
+  // #3873: a wait that settled `accepted` or `denied` was a person's decision; one that settled
+  // `stopped`, `limit-reached` or `unavailable` ended without one, so it is not counted.
+  private countHumanDecision(
+    runId: string,
+    outcome: CodingWorkbenchAuxiliaryStatus | undefined,
+  ): void {
+    if (outcome === "accepted" || outcome === "denied") this.effort.decision(runId);
+  }
+
   private async ingestActiveEvent(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
@@ -2420,7 +2517,9 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
-    recordRuntimeVerificationSummary(this.deps.activityLog, event);
+    if (recordRuntimeVerificationSummary(this.deps.activityLog, event)) {
+      this.effort.verification(current.runId);
+    }
     return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
   }
 
@@ -2672,21 +2771,48 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     if (current?.runId !== runId) return;
     if (await this.continueForDelivery(current, outcome)) return;
+    // Read before the stop: the facts describe the model call that ended this turn (F9).
+    const terminalFailure = this.terminalFailure(runId, outcome);
     this.captureHistory(runId);
     const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
-    const terminalResult = this.deps.manager.result(runId);
+    this.settleStoppedTask(live, outcome, stopped, terminalFailure);
+  }
+
+  private settleStoppedTask(
+    live: CodingRuntimeSnapshot,
+    outcome: CodingRuntimeTaskOutcome,
+    stopped: boolean,
+    terminalFailure: CodingRuntimeTerminalFailure | undefined,
+  ): void {
+    const terminalResult = this.deps.manager.result(live.runId);
     if (!stopped || terminalResult?.status !== outcome) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome));
+    const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome, terminalFailure));
     if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    this.transition(live, target.state, target.failureCode);
+    const settledFailure =
+      target.failureCode === terminalFailure?.failureCode ? terminalFailure : undefined;
+    this.transition(live, target.state, target.failureCode, undefined, settledFailure);
+  }
+
+  /**
+   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted prompt
+   * allowance, an unreachable provider, a failed model call, or `runtime-failed` when none is on
+   * record. A success or a cancellation is never explained by an earlier model-call failure.
+   */
+  private terminalFailure(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+  ): CodingRuntimeTerminalFailure | undefined {
+    const facts = this.deps.terminalFacts;
+    if (outcome !== "failed" || facts === undefined) return undefined;
+    return classifyTerminalFailure(facts, runId);
   }
 
   /**
@@ -2880,7 +3006,7 @@ export class CodingRuntimeOrchestrator {
     live: CodingRuntimeSnapshot,
     target: {
       readonly state: "failed" | "succeeded";
-      readonly failureCode?: "runtime-failed" | undefined;
+      readonly failureCode?: CodingRuntimeTerminalFailureCode | undefined;
     },
   ):
     | {
@@ -3104,6 +3230,7 @@ export class CodingRuntimeOrchestrator {
     this.activeRunId = runId;
     this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
+    this.effort.begin(runId);
     recordRuntimeRunStarted(
       this.deps.activityLog,
       selection.snapshot,
@@ -3653,6 +3780,7 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
+    terminalFailure?: CodingRuntimeTerminalFailure,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
@@ -3663,7 +3791,7 @@ export class CodingRuntimeOrchestrator {
     if (this.shouldTransitionToRecoveryRequired(published, state)) {
       return this.transition(next, "recovery-required", "recovery-required");
     }
-    this.finalizeTransitionIfTerminal(next, state, failureCode);
+    this.finalizeTransitionIfTerminal(next, state, failureCode, terminalFailure);
     return { ok: true, snapshot: this.publicSnapshotWithDescription(next) };
   }
 
@@ -3698,6 +3826,7 @@ export class CodingRuntimeOrchestrator {
       state,
       ...(failureCode ? { failureCode } : {}),
     });
+    this.effort.waiting(next.runId, waitsOnPerson(next), next.updatedAt);
   }
 
   private shouldTransitionToRecoveryRequired(
@@ -3711,6 +3840,7 @@ export class CodingRuntimeOrchestrator {
     next: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
+    terminalFailure?: CodingRuntimeTerminalFailure,
   ): void {
     if (state === "recovery-required") {
       this.deps.safeActivityProjection?.markUnavailable(next.runId);
@@ -3719,7 +3849,15 @@ export class CodingRuntimeOrchestrator {
     } else {
       this.purgeExplicitlyEndedActivity(next.runId, state);
     }
-    recordRuntimeRunSettled(this.deps.activityLog, next, state, failureCode);
+    recordRuntimeRunSettled(
+      this.deps.activityLog,
+      next,
+      state,
+      this.effort.rollUp(next, this.deps.runEffort?.(next.runId)),
+      failureCode,
+      terminalFailure,
+    );
+    if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);
     if (state === "succeeded") this.dispatchDescriptionIfEligible(next);
   }
@@ -4115,13 +4253,25 @@ export const DELIVERY_CONTINUATION_MAX = 2;
 export const DELIVERY_CONTINUATION_INTENT =
   "Delivery is not evidenced yet: this issue-bound run has no verified commit and no delivered draft pull request. Continue with the next action your last tool results named, such as staging the changed files, verifying the staged candidate, committing, pushing and opening the draft pull request. Stop only when the delivery is evidenced or a governed tool refuses.";
 
-function taskOutcomeState(outcome: CodingRuntimeTaskOutcome): {
+function taskOutcomeState(
+  outcome: CodingRuntimeTaskOutcome,
+  terminalFailure: CodingRuntimeTerminalFailure | undefined,
+): {
   readonly state: "failed" | "succeeded";
-  readonly failureCode?: "runtime-failed" | undefined;
+  readonly failureCode?: CodingRuntimeTerminalFailureCode | undefined;
 } {
   return outcome === "succeeded"
     ? { state: "succeeded" }
-    : { state: "failed", failureCode: "runtime-failed" };
+    : { state: "failed", failureCode: terminalFailure?.failureCode ?? "runtime-failed" };
+}
+
+// #3873: a run awaiting an approval, or paused on a decision a governed tool waits for, is waiting
+// on a person. A pause the operator asked for names no decision, so the run is not waiting on one.
+function waitsOnPerson(snapshot: CodingRuntimeSnapshot): boolean {
+  return (
+    snapshot.state === "awaiting-approval" ||
+    (snapshot.state === "paused" && snapshot.pauseReason !== undefined)
+  );
 }
 
 function effectiveModeAfterResume(

@@ -19,6 +19,16 @@ import {
 
 const DIGEST = "a".repeat(64);
 
+// F9 (#3873): the closed causes a failed run settles with instead of `runtime-failed` (an internal
+// error): its own bounds, a repeated output exhaustion, an unreachable provider, a failed model call.
+const TERMINAL_RUN_CAUSES = [
+  "prompt-allowance-exhausted",
+  "envelope-duration-exhausted",
+  "output-exhausted-repeated",
+  "provider-unavailable",
+  "model-turn-failed",
+] as const;
+
 function authority(): CodingWorkbenchAuthorityEnvelope {
   return {
     schemaVersion: "1",
@@ -398,6 +408,33 @@ describe("Coding Workbench runtime contracts", () => {
       }),
     ).toMatchObject({ ok: false });
   });
+
+  // F9 (#3873): the terminal causes are failures of a settled run only. A live run never
+  // carries one, and a per-turn gateway cause never stands in for one.
+  it.each(TERMINAL_RUN_CAUSES)(
+    "binds the %s terminal cause to a failed run state only",
+    (failureCode) => {
+      const failed = {
+        schemaVersion: "1",
+        state: "failed",
+        revision: 4,
+        updatedAt: "2026-07-11T12:00:00.000Z",
+        runId: "run-1",
+        taskId: "task-1",
+        workspaceId: "workspace-1",
+        runtimeSource: "keiko-sidecar",
+        modelSource: "keiko-model-gateway",
+        failureCode,
+      };
+      expect(validateCodingWorkbenchRuntimeState(failed)).toMatchObject({ ok: true });
+      expect(validateCodingWorkbenchRuntimeState({ ...failed, state: "running" })).toMatchObject({
+        ok: false,
+      });
+      expect(
+        validateCodingWorkbenchRuntimeState({ ...failed, failureCode: "stream-incomplete" }),
+      ).toMatchObject({ ok: false });
+    },
+  );
 });
 
 describe("Coding Workbench runtime contract failure branches", () => {

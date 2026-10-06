@@ -1991,11 +1991,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-runtime.event.late-terminal",
       "coding-runtime.run.settled",
     ],
+    // `duration`: the settled line's effort roll-up (#3873) carries the run's wall time, summed
+    // model-call time and human-wait time.
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
       "count",
       "digest",
+      "duration",
       "loss-state",
       "opaque-id",
     ],

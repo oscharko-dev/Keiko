@@ -33,6 +33,8 @@ import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 import type { CodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import type { CodingRuntimeHostRunEffort } from "./codingRuntimeRunEffort.js";
+import type { CodingRuntimeTerminalFacts } from "./codingRuntimeTerminalCause.js";
 
 export interface CodingRuntimeLaunchResolver {
   /** Bounded server-only reads before the existing start-confirmation claim is consumed. */
@@ -118,6 +120,18 @@ export interface CodingRuntimeOrchestratorDeps {
    * channel reports no pending ask and the operator simply sees the content-free approval facts.
    */
   readonly pendingResearchApprovals?: PendingResearchApprovals | undefined;
+  /**
+   * F9 (#3873): the facts that name why a run's failed turn ended — an exhausted prompt allowance,
+   * an unreachable provider, a failed model call. Read at settlement so a failed task outcome
+   * settles under its closed cause; absent, a failed outcome settles `runtime-failed` as before.
+   */
+  readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
+  /**
+   * #3873: the run host's share of a run's effort (model calls, governed tool calls), read when the
+   * run settles for the roll-up on its settlement line. Absent, those counts settle as zero for a
+   * run this process started.
+   */
+  readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly now?: () => Date;

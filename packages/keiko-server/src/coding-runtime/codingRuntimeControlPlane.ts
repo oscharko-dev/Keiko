@@ -28,6 +28,8 @@ import {
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type { CodingRuntimeHostRunEffort } from "./codingRuntimeRunEffort.js";
+import type { CodingRuntimeTerminalFacts } from "./codingRuntimeTerminalCause.js";
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -86,6 +88,24 @@ export interface CodingRuntimeHost {
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   readonly contextUsage?:
     { readonly read: (runId: string) => CodingWorkbenchContextUsage | undefined } | undefined;
+  /**
+   * #3873: the run host's share of a run's effort — its model calls and governed tool calls, counted
+   * where the host saw them. Read when the run settles, for the roll-up on `coding-runtime.run.settled`.
+   */
+  readonly runEffort?:
+    { readonly read: (runId: string) => CodingRuntimeHostRunEffort | undefined } | undefined;
+  /**
+   * F9 (#3873): whether the run's most recent model-call admission was refused by its cumulative
+   * prompt allowance. Read when a failed task settles, so the run names the exhausted allowance
+   * instead of an internal error; absent, no failure is attributed to the allowance.
+   */
+  readonly promptAllowanceExhausted?: ((runId: string) => boolean) | undefined;
+  /**
+   * F9 (#3873): whether the run's Authority Envelope has run out of time. Read when a failed task
+   * settles, so a run that reached its envelope's end names it instead of an internal error; absent,
+   * no failure is attributed to the duration.
+   */
+  readonly envelopeDurationExhausted?: ((runId: string) => boolean) | undefined;
   readonly runtimeCapabilityAuthenticator?:
     | {
         readonly authenticate: (
@@ -290,9 +310,28 @@ function createControlPlaneOrchestrator(
     ...(input.repositoryInstructions
       ? { repositoryInstructions: input.repositoryInstructions }
       : {}),
+    terminalFacts: codingRuntimeTerminalFacts(eventHub, input.runtimeHost),
+    runEffort: input.runtimeHost?.runEffort?.read,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
   });
+}
+
+/**
+ * F9 (#3873): the facts a failed run's settlement names its cause from, each read from the layer
+ * that owns it — the sidecar gateway's failed-call causes from the control plane's event hub, the
+ * prompt allowance and the envelope duration from the runtime host's authority.
+ */
+export function codingRuntimeTerminalFacts(
+  eventHub: Pick<CodingRuntimeEventHub, "lastModelCallFailure">,
+  runtimeHost:
+    Pick<CodingRuntimeHost, "promptAllowanceExhausted" | "envelopeDurationExhausted"> | undefined,
+): CodingRuntimeTerminalFacts {
+  return {
+    promptAllowanceExhausted: (runId) => runtimeHost?.promptAllowanceExhausted?.(runId) === true,
+    envelopeDurationExhausted: (runId) => runtimeHost?.envelopeDurationExhausted?.(runId) === true,
+    lastModelCallFailure: (runId) => eventHub.lastModelCallFailure(runId),
+  };
 }
 
 // #3401: fills the runtime host's notify slot with the orchestrator's real, public

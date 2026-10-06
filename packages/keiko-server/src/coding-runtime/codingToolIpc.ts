@@ -62,6 +62,26 @@ export type CodingToolAction =
   | "skill-discover"
   | "child-agent";
 
+// Every wire action, so a request the facade cannot parse can still be counted under the action it
+// names (#3873). Checked for completeness by `satisfies`; read only as a Set, never as an object
+// lookup, because the name arrives in untrusted runtime JSON (see `requestFromRecord`).
+const CODING_TOOL_ACTION_NAMES = {
+  read: true,
+  discover: true,
+  search: true,
+  edit: true,
+  command: true,
+  verification: true,
+  git: true,
+  delivery: true,
+  connector: true,
+  egress: true,
+  skill: true,
+  "skill-discover": true,
+  "child-agent": true,
+} as const satisfies Readonly<Record<CodingToolAction, true>>;
+const CODING_TOOL_ACTIONS: ReadonlySet<string> = new Set(Object.keys(CODING_TOOL_ACTION_NAMES));
+
 export interface CodingToolRequestIdentity {
   readonly actionId: string;
   readonly idempotencyKey: string;
@@ -337,6 +357,26 @@ export function parseCodingToolRequest(
   if (decoded === undefined) return undefined;
   const value = parseJson(decoded);
   return isRecord(value) ? requestFromRecord(value) : undefined;
+}
+
+/**
+ * The closed action a request names even when it fails `parseCodingToolRequest`, so a refused call
+ * is still counted under its action (#3873 run effort roll-up). Reads the `action` field alone and
+ * never returns anything from the body but that closed name; `undefined` when it names none.
+ */
+export function declaredCodingToolAction(
+  body: string | Buffer,
+  maxBodyBytes: number,
+): CodingToolAction | undefined {
+  const decoded = decodeBody(body, maxBodyBytes);
+  if (decoded === undefined) return undefined;
+  const value = parseJson(decoded);
+  if (!isRecord(value) || typeof value.action !== "string") return undefined;
+  return isCodingToolAction(value.action) ? value.action : undefined;
+}
+
+function isCodingToolAction(value: string): value is CodingToolAction {
+  return CODING_TOOL_ACTIONS.has(value);
 }
 
 export function isPermissionObservation(body: string | Buffer, maxBodyBytes: number): boolean {

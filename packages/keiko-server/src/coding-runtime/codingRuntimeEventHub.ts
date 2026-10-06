@@ -127,6 +127,9 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
  */
 export class CodingRuntimeEventHub {
   private readonly runs = new Map<string, RunBuffer>();
+  // One closed code per run with a failed model call on record; bounded like `runs` by the durable
+  // snapshot ledger's retention through `deleteRuns`.
+  private readonly modelCallFailures = new Map<string, CodingWorkbenchTurnFailureCode>();
   private readonly maxEvents: number;
   private readonly maxBytes: number;
   private readonly maxSubscribers: number;
@@ -179,7 +182,12 @@ export class CodingRuntimeEventHub {
     return { ok: true, event };
   }
 
-  /** Reports each content-free gateway failure, including retries at the same task revision. */
+  /**
+   * Reports each content-free gateway failure, including retries at the same task revision. The
+   * cause is also kept as the run's last model-call failure (F9, #3873), apart from the bounded
+   * replay, so the run's settlement can name what ended its turn even after the frame was demoted,
+   * evicted, or refused for capacity.
+   */
   publishTurnFailure(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
@@ -188,6 +196,7 @@ export class CodingRuntimeEventHub {
   ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
     const run = this.runs.get(runId);
     if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
+    if (SAFE_ID.test(runId)) this.modelCallFailures.set(runId, failureCode);
     return this.publish({
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       kind: "runtime-event",
@@ -197,6 +206,19 @@ export class CodingRuntimeEventHub {
       eventKind: "failure-redacted",
       failureCode,
     });
+  }
+
+  /**
+   * A model call of the run was answered: an earlier failure was recovered from and no longer
+   * describes how the run's turn ends.
+   */
+  noteModelCallAnswered(runId: string): void {
+    this.modelCallFailures.delete(runId);
+  }
+
+  /** The cause of the run's most recent failed model call that no later answered call superseded. */
+  lastModelCallFailure(runId: string): CodingWorkbenchTurnFailureCode | undefined {
+    return this.modelCallFailures.get(runId);
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {
@@ -243,6 +265,7 @@ export class CodingRuntimeEventHub {
   /** Retention coupling: delete only ids selected by the durable snapshot ledger. */
   deleteRuns(runIds: readonly string[]): void {
     for (const runId of runIds) {
+      this.modelCallFailures.delete(runId);
       const run = this.runs.get(runId);
       if (run === undefined) continue;
       this.closeSubscribers(run);

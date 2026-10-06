@@ -41,6 +41,47 @@ const recovery = (runId: string, revision: number): CodingRuntimeEventHubInput =
   failureCode: "recovery-required",
 });
 
+// F9 (#3873): the cause of a run's last failed model call, kept apart from the lossy SSE replay so
+// settlement can name it after every retained event has been demoted or evicted.
+describe("CodingRuntimeEventHub model-call failure fact", () => {
+  it("keeps the latest gateway failure of a run until a later model call is answered", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 2 });
+    expect(hub.lastModelCallFailure("run-a")).toBeUndefined();
+    hub.publishTurnFailure("run-a", "running", 1, "provider-failed");
+    hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete");
+    // A burst the bounded replay cannot hold still leaves the latest cause on record.
+    for (let index = 0; index < 4; index += 1) {
+      hub.publishTurnFailure("run-a", "running", 2, "turn-rejected");
+    }
+    expect(hub.lastModelCallFailure("run-a")).toBe("turn-rejected");
+    expect(hub.lastModelCallFailure("run-b")).toBeUndefined();
+
+    hub.noteModelCallAnswered("run-a");
+    expect(hub.lastModelCallFailure("run-a")).toBeUndefined();
+    hub.publishTurnFailure("run-a", "running", 3, "stream-incomplete");
+    expect(hub.lastModelCallFailure("run-a")).toBe("stream-incomplete");
+  });
+
+  it("records nothing for a settled run and forgets a pruned one", () => {
+    const hub = new CodingRuntimeEventHub();
+    hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete");
+    hub.publish(terminal("run-a", 2));
+    expect(hub.publishTurnFailure("run-a", "running", 3, "provider-failed")).toEqual({
+      ok: false,
+      reason: "terminal-run",
+    });
+    expect(hub.lastModelCallFailure("run-a")).toBe("stream-incomplete");
+    hub.deleteRuns(["run-a"]);
+    expect(hub.lastModelCallFailure("run-a")).toBeUndefined();
+  });
+
+  it("ignores a run id the replay itself would refuse", () => {
+    const hub = new CodingRuntimeEventHub();
+    expect(hub.publishTurnFailure("../run", "running", 1, "provider-failed").ok).toBe(false);
+    expect(hub.lastModelCallFailure("../run")).toBeUndefined();
+  });
+});
+
 describe("CodingRuntimeEventHub", () => {
   it("retains every redacted gateway failure when separate turns share a task revision", () => {
     const hub = new CodingRuntimeEventHub({ maxEvents: 3 });

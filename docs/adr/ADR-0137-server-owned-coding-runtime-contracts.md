@@ -198,6 +198,50 @@ the dispatch was in flight is abandoned with `reason` `run-superseded`: the run 
 the operator's action decided (a stop settles `cancelled`), and the continuation count is
 discarded with the run.
 
+**A failed run names the bound or model-call cause that ended it** (F9 of the live Gemma
+qualification, #3873). A failed task outcome carries no cause of its own, and settling every one as
+`runtime-failed` told an operator "internal error" for runs that had only reached a bound: run
+`run-65084062444586162471229658028402064666` used up its prompt allowance, and run
+`run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model call in
+flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-stopped`). At settlement
+the orchestrator reads, before it stops the runtime, the facts the owning layers hold: the runtime
+authority answers whether the run's most recent model-call admission was refused by the cumulative
+prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run state that
+admits no model call) and whether the run's envelope ran out of time (`maxRuntimeMs` after minting
+or `expiresAt`, whichever comes first), and the control plane's event hub keeps the closed cause the
+coding sidecar gateway reported for the run's most recent failed model call until a later call of
+the run is answered. In that order, the run settles `prompt-allowance-exhausted`,
+`envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
+ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
+again), `provider-unavailable` (the gateway's `stream-incomplete`: a timeout, a refused or dropped
+connection, a stream that broke before the answer completed), or `model-turn-failed` (any other
+failed-call cause, which the failed turn's own frame names), and `runtime-failed` (the runtime
+crashed or failed internally) only when no such cause is on record. A run the operator stopped
+settles `cancelled`, as before, and the Workbench says the operator stopped it. Nothing is read
+from OpenCode's error text. `coding-runtime.run.settled` records the cause with `failureBasis`
+(`prompt-allowance`, `envelope-duration`, `model-call-failure`, `no-model-call-failure`) and
+`modelCallFailure`, and an error class that matches it instead of `internal`. The gateway reports a
+provider that stayed unavailable past the outage window (a 5xx, 408 or 429, an open breaker) with the
+same `provider-failed` code as a 4xx rejection, so such a run settles `model-turn-failed` until the
+gateway reports a distinct cause for the unavailable class.
+
+**A settled run carries its effort roll-up** (#3873), so one line answers how many model turns and
+tool calls the run made and where its time went. `coding-runtime.run.settled` adds counts and
+durations only, each counted in process where it is observed: `wallDurationMs` (creation to
+settlement); `modelTurnCount`, `modelDurationMs` and `promptTokensTotal` at the run's model-gateway
+capability, where the sidecar gateway reserves a call's prompt estimate immediately before dispatch
+and settles it once the provider answered or failed (a released reservation is no call, and a
+settled count equal to the reserved estimate may be that estimate, so `promptTokensTotal` is a
+lower bound of provider-reported prompt tokens, never an estimate); `toolInvocationCount`,
+`workspaceReadCount`, `editCount` and `editRefusedCount` at the run's tool facade, which reports each
+answered call's closed action and status (a malformed edit is a refused edit); and
+`verificationCount`, `operatorDecisionCount` (an approval decided, or a decision wait that settled
+`accepted` or `denied`) and `operatorWaitMs` (time awaiting an approval or paused on a decision) in
+the orchestrator. A count nothing was observed for is 0; a run this process did not start carries
+`wallDurationMs` alone. Completion tokens are not rolled up: the gateway's run evidence carries a
+completion count without saying whether the provider reported it or it was estimated from output
+bytes, and the roll-up never presents an estimate as a provider count.
+
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are
 adapter-internal server concerns deliberately excluded from the public contract.

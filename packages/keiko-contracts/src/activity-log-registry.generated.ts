@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "216ab66a27e8812205d79f7aa4cf81cffebbcade5800d6df67c24c93a01d7ee0" as const;
+  "6df793c9f78d58283db07eb3ddc712e194e5a160b2bceaef4d7290067a932f5e" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8495,9 +8495,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "editCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "editRefusedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "exitCode",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "failureBasis",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -8507,10 +8525,40 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "modelCallFailure",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "modelDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "modelSource",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "modelTurnCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "operatorDecisionCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "operatorWaitMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
             },
             {
               name: "outputByteCount",
@@ -8534,6 +8582,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "outputTruncated",
               type: "boolean",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "promptTokensTotal",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -8578,12 +8632,37 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "toolInvocationCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "verificationCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "wallDurationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "workspaceReadCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
             "count",
             "digest",
+            "duration",
             "loss-state",
             "opaque-id",
           ],

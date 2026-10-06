@@ -5,6 +5,16 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
 } from "./coding-workbench-runtime-constants.js";
 
+// F9 (#3873): the closed causes a failed run settles with instead of `runtime-failed` (an internal
+// error): its own bounds, a repeated output exhaustion, an unreachable provider, a failed model call.
+const TERMINAL_RUN_CAUSES = [
+  "prompt-allowance-exhausted",
+  "envelope-duration-exhausted",
+  "output-exhausted-repeated",
+  "provider-unavailable",
+  "model-turn-failed",
+] as const;
+
 // #3390: a start against a durable issue binding with no fresh pasted reference re-resolves the
 // attachment through the same authorized reader the preview uses; when that re-resolution fails,
 // the orchestrator refuses with this new closed code rather than the generic "invalid-intent" so
@@ -19,6 +29,13 @@ describe("CODING_WORKBENCH_RUNTIME_FAILURE_CODES", () => {
   // lets the coordinator distinguish that runtime rejection from a real authority failure.
   it("carries the question-answer-rejected closed code", () => {
     expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain("question-answer-rejected");
+  });
+
+  // F9 (#3873): the terminal causes a run that ended on one of its bounds or on a failed model call
+  // settles with, so the Workbench never presents an exhausted bound or an unreachable provider as
+  // an internal error.
+  it.each(TERMINAL_RUN_CAUSES)("carries the %s terminal cause", (failureCode) => {
+    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain(failureCode);
   });
 
   it("is a frozen array with no duplicate entries", () => {

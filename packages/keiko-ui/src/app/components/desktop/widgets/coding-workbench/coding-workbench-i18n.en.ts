@@ -973,6 +973,18 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
+  "codingWorkbench.event.failure.prompt-allowance-exhausted":
+    "The run used up its prompt allowance, the total prompt tokens one run may send to the model, so Keiko refused its next model call. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh allowance, or split the task into smaller ones. An operator can raise the allowance with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS.",
+  "codingWorkbench.event.failure.envelope-duration-exhausted":
+    "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES.",
+  "codingWorkbench.event.failure.output-exhausted-repeated":
+    "The run ended because the model used its whole output budget again without calling a tool or answering, even after a repair attempt. The model usually spends that budget on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then start the task again; your changes so far stay in the task workspace.",
+  "codingWorkbench.event.stopped.operator":
+    "You stopped this run. Nothing failed, and your changes so far stay in the task workspace.",
+  "codingWorkbench.event.failure.provider-unavailable":
+    "The run ended because the model provider could not be reached or stopped answering, even after Keiko waited and retried. Nothing was rejected. Check that the model gateway and its provider are running, then start the task again; your changes so far stay in the task workspace. An operator can lengthen the wait with the gateway setting codingOutageWindowMs.",
+  "codingWorkbench.event.failure.model-turn-failed":
+    "The run ended because its last model step failed, for the reason shown on that step above. Address that reason, then start the task again; your changes so far stay in the task workspace.",
   "codingWorkbench.event.runFailed": "Coding run failed",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",

@@ -1,6 +1,10 @@
 import type { CodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
 
-import type { CodingToolActionRequest, CodingToolResult } from "./codingToolIpc.js";
+import type {
+  CodingToolAction,
+  CodingToolActionRequest,
+  CodingToolResult,
+} from "./codingToolIpc.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
 export interface CodingToolProducerBinding {
@@ -72,6 +76,15 @@ export interface CodingToolFacadeOptions {
   readonly maxInFlight?: number | undefined;
   readonly invocationRegistry?: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits?: boolean | undefined;
+  /**
+   * Told of every call the facade answered for the run (#3873 run effort roll-up): the closed action
+   * the call named — `undefined` when it named none — and the status of the answer. Never the
+   * request or the result. Not told of a cross-origin refusal or a permission observation, which
+   * are not the run's tool calls.
+   */
+  readonly onToolSettled?:
+    | ((action: CodingToolAction | undefined, status: CodingToolResult["status"]) => void)
+    | undefined;
 }
 
 export interface CodingToolFacadeInput {

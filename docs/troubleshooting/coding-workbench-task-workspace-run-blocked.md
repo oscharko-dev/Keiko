@@ -274,7 +274,8 @@ the root's own authority. Nothing has to be migrated; start the run again.
 **Symptom**
 
 The run inspects the repository normally, then the first substantial edit step ends the run:
-`Failed. Failure: runtime-failed`, no workspace change. The activity log shows a gateway fetch of
+`Failed. Failure: runtime-failed` (`model-turn-failed` on builds that name the model-call cause of a
+failed run, #3873), no workspace change. The activity log shows a gateway fetch of
 several tens of seconds (`http.gateway.fetch.completed` with a large `durationMs`) followed by
 `gateway.tool-catalog.rejected` with `reason: "invalid-arguments"` and
 `catalogReason: "expired-compatibility"`, `gateway.chat.failed` with `GATEWAY_MALFORMED_TOOL_CALL`,
@@ -463,8 +464,9 @@ untrack its IDE metadata to be delivered by the Workbench.
 
 **Symptom**
 
-The run starts, attaches the issue and ends within a minute: `Failed. Failure: runtime-failed`. The
-activity log shows, under one chat correlation id, `gateway.tool-catalog.rejected` with
+The run starts, attaches the issue and ends within a minute: `Failed. Failure: runtime-failed`
+(`model-turn-failed` on builds that name the model-call cause of a failed run, #3873). The activity
+log shows, under one chat correlation id, `gateway.tool-catalog.rejected` with
 `catalogReason: "invalid-shape"` three times, each followed by `gateway.tool-catalog.repair`
 (`state: "scheduled"`, `correctionMessageCount: 1`) and `gateway.retry.scheduled`, then
 `gateway.retry.exhausted` and `gateway.chat.failed` with `GATEWAY_MALFORMED_TOOL_CALL`,
@@ -561,6 +563,93 @@ Resolve the blocker the timeline names and start the run again; there is nothing
 run that already failed. For a trust refusal, see the entry below. Do not treat the failure code as
 the problem: a run that reports this has told the truth about delivering nothing, and suppressing it
 would restore the false green it replaced.
+
+---
+
+## A run fails on one of its bounds or on a failed model call
+
+| Field             | Value                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                             |
+| Surface           | Coding Workbench / coding sidecar gateway                                                          |
+| Stable identifier | `coding-runtime.run.settled` with `failureBasis`, `coding-sidecar.gateway.turn-failed`, `rejected` |
+
+**Symptom**
+
+A run ends as failed, and the Workbench names why instead of "The coding run ended with an internal
+error": the prompt allowance is used up (`prompt-allowance-exhausted`), the run's time limit is used
+up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
+attempt (`output-exhausted-repeated`), the model provider could not be reached or stopped answering
+(`provider-unavailable`), or the last model step failed for the reason the failed step above it
+names (`model-turn-failed`). The run's `coding-runtime.run.settled` line carries the same
+`failureCode`, a `failureBasis` and, when one is on record, the `modelCallFailure` of the run's last
+failed model call. A run you stopped yourself settles `cancelled` and reads "You stopped this run".
+
+**Root Cause**
+
+The failed turn ended on one of the run's bounds or on a model call, not on a Keiko fault (#3873,
+F9; runs `run-65084062444586162471229658028402064666` and
+`run-272120967981827964065820685403290179367`). `failureBasis` names the fact the cause came from:
+
+- `prompt-allowance` — the run's cumulative prompt allowance (`maxPromptTokens` of the Authority
+  Envelope) refused its most recent model call. The gateway answered that call with
+  `coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied` and a `turn-rejected` turn
+  failure. Failed model calls keep their reserved prompt estimate, so a long provider outage spends
+  the allowance too.
+- `envelope-duration` — the run's Authority Envelope ran out of time (`maxRuntimeMs` after minting,
+  or its `expiresAt`). A model call in flight at that moment ends with
+  `coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`; a call started
+  after it is refused.
+- `model-call-failure` — the coding sidecar gateway reported the run's most recent model call as
+  failed, and no later call of the run was answered. `stream-incomplete` (a timeout, a refused or
+  dropped connection, a stream that broke before the answer completed) settles
+  `provider-unavailable`; `output-exhausted`, which ends a run only after the gateway's steered repair
+  or the runtime's retries exhausted the budget again, settles `output-exhausted-repeated`; every
+  other cause settles `model-turn-failed`.
+- `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
+  settles `runtime-failed`: the runtime crashed or failed internally.
+
+The gateway reports a provider that stayed unavailable past the outage window — a 5xx, 408 or 429, an
+open breaker — with the same `provider-failed` code as a 4xx rejection, so such a run settles
+`model-turn-failed`, and its failed step reads "The model provider rejected this turn".
+
+**Diagnostic Steps**
+
+1. Reconstruct the run and read the `coding-runtime.run.settled` line's `failureCode`,
+   `failureBasis` and `modelCallFailure`.
+
+   ```bash
+   keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
+   ```
+
+2. For `prompt-allowance`, `coding-runtime.authority.minted` names the run's `maxPromptTokens`, and the
+   `coding-sidecar.gateway.usage-settled` lines under the run sum what each model call spent
+   (`promptSource` tells a provider-reported count from a kept estimate).
+3. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
+   (`maxRuntimeMs` on `coding-runtime.authority.minted`, where the composition reports it).
+4. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
+   names the cause (`failureCode`) and whether the runtime could retry it (`runtimeRetry`); a
+   `gateway.retry.exhausted` or `gateway.circuit.wait outcome=budget-refused` under the same chat
+   correlation shows an outage that outlasted the window.
+
+**Resolution**
+
+- `prompt-allowance-exhausted`: start the task again as a new run, which gets a fresh allowance and the
+  changes already in the task workspace, or split the task. Where tasks of this size are routine, an
+  operator raises `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server; see the
+  operator runbook. A run that spends its allowance on a loop of refused edits is a defect to report,
+  not a reason to raise it.
+- `envelope-duration-exhausted`: start the task again as a new run, which gets a fresh time limit and
+  the changes already in the task workspace, or split the task. Where slow models make tasks of this
+  size routine, an operator lengthens the envelope duration before starting the server (see the
+  operator runbook).
+- `output-exhausted-repeated`: have the gateway declare a larger `max_output_tokens` for the model, or
+  choose a model with a smaller reasoning share, then start the task again.
+- `provider-unavailable`: check the model gateway's and the model server's health, then start the
+  task again. Where peak overloads last longer than ten minutes, raise the gateway configuration's
+  `codingOutageWindowMs` (see the LiteLLM production gateway entry).
+- `model-turn-failed`: follow the failed step's own sentence (provider configuration, the model's
+  output budget, a rephrased task or another model), then start the task again.
 
 ---
 

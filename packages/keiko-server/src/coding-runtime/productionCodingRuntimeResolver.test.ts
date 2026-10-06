@@ -21,6 +21,7 @@ import {
 } from "./productionCodingRuntimeHost.js";
 import { RESEARCH_GRANT_DEFAULT_MAX_TTL_MS } from "./researchGrantRegistry.js";
 import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type {
   CodingRuntimeStartConfirmationClaim,
   CodingRuntimeStartConfirmationConsumer,
@@ -37,6 +38,13 @@ const ciRepairNotifierCapture = vi.hoisted(() => ({
   current: undefined as ((runId: string) => void) | undefined,
 }));
 
+// #3873: a fixture without delivery storage composes the unavailable CI-repair budget, which refuses
+// every prompt charge. The one test that drives a run's model calls through the composed prompt
+// ledger replaces it with a budget that admits them; every other test composes the original.
+const ciRepairBudgetOverride = vi.hoisted(() => ({
+  current: undefined as CiRepairExecutionBudget | undefined,
+}));
+
 vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./productionCiRepairRuntime.js")>();
   return {
@@ -45,7 +53,7 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
       ...args: Parameters<typeof original.createProductionCiRepairBudget>
     ): ReturnType<typeof original.createProductionCiRepairBudget> => {
       ciRepairNotifierCapture.current = args[3];
-      return original.createProductionCiRepairBudget(...args);
+      return ciRepairBudgetOverride.current ?? original.createProductionCiRepairBudget(...args);
     },
   };
 });
@@ -53,6 +61,8 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
 const roots: string[] = [];
 
 afterEach(() => {
+  ciRepairBudgetOverride.current = undefined;
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -638,7 +648,114 @@ describe("production coding runtime resolver", () => {
     expect(createRun).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  // F9 (#3873): the composed host answers whether a run's Authority Envelope ran out of time, on the
+  // composition's own clock, so a run that reached its envelope's end (run
+  // `run-272120967981827964065820685403290179367`) settles under that cause, not an internal error.
+  it("answers a run's envelope end from its minted authority on the composition clock", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    const expiresAt = createRun.mock.calls[0]?.[0].context.expiresAt;
+    if (expiresAt === undefined) throw new Error("expected a composed run");
+
+    expect(host.envelopeDurationExhausted?.(request.runId)).toBe(false);
+    fixture.advanceNow(Date.parse(expiresAt) - fixture.nowMs() - 1);
+    expect(host.envelopeDurationExhausted?.(request.runId)).toBe(false);
+    fixture.advanceNow(1);
+    expect(host.envelopeDurationExhausted?.(request.runId)).toBe(true);
+    expect(host.envelopeDurationExhausted?.("run-other")).toBe(false);
+  });
+
+  // #3873: the composed host counts a run's model calls where the sidecar gateway admits and settles
+  // them — the model-gateway capability's prompt reservation — and its tool calls where the run's
+  // facade answers them, and answers both through `runEffort` for the run's settled line.
+  it("counts the run's admitted model calls and answered tool calls for its effort roll-up", async () => {
+    const fixture = workspaceFixture();
+    // The capability store and its authentication read the process clock; hold it on the fixture's
+    // clock from before the host is composed, so both judge the run's capabilities at one instant.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(fixture.nowMs());
+    ciRepairBudgetOverride.current = {
+      admitTool: () => undefined,
+      canChargePrompt: () => true,
+      chargePrompt: () => true,
+      observed: () => undefined,
+    };
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    const backend = createRun.mock.calls[0]?.[0];
+    const ledger = host.runtimeCapabilityAuthenticator;
+    if (backend === undefined || ledger === undefined || !hasPromptSettlement(ledger)) {
+      throw new Error("expected a composed run and its prompt ledger");
+    }
+    const capability = backend.minted.modelGatewayCapability;
+
+    // One model call the gateway admitted and, 4 s later, settled with the provider's own count.
+    expect(ledger.reservePromptTokens?.(capability, 1_000)).toMatchObject({ ok: true });
+    fixture.advanceNow(4_000);
+    vi.setSystemTime(fixture.nowMs());
+    expect(ledger.settlePromptTokens(capability, 1_000, 1_240)).toMatchObject({ ok: true });
+    // A reservation the run's allowance refused is no model call: nothing was dispatched.
+    expect(ledger.reservePromptTokens?.(capability, 10_000_000)).toMatchObject({ ok: false });
+    // A malformed edit the run's facade refused is still a refused edit.
+    await expect(
+      backend.toolFacade.execute({
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "action-1",
+          idempotencyKey: "idempotency-1",
+          changeset: {},
+        }),
+        capability: backend.minted.toolFacadeCapability,
+      }),
+    ).resolves.toMatchObject({ status: "invalid" });
+
+    expect(host.runEffort?.read(request.runId)).toEqual({
+      modelTurnCount: 1,
+      modelDurationMs: 4_000,
+      promptTokensTotal: 1_240,
+      toolInvocationCount: 1,
+      workspaceReadCount: 0,
+      editCount: 0,
+      editRefusedCount: 1,
+    });
+    expect(host.runEffort?.read("run-other")).toBeUndefined();
+  });
 });
+
+interface PromptSettlementPort {
+  readonly settlePromptTokens: (
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+  ) => unknown;
+}
+
+// The settlement half of the gateway's prompt ledger is wired by the resolver but not declared on
+// the shared host interface (see `runtimeCapabilityAuthenticatorFor`); the gateway reads it the same
+// way.
+function hasPromptSettlement<T extends object>(value: T): value is T & PromptSettlementPort {
+  return "settlePromptTokens" in value && typeof value.settlePromptTokens === "function";
+}
 
 function researchUnavailable(
   host: ProductionCodingRuntimeHost,

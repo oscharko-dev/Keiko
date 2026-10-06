@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
+  CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
@@ -271,9 +272,40 @@ export function eventDetail(
   t: CodingWorkbenchTranslate,
 ): string {
   const failure = eventFailureDetail(event, t);
-  return [failure, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
+  return [
+    failure,
+    eventStoppedDetail(event, t),
+    eventOutcomeDetail(event, t),
+    eventContentTrustDetail(event, t),
+  ]
     .filter((part) => part.length > 0)
     .join(" ");
+}
+
+// The run failures with a sentence of their own. F9 (#3873): the internal-error sentence belongs
+// to `runtime-failed` alone; a run that ended on one of its bounds or on a model call names that
+// cause instead.
+const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map<
+  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchMessageKey
+>([
+  ["runtime-failed", "codingWorkbench.event.failure.runtime"],
+  ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
+  ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
+  ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
+  ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
+  ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+]);
+
+// F9 (#3873): a run settles `cancelled` only from the stop the operator asked for, so its terminal
+// entry says so instead of leaving a bare "Stopped" a reader could take for a failure.
+function eventStoppedDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  return event.kind === "status" && event.state === "cancelled"
+    ? t("codingWorkbench.event.stopped.operator")
+    : "";
 }
 
 function eventFailureDetail(
@@ -282,8 +314,8 @@ function eventFailureDetail(
 ): string {
   const turnFailure = turnFailureDetail(event, t);
   if (turnFailure.length > 0) return turnFailure;
-  if (event.failureCode === "runtime-failed") return t("codingWorkbench.event.failure.runtime");
-  return event.failureCode === undefined ? "" : t("codingWorkbench.event.failure.generic");
+  if (event.failureCode === undefined) return "";
+  return t(RUN_FAILURE_MESSAGES.get(event.failureCode) ?? "codingWorkbench.event.failure.generic");
 }
 
 function turnFailureDetail(

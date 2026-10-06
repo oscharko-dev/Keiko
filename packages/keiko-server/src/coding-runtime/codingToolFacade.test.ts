@@ -367,6 +367,44 @@ describe("CodingToolFacade", () => {
     expect(ports.delegate.execute).not.toHaveBeenCalled();
   });
 
+  // #3873: the run's effort roll-up counts the calls the facade answered, by action and answer. A
+  // malformed edit is still a refused edit, so the closed action it names is reported with it.
+  it("tells its observer each answered call's closed action and status, never the call", async () => {
+    const settled: unknown[][] = [];
+    const onToolSettled = (...args: unknown[]): void => {
+      settled.push(args);
+    };
+    const subject = createCodingToolFacade(facade(), { onToolSettled });
+    const refusing = createCodingToolFacade(facade(false), { onToolSettled });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+    await refusing.execute({
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+    });
+    await subject.execute({ body: requestBody({ action: "edit", changeset: {} }), capability });
+    await subject.execute({ body: requestBody({ action: "constructor" }), capability });
+    await subject.execute({ body: "not a request", capability });
+    await subject.execute({
+      body: JSON.stringify({ action: "permission-event", requestId: "request-1" }),
+      capability,
+    });
+    await subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+      headers: { Origin: "http://127.0.0.1" },
+    });
+
+    expect(settled).toEqual([
+      ["edit", "completed"],
+      ["command", "denied"],
+      ["edit", "invalid"],
+      [undefined, "invalid"],
+      [undefined, "invalid"],
+    ]);
+    expect(JSON.stringify(settled)).not.toContain("src/file.ts");
+  });
+
   it("delegates each closed governed action exactly once", async () => {
     const ports = facade();
     const subject = createCodingToolFacade(ports);

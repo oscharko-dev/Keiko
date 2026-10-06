@@ -23,6 +23,16 @@ import {
 
 const AT = "2026-07-13T12:00:00.000Z";
 
+// F9 (#3873): the closed causes a failed run settles with instead of `runtime-failed` (an internal
+// error): its own bounds, a repeated output exhaustion, an unreachable provider, a failed model call.
+const TERMINAL_RUN_CAUSES = [
+  "prompt-allowance-exhausted",
+  "envelope-duration-exhausted",
+  "output-exhausted-repeated",
+  "provider-unavailable",
+  "model-turn-failed",
+] as const;
+
 describe("Coding Workbench runtime API contracts", () => {
   it("accepts only a bounded preview precondition attached to an issue intent", () => {
     const start = {
@@ -839,6 +849,43 @@ describe("Coding Workbench runtime API failure branches", () => {
     });
     expect(failed.ok).toBe(false);
     if (!failed.ok) expect(failed.errors).toContain("failureCode is invalid");
+  });
+
+  // F9 (#3873): a run that ended on one of its bounds or on a failed model call settles under the
+  // closed cause that names it. Each cause is a durable run failure on the snapshot and on the terminal status
+  // frame, while the per-turn gateway vocabulary stays SSE-only and never becomes a run state.
+  it.each(TERMINAL_RUN_CAUSES)(
+    "carries the %s terminal model-call cause on a failed snapshot and its status frame",
+    (failureCode) => {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, state: "failed", failureCode }).ok,
+      ).toBe(true);
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent({
+          schemaVersion: "1",
+          cursor: "run-1:4",
+          sequence: 4,
+          occurredAt: AT,
+          kind: "status",
+          runId: "run-1",
+          state: "failed",
+          revision: 4,
+          failureCode,
+        }).ok,
+      ).toBe(true);
+    },
+  );
+
+  it("keeps the per-turn gateway causes off the durable run snapshot", () => {
+    for (const failureCode of ["stream-incomplete", "turn-rejected", "invalid-tool-call"]) {
+      const failed = validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        state: "failed",
+        failureCode,
+      });
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) expect(failed.errors).toContain("failureCode is invalid");
+    }
   });
 
   it("rejects malformed SSE schema versions, event kinds, instants, and failure codes", () => {

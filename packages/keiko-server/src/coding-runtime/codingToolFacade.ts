@@ -40,9 +40,11 @@ import {
   CODING_TOOL_MAX_READ_BYTES,
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
+  declaredCodingToolAction,
   dependencyBootstrapFailureSummary,
   isPermissionObservation,
   parseCodingToolRequest,
+  type CodingToolAction,
   type CodingToolActionRequest,
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
@@ -185,6 +187,7 @@ export function createCodingToolFacade(
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
     catalogBridge: options.catalogBridge,
+    onToolSettled: options.onToolSettled,
     inFlight: { count: 0 },
   };
   return {
@@ -199,6 +202,7 @@ interface ExecutionContext {
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
+  readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
   readonly inFlight: { count: number };
 }
 
@@ -237,7 +241,29 @@ async function execute(
   if (hasOrigin(input.headers)) return empty("denied");
   if (isPermissionObservation(input.body, context.maxBodyBytes)) return empty("observed");
   const request = parseCodingToolRequest(input.body, context.maxBodyBytes);
-  if (request === undefined) return empty("invalid");
+  if (request === undefined) {
+    const action = declaredCodingToolAction(input.body, context.maxBodyBytes);
+    return answered(context, action, empty("invalid"));
+  }
+  return answered(context, request.action, await executeParsed(context, input, request));
+}
+
+// #3873: the run's effort roll-up counts each call the facade answered by its closed action and the
+// status of the answer — never the request or the result.
+function answered(
+  context: ExecutionContext,
+  action: CodingToolAction | undefined,
+  result: CodingToolResult,
+): CodingToolResult {
+  context.onToolSettled?.(action, result.status);
+  return result;
+}
+
+async function executeParsed(
+  context: ExecutionContext,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+): Promise<CodingToolResult> {
   if (input.signal?.aborted === true) return empty("cancelled");
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;

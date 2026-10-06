@@ -69,6 +69,7 @@ import {
 import {
   createInMemoryRuntimeCapabilityStore,
   type RuntimeCapabilityAudience,
+  type RuntimeCapabilityBinding,
   type RuntimeCapabilityStore,
 } from "./runtimeCapabilityStore.js";
 import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
@@ -408,6 +409,11 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "delivery-not-evidenced",
         "model-unavailable",
         "workspace-unqualified",
+        "prompt-allowance-exhausted",
+        "envelope-duration-exhausted",
+        "output-exhausted-repeated",
+        "provider-unavailable",
+        "model-turn-failed",
       ],
     },
   },
@@ -672,6 +678,14 @@ export class CodingRuntimeAuthorityService {
   private activeTreeBindingId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
   private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
+  // The outcome of the most recent prompt-token admission (F9, #3873): a single slot, because one
+  // run is active at a time and only its latest model call can have ended its turn.
+  private lastPromptAdmission:
+    { readonly runId: string; readonly allowanceExhausted: boolean } | undefined;
+  // The instant the most recently minted run's Authority Envelope runs out of time (F9, #3873): its
+  // `expiresAt`, or its `maxRuntimeMs` after minting, whichever comes first.
+  private mintedRuntimeDeadline:
+    { readonly runId: string; readonly deadlineMs: number } | undefined;
   private runtimeState: CodingWorkbenchRuntimeState = {
     schemaVersion: "1",
     state: "idle",
@@ -829,6 +843,7 @@ export class CodingRuntimeAuthorityService {
     const { runId, envelope, authorityRef, capabilities, context, nowIso } = input;
     const treeBindingId = randomBytes(32).toString("hex");
     this.activeAuthorityRef = authorityRef;
+    this.mintedRuntimeDeadline = { runId, deadlineMs: runtimeDeadlineMs(envelope, nowIso) };
     this.activeGitDeliveryAuthority = {
       runId,
       envelopeDigest: authorityRef.envelopeDigest,
@@ -1054,24 +1069,69 @@ export class CodingRuntimeAuthorityService {
     | { readonly ok: true; readonly runId: string }
     | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
     const authenticated = this.capabilities.authenticate(capability, nowMs);
-    const reference = this.activeAuthorityRef;
     if (!authenticated.ok) return capabilityFailure(authenticated.reason);
-    if (
-      authenticated.binding.audience !== "model-gateway" ||
-      reference === undefined ||
-      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
-      this.runtimeState.runId !== authenticated.binding.runId ||
-      reference.runId !== authenticated.binding.runId ||
-      reference.envelopeDigest !== authenticated.binding.envelopeDigest
-    ) {
+    const reference = this.promptLedgerReference(authenticated.binding);
+    if (reference === undefined) {
+      this.recordPromptAdmission(authenticated.binding.runId, false);
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    const reserved = this.registry.reserveRuntimePromptTokens(
-      reference,
-      promptTokens,
-      new Date(nowMs).toISOString(),
+    const nowIso = new Date(nowMs).toISOString();
+    const reserved = this.registry.reserveRuntimePromptTokens(reference, promptTokens, nowIso);
+    this.recordPromptAdmission(
+      reference.runId,
+      !reserved.ok &&
+        reserved.reason === "authority-budget-exceeded" &&
+        this.registry.runtimePromptAllowanceExhausted(reference, promptTokens, nowIso),
     );
     return reserved.ok ? { ok: true, runId: reference.runId } : reserved;
+  }
+
+  /**
+   * F9 (#3873): whether the run's most recent model-call admission was refused by its cumulative
+   * prompt allowance (`maxPromptTokens`) itself — not by the runtime's time budget, an expired or
+   * revoked authority, or a run state that admits no model call. Any later admission attempt for
+   * the run replaces the answer, so it describes the call that ended a failed turn.
+   */
+  public promptAllowanceExhausted(runId: string): boolean {
+    return this.lastPromptAdmission?.runId === runId && this.lastPromptAdmission.allowanceExhausted;
+  }
+
+  /**
+   * F9 (#3873): whether the run's Authority Envelope has run out of time at `nowMs` — its
+   * `expiresAt`, or its `maxRuntimeMs` since minting, has passed. Read-only, and kept after the
+   * envelope expired: a run that reached its envelope's end with a model call in flight (run
+   * `run-272120967981827964065820685403290179367`, 30 minutes) is settled after the end, and its
+   * failed turn names no other cause.
+   */
+  public envelopeDurationExhausted(runId: string, nowMs = Date.now()): boolean {
+    const deadline = this.mintedRuntimeDeadline;
+    return deadline?.runId === runId && Number.isFinite(nowMs) && nowMs >= deadline.deadlineMs;
+  }
+
+  // Only the active run's own admissions count: a stray capability of another run never rewrites
+  // what ended the active run's turn.
+  private recordPromptAdmission(runId: string, allowanceExhausted: boolean): void {
+    if (runId !== this.activeAuthorityRef?.runId) return;
+    this.lastPromptAdmission = { runId, allowanceExhausted };
+  }
+
+  // The live authority a model-gateway capability may book prompt tokens against: the capability's
+  // run must be the active one, in a state that admits model calls, under the same envelope.
+  private promptLedgerReference(
+    binding: RuntimeCapabilityBinding,
+  ): CodingRuntimeAuthorityRef | undefined {
+    const reference = this.activeAuthorityRef;
+    if (
+      binding.audience !== "model-gateway" ||
+      reference === undefined ||
+      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
+      this.runtimeState.runId !== binding.runId ||
+      reference.runId !== binding.runId ||
+      reference.envelopeDigest !== binding.envelopeDigest
+    ) {
+      return undefined;
+    }
+    return reference;
   }
 
   /**
@@ -1088,18 +1148,9 @@ export class CodingRuntimeAuthorityService {
     | { readonly ok: true; readonly runId: string }
     | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
     const authenticated = this.capabilities.authenticate(capability, nowMs);
-    const reference = this.activeAuthorityRef;
     if (!authenticated.ok) return capabilityFailure(authenticated.reason);
-    if (
-      authenticated.binding.audience !== "model-gateway" ||
-      reference === undefined ||
-      !PROMPT_RESERVATION_ADMISSIBLE_STATES.has(this.runtimeState.state) ||
-      this.runtimeState.runId !== authenticated.binding.runId ||
-      reference.runId !== authenticated.binding.runId ||
-      reference.envelopeDigest !== authenticated.binding.envelopeDigest
-    ) {
-      return { ok: false, reason: "authority-resolution-failed" };
-    }
+    const reference = this.promptLedgerReference(authenticated.binding);
+    if (reference === undefined) return { ok: false, reason: "authority-resolution-failed" };
     const settled = this.registry.settleRuntimePromptTokens(
       reference,
       reservedPromptTokens,
@@ -1694,6 +1745,19 @@ function startIntentDigest(
   intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
 ): string {
   return sha256Hex(canonicalise(intent));
+}
+
+// When a minted envelope runs out of time (F9, #3873): its `expiresAt`, or `maxRuntimeMs` after the
+// mint, whichever comes first. An unreadable instant yields NaN, which no clock reaches, so a run is
+// never said to have run out of time on a deadline nobody can read.
+function runtimeDeadlineMs(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  nowIso: string,
+): number {
+  return Math.min(
+    Date.parse(envelope.authority.expiresAt),
+    Date.parse(nowIso) + envelope.authority.budget.maxRuntimeMs,
+  );
 }
 
 function stateForMint(

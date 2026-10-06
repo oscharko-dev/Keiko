@@ -100,6 +100,9 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "toolFacadeBridge",
   "contextUsage",
   "secureWorkspaceTextRead",
+  "runEffort",
+  "promptAllowanceExhausted",
+  "envelopeDurationExhausted",
 ] as const;
 
 type OptionalRuntimeCapabilities = Pick<

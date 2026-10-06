@@ -68,7 +68,11 @@ import {
 } from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
-import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolFacade,
+  CodingToolFacadeOptions,
+  CodingToolMutationGuard,
+} from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
   GovernedCodingToolResult,
@@ -578,6 +582,8 @@ export interface ProductionManagedWorktreeToolInput {
    */
   readonly admitRunManifest?: (() => void) | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  /** Counts each call the run's facade answered, by action and status (#3873 run effort roll-up). */
+  readonly onToolSettled?: CodingToolFacadeOptions["onToolSettled"];
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Body-free activity-log sink for the H1 search handler; defaults to the process-wide log. */
   readonly activityLog?: ServerLogSink | undefined;
@@ -756,6 +762,7 @@ export function createProductionManagedWorktreeToolFacade(
       // lifecycle evidence too.
       ...(input.activityLog === undefined ? {} : { catalogActivityLog: input.activityLog }),
       ...(input.diagnostics === undefined ? {} : { catalogDiagnostics: input.diagnostics }),
+      ...(input.onToolSettled === undefined ? {} : { onToolSettled: input.onToolSettled }),
       unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
     },
   );

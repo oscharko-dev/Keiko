@@ -117,6 +117,15 @@ requires a fresh accepted run and preserves its workspace through normal recover
 deliberately for a constrained deployment; the former 200,000-token / 30-minute defaults ended
 ordinary multi-file work on a slow self-hosted model.
 
+A run that ends on one of its bounds settles `failed` with a cause of its own instead of an internal
+error (#3873, ADR-0137 D3): `prompt-allowance-exhausted` when the allowance refused its last model
+call, `envelope-duration-exhausted` when its envelope ran out of time (`coding-runtime.run.settled`
+with `failureBasis` `prompt-allowance` or `envelope-duration`), and the Workbench names the bound and
+the next step. The same settled line carries the run's effort roll-up (`wallDurationMs`,
+`modelTurnCount`, `promptTokensTotal`, `toolInvocationCount`, `editRefusedCount`, `operatorWaitMs`
+and the other counts and durations of ADR-0137 D3), so a bound a run used up can be read against the
+model turns and tool calls that used it.
+
 The output allowance of one model request (`maxOutputTokens` on
 `coding-sidecar.gateway.request-validated`, and OpenCode's `limit.output`) is not an operator
 setting; it is derived by this rule (#3873, F17): a coding turn reserves at least 16,384 output

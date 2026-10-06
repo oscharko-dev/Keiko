@@ -272,6 +272,50 @@ describe("eventDetail auxiliary outcome", () => {
     );
   });
 
+  // F9 (#3873): a failed run names the closed cause its settlement carries. The internal-error
+  // sentence belongs to `runtime-failed` alone; every bound and model-call cause has its own copy.
+  it.each([
+    ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
+    ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
+    ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
+    ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
+    ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+    ["runtime-failed", "codingWorkbench.event.failure.runtime"],
+  ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
+    const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
+    expect(eventDetail(settled, t)).toBe(key);
+  });
+
+  it("keeps the internal-error sentence off every run cause but runtime-failed", () => {
+    for (const failureCode of [
+      "prompt-allowance-exhausted",
+      "envelope-duration-exhausted",
+      "output-exhausted-repeated",
+      "provider-unavailable",
+      "model-turn-failed",
+      "delivery-not-evidenced",
+      "authority-budget-exceeded",
+    ] as const) {
+      expect(
+        eventDetail(runtimeEvent({ kind: "status", state: "failed", failureCode }), t),
+      ).not.toBe("codingWorkbench.event.failure.runtime");
+    }
+  });
+
+  // F9 (#3873): a run the operator stopped settles `cancelled`; its terminal entry says the operator
+  // stopped it and that nothing failed, and no other state borrows that sentence.
+  it("says an operator-stopped run was stopped on request, not that it failed", () => {
+    const stopped = runtimeEvent({ kind: "status", state: "cancelled" });
+    expect(eventTitle(stopped, t)).toBe("codingWorkbench.runState.cancelled");
+    expect(eventDetail(stopped, t)).toBe("codingWorkbench.event.stopped.operator");
+    for (const state of ["taken-over", "succeeded", "running"] as const) {
+      expect(eventDetail(runtimeEvent({ kind: "status", state }), t)).not.toContain(
+        "codingWorkbench.event.stopped.operator",
+      );
+    }
+  });
+
   it("appends the normalized outcome as a content-free sentence", () => {
     expect(eventDetail(runtimeEvent({ auxiliaryOutcome: "denied" }), t)).toBe(
       "codingWorkbench.event.detailOutcome",

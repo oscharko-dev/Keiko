@@ -263,6 +263,77 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toBe(en);
   });
 
+  // F9 (#3873, live Gemma qualification): a budget-exhausted run read "The coding run ended with an
+  // internal error". Each terminal model-call cause is plain language with a next step in both
+  // catalogs, German in the informal du-form, and only `runtime-failed` speaks of an internal error.
+  it.each([
+    "codingWorkbench.event.failure.prompt-allowance-exhausted",
+    "codingWorkbench.event.failure.envelope-duration-exhausted",
+    "codingWorkbench.event.failure.output-exhausted-repeated",
+    "codingWorkbench.event.failure.provider-unavailable",
+    "codingWorkbench.event.failure.model-turn-failed",
+  ] as const)("explains %s with a next step and never as an internal error", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).not.toBe(key);
+    expect(de).not.toBe(key);
+    expect(de).not.toBe(en);
+    expect(en).not.toMatch(/internal error/iu);
+    expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(en).toMatch(/start the task again/iu);
+    expect(de).toMatch(/starte die Aufgabe/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("names the exhausted allowance and the outage window an operator can raise", () => {
+    for (const locale of ["en", "de"] as const) {
+      expect(
+        translateCodingWorkbench(
+          locale,
+          "codingWorkbench.event.failure.prompt-allowance-exhausted",
+        ),
+      ).toContain("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
+      expect(
+        translateCodingWorkbench(
+          locale,
+          "codingWorkbench.event.failure.envelope-duration-exhausted",
+        ),
+      ).toContain("KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES");
+      expect(
+        translateCodingWorkbench(locale, "codingWorkbench.event.failure.provider-unavailable"),
+      ).toContain("codingOutageWindowMs");
+      expect(
+        translateCodingWorkbench(locale, "codingWorkbench.event.failure.output-exhausted-repeated"),
+      ).toContain("max_output_tokens");
+    }
+    expect(
+      translateCodingWorkbench("en", "codingWorkbench.event.failure.prompt-allowance-exhausted"),
+    ).toMatch(/prompt allowance/iu);
+    expect(
+      translateCodingWorkbench("en", "codingWorkbench.event.failure.provider-unavailable"),
+    ).toMatch(/could not be reached/iu);
+  });
+
+  it("says an operator-stopped run was stopped on request and that nothing failed", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.event.stopped.operator");
+    const de = translateCodingWorkbench("de", "codingWorkbench.event.stopped.operator");
+    expect(en).toMatch(/you stopped this run/iu);
+    expect(en).toMatch(/nothing failed/iu);
+    expect(en).not.toMatch(/internal error/iu);
+    expect(de).toMatch(/du hast diesen Lauf gestoppt/iu);
+    expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("keeps the internal-error sentence for a genuine internal failure", () => {
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.failure.runtime")).toMatch(
+      /internal error/iu,
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.failure.runtime")).toMatch(
+      /internen Fehler/iu,
+    );
+  });
+
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {
     expect(Object.keys(EN_MESSAGES)).not.toContainEqual(
       expect.stringMatching(/^codingWorkbench\./u),

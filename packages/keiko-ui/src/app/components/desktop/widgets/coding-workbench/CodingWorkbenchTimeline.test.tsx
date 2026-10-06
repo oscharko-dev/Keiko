@@ -425,6 +425,144 @@ describe("CodingWorkbenchTimeline", () => {
     expect(rows[2]).not.toHaveTextContent("runtime-failed");
   });
 
+  // F9 (#3873, live Gemma qualification): a run its prompt allowance ended read "The model or a
+  // Workbench guard rejected this turn" and then "The coding run ended with an internal error". The
+  // settled failure now names the exhausted allowance with its next step, and nothing on the
+  // timeline claims an internal error.
+  it("names the exhausted prompt allowance on the failed run instead of an internal error", async () => {
+    const turnRejected: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "cursor-4",
+      sequence: 4,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 4,
+      eventKind: "failure-redacted",
+      failureCode: "turn-rejected",
+    };
+    const failure: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      kind: "status",
+      state: "failed",
+      occurredAt: "2026-07-19T12:00:01.000Z",
+      failureCode: "prompt-allowance-exhausted",
+    };
+    const { container } = render(
+      <Timeline
+        events={[turnRejected, failure]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const settled = [...container.querySelectorAll('[data-timeline-kind="event"]')].at(-1);
+    expect(settled).toHaveTextContent("Coding run failed");
+    expect(settled).toHaveAttribute("data-event-tone", "attention");
+    expect(settled).toHaveTextContent(/used up its prompt allowance/iu);
+    expect(settled).toHaveTextContent(/start the task again as a new run/iu);
+    expect(settled).toHaveTextContent("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
+    expect(settled).not.toHaveTextContent("prompt-allowance-exhausted");
+    expect(container).not.toHaveTextContent(/internal error/iu);
+
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["provider-unavailable", /could not be reached or stopped answering/iu],
+    ["model-turn-failed", /its last model step failed/iu],
+    ["output-exhausted-repeated", /used its whole output budget again/iu],
+  ] as const)("names a run that failed with %s by its cause", (failureCode, copy) => {
+    const failure: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      kind: "status",
+      state: "failed",
+      failureCode,
+    };
+    const { container } = render(
+      <Timeline
+        events={[failure]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent(copy);
+    expect(container).not.toHaveTextContent(/internal error/iu);
+  });
+
+  // F9 (#3873): run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with
+  // a model call in flight and read "The coding run ended with an internal error". The settled
+  // failure now names the time limit and the setting that lengthens it.
+  it("names the exhausted time limit on a run that reached its envelope's end", async () => {
+    const failure: CodingWorkbenchRuntimeSseEvent = {
+      ...event(5),
+      kind: "status",
+      state: "failed",
+      failureCode: "envelope-duration-exhausted",
+    };
+    const { container } = render(
+      <Timeline
+        events={[failure]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const settled = [...container.querySelectorAll('[data-timeline-kind="event"]')].at(-1);
+    expect(settled).toHaveTextContent("Coding run failed");
+    expect(settled).toHaveTextContent(/used up its time limit/iu);
+    expect(settled).toHaveTextContent("KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES");
+    expect(settled).not.toHaveTextContent("envelope-duration-exhausted");
+    expect(container).not.toHaveTextContent(/internal error/iu);
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+
+  it("says a run the operator stopped was stopped on request, not that it failed", async () => {
+    const stopped: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "cursor-5",
+      sequence: 5,
+      occurredAt: AT,
+      kind: "status",
+      runId: "run-1",
+      state: "cancelled",
+      revision: 5,
+    };
+    const { container, getByText } = render(
+      <Timeline
+        events={[stopped]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    // A stop is not a failure: it needs no attention, so it is one of the run's details.
+    expect(container.querySelector('[data-timeline-kind="event"]')).toBeNull();
+    fireEvent.click(getByText("Run details"));
+
+    const settled = [...container.querySelectorAll('[data-timeline-kind="event"]')].at(-1);
+    expect(settled).toHaveTextContent("Stopped");
+    expect(settled).toHaveTextContent(/you stopped this run/iu);
+    expect(settled).not.toHaveAttribute("data-event-tone", "attention");
+    expect(container).not.toHaveTextContent(/internal error|run failed/iu);
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+
   it("groups completed work between answers and keeps failures outside the disclosure", () => {
     const repeated = feedWithRepeatedTools();
     const turn = repeated.turns[0];

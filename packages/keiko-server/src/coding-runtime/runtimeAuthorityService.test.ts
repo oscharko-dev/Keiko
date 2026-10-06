@@ -564,6 +564,96 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  // F9 (#3873): the run's terminal cause asks whether its most recent model call was refused by
+  // the cumulative prompt allowance. Only a refusal by the allowance itself answers yes; a later
+  // admitted call, the runtime's spent time budget and a refused run state all answer no.
+  it("reports an exhausted prompt allowance only for the run's latest allowance refusal", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const capability = minted.modelGatewayCapability;
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+
+    expect(authority.reservePromptTokens(capability, 10_000, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+    expect(authority.reservePromptTokens(capability, 1, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+    expect(authority.promptAllowanceExhausted("run-other")).toBe(false);
+
+    // The provider reported far less than the estimate: the refund admits the next call, which
+    // supersedes the earlier refusal.
+    expect(authority.settlePromptTokens(capability, 10_000, 10, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.reservePromptTokens(capability, 5, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+  });
+
+  it("does not report the prompt allowance for a spent runtime or a refused run state", () => {
+    const afterRuntimeBudget = Date.parse("2026-07-11T12:01:00.001Z");
+    const spent = promptBudgetService();
+    const spentMint = mint(spent);
+    if (!spentMint.ok) throw new Error("expected mint");
+    expect(
+      spent.reservePromptTokens(spentMint.modelGatewayCapability, 20_000, afterRuntimeBudget),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    expect(spent.promptAllowanceExhausted("run-1")).toBe(false);
+
+    const paused = promptBudgetService();
+    const pausedMint = mint(paused);
+    if (!pausedMint.ok) throw new Error("expected mint");
+    expect(
+      paused.reservePromptTokens(pausedMint.modelGatewayCapability, 20_000, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    expect(paused.promptAllowanceExhausted("run-1")).toBe(true);
+    expect(paused.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(
+      paused.reservePromptTokens(pausedMint.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+    expect(paused.promptAllowanceExhausted("run-1")).toBe(false);
+  });
+
+  // F9 (#3873): run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with
+  // a model call in flight and settled `runtime-failed`, an internal error. The authority answers
+  // whether a run's envelope ran out of time: `maxRuntimeMs` after minting or its `expiresAt`,
+  // whichever comes first — and keeps answering after the end, when the failed turn settles.
+  it("reports an envelope that ran out of time from its earlier bound", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    // The context's budget allows 60 s from minting at NOW; its expiry is an hour later.
+    const budgetEnd = Date.parse("2026-07-11T12:01:00.000Z");
+    expect(authority.envelopeDurationExhausted("run-1", budgetEnd - 1)).toBe(false);
+    expect(authority.envelopeDurationExhausted("run-1", budgetEnd)).toBe(true);
+    expect(authority.envelopeDurationExhausted("run-1", budgetEnd + 3_600_000)).toBe(true);
+    expect(authority.envelopeDurationExhausted("run-other", budgetEnd)).toBe(false);
+    expect(authority.envelopeDurationExhausted("run-1", Number.NaN)).toBe(false);
+
+    const early = promptBudgetService();
+    const trusted = { ...context(), expiresAt: "2026-07-11T12:00:30.000Z" };
+    const confirmation = early.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    expect(early.mintStart(intent, trusted, confirmation, NOW)).toMatchObject({ ok: true });
+    expect(early.envelopeDurationExhausted("run-1", Date.parse("2026-07-11T12:00:29.999Z"))).toBe(
+      false,
+    );
+    expect(early.envelopeDurationExhausted("run-1", Date.parse("2026-07-11T12:00:30.000Z"))).toBe(
+      true,
+    );
+  });
+
+  it("reports no envelope end for a run no envelope was minted for", () => {
+    expect(promptBudgetService().envelopeDurationExhausted("run-1", Date.parse(NOW) + 1e9)).toBe(
+      false,
+    );
+  });
+
   it("revalidates expiry and permits only idempotent or monotonically narrower resume", () => {
     const authority = service();
     const minted = mint(authority);

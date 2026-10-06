@@ -1007,6 +1007,18 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
+  "codingWorkbench.event.failure.prompt-allowance-exhausted":
+    "Der Lauf hat sein Prompt-Kontingent aufgebraucht – die Prompt-Tokens, die ein Lauf insgesamt an das Modell senden darf –, deshalb hat Keiko seinen nächsten Modellaufruf abgelehnt. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Kontingent erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Kontingent mit KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS erhöhen.",
+  "codingWorkbench.event.failure.envelope-duration-exhausted":
+    "Der Lauf hat sein Zeitlimit aufgebraucht – wie lange ein Lauf arbeiten darf –, deshalb endete er, bevor die Aufgabe erledigt war. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Zeitlimit erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Limit mit KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES verlängern.",
+  "codingWorkbench.event.failure.output-exhausted-repeated":
+    "Der Lauf wurde beendet, weil das Modell sein gesamtes Ausgabebudget erneut verbraucht hat, ohne ein Werkzeug aufzurufen oder zu antworten – auch nach einem Reparaturversuch. Meist verbraucht das Modell dieses Budget mit Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.stopped.operator":
+    "Du hast diesen Lauf gestoppt. Nichts ist fehlgeschlagen, und deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.failure.provider-unavailable":
+    "Der Lauf wurde beendet, weil der Modellanbieter nicht erreichbar war oder aufgehört hat zu antworten – auch nachdem Keiko gewartet und es erneut versucht hat. Abgelehnt wurde nichts. Prüfe, ob das Modell-Gateway und sein Anbieter laufen, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich. Ein Betreiber kann die Wartezeit mit der Gateway-Einstellung codingOutageWindowMs verlängern.",
+  "codingWorkbench.event.failure.model-turn-failed":
+    "Der Lauf wurde beendet, weil sein letzter Modellschritt fehlgeschlagen ist – den Grund zeigt dieser Schritt oben. Behebe diesen Grund und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",
