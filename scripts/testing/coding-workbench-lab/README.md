@@ -22,7 +22,7 @@ secret from a file or from the repository, none prints one, and the run summarie
 | `KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET` | Required by `pair` and every `wb-*` script: the secret the dev server was started with (at least 32 characters). Read from the environment only |
 | `KEIKO_LAB_REPO`                           | The lab repository checkout; the default of `--repo`                                                                                            |
 | `KEIKO_LAB_BASE_URL`                       | The dev server origin; loopback `http` only, default `http://127.0.0.1:1983`                                                                    |
-| `KEIKO_LAB_LOG_DIR`                        | Activity Log directory for `run-summary` and `rawtl`; default `$KEIKO_STATE_DIR/logs`, else `./.keiko/dev/logs`                                 |
+| `KEIKO_LAB_LOG_DIR`                        | Activity Log directory for `run-summary`, `turn-profile` and `rawtl`; default `$KEIKO_STATE_DIR/logs`, else `./.keiko/dev/logs`                 |
 | `KEIKO_CONFIG_FILE`                        | The gateway configuration the dev server reads; set it when starting the server                                                                 |
 
 ## Command sequence
@@ -68,11 +68,16 @@ node scripts/testing/coding-workbench-lab/wb-ui.mjs --task-id T2 \
 node scripts/testing/coding-workbench-lab/wb-stop.mjs run-<digits>     # stop a run that must not continue
 ```
 
-**4. Read the run.** Both scripts read the Activity Log (`.keiko/dev/logs`, or `--log-dir`) and print
-counts, states and closed reason codes only; times are UTC.
+**4. Read the run.** These scripts read the Activity Log (`.keiko/dev/logs`, or `--log-dir`) and print
+counts, durations, states and closed reason codes only; times are UTC. `turn-profile.mjs` prints one row per
+model turn (dispatch offset, messages, provider-reported prompt tokens, time to the response headers,
+generation time, completion tokens and tokens per second, reasoning tokens and bytes when the log
+carries them, finish reason, the tools the turn produced and the gap to the next request) and then
+where the wall clock went (model, tools, sidecar and BFF gaps, operator pauses, other).
 
 ```bash
 node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits>
+node scripts/testing/coding-workbench-lab/turn-profile.mjs run-<digits>
 node scripts/testing/coding-workbench-lab/rawtl.mjs <trailing digits> gateway.retry,edit.refused
 ```
 
@@ -108,6 +113,7 @@ node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-
 | `wb-trust.mjs`            | Grants or revokes package-script trust for a repository                                                                   |
 | `pair.mjs`                | Prints a one-time pairing URL (or the attestation JSON); valid about 30 seconds, usable once                              |
 | `run-summary.mjs`         | Body-free run summary and, with `--ledger-row`, a draft ledger row                                                        |
+| `turn-profile.mjs`        | Body-free per-turn timing profile of a run (model, tools, gaps, pauses), bounded at the run's settlement                  |
 | `rawtl.mjs`               | Body-free raw timeline of a run and its child requests, optionally filtered by operation                                  |
 | `chaos-proxy.mjs`         | Fault-injecting proxy between LiteLLM and the model server (503 bursts, outage, latency, drop, stall, hang)               |
 | `chaos-suite.mjs`         | Runs the scenarios S1 to S7 against task C1 and writes one summary line per scenario                                      |

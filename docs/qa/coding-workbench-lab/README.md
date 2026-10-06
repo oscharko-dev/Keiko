@@ -198,6 +198,7 @@ feature branch T6 created).
 ```bash
 node scripts/testing/coding-workbench-lab/wb-ui.mjs --task-id T2 --shots "$HOME/keiko-lab-runs/t2"
 node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits from the last line>
+node scripts/testing/coding-workbench-lab/turn-profile.mjs run-<digits from the last line>
 node scripts/testing/coding-workbench-lab/rawtl.mjs <trailing digits> gateway.retry,edit.refused
 ```
 
@@ -206,11 +207,13 @@ the edits exactly as for a human operator, and it prints `----- run run-<digits>
 API-started run (`wb-run.mjs`) refuses every edit with `NO_ACTIVE_SESSION` (finding F4), so use it
 for read-only tasks and the chaos scenarios only. The scripts' README lists every option.
 
-The activity log is the evidence. `run-summary.mjs` and `rawtl.mjs` are quick local views over it
-(model turns, provider-reported prompt tokens, edit outcomes, retries, settlement); the supported,
-shareable form is `keiko support export --correlation-id <run id>` followed by
-`keiko support analyze` ([`AGENTS.md`](../../../AGENTS.md), section 8). None of them contains a
-prompt, code or model output.
+The activity log is the evidence. `run-summary.mjs`, `turn-profile.mjs` and `rawtl.mjs` are quick
+local views over it (model turns, provider-reported prompt tokens, edit outcomes, retries,
+settlement and, per turn, where the time went: time to the response headers, generation, tools and
+the gap to the next request). The supported, shareable form is
+`keiko support export --correlation-id <run id>` followed by `keiko support analyze`
+([`AGENTS.md`](../../../AGENTS.md), section 8). None of them contains a prompt, code or model
+output.
 
 ### 7. Record the result
 
