@@ -94,7 +94,7 @@ conversation history for subsequent requests; it does not erase the prompt token
 by a run. The run's Authority Envelope independently accounts for cumulative prompt usage.
 
 A deployment operator may set `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server.
-The default remains 200,000; an explicit decimal integer from 1 through 2,000,000 is accepted.
+The default is 1,000,000; an explicit decimal integer from 1 through 2,000,000 is accepted.
 Invalid values fail closed. This setting is copied into each newly minted envelope and reported as
 `maxPromptTokens` on the existing `coding-runtime.authority.minted` activity event. It does not
 change a live or exhausted envelope, the 30-minute duration, the tool/patch ceilings, or a configured

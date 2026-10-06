@@ -77,7 +77,9 @@ Minting requires a server-issued, action-bound, one-use human confirmation. The 
 itself is retained for the complete run so the existing registry remains the sole source of
 cumulative runtime/tool/patch budgets. The deployment may configure the cumulative prompt-token
 allowance for newly minted envelopes with `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default
-200,000; positive decimal integers up to 2,000,000). Invalid values fail closed; this cannot alter
+1,000,000; positive decimal integers up to 2,000,000). Every model turn resends the run's whole
+context, so the allowance divides into turns: the former default of 200,000 ended an ordinary
+two-file bug fix after about 25 turns in the live Gemma qualification (#3873). Invalid values fail closed; this cannot alter
 an existing envelope or reset its usage. Native context compaction changes subsequent request
 size, not cumulative accounting, and the separate Model Gateway spend ceiling remains enforced.
 Each adapter delegation has a fresh idempotency/replay

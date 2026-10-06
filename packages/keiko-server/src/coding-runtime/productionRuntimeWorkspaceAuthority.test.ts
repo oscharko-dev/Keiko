@@ -56,7 +56,7 @@ describe("production runtime workspace authority", () => {
       { ...fixture.input, promptTokenBudget: 2_000_000 },
       { ...fixture.request, runId: "run-next" },
     );
-    expect(prior.budget.maxPromptTokens).toBe(200_000);
+    expect(prior.budget.maxPromptTokens).toBe(1_000_000);
     expect(next.budget.maxPromptTokens).toBe(2_000_000);
     expect(next.budget.maxToolCalls).toBe(prior.budget.maxToolCalls);
     expect(next.budget.maxRuntimeMs).toBe(prior.budget.maxRuntimeMs);
@@ -64,7 +64,7 @@ describe("production runtime workspace authority", () => {
   });
 
   it("validates the deployment prompt budget without an invalid-value fallback", () => {
-    expect(configuredRuntimePromptTokenBudget(undefined)).toBe(200_000);
+    expect(configuredRuntimePromptTokenBudget(undefined)).toBe(1_000_000);
     expect(configuredRuntimePromptTokenBudget("2000000")).toBe(2_000_000);
     for (const invalid of ["", "0", "-1", "1.5", "NaN", "Infinity", "2000001", "1e6"]) {
       expect(() => configuredRuntimePromptTokenBudget(invalid)).toThrow(RangeError);

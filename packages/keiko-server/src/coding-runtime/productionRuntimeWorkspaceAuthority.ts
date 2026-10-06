@@ -37,7 +37,11 @@ import {
 } from "./launchFailure.js";
 
 const RUNTIME_TTL_MS = 30 * 60_000;
-const DEFAULT_RUNTIME_PROMPT_TOKENS = 200_000;
+// The cumulative prompt allowance of one run. Every model turn resends the run's whole context, so
+// the allowance divides into turns, not into tasks: the former 200,000 ended an ordinary two-file
+// Supervised bug fix after about 25 Gemma turns in the live LiteLLM qualification (#3873). Cost is
+// bounded separately by the Model Gateway spend ceiling; this allowance bounds a runaway run.
+const DEFAULT_RUNTIME_PROMPT_TOKENS = 1_000_000;
 const MAX_RUNTIME_PROMPT_TOKENS = 2_000_000;
 
 function checkedRuntimePromptTokenBudget(value: number): number {
