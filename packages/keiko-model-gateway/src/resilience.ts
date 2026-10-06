@@ -377,7 +377,7 @@ function retryDecision(
   lastError: Error,
   attempt: number,
   config: RetryConfig,
-  budget: { readonly remainingMs: number; readonly elapsedMs: number },
+  budget: { readonly remainingMs: number; readonly elapsedMs: () => number },
   random: () => number,
 ): RetryDecision {
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
@@ -394,7 +394,7 @@ function retryDecision(
   const remainingMs =
     config.retryWindowMs === undefined
       ? budget.remainingMs
-      : Math.min(budget.remainingMs, config.retryWindowMs - budget.elapsedMs);
+      : Math.min(budget.remainingMs, config.retryWindowMs - budget.elapsedMs());
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
   return { sleepMs: delayMs };
 }
@@ -625,6 +625,9 @@ type RetryOperation<T> = (
   attemptTimeoutMs?: number,
   remainingBudgetMs?: number,
   previousError?: Error,
+  // How long this attempt may wait for provider admission; with a retry window it is clipped to
+  // what is left of the window, so a breaker wait never outlasts the window (#3873).
+  admissionBudgetMs?: number,
 ) => Promise<T>;
 
 interface RetryState {
@@ -655,7 +658,12 @@ async function executeRetryAttempt<T>(
   if (remaining <= 0)
     throw budgetExhaustedError(state.lastError, sink, context, attempt, elapsed());
   try {
-    const value = await operation(attemptTimeoutFor(config, remaining), remaining, state.lastError);
+    const value = await operation(
+      attemptTimeoutFor(config, remaining),
+      remaining,
+      state.lastError,
+      admissionBudgetFor(config, remaining, (): number => clock.now() - start),
+    );
     return { done: true, value };
   } catch (error) {
     rethrowTerminalAdmission(error);
@@ -665,7 +673,7 @@ async function executeRetryAttempt<T>(
       state.lastError,
       attempt,
       config,
-      { remainingMs, elapsedMs: clock.now() - start },
+      { remainingMs, elapsedMs: (): number => clock.now() - start },
       random,
     );
     const failureLog: RetryFailureLogInput = {
@@ -684,6 +692,19 @@ async function executeRetryAttempt<T>(
     await sleepWithCancellation(clock, decision.sleepMs, signal);
     return { done: false };
   }
+}
+
+// The admission wait of one attempt: the call's remaining budget, clipped by what is left of a
+// retry window. Never below one millisecond, so an attempt at the window's edge refuses at once.
+// The clock is read only for a windowed call, so every other call keeps its exact clock reads.
+function admissionBudgetFor(
+  config: RetryConfig,
+  remainingMs: number,
+  elapsedMs: () => number,
+): number {
+  return config.retryWindowMs === undefined
+    ? remainingMs
+    : Math.max(1, Math.min(remainingMs, config.retryWindowMs - elapsedMs()));
 }
 
 export function executeWithRetry<T>(

@@ -1040,6 +1040,7 @@ export class Gateway {
     attemptTimeoutMs: number | undefined,
     remainingBudgetMs: number | undefined,
     previousError?: Error,
+    admissionBudgetMs?: number,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
     const provider = {
@@ -1053,6 +1054,7 @@ export class Gateway {
         streamedReadBounds(attempt, remainingBudgetMs),
         remainingBudgetMs,
         previousError,
+        admissionBudgetMs,
       );
     } catch (error) {
       if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
@@ -1694,16 +1696,17 @@ export class Gateway {
     bounds?: StreamReadBounds,
     remainingBudgetMs?: number,
     previousError?: Error,
+    admissionBudgetMs?: number,
   ): Promise<NormalizedResponse> {
     const { adapter, correlationId } = attempt;
     const { capability } = attempt.route;
     const request = attempt.state.request;
-    const { admission, remainingMs } = await this.providerAdmission(
+    const { admission, remainingMs } = await this.admitBufferedAttempt(
+      attempt,
       provider,
-      request,
-      correlationId,
       admissionBudget(provider, bounds, remainingBudgetMs),
       previousError,
+      admissionBudgetMs,
     );
     provider = { ...provider, timeoutMs: Math.min(provider.timeoutMs, remainingMs) };
     bounds = clippedStreamBounds(bounds, remainingMs);
@@ -1735,6 +1738,29 @@ export class Gateway {
       admission.settle("non-provider-fault");
       reservation?.settle(usage);
     }
+  }
+
+  // The admission wait is clipped to the retry window; the attempt keeps the call's own budget,
+  // less only the time it actually waited (#3873).
+  private async admitBufferedAttempt(
+    attempt: BufferedChatAttempt,
+    provider: ModelProviderConfig,
+    budgetMs: number,
+    previousError: Error | undefined,
+    admissionBudgetMs: number | undefined,
+  ): Promise<{ readonly admission: CircuitBreakerAdmission; readonly remainingMs: number }> {
+    const waitBudgetMs = Math.min(budgetMs, admissionBudgetMs ?? budgetMs);
+    const admitted = await this.providerAdmission(
+      provider,
+      attempt.state.request,
+      attempt.correlationId,
+      waitBudgetMs,
+      previousError,
+    );
+    return {
+      admission: admitted.admission,
+      remainingMs: budgetMs - (waitBudgetMs - admitted.remainingMs),
+    };
   }
 
   private providerAdmission(

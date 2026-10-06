@@ -202,6 +202,11 @@ describe("decodeGovernedToolModelContent", () => {
     ],
     ["text outside a block", `${envelope}\n<text 1 ${nonce}>\na</text 1 ${nonce}>trailing`],
     ["a malformed opening", `${envelope}\n<text one>\na</text one>`],
+    ["a placeholder without its block", envelope],
+    [
+      "a placeholder whose block is missing",
+      `${JSON.stringify({ a: `<text 1 ${nonce}>`, b: `<text 2 ${nonce}>` })}\n<text 1 ${nonce}>\nx</text 1 ${nonce}>`,
+    ],
   ])("rejects %s", (_name, content) => {
     expect(() => decodeGovernedToolModelContent(content)).toThrow(SyntaxError);
   });

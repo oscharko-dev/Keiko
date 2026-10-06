@@ -149,11 +149,23 @@ export function recordGovernedToolModelContent(
  */
 export function decodeGovernedToolModelContent(content: string): unknown {
   const newline = content.indexOf("\n");
-  if (newline === -1) return JSON.parse(content);
-  const blocks = governedToolModelContentBlocks(content.slice(newline + 1));
-  return JSON.parse(content.slice(0, newline), (_key: string, value: unknown): unknown =>
-    typeof value === "string" && blocks.has(value) ? blocks.get(value) : value,
+  const blocks =
+    newline === -1
+      ? new Map<string, string>()
+      : governedToolModelContentBlocks(content.slice(newline + 1));
+  return JSON.parse(newline === -1 ? content : content.slice(0, newline), (_key, value: unknown) =>
+    resolvedEnvelopeValue(value, blocks),
   );
+}
+
+// The rendering moves every string containing "<text " into a block, so an envelope string that
+// still starts like a tag must be one of this rendering's placeholders, with its block present.
+function resolvedEnvelopeValue(value: unknown, blocks: ReadonlyMap<string, string>): unknown {
+  if (typeof value !== "string" || !value.startsWith("<text ")) return value;
+  const block = blocks.get(value);
+  if (block === undefined)
+    throw new SyntaxError("Governed tool content names a text block it does not contain.");
+  return block;
 }
 
 function governedToolModelContentBlocks(framed: string): ReadonlyMap<string, string> {

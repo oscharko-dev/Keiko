@@ -143,6 +143,41 @@ describe("coding-workbench outage tolerance", () => {
     expect(result.content).toBe("Synthetic answer");
     expect(provider.calls()).toBe(4);
     expect(clock.elapsed()).toBeGreaterThanOrEqual(30_000);
+    expect(clock.elapsed()).toBeLessThan(GATEWAY_CODING_OUTAGE_WINDOW_MS);
+  });
+
+  it("bounds a wait on a saturated probe slot by the outage window", async () => {
+    const clock = simulatedClock();
+    const breaker = { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 };
+    let calls = 0;
+    let releaseProbe: (() => void) | undefined;
+    let probeStarted: (() => void) | undefined;
+    const probing = new Promise<void>((resolve) => {
+      probeStarted = resolve;
+    });
+    // Two 503s open the breaker; the half-open probe then hangs, so the slot stays saturated.
+    const provider: ProviderAdapter["call"] = () => {
+      calls += 1;
+      if (calls <= 2) return Promise.reject(new ProviderError("Synthetic 503", 503));
+      probeStarted?.();
+      return new Promise<NormalizedResponse>((resolve) => {
+        releaseProbe = (): void => {
+          resolve(answer());
+        };
+      });
+    };
+    const gateway = gatewayFor(provider, clock, config(breaker));
+    const holder = gateway.chat(request("coding-workbench"));
+    await probing;
+    const waitingSince = clock.elapsed();
+
+    await expect(gateway.chat(request("coding-workbench"))).rejects.toBeInstanceOf(
+      CircuitOpenError,
+    );
+
+    expect(clock.elapsed() - waitingSince).toBeLessThanOrEqual(GATEWAY_CODING_OUTAGE_WINDOW_MS);
+    releaseProbe?.();
+    await expect(holder).resolves.toMatchObject({ content: "Synthetic answer" });
   });
 
   it("still refuses at once on an open breaker outside the coding profile", async () => {
