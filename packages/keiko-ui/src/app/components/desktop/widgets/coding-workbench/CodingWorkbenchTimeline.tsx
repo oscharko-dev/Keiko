@@ -72,6 +72,8 @@ type TimelineItem =
       readonly order: number;
       readonly message: CodingSafeActivityMessage;
       readonly runId: string;
+      /** The newest message of an active run: its answer and reasoning may still be streaming. */
+      readonly live: boolean;
     }
   | {
       readonly kind: "tool";
@@ -115,7 +117,7 @@ export function Timeline({
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
   const titleRef = focusRef ?? internalTitleRef;
   const [showEvents, setShowEvents] = useState(false);
-  const allItems = useMemo(() => timelineItems(events, activity.feed), [activity.feed, events]);
+  const allItems = useTimelineItems(events, activity.feed, active);
   const items = useMemo(
     () =>
       groupCompletedTools(
@@ -199,9 +201,26 @@ function RunDetailsToggle({
   );
 }
 
+// The newest message of an active run is live: its answer and its reasoning may still be streaming.
+function useTimelineItems(
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  active: boolean,
+): readonly TimelineItem[] {
+  return useMemo(
+    () => timelineItems(events, feed, active ? newestMessageId(feed) : undefined),
+    [events, feed, active],
+  );
+}
+
+function newestMessageId(feed: UseCodingWorkbenchSafeActivityResult["feed"]): string | undefined {
+  return feed?.turns.at(-1)?.messages.at(-1)?.messageId;
+}
+
 function timelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  liveMessageId: string | undefined,
 ): readonly TimelineItem[] {
   const items: TimelineItem[] = events.map((event, index) => ({
     kind: "event",
@@ -222,6 +241,7 @@ function timelineItems(
         order,
         message,
         runId: feed.runId,
+        live: message.messageId === liveMessageId,
       });
       order += 1;
     }
@@ -246,6 +266,7 @@ function timelineItems(
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
   return (
     message.truncated ||
+    message.reasoning !== undefined ||
     message.segments.some((segment) => segment.truncated || segment.text.trim().length > 0)
   );
 }
@@ -689,27 +710,73 @@ function MessageRow({
         <p className={styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
+        {item.message.reasoning === undefined ? null : (
+          <ModelReasoning reasoning={item.message.reasoning} live={item.live} t={t} />
+        )}
         <div className={styles.messageText}>
-          <MessageContent message={item.message} runId={item.runId} t={t} />
+          <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
         </div>
       </article>
     </li>
   );
 }
 
+// #3878: the model's own reasoning, apart from the answer and labelled as unverified. It is open
+// while its turn is live, so it streams in view, and collapses once the turn completes; the reader
+// can open or close it at any time. Only a reader's toggle is reported, never the automatic one.
+function ModelReasoning({
+  reasoning,
+  live,
+  t,
+}: {
+  readonly reasoning: NonNullable<CodingSafeActivityMessage["reasoning"]>;
+  readonly live: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <details
+      className={styles.cmpReasoning}
+      open={live}
+      data-reasoning-live={live}
+      onToggle={(event) => {
+        if (event.currentTarget.open !== live) {
+          reportClientDiagnostic("[keiko] coding workbench model reasoning toggled");
+        }
+      }}
+    >
+      <summary className={styles.cmpActivitySummary}>
+        <span>{t("codingWorkbench.activity.reasoning.title")}</span>
+        <span className={styles.cmpReasoningBadge}>
+          {t("codingWorkbench.activity.reasoning.badge")}
+        </span>
+      </summary>
+      <p className={styles.cmpReasoningNote}>{t("codingWorkbench.activity.reasoning.note")}</p>
+      <p className={styles.cmpReasoningText}>
+        {reasoning.text}
+        {reasoning.truncated ? <TruncationMark t={t} /> : null}
+      </p>
+    </details>
+  );
+}
+
 function MessageContent({
   message,
   runId,
+  live,
   t,
 }: {
   readonly message: CodingSafeActivityMessage;
   readonly t: CodingWorkbenchTranslate;
   readonly runId: string;
+  readonly live: boolean;
 }): ReactNode {
   if (message.role === "assistant") {
+    // While the answer still streams, SafeMarkdown renders its code without highlighting or list
+    // evidence on every update; the finished answer renders in full once the turn completes.
     return (
       <SafeMarkdownBoundary
         source={message.segments.map((segment) => segment.text).join("")}
+        streaming={live}
         diagnosticCorrelationId={runId}
         diagnosticMessageId={message.messageId}
         trailing={truncationFor(message, t)}

@@ -311,6 +311,21 @@ const GATEWAY_CALL_STARTED_EXECUTION_FIELDS = {
   },
 } as const;
 
+// #3878: the reasoning share of a completed call, as counts: the UTF-8 size of the reasoning the
+// answer carried, the provider's own reasoning-token count when it reports one (never estimated),
+// and whether the reasoning was forwarded to the caller or discarded. Never the reasoning itself.
+// `required: false`: records written before these fields existed lack them.
+const REASONING_COMPLETION_FIELDS = {
+  reasoningBytes: { type: "integer", dataClass: "count", required: false },
+  reasoningTokens: { type: "integer", dataClass: "count", required: false },
+  reasoningDisposition: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["none", "forwarded", "discarded"],
+  },
+} as const;
+
 const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
   ...GATEWAY_CALL_STARTED_OPERATION_BASE,
   op: "gateway.chat.started",
@@ -394,6 +409,7 @@ const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
     firstTokenMs: { type: "number", dataClass: "duration", required: false },
     promptTokens: { type: "integer", dataClass: "count", required: false },
     completionTokens: { type: "integer", dataClass: "count", required: false },
+    ...REASONING_COMPLETION_FIELDS,
   },
   causal: "correlation",
   lifecycle: "end",
@@ -508,6 +524,7 @@ const GATEWAY_CHAT_COMPLETED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
     },
+    ...REASONING_COMPLETION_FIELDS,
   },
   diagnosticWhen: [
     { field: "finishReason", values: ["length", "content_filter", "error", "cancelled"] },
@@ -896,6 +913,55 @@ function streamUsageIfSupplied(usage: UsageMetadata | undefined): StreamTerminal
   return { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
 }
 
+type ReasoningDisposition = "none" | "forwarded" | "discarded";
+
+interface ReasoningCompletion {
+  readonly reasoningBytes: number;
+  readonly reasoningTokens?: number;
+  readonly reasoningDisposition: ReasoningDisposition;
+}
+
+function carriedReasoning(response: NormalizedResponse): boolean {
+  return response.reasoning !== undefined || (response.usage.reasoningBytes ?? 0) > 0;
+}
+
+function reasoningDisposition(
+  response: NormalizedResponse,
+  forwards: boolean,
+): ReasoningDisposition {
+  if (!carriedReasoning(response)) return "none";
+  return forwards ? "forwarded" : "discarded";
+}
+
+// The body-free reasoning share a completion line records (#3878).
+function reasoningCompletion(response: NormalizedResponse, forwards: boolean): ReasoningCompletion {
+  const { reasoningBytes, reasoningTokens } = response.usage;
+  return {
+    reasoningBytes: reasoningBytes ?? 0,
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    reasoningDisposition: reasoningDisposition(response, forwards),
+  };
+}
+
+// #3878: an answer handed to a caller that does not display reasoning loses the reasoning text and
+// keeps only its counts on `usage`.
+function withReasoningPolicy(response: NormalizedResponse, forwards: boolean): NormalizedResponse {
+  if (forwards || response.reasoning === undefined) return response;
+  const { reasoning: _discarded, ...answer } = response;
+  return answer;
+}
+
+// Reasoning chunks of a caller that does not display reasoning are dropped where the provider's
+// stream is read, below the gateway's commit point: a discarded thought is never a delivered chunk,
+// so it neither starts the caller's answer nor ends the startup retries.
+async function* withoutReasoningChunks(
+  stream: AsyncIterable<GatewayStreamChunk>,
+): AsyncGenerator<GatewayStreamChunk> {
+  for await (const chunk of stream) {
+    if (chunk.type !== "reasoning") yield chunk;
+  }
+}
+
 export class Gateway {
   private readonly spendBudget: GatewaySpendBudget | undefined;
   private readonly promptCounter: ProviderPromptCounter;
@@ -1013,9 +1079,10 @@ export class Gateway {
       this.settleFailedCall(ids, route, elapsed(), error);
       throw error;
     }
-    this.logCallCompleted(ids, route, result, elapsed());
+    const forwardsReasoning = this.forwardsReasoning(request);
+    this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
     return {
-      ...result,
+      ...withReasoningPolicy(result, forwardsReasoning),
       usage: {
         ...result.usage,
         requestId,
@@ -1167,21 +1234,36 @@ export class Gateway {
         this.logStreamAbandoned(ids, route, chunkCount, elapsed());
       }
     }
+    const forwardsReasoning = this.forwardsReasoning(state.prepared);
     // Outside the try on purpose: a sink that throws here must not be caught above and reported as
     // a mid-stream provider failure — which would also trip the circuit breaker on a logging fault.
-    this.logStreamCompleted(
-      ids,
-      route,
-      chunkCount,
-      elapsed(),
+    this.logStreamCompleted(ids, route, chunkCount, elapsed(), {
       firstTokenMs,
-      streamUsageIfSupplied(terminalResponse?.usage),
-    );
+      usage: streamUsageIfSupplied(terminalResponse?.usage),
+      reasoning:
+        terminalResponse === undefined
+          ? undefined
+          : reasoningCompletion(terminalResponse, forwardsReasoning),
+    });
     // Production consumers stop at done without advancing or closing the iterator again.
     // Close the provider, settle spend/circuit state and emit the outcome before handing it off.
     if (terminalResponse !== undefined) {
-      yield this.enrichDone(terminalResponse, ids.requestId, start, route);
+      yield this.enrichDone(
+        withReasoningPolicy(terminalResponse, forwardsReasoning),
+        ids.requestId,
+        start,
+        route,
+      );
     }
+  }
+
+  // #3878: only a coding-workbench call forwards the model's reasoning, so the Coding Workbench can
+  // show it, and only while the operator has not switched `codingReasoningDisplay` off. Every other
+  // surface keeps today's answer: the reasoning is parsed and discarded.
+  private forwardsReasoning(request: GatewayCallRequest): boolean {
+    return (
+      request.latencyProfile === "coding-workbench" && this.config.codingReasoningDisplay !== "off"
+    );
   }
 
   private async prepareStream(request: GatewayCallRequest): Promise<PreparedStream> {
@@ -1365,8 +1447,11 @@ export class Gateway {
     route: RoutedCall,
     chunkCount: number,
     durationMs: number,
-    firstTokenMs: number | undefined,
-    usage: StreamTerminalUsage | undefined,
+    terminal: {
+      readonly firstTokenMs: number | undefined;
+      readonly usage: StreamTerminalUsage | undefined;
+      readonly reasoning: ReasoningCompletion | undefined;
+    },
   ): void {
     this.log.write(
       activityLogEvent(
@@ -1377,8 +1462,9 @@ export class Gateway {
           modelId: logModelId(route.provider.modelId),
           costClass: route.capability.costClass,
           chunkCount,
-          ...(firstTokenMs === undefined ? {} : { firstTokenMs }),
-          ...usage,
+          ...(terminal.firstTokenMs === undefined ? {} : { firstTokenMs: terminal.firstTokenMs }),
+          ...terminal.usage,
+          ...terminal.reasoning,
         },
       ),
     );
@@ -1449,6 +1535,7 @@ export class Gateway {
     route: RoutedCall,
     result: NormalizedResponse,
     durationMs: number,
+    forwardsReasoning: boolean,
   ): void {
     this.log.write(
       activityLogEvent(
@@ -1463,6 +1550,7 @@ export class Gateway {
           promptTokens: result.usage.promptTokens,
           completionTokens: result.usage.completionTokens,
           streaming: false,
+          ...reasoningCompletion(result, forwardsReasoning),
         },
       ),
     );
@@ -1621,8 +1709,10 @@ export class Gateway {
     ids: CallIds,
     bounds: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
+    const forwardsReasoning = this.forwardsReasoning(request);
     if (adapter.callStream !== undefined) {
-      yield* adapter.callStream(request, provider, bounds);
+      const stream = adapter.callStream(request, provider, bounds);
+      yield* forwardsReasoning ? stream : withoutReasoningChunks(stream);
       return;
     }
     // Degradation: this adapter has no streaming variant, so the caller gets ONE synthetic delta
@@ -1649,6 +1739,9 @@ export class Gateway {
       timeoutMs: Math.min(effectiveBufferedAttemptMs(provider), bounds.budgetMs),
     };
     const response = await adapter.call(request, bufferedProvider);
+    if (forwardsReasoning && response.reasoning !== undefined) {
+      yield { type: "reasoning", token: response.reasoning };
+    }
     yield { type: "delta", token: response.content };
     yield { type: "done", response };
   }

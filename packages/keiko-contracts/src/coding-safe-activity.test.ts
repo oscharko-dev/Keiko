@@ -5,6 +5,7 @@ import {
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
@@ -383,6 +384,48 @@ describe("coding safe-activity contract", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+// #3878: the model's reasoning rides beside an assistant message as bounded, untrusted text.
+describe("coding safe-activity contract — model reasoning", () => {
+  function withAssistantReasoning(reasoning: unknown, role = "assistant"): unknown {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected an available feed");
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const [user, assistant] = turn.messages;
+    return {
+      ...feed,
+      turns: [{ ...turn, messages: [user, { ...assistant, role, reasoning }] }],
+    };
+  }
+
+  it("accepts bounded reasoning beside an assistant message, shortened or whole", () => {
+    for (const truncated of [false, true]) {
+      const feed = withAssistantReasoning({ text: "Weigh the edge case first.", truncated });
+      expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+    }
+    const atBound = "é".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES / 2);
+    expect(
+      validateCodingSafeActivityFeed(withAssistantReasoning({ text: atBound, truncated: true })).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["on a user message", { text: "x", truncated: false }, "user"],
+    ["empty", { text: "", truncated: false }, "assistant"],
+    [
+      "beyond its UTF-8 bound",
+      { text: "é".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES / 2 + 1), truncated: true },
+      "assistant",
+    ],
+    ["with unsafe format characters", { text: "a‮b", truncated: false }, "assistant"],
+    ["with an extra key", { text: "x", truncated: false, raw: "private" }, "assistant"],
+    ["without its truncation flag", { text: "x" }, "assistant"],
+    ["as a bare string", "x", "assistant"],
+  ] as const)("rejects reasoning %s", (_label, reasoning, role) => {
+    expect(validateCodingSafeActivityFeed(withAssistantReasoning(reasoning, role)).ok).toBe(false);
   });
 });
 

@@ -10,7 +10,6 @@
           "properties": {
             "edits": {
               "type": "array",
-              "minItems": 1,
               "maxItems": 50,
               "items": {
                 "type": "object",
@@ -39,7 +38,45 @@
                 },
                 "required": ["file", "oldString", "newString"]
               },
-              "description": "Exact text replacements applied in order. Each oldString must occur exactly once in its file unless replaceAll is true."
+              "description": "Exact text replacements applied in order, after renames and before deletions. Each oldString must occur exactly once in its file unless replaceAll is true. Use [] when the call only renames or deletes."
+            },
+            "deletions": {
+              "type": "array",
+              "maxItems": 50,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+              },
+              "description": "Files to delete entirely, applied after edits; each must be listed in files with its last read digest and may not also be edited. Use [] for none."
+            },
+            "renames": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+                    "description": "Existing file to move, listed in files with its last read digest."
+                  },
+                  "to": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+                    "description": "New path, which must not exist, listed in files with the empty-content digest."
+                  }
+                },
+                "required": ["from", "to"]
+              },
+              "description": "Files to move, applied before edits; an edit addresses a moved file by its new path. Use [] for none."
             },
             "files": {
               "type": "array",
@@ -63,7 +100,7 @@
                 },
                 "required": ["file", "expectedContentHash"]
               },
-              "description": "Every file changed by edits, bound to its last governed read digest (a new file uses the empty-content digest)."
+              "description": "Every path touched by edits, renames (both paths) and deletions, bound to its last governed read digest (a new file or rename target uses the empty-content digest)."
             },
             "selectedFiles": {
               "type": "array",
@@ -76,7 +113,7 @@
                 "maxLength": 512,
                 "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
               },
-              "description": "Optional subset of files to apply; each entry must occur in files."
+              "description": "Every path the call touches; a touched path left out is refused, never applied partially. Each entry must occur in files."
             }
           },
           "required": ["edits", "files"]

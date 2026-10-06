@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES,
@@ -43,6 +44,15 @@ export interface SecureWorkspaceTextReadPort {
     readonly relativePath: string;
     readonly signal?: AbortSignal | undefined;
   }): Promise<SecureWorkspaceTextReadResult>;
+}
+
+/**
+ * The whole-file digest `keiko_workspace_read` reports and every hash-bound edit is checked
+ * against (#3612): one formula, owned by the read port both the tool result and the replacement
+ * materializer read through, so the two sides of a precondition cannot drift apart (#3873 review).
+ */
+export function secureWorkspaceTextDigest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 export interface SecureWorkspaceTextReadDeps {

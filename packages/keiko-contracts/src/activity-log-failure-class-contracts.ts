@@ -1196,7 +1196,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-runtime.editor-mutation.settled",
       "coding-runtime.editor-review.decided",
     ],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    // #3873 follow-up: the settled and refused edit lines count the files a replacement changeset
+    // deletes and moves.
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

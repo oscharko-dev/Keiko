@@ -27,6 +27,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
@@ -84,6 +85,18 @@ import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 const DIGEST = "a".repeat(64);
+// #3873: through the production facade an edit is the replacement form with every member present;
+// the port materializes it against the governed read of `src/a.ts`, bound to that read's digest.
+const EDITED_TEXT = "old\n";
+function replacementChangeset(): Record<string, unknown> {
+  return {
+    edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+    deletions: [],
+    renames: [],
+    files: [{ file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(EDITED_TEXT) }],
+    selectedFiles: ["src/a.ts"],
+  };
+}
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
   kind: "managed-task" as const,
   canonicalRoot: "/managed/worktree",
@@ -610,7 +623,7 @@ describe("production managed worktree tools", () => {
         deploymentCeiling: "autonomous-delivery",
         liveFacts: () => FACTS,
         secureWorkspaceTextRead: {
-          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+          readText: () => Promise.resolve({ ok: true as const, text: EDITED_TEXT }),
         },
         editorAgentClient: {
           action: (action) => {
@@ -646,10 +659,7 @@ describe("production managed worktree tools", () => {
             action: "edit",
             actionId: "edit-1",
             idempotencyKey: "edit-key-1",
-            changeset: {
-              patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
-              files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
-            },
+            changeset: replacementChangeset(),
           }),
         }),
       ).resolves.toMatchObject({ status: "completed" });
@@ -993,7 +1003,7 @@ describe("production managed worktree tools", () => {
       deploymentCeiling: "autonomous-delivery",
       liveFacts: () => FACTS,
       secureWorkspaceTextRead: {
-        readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        readText: () => Promise.resolve({ ok: true as const, text: EDITED_TEXT }),
       },
       // registerMutationLease requires a coordinator once a producer binding is present (it is,
       // via liveFacts) — its absence is a silent EDIT_PREPARE_FAILED before the mocked editor
@@ -1046,10 +1056,7 @@ describe("production managed worktree tools", () => {
           action: "edit",
           actionId: "edit-1",
           idempotencyKey: "edit-key-1",
-          changeset: {
-            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
-            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
-          },
+          changeset: replacementChangeset(),
         }),
       });
       expect(action).toHaveBeenCalledOnce();

@@ -1,25 +1,30 @@
-import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPatch } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   changesetPayloadBytes,
+  EMPTY_CONTENT_SHA256,
   materializeReplacementChangeset,
   type CodingToolReplacementChangeset,
   type CodingToolReplacementEdit,
   type ReplacementMaterialization,
 } from "./codingToolReplacementEdits.js";
-import type {
-  SecureWorkspaceTextReadPort,
-  SecureWorkspaceTextReadResult,
+import {
+  secureWorkspaceTextDigest,
+  type SecureWorkspaceTextReadPort,
+  type SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 
 // #3873: replacement edits are materialized into the unified diff the governed editor path applies.
 // Every materialized patch below is applied by the real keiko-tools patch engine, so the expected
-// file text is asserted on the bytes the editor would write, not on a restated diff.
+// file text is asserted on the bytes the editor would write, not on a restated diff. Every
+// expectedContentHash is produced by the digest function the governed read reports, never by a
+// local copy of its formula (#3873 review).
 
 const roots: string[] = [];
 
@@ -27,9 +32,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
+const sha256 = secureWorkspaceTextDigest;
 
 function reader(files: Readonly<Record<string, string>>): SecureWorkspaceTextReadPort {
   return {
@@ -69,11 +72,14 @@ function workspace(root: string): WorkspaceInfo {
   };
 }
 
-/** Applies a materialized patch with the real patch engine and returns the resulting files. */
+/**
+ * Applies a materialized patch with the real patch engine and returns the resulting files; a file
+ * the patch deleted is reported as `undefined`.
+ */
 function applied(
   files: Readonly<Record<string, string>>,
   result: ReplacementMaterialization,
-): Readonly<Record<string, string>> {
+): Readonly<Record<string, string | undefined>> {
   if (result.status !== "materialized") throw new Error(`expected a patch, got ${result.status}`);
   const root = mkdtempSync(join(tmpdir(), "keiko-replacement-"));
   roots.push(root);
@@ -86,8 +92,20 @@ function applied(
     signal: new AbortController().signal,
   });
   return Object.fromEntries(
-    result.changeset.files.map(({ file }) => [file, readFileSync(join(root, file), "utf8")]),
+    result.changeset.files.map(({ file }) => [
+      file,
+      existsSync(join(root, file)) ? readFileSync(join(root, file), "utf8") : undefined,
+    ]),
   );
+}
+
+function patchOf(result: ReplacementMaterialization): string {
+  if (result.status !== "materialized") throw new Error(`expected a patch, got ${result.status}`);
+  return result.changeset.patch;
+}
+
+function refusalMessage(result: ReplacementMaterialization): string {
+  return result.status === "refused" ? result.message : "";
 }
 
 async function materialize(
@@ -154,7 +172,11 @@ describe("materializeReplacementChangeset", () => {
       { file: "a.ts", oldString: "x", newString: "y", replaceAll: true },
     ]);
 
-    expect(ambiguous).toMatchObject({ status: "refused", reasonCode: "INVALID_EDITS" });
+    expect(ambiguous).toMatchObject({
+      status: "refused",
+      reasonCode: "INVALID_EDITS",
+      refusal: "old-string-ambiguous",
+    });
     expect(ambiguous.status === "refused" ? ambiguous.message : "").toContain("matches 2 places");
     expect(applied(files, all)["a.ts"]).toBe("y = 1;\ny = 2;\n");
   });
@@ -167,6 +189,7 @@ describe("materializeReplacementChangeset", () => {
     expect(result).toEqual({
       status: "refused",
       reasonCode: "INVALID_EDITS",
+      refusal: "old-string-not-found",
       message: "oldString was not found in a.ts; copy the exact current text from a fresh read.",
     });
   });
@@ -179,6 +202,86 @@ describe("materializeReplacementChangeset", () => {
     ]);
 
     expect(applied(files, result)["a.ts"]).toBe("first\r\nmiddle\r\nsecond\r\nthird\r\n");
+  });
+
+  // #3873 review: the CRLF fallback was all-or-nothing, so a region spanning a "\r\n" line and a
+  // "\n" line could never match, and the model resent the same edit until its budget was gone.
+  // Matching is line-ending-insensitive now; each replaced line keeps the ending it had.
+  it("matches across a CRLF/LF boundary in a file with mixed endings and keeps each ending", async () => {
+    const files = { "a.ts": "one\r\ntwo\nthree\r\nfour\n" };
+
+    const result = await materialize(files, [
+      { file: "a.ts", oldString: "one\ntwo\nthree", newString: "1\n2\n3" },
+    ]);
+
+    expect(applied(files, result)["a.ts"]).toBe("1\r\n2\n3\r\nfour\n");
+  });
+
+  it("matches an oldString that kept its carriage returns and one that dropped them alike", async () => {
+    const files = { "a.ts": "alpha\r\nbeta\r\n" };
+
+    const kept = await materialize(files, [
+      { file: "a.ts", oldString: "alpha\r\nbeta", newString: "ALPHA\r\nBETA" },
+    ]);
+    const dropped = await materialize(files, [
+      { file: "a.ts", oldString: "alpha\nbeta", newString: "ALPHA\nBETA" },
+    ]);
+
+    expect(applied(files, kept)["a.ts"]).toBe("ALPHA\r\nBETA\r\n");
+    expect(applied(files, dropped)["a.ts"]).toBe("ALPHA\r\nBETA\r\n");
+  });
+
+  it("gives a line break the replacement adds the file's majority ending", async () => {
+    const crlfMajority = { "a.ts": "one\r\ntwo\r\nthree\n" };
+    const lfMajority = { "b.ts": "one\ntwo\nthree\r\n" };
+
+    const added = await materialize(crlfMajority, [
+      { file: "a.ts", oldString: "three", newString: "three\nfour" },
+    ]);
+    const addedLf = await materialize(lfMajority, [
+      { file: "b.ts", oldString: "one", newString: "zero\none" },
+    ]);
+
+    expect(applied(crlfMajority, added)["a.ts"]).toBe("one\r\ntwo\r\nthree\r\nfour\n");
+    expect(applied(lfMajority, addedLf)["b.ts"]).toBe("zero\none\ntwo\nthree\r\n");
+  });
+
+  // #3873 review: `replaceAll` built the whole result before any size check; one short edit
+  // against a 64 KB file could hold the event loop for seconds and the heap for a gigabyte. The
+  // result is projected from the match count and refused before it is built: with 20,000 matches
+  // of a 65,536-character replacement, building it would throw "Invalid string length".
+  it("refuses a replaceAll whose projected result exceeds the read ceiling without building it", async () => {
+    const files = { "a.ts": "\n".repeat(20_000) };
+
+    const result = await materialize(files, [
+      { file: "a.ts", oldString: "\n", newString: "x".repeat(65_536), replaceAll: true },
+    ]);
+
+    expect(result).toEqual({
+      status: "refused",
+      reasonCode: "LIMIT_EXCEEDED",
+      refusal: "result-too-large",
+      message: `The edits make a.ts larger than ${String(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES)} bytes, which no governed read could return; split the edits or narrow replaceAll.`,
+    });
+  });
+
+  it("refuses an edit that grows a file past the read ceiling, in bytes", async () => {
+    const files = { "a.ts": `${"x".repeat(60_000)}\nend\n` };
+
+    const grown = await materialize(files, [
+      { file: "a.ts", oldString: "end", newString: "y".repeat(6_000) },
+    ]);
+    // 4,000 two-byte characters stay under the ceiling in code units but not in bytes.
+    const wide = await materialize(files, [
+      { file: "a.ts", oldString: "end", newString: "é".repeat(4_000) },
+    ]);
+    const fitting = await materialize(files, [
+      { file: "a.ts", oldString: "end", newString: "y".repeat(5_000) },
+    ]);
+
+    expect(grown).toMatchObject({ status: "refused", refusal: "result-too-large" });
+    expect(wide).toMatchObject({ status: "refused", refusal: "result-too-large" });
+    expect(fitting.status).toBe("materialized");
   });
 
   it("keeps a missing final line break", async () => {
@@ -212,31 +315,39 @@ describe("materializeReplacementChangeset", () => {
       { "a.ts": "x\n" },
       [{ file: "a.ts", oldString: "", newString: "y\n" }],
       "INVALID_EDITS",
+      "create-over-content",
     ],
     [
       "a replacement for a file that does not exist",
       {},
       [{ file: "missing.ts", oldString: "x", newString: "y" }],
       "INVALID_EDITS",
+      "file-missing",
     ],
     [
       "identical old and new text",
       { "a.ts": "x\n" },
       [{ file: "a.ts", oldString: "x", newString: "x" }],
       "INVALID_EDITS",
+      "identical-strings",
     ],
-  ] as const)("refuses %s", async (_name, files, edits, reasonCode) => {
+  ] as const)("refuses %s", async (_name, files, edits, reasonCode, refusal) => {
     const declared = Object.keys(files).length === 0 ? { "missing.ts": undefined } : files;
     expect(await materialize(files, edits, declared)).toMatchObject({
       status: "refused",
       reasonCode,
+      refusal,
     });
   });
 
   it("refuses an edit whose file is not bound to a read digest", async () => {
     expect(
       await materialize({ "a.ts": "x\n" }, [{ file: "a.ts", oldString: "x", newString: "y" }], {}),
-    ).toMatchObject({ status: "refused", reasonCode: "PRECONDITION_REQUIRED" });
+    ).toMatchObject({
+      status: "refused",
+      reasonCode: "PRECONDITION_REQUIRED",
+      refusal: "digest-unbound",
+    });
   });
 
   it("refuses an edit bound to a stale digest", async () => {
@@ -246,7 +357,11 @@ describe("materializeReplacementChangeset", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ status: "refused", reasonCode: "CONTENT_HASH_MISMATCH" });
+    expect(result).toMatchObject({
+      status: "refused",
+      reasonCode: "CONTENT_HASH_MISMATCH",
+      refusal: "stale-digest",
+    });
   });
 
   it("refuses edits that leave the file unchanged", async () => {
@@ -255,10 +370,10 @@ describe("materializeReplacementChangeset", () => {
         { file: "a.ts", oldString: "a", newString: "b" },
         { file: "a.ts", oldString: "bb", newString: "ab" },
       ]),
-    ).toMatchObject({ status: "refused", reasonCode: "INVALID_EDITS" });
+    ).toMatchObject({ status: "refused", reasonCode: "INVALID_EDITS", refusal: "no-change" });
   });
 
-  it("reports a governed read failure other than a missing file", async () => {
+  it("reports a governed read failure other than a missing file with its closed reason", async () => {
     const denied: SecureWorkspaceTextReadPort = {
       readText: (): Promise<SecureWorkspaceTextReadResult> =>
         Promise.resolve({ ok: false, reason: "denied" }),
@@ -270,7 +385,7 @@ describe("materializeReplacementChangeset", () => {
       undefined,
     );
 
-    expect(result).toEqual({ status: "read-failed" });
+    expect(result).toEqual({ status: "read-failed", reason: "denied" });
   });
 
   it("drops declared files without edits and keeps a selection of edited ones", async () => {
@@ -291,6 +406,446 @@ describe("materializeReplacementChangeset", () => {
   });
 });
 
+// #3873 follow-up: the model cannot write a `/dev/null` diff, so `deletions` and `renames` are
+// materialized here into the full pre-image deletion and the deletion-plus-creation the patch engine
+// already applies. Every patch below is applied by the real engine, so the asserted outcome is the
+// tree the editor would leave behind, never a restated diff.
+describe("materializeReplacementChangeset deletions and renames", () => {
+  const OLD = "export const old = 1;\nexport const older = 2;\n";
+
+  function operations(
+    files: Readonly<Record<string, string | undefined>>,
+    members: Partial<CodingToolReplacementChangeset>,
+  ): CodingToolReplacementChangeset {
+    return { ...changeset(files, []), ...members };
+  }
+
+  it("deletes one file as its full pre-image bound to its read digest", async () => {
+    const files = { "src/old.ts": OLD, "src/keep.ts": "keep\n" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(files, { deletions: ["src/old.ts"] }),
+      undefined,
+    );
+
+    expect(result).toMatchObject({
+      status: "materialized",
+      changeset: {
+        files: [{ file: "src/old.ts", expectedContentHash: sha256(OLD) }],
+        selectedFiles: ["src/old.ts"],
+      },
+    });
+    expect(patchOf(result)).toBe(
+      "--- a/src/old.ts\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-export const old = 1;\n-export const older = 2;\n",
+    );
+    expect(applied(files, result)).toEqual({ "src/old.ts": undefined });
+  });
+
+  it("renames one file as a deletion of from and a creation of to with identical content", async () => {
+    const files = { "src/total.ts": LEDGER };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "src/ledger.ts": undefined },
+        { renames: [{ from: "src/total.ts", to: "src/ledger.ts" }] },
+      ),
+      undefined,
+    );
+
+    expect(result).toMatchObject({
+      status: "materialized",
+      changeset: {
+        files: [
+          { file: "src/total.ts", expectedContentHash: sha256(LEDGER) },
+          { file: "src/ledger.ts", expectedContentHash: EMPTY_CONTENT_SHA256 },
+        ],
+        selectedFiles: ["src/total.ts", "src/ledger.ts"],
+      },
+    });
+    expect(patchOf(result)).toMatch(
+      /^--- a\/src\/total\.ts\n\+\+\+ \/dev\/null\n@@ -1,5 \+0,0 @@\n(?:-.*\n){5}--- \/dev\/null\n\+\+\+ b\/src\/ledger\.ts\n@@ -0,0 \+1,5 @@\n/u,
+    );
+    expect(applied(files, result)).toEqual({ "src/total.ts": undefined, "src/ledger.ts": LEDGER });
+  });
+
+  it("applies renames before edits, so an edit addresses the moved file by its new path", async () => {
+    const files = { "src/total.ts": LEDGER };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "src/ledger.ts": undefined },
+        {
+          renames: [{ from: "src/total.ts", to: "src/ledger.ts" }],
+          edits: [
+            {
+              file: "src/ledger.ts",
+              oldString: "sum + value, 0",
+              newString: "sum + value, 0 as Cents",
+            },
+          ],
+        },
+      ),
+      undefined,
+    );
+
+    expect(applied(files, result)).toEqual({
+      "src/total.ts": undefined,
+      "src/ledger.ts": LEDGER.replace("sum + value, 0", "sum + value, 0 as Cents"),
+    });
+  });
+
+  it("orders the patch as renames, then edits, then deletions", async () => {
+    const files = { "a.ts": "a\n", "c.ts": "c\n", "d.ts": "d\n" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "b.ts": undefined },
+        {
+          deletions: ["d.ts"],
+          edits: [{ file: "c.ts", oldString: "c", newString: "C" }],
+          renames: [{ from: "a.ts", to: "b.ts" }],
+        },
+      ),
+      undefined,
+    );
+
+    const headers = patchOf(result)
+      .split("\n")
+      .filter((line) => line.startsWith("--- ") || line.startsWith("+++ "));
+    expect(headers).toEqual([
+      "--- a/a.ts",
+      "+++ /dev/null",
+      "--- /dev/null",
+      "+++ b/b.ts",
+      "--- a/c.ts",
+      "+++ b/c.ts",
+      "--- a/d.ts",
+      "+++ /dev/null",
+    ]);
+    expect(applied(files, result)).toEqual({
+      "a.ts": undefined,
+      "b.ts": "a\n",
+      "c.ts": "C\n",
+      "d.ts": undefined,
+    });
+  });
+
+  it("keeps a missing final line break through a rename and deletes a file that lacks one", async () => {
+    const files = { "a.ts": "alpha\nbeta", "d.ts": "delta" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "b.ts": undefined },
+        { renames: [{ from: "a.ts", to: "b.ts" }], deletions: ["d.ts"] },
+      ),
+      undefined,
+    );
+
+    expect(applied(files, result)).toEqual({
+      "a.ts": undefined,
+      "b.ts": "alpha\nbeta",
+      "d.ts": undefined,
+    });
+  });
+
+  it("deletes and moves empty files through hunk-free sections the engine accepts", async () => {
+    const files = { "empty.ts": "", "void.ts": "" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "moved.ts": undefined },
+        { renames: [{ from: "empty.ts", to: "moved.ts" }], deletions: ["void.ts"] },
+      ),
+      undefined,
+    );
+
+    expect(patchOf(result)).toBe(
+      "--- a/empty.ts\n+++ /dev/null\n--- /dev/null\n+++ b/moved.ts\n--- a/void.ts\n+++ /dev/null\n",
+    );
+    expect(applied(files, result)).toEqual({
+      "empty.ts": undefined,
+      "moved.ts": "",
+      "void.ts": undefined,
+    });
+  });
+
+  it.each([
+    [
+      "an edit addressed to a path renamed away in the same call",
+      {
+        renames: [{ from: "a.ts", to: "b.ts" }],
+        edits: [{ file: "a.ts", oldString: "a", newString: "A" }],
+      },
+      "path-conflict",
+      "a.ts no longer exists after the renames in this call; address its edits to b.ts.",
+    ],
+    [
+      "a deletion of a path renamed away in the same call",
+      { renames: [{ from: "a.ts", to: "b.ts" }], deletions: ["a.ts"] },
+      "path-conflict",
+      "a.ts no longer exists after the renames in this call.",
+    ],
+    [
+      "a rename whose target is also deleted",
+      { renames: [{ from: "a.ts", to: "b.ts" }], deletions: ["b.ts"] },
+      "path-conflict",
+      "b.ts is named more than once in this call.",
+    ],
+    [
+      "two renames with the same target",
+      {
+        renames: [
+          { from: "a.ts", to: "b.ts" },
+          { from: "c.ts", to: "b.ts" },
+        ],
+      },
+      "path-conflict",
+      "b.ts is named more than once in this call.",
+    ],
+    [
+      "a rename chained through another rename's target",
+      {
+        renames: [
+          { from: "a.ts", to: "b.ts" },
+          { from: "b.ts", to: "c.ts" },
+        ],
+      },
+      "path-conflict",
+      "b.ts is named more than once in this call.",
+    ],
+    [
+      "a rename to the same path",
+      { renames: [{ from: "a.ts", to: "a.ts" }] },
+      "path-conflict",
+      "a.ts is renamed to itself.",
+    ],
+    [
+      "a duplicate deletion",
+      { deletions: ["d.ts", "d.ts"] },
+      "path-conflict",
+      "d.ts is named more than once in this call.",
+    ],
+    [
+      "a deletion of a file that is also edited",
+      { deletions: ["c.ts"], edits: [{ file: "c.ts", oldString: "c", newString: "C" }] },
+      "path-conflict",
+      "c.ts is both edited and deleted in this call; drop one of them.",
+    ],
+    [
+      "a changeset that changes nothing",
+      { edits: [], deletions: [], renames: [] },
+      "no-change",
+      "The changeset changes nothing; add an edit, a rename or a deletion.",
+    ],
+  ] as const)("refuses %s before reading any file", async (_name, members, refusal, message) => {
+    const files = { "a.ts": "a\n", "c.ts": "c\n", "d.ts": "d\n" };
+    let reads = 0;
+    const counting = reader(files);
+    const read = {
+      readText: (
+        request: Parameters<typeof counting.readText>[0],
+      ): Promise<SecureWorkspaceTextReadResult> => {
+        reads += 1;
+        return counting.readText(request);
+      },
+    };
+
+    const result = await materializeReplacementChangeset(
+      read,
+      operations({ ...files, "b.ts": undefined }, members),
+      undefined,
+    );
+
+    expect(result).toEqual({ status: "refused", reasonCode: "INVALID_EDITS", refusal, message });
+    expect(reads).toBe(0);
+  });
+
+  it("refuses a rename target that already exists", async () => {
+    const files = { "a.ts": "a\n", "b.ts": "" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(files, { renames: [{ from: "a.ts", to: "b.ts" }] }),
+      undefined,
+    );
+
+    expect(result).toEqual({
+      status: "refused",
+      reasonCode: "INVALID_EDITS",
+      refusal: "target-exists",
+      message: "b.ts already exists; a rename target must be a new path.",
+    });
+  });
+
+  it("refuses a deletion of a file that does not exist", async () => {
+    const result = await materializeReplacementChangeset(
+      reader({}),
+      operations({ "gone.ts": undefined }, { deletions: ["gone.ts"] }),
+      undefined,
+    );
+
+    expect(result).toEqual({
+      status: "refused",
+      reasonCode: "INVALID_EDITS",
+      refusal: "file-missing",
+      message: "gone.ts does not exist.",
+    });
+  });
+
+  it.each([
+    ["a deleted file", { deletions: ["a.ts"] }, "a.ts"],
+    ["a rename source", { renames: [{ from: "a.ts", to: "b.ts" }] }, "a.ts"],
+  ] as const)(
+    "requires %s to be listed in files with its read digest",
+    async (_name, members, file) => {
+      const result = await materializeReplacementChangeset(
+        reader({ "a.ts": "a\n" }),
+        operations({ "b.ts": undefined }, members),
+        undefined,
+      );
+
+      expect(result).toEqual({
+        status: "refused",
+        reasonCode: "PRECONDITION_REQUIRED",
+        refusal: "digest-unbound",
+        message: `List ${file} in files with the digest from its latest keiko_workspace_read.`,
+      });
+    },
+  );
+
+  it("requires a rename target to be listed in files with the empty-content digest", async () => {
+    const files = { "a.ts": "a\n" };
+    const missing = await materializeReplacementChangeset(
+      reader(files),
+      operations(files, { renames: [{ from: "a.ts", to: "b.ts" }] }),
+      undefined,
+    );
+    const wrongDigest = await materializeReplacementChangeset(
+      reader(files),
+      operations({ ...files, "b.ts": "not empty\n" }, { renames: [{ from: "a.ts", to: "b.ts" }] }),
+      undefined,
+    );
+
+    expect(missing).toMatchObject({
+      status: "refused",
+      reasonCode: "PRECONDITION_REQUIRED",
+      refusal: "digest-unbound",
+    });
+    expect(wrongDigest).toMatchObject({
+      status: "refused",
+      reasonCode: "CONTENT_HASH_MISMATCH",
+      refusal: "stale-digest",
+    });
+    for (const result of [missing, wrongDigest]) {
+      expect(refusalMessage(result)).toBe(
+        `List b.ts in files with the empty-content SHA-256 ${EMPTY_CONTENT_SHA256}; a rename target is a new file.`,
+      );
+    }
+  });
+
+  it("refuses a stale digest on a deleted file and on a rename source", async () => {
+    const stale = sha256("original\n");
+    const read = reader({ "a.ts": "changed\n", "d.ts": "changed\n" });
+
+    const deletion = await materializeReplacementChangeset(
+      read,
+      { edits: [], deletions: ["d.ts"], files: [{ file: "d.ts", expectedContentHash: stale }] },
+      undefined,
+    );
+    const rename = await materializeReplacementChangeset(
+      read,
+      {
+        edits: [],
+        renames: [{ from: "a.ts", to: "b.ts" }],
+        files: [
+          { file: "a.ts", expectedContentHash: stale },
+          { file: "b.ts", expectedContentHash: EMPTY_CONTENT_SHA256 },
+        ],
+      },
+      undefined,
+    );
+
+    expect(deletion).toMatchObject({ status: "refused", reasonCode: "CONTENT_HASH_MISMATCH" });
+    expect(rename).toMatchObject({ status: "refused", reasonCode: "CONTENT_HASH_MISMATCH" });
+  });
+
+  it.each([
+    ["a rename target", { renames: [{ from: "a.ts", to: "b.ts" }] }, ["a.ts"], "b.ts"],
+    ["a rename source", { renames: [{ from: "a.ts", to: "b.ts" }] }, ["b.ts"], "a.ts"],
+    ["a deleted file", { deletions: ["d.ts"] }, ["a.ts"], "d.ts"],
+    [
+      "an edited file",
+      { edits: [{ file: "c.ts", oldString: "c", newString: "C" }] },
+      ["a.ts"],
+      "c.ts",
+    ],
+  ] as const)(
+    "refuses %s missing from a supplied selectedFiles instead of applying a partial call",
+    async (_name, members, selectedFiles, missing) => {
+      const files = { "a.ts": "a\n", "c.ts": "c\n", "d.ts": "d\n" };
+
+      const result = await materializeReplacementChangeset(
+        reader(files),
+        operations({ ...files, "b.ts": undefined }, { ...members, selectedFiles }),
+        undefined,
+      );
+
+      expect(result).toEqual({
+        status: "refused",
+        reasonCode: "INVALID_EDITS",
+        refusal: "selection-gap",
+        message: `List ${missing} in selectedFiles.`,
+      });
+    },
+  );
+
+  it("reports a governed read failure for a rename target other than a missing file", async () => {
+    const denied: SecureWorkspaceTextReadPort = {
+      readText: ({ relativePath }): Promise<SecureWorkspaceTextReadResult> =>
+        Promise.resolve(
+          relativePath === "a.ts" ? { ok: true, text: "a\n" } : { ok: false, reason: "busy" },
+        ),
+    };
+
+    const result = await materializeReplacementChangeset(
+      denied,
+      operations({ "a.ts": "a\n", "b.ts": undefined }, { renames: [{ from: "a.ts", to: "b.ts" }] }),
+      undefined,
+    );
+
+    expect(result).toEqual({ status: "read-failed", reason: "busy" });
+  });
+
+  // A rename carries the whole file twice; the 65,536-byte changeset cap (ADR-0125 D3) still binds
+  // the materialized patch, and the model is told so instead of receiving an opaque prepare failure.
+  it("refuses a materialized changeset over the patch byte cap with LIMIT_EXCEEDED", async () => {
+    const large = `${"x".repeat(1_023)}\n`.repeat(40);
+    const files = { "large.ts": large };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "moved.ts": undefined },
+        { renames: [{ from: "large.ts", to: "moved.ts" }] },
+      ),
+      undefined,
+    );
+
+    expect(result).toEqual({
+      status: "refused",
+      reasonCode: "LIMIT_EXCEEDED",
+      refusal: "patch-too-large",
+      message: `The materialized changeset exceeds ${String(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)} bytes; split it into smaller calls.`,
+    });
+  });
+});
+
 describe("changesetPayloadBytes", () => {
   it("counts a patch and the replacement text of both edit forms", () => {
     expect(changesetPayloadBytes({ patch: "--- a/x\n", files: [] })).toBe(8);
@@ -300,5 +855,16 @@ describe("changesetPayloadBytes", () => {
         files: [],
       }),
     ).toBe(4);
+  });
+
+  it("counts the paths a deletion or rename carries", () => {
+    expect(
+      changesetPayloadBytes({
+        edits: [],
+        deletions: ["ab"],
+        renames: [{ from: "cde", to: "f" }],
+        files: [],
+      }),
+    ).toBe(6);
   });
 });

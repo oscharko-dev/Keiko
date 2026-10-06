@@ -45,7 +45,13 @@ import {
   createGatewayToolCatalogBridge,
   retainMeasuredCatalogFailureUsage,
 } from "./toolCatalogBridge.js";
-import { bindNormalizedToolCalls, normalizeChatResponse, textFromContent } from "./normalize.js";
+import {
+  bindNormalizedToolCalls,
+  normalizeChatResponse,
+  reasoningOfChatPayload,
+  reasoningText,
+  textFromContent,
+} from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import {
@@ -294,6 +300,11 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
     },
+    // #3878: how much model reasoning (`reasoning_content`) the read carried: the provider events
+    // that held some and its UTF-8 size. Counts only — the reasoning is a body and never enters the
+    // log. `required: false`: records written before this field existed lack both.
+    reasoningEvents: { type: "integer", dataClass: "count", required: false },
+    reasoningBytes: { type: "integer", dataClass: "count", required: false },
   },
   diagnosticWhen: [
     { field: "outcome", values: ["stalled", "failed"] },
@@ -686,6 +697,13 @@ function deltaFromChunk(chunk: unknown): string | undefined {
   return content.length > 0 ? content : undefined;
 }
 
+// #3878: the model reasoning a streaming chunk carries (`delta.reasoning_content`), kept apart from
+// its answer text, when present.
+function reasoningFromChunk(chunk: unknown): string | undefined {
+  const choice = firstStreamChoice(chunk);
+  return choice !== undefined && isRecord(choice.delta) ? reasoningText(choice.delta) : undefined;
+}
+
 function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
   const choice = firstStreamChoice(chunk);
   const raw = choice?.finish_reason;
@@ -889,6 +907,7 @@ function redactResponse(
     content: redact(response.content, secrets),
     toolCalls: response.toolCalls.map((call) => redactToolCall(call, secrets)),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
+    ...(response.reasoning === undefined ? {} : { reasoning: redact(response.reasoning, secrets) }),
   };
 }
 
@@ -1276,18 +1295,15 @@ function mapOutboundEgressError(
   );
 }
 
-// Appends a chunk's content delta onto the accumulated response and the
-// held-back suffix buffer, then yields the prefix that is now provably safe
-// to emit (i.e. no longer a possible prefix of a configured secret).
+// Appends a delta onto its lane's held-back suffix buffer, then yields the prefix that is now
+// provably safe to emit (i.e. no longer a possible prefix of a configured secret).
 function* emitRedactedDelta(
-  content: string,
+  text: string,
   buffer: { pending: string },
   activeSecrets: readonly string[],
   secrets: readonly string[],
-  acc: { content: string },
 ): Generator<string> {
-  acc.content += content;
-  buffer.pending += content;
+  buffer.pending += text;
   const holdLength = longestSecretPrefixSuffix(buffer.pending, activeSecrets);
   if (buffer.pending.length === holdLength) {
     return;
@@ -1298,8 +1314,58 @@ function* emitRedactedDelta(
   yield redact(emitNow, secrets);
 }
 
+type StreamTextChunk = Exclude<GatewayStreamChunk, { readonly type: "done" }>;
+
+// The two text lanes of one streamed answer (#3878): the model's reasoning and the answer itself.
+// Each holds back its own possible secret prefix, so a secret split across two deltas of one lane is
+// redacted whole and the lanes never mix.
+interface StreamTextLanes {
+  readonly reasoning: { pending: string };
+  readonly content: { pending: string };
+}
+
+interface StreamSecrets {
+  readonly active: readonly string[];
+  readonly all: readonly string[];
+}
+
+function* redactedLaneChunks(
+  type: StreamTextChunk["type"],
+  text: string,
+  lane: { pending: string },
+  secrets: StreamSecrets,
+): Generator<StreamTextChunk> {
+  for (const token of emitRedactedDelta(text, lane, secrets.active, secrets.all)) {
+    yield { type, token };
+  }
+}
+
+// The reasoning and the answer text one provider event carries, as redacted chunks: the reasoning
+// first, since it led to the answer it arrived with.
+function* textChunksOf(
+  chunk: unknown,
+  lanes: StreamTextLanes,
+  secrets: StreamSecrets,
+  acc: StreamAccumulator,
+  report: StreamReport,
+): Generator<StreamTextChunk> {
+  const reasoning = reasoningFromChunk(chunk);
+  if (reasoning !== undefined) {
+    acc.reasoning += reasoning;
+    recordReasoning(report, reasoning);
+    yield* redactedLaneChunks("reasoning", reasoning, lanes.reasoning, secrets);
+  }
+  const content = deltaFromChunk(chunk);
+  if (content !== undefined) {
+    acc.content += content;
+    yield* redactedLaneChunks("delta", content, lanes.content, secrets);
+  }
+}
+
 interface StreamAccumulator {
   content: string;
+  // #3878: the raw reasoning, assembled like the content so the answer normalizes it once.
+  reasoning: string;
   refusal: string;
   finishReason: FinishReason;
   sawFinishReason: boolean;
@@ -1314,6 +1380,7 @@ interface StreamAccumulator {
 function newStreamAccumulator(): StreamAccumulator {
   return {
     content: "",
+    reasoning: "",
     refusal: "",
     finishReason: "stop",
     sawFinishReason: false,
@@ -1338,6 +1405,7 @@ function streamedPayload(acc: StreamAccumulator): Record<string, unknown> {
   const message = {
     role: "assistant",
     content: acc.content,
+    ...(acc.reasoning.length > 0 ? { reasoning_content: acc.reasoning } : {}),
     ...(acc.refusal.length > 0 ? { refusal: acc.refusal } : {}),
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   };
@@ -1361,10 +1429,34 @@ interface StreamReport {
   firstDataMs: number | undefined;
   maxGapMs: number;
   lastDataMs: number;
+  // #3878: the provider events that carried reasoning and its UTF-8 size; counts, never the text.
+  reasoningEvents: number;
+  reasoningBytes: number;
 }
 
 function newStreamReport(): StreamReport {
-  return { elapsed: logTimer(), dataEvents: 0, firstDataMs: undefined, maxGapMs: 0, lastDataMs: 0 };
+  return {
+    elapsed: logTimer(),
+    dataEvents: 0,
+    firstDataMs: undefined,
+    maxGapMs: 0,
+    lastDataMs: 0,
+    reasoningEvents: 0,
+    reasoningBytes: 0,
+  };
+}
+
+const UTF8 = new TextEncoder();
+
+function recordReasoning(report: StreamReport, reasoning: string): void {
+  report.reasoningEvents += 1;
+  report.reasoningBytes += UTF8.encode(reasoning).byteLength;
+}
+
+// A whole body answers in one event, so the reasoning it carries counts as one.
+function recordWholeBodyReasoning(report: StreamReport, payload: unknown): void {
+  const reasoning = reasoningOfChatPayload(payload);
+  if (reasoning !== undefined) recordReasoning(report, reasoning);
 }
 
 function recordDataEvent(report: StreamReport): void {
@@ -1404,6 +1496,8 @@ function streamReadFields(
   readonly maxGapMs: number;
   readonly silenceMs: number;
   readonly readBudgetMs?: number;
+  readonly reasoningEvents: number;
+  readonly reasoningBytes: number;
 } {
   return {
     modelId: logModelId(read.config.modelId),
@@ -1413,6 +1507,8 @@ function streamReadFields(
     maxGapMs: report.maxGapMs,
     silenceMs: read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS,
     ...(read.bounds === undefined ? {} : { readBudgetMs: read.bounds.budgetMs }),
+    reasoningEvents: report.reasoningEvents,
+    reasoningBytes: report.reasoningBytes,
   };
 }
 
@@ -1444,6 +1540,17 @@ function* flushPendingBuffer(
     return;
   }
   yield redact(buffer.pending, secrets);
+}
+
+// Both lanes' held-back suffixes once the stream ends, the reasoning first.
+function* flushedLanes(
+  lanes: StreamTextLanes,
+  secrets: readonly string[],
+): Generator<StreamTextChunk> {
+  for (const token of flushPendingBuffer(lanes.reasoning, secrets)) {
+    yield { type: "reasoning", token };
+  }
+  for (const token of flushPendingBuffer(lanes.content, secrets)) yield { type: "delta", token };
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
@@ -1546,8 +1653,9 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
   };
 
-  // Reads the SSE stream into `acc`, yielding redacted content tokens. A suffix that matches the
-  // start of a configured secret is held until the next delta proves it safe or completes the
+  // Reads the SSE stream into `acc`, yielding redacted answer tokens as `delta` chunks and the
+  // model's reasoning as `reasoning` chunks (#3878). A suffix that matches the start of a
+  // configured secret is held until the next delta of its lane proves it safe or completes the
   // secret so redaction can match it. The wait for every data event is bounded (the read's silence
   // bound, or STREAM_IDLE_TIMEOUT_MS without bounds), and an error frame inside the stream ends it
   // with the failure it reports.
@@ -1556,9 +1664,9 @@ export class OpenAiAdapter implements ProviderAdapter {
     read: StreamRead,
     acc: StreamAccumulator,
     report: StreamReport,
-  ): AsyncGenerator<string> {
-    const buffer = { pending: "" };
-    const activeSecrets = configuredSecrets(read.secrets);
+  ): AsyncGenerator<StreamTextChunk> {
+    const lanes: StreamTextLanes = { reasoning: { pending: "" }, content: { pending: "" } };
+    const secrets: StreamSecrets = { active: configuredSecrets(read.secrets), all: read.secrets };
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
     const completion = { sawDone: false };
     try {
@@ -1567,10 +1675,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       })) {
         recordDataEvent(report);
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
-        const content = deltaFromChunk(chunk);
-        if (content !== undefined) {
-          yield* emitRedactedDelta(content, buffer, activeSecrets, read.secrets, acc);
-        }
+        yield* textChunksOf(chunk, lanes, secrets, acc, report);
         applyChunkMetadata(chunk, acc);
       }
       // An explicit provider refusal must retain its refusal class even if the stream then closes.
@@ -1581,7 +1686,7 @@ export class OpenAiAdapter implements ProviderAdapter {
           read.secrets,
         );
       }
-      yield* flushPendingBuffer(buffer, read.secrets);
+      yield* flushedLanes(lanes, read.secrets);
     } catch (error) {
       throw this.withPartialUsage(
         this.mapStreamError(error, read.config, read.secrets, read.signal),
@@ -1597,9 +1702,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const acc = newStreamAccumulator();
     const report = newStreamReport();
     try {
-      for await (const token of this.streamDeltas(response, read, acc, report)) {
-        yield { type: "delta", token };
-      }
+      yield* this.streamDeltas(response, read, acc, report);
     } catch (error) {
       this.logStreamRead(read, report, streamReadOutcome(error), error);
       throw error;
@@ -1620,7 +1723,9 @@ export class OpenAiAdapter implements ProviderAdapter {
       this.logStreamRead(read, report, streamReadOutcome(error), error);
       throw error;
     }
+    recordWholeBodyReasoning(report, payload);
     const answer = this.settledAnswer(read, report, "whole-body", payload);
+    if (answer.reasoning !== undefined) yield { type: "reasoning", token: answer.reasoning };
     if (answer.content.length > 0) yield { type: "delta", token: answer.content };
     yield { type: "done", response: answer };
   }

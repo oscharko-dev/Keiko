@@ -402,8 +402,9 @@ describe("coding-sidecar gateway", () => {
 
   // #3873 review: the outage window is an explicit request signal that only this route sets, on its
   // buffered AND its streamed model calls; the commit draft borrows the latency profile alone. The
-  // coding profile does not stream upstream today (`supportsStreaming: false`), so a streamed
-  // request is answered as buffered SSE: whichever gateway call serves the turn carries the policy.
+  // coding profile streams upstream wherever the capability streams and `codingStreaming` is not
+  // "off" (lab ledger F2), so the streamed case here is answered live through `chatStream()` and the
+  // buffered one through `chat()`: whichever gateway call serves the turn carries the policy.
   it.each([
     { label: "buffered", stream: false },
     { label: "streamed", stream: true },
@@ -946,7 +947,9 @@ describe("coding-sidecar gateway", () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
-      ["keiko_changeset_edit", "4120cf67cf3f10c1a023a460f20f9282f744abfed6361876933fd76f02d07859"],
+      // #3873 follow-up: deletions and renames joined the replacement changeset (regenerated from
+      // the producer with projectedGatewaySchema; a schema change here is deliberate, never typed).
+      ["keiko_changeset_edit", "a88e907c1c4f7f955dccfa4d960e10f315a59a1f94b16cedc223f2a47bf4abf6"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
@@ -3225,7 +3228,8 @@ describe("coding-sidecar gateway", () => {
       profileId: "coding-safe-openai-compatible",
       modelAlias: "azure-coding-model",
       localEndpointPath: "/api/coding-sidecar/gateway",
-      supportsStreaming: false,
+      // Lab ledger F2: the fixture capability streams, so the profile streams by default.
+      supportsStreaming: true,
       supportsToolCalling: true,
     });
     expect(JSON.stringify(result)).not.toContain("baseUrl");
@@ -6056,5 +6060,404 @@ describe("admittedOutputTokens", () => {
       8_000,
     );
     expect(admittedOutputTokens({ maxPromptTokens: 128_000, maxOutputTokens: 4 }, 10)).toBe(4);
+  });
+});
+
+const sseData = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
+const sseDelta = (delta: Readonly<Record<string, unknown>>): string =>
+  sseData({ choices: [{ index: 0, delta }] });
+const sseFinish = (reason: string): string =>
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: reason }] });
+
+interface DrivenProviderStream {
+  readonly response: Response;
+  readonly push: (line: string) => void;
+  readonly end: () => void;
+}
+
+// A provider SSE answer the test writes line by line; it stays open until the test ends it.
+function drivenProviderStream(): DrivenProviderStream {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(started): void {
+      controller = started;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    push: (line): void => {
+      controller?.enqueue(encoder.encode(line));
+    },
+    end: (): void => {
+      controller?.close();
+    },
+  };
+}
+
+function providerSse(lines: readonly string[]): Response {
+  const stream = drivenProviderStream();
+  for (const line of lines) stream.push(line);
+  stream.end();
+  return stream.response;
+}
+
+function sseFrames(body: string): readonly unknown[] {
+  return body
+    .trim()
+    .split("\n\n")
+    .filter((frame) => frame.startsWith("data: ") && frame !== "data: [DONE]")
+    .map((frame) => JSON.parse(frame.slice("data: ".length)) as unknown);
+}
+
+function isDeltaRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && Object.keys(value).length > 0;
+}
+
+function frameDeltas(body: string): readonly Readonly<Record<string, unknown>>[] {
+  return sseFrames(body).flatMap((frame) => {
+    const choices = (frame as { readonly choices?: readonly { readonly delta?: unknown }[] })
+      .choices;
+    const delta = choices?.[0]?.delta;
+    return isDeltaRecord(delta) ? [delta] : [];
+  });
+}
+
+function liveTurnContext(response: ReturnType<typeof mockResponse>): RouteContext {
+  return {
+    ...authenticatedContext({
+      model: "coding",
+      stream: true,
+      messages: [{ role: "user", content: "fix the parser" }],
+      tools: modelVisibleTools(),
+    }),
+    res: response.res,
+  };
+}
+
+function liveDeps(runId: string, config: Partial<GatewayConfig> = {}): UiHandlerDeps {
+  return {
+    ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId } })),
+    config: { ...configValue(provider(), capability()), ...config },
+  };
+}
+
+// Lab ledger F2 (#3873): the sidecar profile was hard-coded as non-streaming, so even a provider that
+// streams (`chat.response.streamed dataEvents=2571` in the live run) reached OpenCode as one buffered
+// frame (`sse.stream.closed frameCount=5`) and a slow model showed only "Working". Owner decision
+// 2026-10-06: live by default wherever the model streams; `codingStreaming: "off"` opts out.
+describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  it("forwards each provider delta to the coding runtime before the provider has finished", async () => {
+    resetGatewayInstanceCacheForTests();
+    const upstream = drivenProviderStream();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(upstream.response)),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const pending = handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-live"),
+    );
+    upstream.push(sseDelta({ role: "assistant", content: "First " }));
+    await vi.waitFor(() => {
+      expect(response.body()).toContain('"content":"First "');
+    });
+    upstream.push(sseDelta({ content: "second." }));
+    upstream.push(sseFinish("stop"));
+    upstream.push("data: [DONE]\n\n");
+    upstream.end();
+
+    expect(await pending).toBe(STREAMING);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { content: "First " },
+      { content: "second." },
+    ]);
+    expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("keeps a silent live turn's connection alive with SSE comments, as the buffered answer did", async () => {
+    vi.useFakeTimers();
+    try {
+      let release = (): void => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const response = mockResponse({ captureBody: true });
+      const deps = runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-silent" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await gate;
+            yield { type: "delta", token: "late" };
+            yield {
+              type: "done",
+              response: { ...assistantResponse("azure-coding-model"), content: "late" },
+            };
+          },
+      );
+
+      const pending = handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(response.body()).toContain(": keep-alive");
+      release();
+
+      expect(await pending).toBe(STREAMING);
+      expect(frameDeltas(response.body())).toEqual([{ role: "assistant" }, { content: "late" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the buffered answer when the operator switched coding streaming off", async () => {
+    resetGatewayInstanceCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          providerSse([
+            sseDelta({ content: "First " }),
+            sseDelta({ content: "second." }),
+            sseFinish("stop"),
+            "data: [DONE]\n\n",
+          ]),
+        ),
+      ),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-buffered", { codingStreaming: "off" }),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { content: "First second." },
+    ]);
+  });
+});
+
+// #3878: the model's reasoning (`reasoning_content`) reaches OpenCode as `delta.reasoning_content`,
+// the field its OpenAI-compatible provider turns into a reasoning part, and the log records only
+// its share of the turn, never its text.
+describe("coding sidecar gateway model reasoning (#3878)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const REASONING_DELTAS = ["Prüfe ", "den Randfall."] as const;
+  const CONTENT_DELTAS = ["Asking ", "first."] as const;
+
+  function reasonedProviderAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: REASONING_DELTAS[0] }),
+      sseDelta({ reasoning_content: REASONING_DELTAS[1] }),
+      sseDelta({ content: CONTENT_DELTAS[0] }),
+      sseDelta({ content: CONTENT_DELTAS[1] }),
+      sseDelta({
+        tool_calls: [
+          {
+            index: 0,
+            id: "call-q",
+            type: "function",
+            function: { name: "question", arguments: "" },
+          },
+        ],
+      }),
+      sseDelta({ tool_calls: [{ index: 0, function: { arguments: '{"questions":[]}' } }] }),
+      sseFinish("tool_calls"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 120,
+          completion_tokens_details: { reasoning_tokens: 96 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  const utf8 = (value: string): number => Buffer.byteLength(value, "utf8");
+
+  it("records the turn's content, reasoning and tool-call share on usage-settled", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(reasonedProviderAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-reasoning-share"),
+    );
+
+    expect(result).toBe(STREAMING);
+    const settled = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.usage-settled",
+    );
+    expect(settled?.extra).toMatchObject({
+      completionTokens: 120,
+      contentBytes: utf8(CONTENT_DELTAS.join("")),
+      reasoningBytes: utf8(REASONING_DELTAS.join("")),
+      reasoningTokens: 96,
+    });
+    expect(utf8(REASONING_DELTAS.join(""))).toBe(20);
+    expect(utf8(CONTENT_DELTAS.join(""))).toBe(13);
+    // Answer text, tool call and structured output together; the tool call is the difference.
+    expect(Number(settled?.extra?.outputBytes)).toBeGreaterThan(13 + "question".length);
+    expectActivityLogProof(
+      "coding-sidecar.gateway.usage-settled.line",
+      formatActivityLogProofLine(settled ?? {}),
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "accepted", reasoningFrames: 2 });
+    expect(JSON.stringify(sink.events)).not.toContain("Randfall");
+  });
+
+  it("forwards reasoning as reasoning_content frames ahead of the answer and its tool call", async () => {
+    resetGatewayInstanceCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(reasonedProviderAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-reasoning-frames"),
+    );
+
+    const deltas = frameDeltas(response.body());
+    expect(deltas.slice(0, 5)).toEqual([
+      { role: "assistant" },
+      { reasoning_content: REASONING_DELTAS[0] },
+      { reasoning_content: REASONING_DELTAS[1] },
+      { content: CONTENT_DELTAS[0] },
+      { content: CONTENT_DELTAS[1] },
+    ]);
+    expect(deltas[5]).toMatchObject({
+      tool_calls: [{ index: 0, id: "call-q", type: "function", function: { name: "question" } }],
+    });
+    expect(
+      deltas.some((delta) => "content" in delta && String(delta.content).includes("Prüfe")),
+    ).toBe(false);
+  });
+
+  it("discards the reasoning but keeps its counts when the operator switched the display off", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(reasonedProviderAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-reasoning-off", { codingReasoningDisplay: "off" }),
+    );
+
+    expect(response.body()).not.toContain("reasoning_content");
+    expect(response.body()).not.toContain("Randfall");
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({ reasoningBytes: 20, reasoningTokens: 96, contentBytes: 13 });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "accepted", reasoningFrames: 0 });
+    expect(
+      sink.events.find((event) => event.op === "gateway.stream.completed")?.extra,
+    ).toMatchObject({ reasoningDisposition: "discarded", reasoningBytes: 20 });
+  });
+
+  it("forwards the reasoning of a buffered answer in its one frame and in a JSON answer", async () => {
+    const reasoned: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "Fixed.",
+      reasoning: "Weigh the edge case.",
+    };
+    const chatFactory =
+      (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+        Promise.resolve(reasoned);
+    const streamed = mockResponse({ captureBody: true });
+    const sink = captureServerLog("info");
+
+    await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(streamed),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-buffered-reasoning" } }),
+        chatFactory,
+      ),
+    );
+    const json = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix it" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-json-reasoning" } }),
+        chatFactory,
+      ),
+    );
+
+    expect(frameDeltas(streamed.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Weigh the edge case.", content: "Fixed." },
+    ]);
+    assertRouteResult(json);
+    expect(json.body).toMatchObject({
+      choices: [{ message: { content: "Fixed.", reasoning_content: "Weigh the edge case." } }],
+    });
+    const outcomes = sink.events.filter((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcomes.map((event) => event.extra?.reasoningFrames)).toEqual([1, 1]);
+    expect(JSON.stringify(sink.events)).not.toContain("edge case");
+  });
+
+  it("ends a turn whose forwarded reasoning outgrows the output allowance as output-limit", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const endless = "r".repeat(1_000_000);
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-reasoning-limit" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) =>
+        async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          yield { type: "reasoning", token: endless };
+          yield { type: "delta", token: "never sent" };
+          yield { type: "done", response: assistantResponse("azure-coding-model") };
+        },
+    );
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).not.toContain("never sent");
+    expect(response.body()).not.toContain(endless.slice(0, 64));
+    expect(response.body()).toContain('"finish_reason":"length"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "output-limit", reasoningFrames: 0 });
   });
 });

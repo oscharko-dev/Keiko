@@ -225,7 +225,7 @@ function applyPromptTokenSettlement(
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
 const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
-const BUFFERED_STREAM_HEARTBEAT_MS = 5_000;
+const SIDECAR_SSE_HEARTBEAT_MS = 5_000;
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
 // judgeable once the replayed history holds the two system messages, the task prompt, and three
@@ -554,6 +554,14 @@ const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperatio
       required: true,
       values: ["provider-reported", "streamed-byte-estimate", "output-byte-estimate"],
     },
+    // #3878: the turn's share of visible text and model reasoning, as counts beside `outputBytes`
+    // (answer text, tool calls and structured output together): the UTF-8 size of the answer text,
+    // of the reasoning the provider returned (also when it was not forwarded), and the provider's
+    // own reasoning-token count when it reports one, never an estimate. Never the text itself.
+    // `required: false`: lines written before these fields existed lack them.
+    contentBytes: { type: "integer", dataClass: "count", required: false },
+    reasoningBytes: { type: "integer", dataClass: "count", required: false },
+    reasoningTokens: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -582,6 +590,9 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     },
     completionTokens: { type: "integer", dataClass: "count", required: true },
     outputBytes: { type: "integer", dataClass: "count", required: true },
+    // #3878: the frames (or the one buffered answer) that carried model reasoning to the coding
+    // runtime; 0 when the answer had none or the reasoning display is off. A count only.
+    reasoningFrames: { type: "integer", dataClass: "count", required: false },
     // The route backstop armed for this turn (#3602 review); absent on lines written before 1.1.7.
     deadlineMs: { type: "integer", dataClass: "duration", required: false },
     // On a cancelled outcome only: which armed abort source ended the turn, so a stall that ran into
@@ -1319,6 +1330,8 @@ function openAiResponse(modelId: string, response: NormalizedResponse): RouteRes
           message: {
             role: "assistant",
             content: response.content,
+            // #3878: the field OpenCode's OpenAI-compatible provider reads as a reasoning part.
+            ...(response.reasoning === undefined ? {} : { reasoning_content: response.reasoning }),
             ...(response.toolCalls.length === 0
               ? {}
               : { tool_calls: openAiToolCalls(response.toolCalls) }),
@@ -1419,15 +1432,29 @@ function gatewayOutcomeCancellationCause(
   return { cancellationCause: cancellation.cause() ?? "client-disconnect" };
 }
 
+/** What a turn handed the coding runtime, as counts for its outcome line. */
+interface GatewayOutcomeMetrics {
+  readonly completionTokens: number;
+  readonly outputBytes: number;
+  /** Frames (or the one buffered answer) that carried model reasoning to the runtime (#3878). */
+  readonly reasoningFrames: number;
+}
+
+const NO_GATEWAY_OUTPUT: GatewayOutcomeMetrics = {
+  completionTokens: 0,
+  outputBytes: 0,
+  reasoningFrames: 0,
+};
+
 function recordGatewayOutcome(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   cancellation: GatewayRequestCancellation,
   outcome: CodingSidecarGatewayRunOutcome,
-  completionTokens: number,
-  outputBytes: number,
+  metrics: GatewayOutcomeMetrics,
 ): void {
+  const { completionTokens, outputBytes } = metrics;
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
@@ -1437,6 +1464,7 @@ function recordGatewayOutcome(
         outcome,
         completionTokens,
         outputBytes,
+        reasoningFrames: metrics.reasoningFrames,
         deadlineMs: cancellation.deadlineMs,
         ...gatewayOutcomeCancellationCause(cancellation, outcome),
         completeness: "complete",
@@ -2535,7 +2563,7 @@ function settleUndeliverableBufferedStream(
   dispatch: GatewayChatDispatchContext,
 ): typeof STREAMING {
   const { deps, runId, cancellation, promptTokenReservation } = dispatch;
-  recordGatewayOutcome(ctx, deps, runId, cancellation, "cancelled", 0, 0);
+  recordGatewayOutcome(ctx, deps, runId, cancellation, "cancelled", NO_GATEWAY_OUTPUT);
   releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
   return STREAMING;
 }
@@ -2553,7 +2581,7 @@ function releaseUndispatchedPromptBudget(
   logGatewayCompletionUsage(
     ctx,
     runId,
-    { completionTokens: 0, outputBytes: 0 },
+    { completionTokens: 0, outputBytes: 0, contentBytes: 0, reasoningBytes: 0 },
     "output-byte-estimate",
     settlement,
   );
@@ -2570,7 +2598,14 @@ function settleFailedGatewayChat(
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
   const cancelled = cancellation.signal.aborted;
-  recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    cancellation,
+    cancelled ? "cancelled" : "failed",
+    NO_GATEWAY_OUTPUT,
+  );
   const spendReason = gatewaySpendRejectionReason(error);
   const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
   const runtimeRetry = runtimeRetryFor(error, failureCode);
@@ -2609,17 +2644,15 @@ async function executeBufferedGatewayChat(
     ...response,
     usage: { ...response.usage, completionTokens: usage.completionTokens },
   };
-  logGatewayCompletionUsage(ctx, runId, metrics, usage.source, promptSettlement);
-  const record = (outcome: CodingSidecarGatewayRunOutcome): void => {
-    recordGatewayOutcome(
-      ctx,
-      deps,
-      runId,
-      cancellation,
-      outcome,
-      metrics.completionTokens,
-      metrics.outputBytes,
-    );
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    { ...metrics, ...answerShares(response) },
+    usage.source,
+    promptSettlement,
+  );
+  const record: RecordBufferedOutcome = (outcome, reasoningFrames = 0) => {
+    recordGatewayOutcome(ctx, deps, runId, cancellation, outcome, { ...metrics, reasoningFrames });
   };
   if (cancellation.signal.aborted) {
     record("cancelled");
@@ -2627,7 +2660,11 @@ async function executeBufferedGatewayChat(
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "error");
   }
-  if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
+  const maxOutputTokens = request.maxOutputTokens ?? 1;
+  if (
+    exceedsOutputBudget(metrics, maxOutputTokens) ||
+    exceedsReasoningBudget(response, maxOutputTokens)
+  ) {
     record("output-limit");
     return stream === undefined
       ? unavailableError()
@@ -2636,19 +2673,26 @@ async function executeBufferedGatewayChat(
   return deliverBufferedGatewayAnswer(ctx, modelAlias, stream, settledResponse, record);
 }
 
+type RecordBufferedOutcome = (
+  outcome: CodingSidecarGatewayRunOutcome,
+  reasoningFrames?: number,
+) => void;
+
 function deliverBufferedGatewayAnswer(
   ctx: RouteContext,
   modelAlias: string,
   stream: BufferedOpenAiStreamSession | undefined,
   response: NormalizedResponse,
-  record: (outcome: CodingSidecarGatewayRunOutcome) => void,
+  record: RecordBufferedOutcome,
 ): RouteResult | typeof STREAMING {
+  const reasoningFrames = response.reasoning === undefined ? 0 : 1;
   if (stream === undefined) {
-    record("accepted");
+    record("accepted", reasoningFrames);
     return openAiResponse(modelAlias, response);
   }
   completeBufferedOpenAiStream(stream, response);
-  record(ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled");
+  const delivered = ctx.res.writableEnded && !ctx.res.destroyed;
+  record(delivered ? "accepted" : "cancelled", delivered ? reasoningFrames : 0);
   return STREAMING;
 }
 
@@ -2665,7 +2709,7 @@ async function streamGatewayChat(
       modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
-    recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
+    recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", NO_GATEWAY_OUTPUT);
     const failureCode = gatewayTurnFailureCode(error);
     const runtimeRetry = runtimeRetryFor(error, failureCode);
     const turnFailureRecorded = reportGatewayTurnFailure(ctx, deps, runId, {
@@ -2705,6 +2749,10 @@ async function pumpGatewayStreamWithCancellation(
     void iterator.return?.();
   };
   cancellationSignal.addEventListener("abort", cancelIterator, { once: true });
+  // A live turn keeps the same keep-alive the buffered answer always had (lab ledger F2): a model
+  // that thinks before its first token, or generates a tool call the sidecar forwards only once it
+  // is whole, leaves the runtime's connection silent for as long as that takes.
+  const stopHeartbeat = sidecarSseHeartbeat(session.ctx, cancellation.transport);
   try {
     await pumpGatewayStream(session);
   } catch (error) {
@@ -2726,6 +2774,7 @@ async function pumpGatewayStreamWithCancellation(
     );
     settleGatewayStreamError(session, runtimeRetry);
   } finally {
+    stopHeartbeat();
     cancellationSignal.removeEventListener("abort", cancelIterator);
   }
 }
@@ -2746,6 +2795,10 @@ interface GatewayStreamSession {
     promptTokens: number;
     outputBytes: number;
     previousDeltaEndedWithHighSurrogate: boolean;
+    // #3878: the model reasoning forwarded so far, bounded apart from the answer's output budget.
+    reasoningFrames: number;
+    forwardedReasoningBytes: number;
+    previousReasoningEndedWithHighSurrogate: boolean;
   };
 }
 
@@ -2771,6 +2824,9 @@ function createGatewayStreamSession(
       promptTokens: 0,
       outputBytes: 0,
       previousDeltaEndedWithHighSurrogate: false,
+      reasoningFrames: 0,
+      forwardedReasoningBytes: 0,
+      previousReasoningEndedWithHighSurrogate: false,
     },
   };
 }
@@ -2801,15 +2857,11 @@ function recordSessionOutcome(
   outcome: CodingSidecarGatewayRunOutcome,
 ): void {
   const { ctx, deps, runId, cancellation, metrics } = session;
-  recordGatewayOutcome(
-    ctx,
-    deps,
-    runId,
-    cancellation,
-    outcome,
-    metrics.completionTokens,
-    metrics.outputBytes,
-  );
+  recordGatewayOutcome(ctx, deps, runId, cancellation, outcome, {
+    completionTokens: metrics.completionTokens,
+    outputBytes: metrics.outputBytes,
+    reasoningFrames: metrics.reasoningFrames,
+  });
 }
 
 function writeSessionTerminal(
@@ -2841,8 +2893,8 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
     }
     if (next.done) break;
     const chunk = next.value;
-    if (chunk.type === "delta") {
-      if (await streamGatewayDelta(session, chunk.token)) continue;
+    if (chunk.type !== "done") {
+      if (await streamGatewayText(session, chunk)) continue;
       return;
     }
     await streamGatewayResponse(session, chunk.response);
@@ -2853,14 +2905,56 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
 }
 
 /** Returns true when the stream may continue with the next chunk. */
-async function streamGatewayDelta(session: GatewayStreamSession, token: string): Promise<boolean> {
-  const { ctx, id, created, modelId, request, iterator, metrics } = session;
+function streamGatewayText(
+  session: GatewayStreamSession,
+  chunk: Exclude<GatewayStreamChunk, { readonly type: "done" }>,
+): Promise<boolean> {
+  return chunk.type === "delta"
+    ? streamGatewayDelta(session, chunk.token)
+    : streamGatewayReasoning(session, chunk.token);
+}
+
+/** Returns true when the stream may continue with the next chunk. */
+function streamGatewayDelta(session: GatewayStreamSession, token: string): Promise<boolean> {
+  const { request, metrics } = session;
   const deltaMetrics = incrementalUtf8ByteCount(token, metrics.previousDeltaEndedWithHighSurrogate);
   metrics.outputBytes += deltaMetrics.bytes;
   metrics.previousDeltaEndedWithHighSurrogate = deltaMetrics.endsWithHighSurrogate;
   metrics.completionTokens = Math.ceil(metrics.outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT);
   const budget = { completionTokens: metrics.completionTokens, outputBytes: metrics.outputBytes };
-  if (exceedsOutputBudget(budget, request.maxOutputTokens ?? 1)) {
+  const overBudget = exceedsOutputBudget(budget, request.maxOutputTokens ?? 1);
+  return forwardStreamText(session, { content: token }, overBudget);
+}
+
+// #3878: the model's reasoning reaches the coding runtime as `delta.reasoning_content`, the field
+// OpenCode's OpenAI-compatible provider turns into a reasoning part, as it arrives. It is bounded
+// apart from the answer, by the same byte allowance, so a reasoning model keeps its whole answer
+// budget and a provider that ignores its output limit still cannot stream without end.
+async function streamGatewayReasoning(
+  session: GatewayStreamSession,
+  token: string,
+): Promise<boolean> {
+  const { request, metrics } = session;
+  const counted = incrementalUtf8ByteCount(token, metrics.previousReasoningEndedWithHighSurrogate);
+  metrics.forwardedReasoningBytes += counted.bytes;
+  metrics.previousReasoningEndedWithHighSurrogate = counted.endsWithHighSurrogate;
+  const overBudget =
+    metrics.forwardedReasoningBytes > outputByteBudget(request.maxOutputTokens ?? 1);
+  const forwarded = await forwardStreamText(session, { reasoning_content: token }, overBudget);
+  if (forwarded) metrics.reasoningFrames += 1;
+  return forwarded;
+}
+
+// One text frame of a live turn, or its end: at the output budget the turn ends with `length`, and
+// a frame that no longer reaches the client ends it as cancelled. Returns true when the stream may
+// continue with the next chunk.
+async function forwardStreamText(
+  session: GatewayStreamSession,
+  delta: Readonly<Record<string, string>>,
+  overBudget: boolean,
+): Promise<boolean> {
+  const { ctx, id, created, modelId, iterator } = session;
+  if (overBudget) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
     writeSessionTerminal(session, "length");
@@ -2868,7 +2962,7 @@ async function streamGatewayDelta(session: GatewayStreamSession, token: string):
   }
   const wrote = writeOpenAiSse(
     ctx,
-    openAiStreamChunk(id, created, modelId, { content: token }, null),
+    openAiStreamChunk(id, created, modelId, delta, null),
     session.cancellation.transport,
   );
   if (!wrote) {
@@ -2941,6 +3035,7 @@ function settleStreamCompletionUsage(
     {
       completionTokens: metrics.completionTokens,
       outputBytes: Math.max(outcome.outputBytes, metrics.outputBytes),
+      ...answerShares(response),
     },
     usage.source,
     promptSettlement,
@@ -2974,10 +3069,39 @@ function completionUsage(
   };
 }
 
+/**
+ * #3878: the turn's visible text and model reasoning share, as counts only. `reasoningBytes` is the
+ * size of the reasoning the provider returned as the gateway measured it, so it stays visible where
+ * the reasoning display is off and nothing was forwarded; `reasoningTokens` is the provider's own
+ * count and absent unless the provider reports it.
+ */
+interface AnswerShares {
+  readonly contentBytes: number;
+  readonly reasoningBytes: number;
+  readonly reasoningTokens?: number;
+}
+
+function answerShares(response: NormalizedResponse): AnswerShares {
+  const { reasoningBytes, reasoningTokens } = response.usage;
+  return {
+    contentBytes: Buffer.byteLength(response.content, "utf8"),
+    reasoningBytes: reasoningBytes ?? 0,
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  };
+}
+
+// A forwarded reasoning is bounded by the turn's output allowance in bytes, apart from the answer.
+function exceedsReasoningBudget(response: NormalizedResponse, maxOutputTokens: number): boolean {
+  return (
+    response.reasoning !== undefined &&
+    Buffer.byteLength(response.reasoning, "utf8") > outputByteBudget(maxOutputTokens)
+  );
+}
+
 function logGatewayCompletionUsage(
   ctx: RouteContext,
   runId: string,
-  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+  metrics: { readonly completionTokens: number; readonly outputBytes: number } & AnswerShares,
   source: CompletionUsageSource,
   promptSettlement: PromptTokenSettlement,
 ): void {
@@ -2993,6 +3117,11 @@ function logGatewayCompletionUsage(
         promptSettlementStatus: promptSettlement.status,
         outputBytes: metrics.outputBytes,
         source,
+        contentBytes: metrics.contentBytes,
+        reasoningBytes: metrics.reasoningBytes,
+        ...(metrics.reasoningTokens === undefined
+          ? {}
+          : { reasoningTokens: metrics.reasoningTokens }),
         completeness: "complete",
         loss: "none",
       },
@@ -3059,12 +3188,18 @@ function beginBufferedOpenAiStream(
     created,
     modelId,
     transport,
-    stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS, undefined, {
-      controller: transport.backpressure,
-      onBackpressure: transport.onBackpressure,
-      correlationId: transport.correlationId,
-    }),
+    stopHeartbeat: sidecarSseHeartbeat(ctx, transport),
   };
+}
+
+// SSE comments that keep the runtime's connection alive while the model is silent, written through
+// the shared protective path so a client that stops draining kills the stream like any frame.
+function sidecarSseHeartbeat(ctx: RouteContext, transport: SidecarSseTransport): () => void {
+  return startSseHeartbeat(ctx.res, SIDECAR_SSE_HEARTBEAT_MS, undefined, {
+    controller: transport.backpressure,
+    onBackpressure: transport.onBackpressure,
+    correlationId: transport.correlationId,
+  });
 }
 
 function completeBufferedOpenAiStream(
@@ -3073,21 +3208,14 @@ function completeBufferedOpenAiStream(
 ): typeof STREAMING {
   const { ctx, id, created, modelId, transport, stopHeartbeat } = session;
   stopHeartbeat();
-  if (response.content.length > 0 || response.toolCalls.length > 0) {
+  if (
+    response.content.length > 0 ||
+    response.toolCalls.length > 0 ||
+    response.reasoning !== undefined
+  ) {
     const wrote = writeOpenAiSse(
       ctx,
-      openAiStreamChunk(
-        id,
-        created,
-        modelId,
-        {
-          ...(response.content.length === 0 ? {} : { content: response.content }),
-          ...(response.toolCalls.length === 0
-            ? {}
-            : { tool_calls: openAiToolCalls(response.toolCalls) }),
-        },
-        null,
-      ),
+      openAiStreamChunk(id, created, modelId, bufferedAnswerDelta(response), null),
       transport,
     );
     if (!wrote) {
@@ -3102,6 +3230,16 @@ function completeBufferedOpenAiStream(
     response.usage.completionTokens,
   );
   return STREAMING;
+}
+
+// The whole buffered answer as one streamed delta: the model's reasoning (#3878), then the answer
+// and its tool calls, the order in which the runtime shows them.
+function bufferedAnswerDelta(response: NormalizedResponse): Readonly<Record<string, unknown>> {
+  return {
+    ...(response.reasoning === undefined ? {} : { reasoning_content: response.reasoning }),
+    ...(response.content.length === 0 ? {} : { content: response.content }),
+    ...(response.toolCalls.length === 0 ? {} : { tool_calls: openAiToolCalls(response.toolCalls) }),
+  };
 }
 
 function settleBufferedOpenAiStreamError(
@@ -3407,11 +3545,17 @@ function boundedProfileWait(): Promise<void> {
   });
 }
 
+// Lab ledger F2 (#3873): a streamed request is answered live wherever the resolved profile streams
+// (the model's capability streams and `codingStreaming` is not "off"), so the coding runtime sees
+// the answer as the provider produces it instead of only once it exists. An injected stream seam
+// streams; an injected buffered seam alone stands in for the whole gateway, which then has no
+// stream to read.
 function upstreamGatewayStreamingSupported(
   deps: UiHandlerDeps,
   advertisedSupport: boolean,
 ): boolean {
-  return advertisedSupport || deps.codingSidecarGatewayChatStreamFactory !== undefined;
+  if (deps.codingSidecarGatewayChatStreamFactory !== undefined) return true;
+  return advertisedSupport && deps.codingSidecarGatewayChatFactory === undefined;
 }
 
 /** A single explicit result shape for `runtimeGatewayAdmissionResponse`: every branch returns an

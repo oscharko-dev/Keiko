@@ -1,6 +1,7 @@
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { describe, expect, it, vi } from "vitest";
+import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
@@ -267,4 +268,107 @@ describe("OpenCode V2 native tool history", () => {
       );
     },
   );
+});
+
+// #3878: OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content
+// part. It reaches the live timeline as its own growing signal and never Coding History.
+describe("OpenCode V2 native reasoning history", () => {
+  function reasoningHistory(
+    reasoning: string,
+    text?: string,
+  ): readonly Readonly<Record<string, unknown>>[] {
+    return [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        time: { created: 2 },
+        content: [
+          { type: "reasoning", text: reasoning },
+          ...(text === undefined ? [] : [{ type: "text", text }]),
+        ],
+      },
+    ];
+  }
+
+  it("emits reasoning as its own suffix signals and keeps it out of Coding History", () => {
+    const activityLog = createBufferedServerLogSink();
+    const captureMessages = vi.fn((): boolean => true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-reasoning-history",
+      activityLog,
+      captureMessages,
+    });
+    const pulls: [string, string | undefined][] = [
+      ["", undefined],
+      ["PRIVATE_THOUGHT look", undefined],
+      ["PRIVATE_THOUGHT look closer", "Done"],
+    ];
+    let checkpoint: number | undefined;
+    const signals: unknown[] = [];
+    for (const [reasoning, text] of pulls) {
+      const events = projection.project(
+        "ses_reasoning",
+        reasoningHistory(reasoning, text),
+        checkpoint,
+      );
+      for (const event of events) signals.push(projection.takeSignal(event));
+      checkpoint = events.at(-1)?.sequence ?? checkpoint;
+    }
+
+    const reasoningSignals = signals.filter(
+      (signal): signal is { kind: "reasoning"; text: string } =>
+        typeof signal === "object" &&
+        signal !== null &&
+        "kind" in signal &&
+        signal.kind === "reasoning",
+    );
+    expect(reasoningSignals.map((signal) => signal.text)).toEqual([
+      "PRIVATE_THOUGHT look",
+      " closer",
+    ]);
+    expect(signals).toContainEqual({
+      kind: "reasoning",
+      messageId: "msg_assistant",
+      text: " closer",
+      occurredAt: "1970-01-01T00:00:00.002Z",
+    });
+    expect(captureMessages).toHaveBeenLastCalledWith([
+      { messageId: "msg_user", role: "user", content: "Task" },
+      { messageId: "msg_assistant", role: "assistant", content: "Done" },
+    ]);
+    expect(JSON.stringify(captureMessages.mock.calls)).not.toContain("PRIVATE_THOUGHT");
+    const lines = activityLog.events.map((event) => formatActivityLogProofLine(event));
+    expect(
+      lines.map((line) =>
+        expectActivityLogProof("coding-runtime.history-projection.emitted-line", line),
+      ),
+    ).toEqual([
+      expect.objectContaining({ reasoningSignalCount: 0 }),
+      expect.objectContaining({ reasoningSignalCount: 1 }),
+      expect.objectContaining({ reasoningSignalCount: 1 }),
+    ]);
+    expect(lines.join("\n")).not.toContain("PRIVATE_THOUGHT");
+  });
+
+  it("reads a long reasoning part only up to its projection bound and never fails on it", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const long = "é".repeat(80_000);
+
+    const events = projection.project("ses_long", reasoningHistory(long, "ok"), undefined);
+    const reasoning = events
+      .map((event) => projection.takeSignal(event))
+      .find((signal) => signal?.kind === "reasoning");
+
+    expect(reasoning?.kind === "reasoning" && reasoning.text.length).toBeGreaterThan(0);
+    expect(
+      reasoning?.kind === "reasoning" && Buffer.byteLength(reasoning.text, "utf8"),
+    ).toBeLessThanOrEqual(2 * CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES);
+    const grown = projection.project(
+      "ses_long",
+      reasoningHistory(`${long}more`, "ok"),
+      events.at(-1)?.sequence,
+    );
+    expect(grown).toEqual([]);
+  });
 });

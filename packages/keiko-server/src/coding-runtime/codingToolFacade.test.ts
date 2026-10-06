@@ -1004,6 +1004,9 @@ describe("CodingToolFacade", () => {
     "CONTENT_HASH_MISMATCH",
     "INVALID_EDITS",
     "PRECONDITION_REQUIRED",
+    // #3873 review: a replacement edit the materializer refuses as too large for the file, the
+    // changeset or the run's patch budget carries its own recovery instruction.
+    "LIMIT_EXCEEDED",
     "OUT_OF_SCOPE",
   ]);
   it("forwards every canonical contract EditorAgent conflict and failure code", async () => {

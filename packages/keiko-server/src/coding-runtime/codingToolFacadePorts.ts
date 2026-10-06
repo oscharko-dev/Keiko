@@ -28,6 +28,13 @@ export interface CodingToolMutationGuard {
     ((delegationId: string, idempotencyKey: string) => boolean) | undefined;
   /** Whether one more delegated read would fit the parent runtime budget; charges nothing. */
   readonly canChargeDelegatedRead?: (() => boolean) | undefined;
+  /**
+   * Charges the bytes a materialized replacement changeset adds beyond the request payload its
+   * admission reserved, against the same run budget, before the editor applies it (#3873 review:
+   * the envelope's patch budget bounds what is applied). Absent on a wiring that owns no edit
+   * budget, which then charges nothing here, as its admission charged nothing.
+   */
+  readonly chargeMaterializedPatch?: ((patchBytes: number) => boolean) | undefined;
   readonly binding?: CodingToolProducerBinding | undefined;
 }
 

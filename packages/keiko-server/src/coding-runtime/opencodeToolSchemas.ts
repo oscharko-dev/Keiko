@@ -132,6 +132,20 @@ const WORKSPACE_DISCOVER_SCHEMA = {
   required: ["query", "maxResults"],
 } as const;
 
+const CHANGESET_PATH_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  maxLength: 512,
+  pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+} as const;
+
+// #3873: the model edits through one form, exact-text replacements plus whole-file deletions and
+// renames (follow-up), and never through a diff: the server materializes all three into the
+// unified-diff changeset the governed editor path applies (codingToolReplacementEdits.ts). The
+// system prompt (opencodeLaunchProfile.ts), the tool description (keiko-tool-catalog's opencode.ts)
+// and this schema describe that same form, and opencodeToolSchemas.test.ts pins that the prompt
+// names no changeset property this schema does not declare. The managed-runtime dialect requires
+// every declared argument, so a second, optional diff form cannot be offered beside it.
 const CHANGESET_EDIT_SCHEMA = {
   type: "object",
   properties: {
@@ -139,24 +153,14 @@ const CHANGESET_EDIT_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
-        // #3873: exact-text replacements are the only model-visible edit form; the server
-        // materializes them into the unified diff the governed editor path applies
-        // (codingToolReplacementEdits.ts). The managed-runtime dialect requires every declared
-        // argument, so a second, optional diff form cannot be offered beside them.
         edits: {
           type: "array",
-          minItems: 1,
           maxItems: 50,
           items: {
             type: "object",
             additionalProperties: false,
             properties: {
-              file: {
-                type: "string",
-                minLength: 1,
-                maxLength: 512,
-                pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
-              },
+              file: CHANGESET_PATH_SCHEMA,
               oldString: {
                 type: "string",
                 maxLength: 65_536,
@@ -172,7 +176,37 @@ const CHANGESET_EDIT_SCHEMA = {
             required: ["file", "oldString", "newString"],
           },
           description:
-            "Exact text replacements applied in order. Each oldString must occur exactly once in its file unless replaceAll is true.",
+            "Exact text replacements applied in order, after renames and before deletions. Each oldString must occur exactly once in its file unless replaceAll is true. Use [] when the call only renames or deletes.",
+        },
+        deletions: {
+          type: "array",
+          maxItems: 50,
+          uniqueItems: true,
+          items: CHANGESET_PATH_SCHEMA,
+          description:
+            "Files to delete entirely, applied after edits; each must be listed in files with its last read digest and may not also be edited. Use [] for none.",
+        },
+        renames: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              from: {
+                ...CHANGESET_PATH_SCHEMA,
+                description: "Existing file to move, listed in files with its last read digest.",
+              },
+              to: {
+                ...CHANGESET_PATH_SCHEMA,
+                description:
+                  "New path, which must not exist, listed in files with the empty-content digest.",
+              },
+            },
+            required: ["from", "to"],
+          },
+          description:
+            "Files to move, applied before edits; an edit addresses a moved file by its new path. Use [] for none.",
         },
         files: {
           type: "array",
@@ -182,12 +216,7 @@ const CHANGESET_EDIT_SCHEMA = {
             type: "object",
             additionalProperties: false,
             properties: {
-              file: {
-                type: "string",
-                minLength: 1,
-                maxLength: 512,
-                pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
-              },
+              file: CHANGESET_PATH_SCHEMA,
               expectedContentHash: {
                 type: "string",
                 pattern: "^[a-f0-9]{64}$",
@@ -197,20 +226,16 @@ const CHANGESET_EDIT_SCHEMA = {
             required: ["file", "expectedContentHash"],
           },
           description:
-            "Every file changed by edits, bound to its last governed read digest (a new file uses the empty-content digest).",
+            "Every path touched by edits, renames (both paths) and deletions, bound to its last governed read digest (a new file or rename target uses the empty-content digest).",
         },
         selectedFiles: {
           type: "array",
           minItems: 1,
           maxItems: 50,
           uniqueItems: true,
-          items: {
-            type: "string",
-            minLength: 1,
-            maxLength: 512,
-            pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
-          },
-          description: "Optional subset of files to apply; each entry must occur in files.",
+          items: CHANGESET_PATH_SCHEMA,
+          description:
+            "Every path the call touches; a touched path left out is refused, never applied partially. Each entry must occur in files.",
         },
       },
       required: ["edits", "files"],

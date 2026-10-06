@@ -535,9 +535,8 @@ export function isExactReplacementChangeset(
 ): value is CodingToolReplacementChangeset {
   return (
     isRecord(value) &&
-    hasAllowedKeys(value, ["edits", "files", "selectedFiles"]) &&
-    boundedArray(value.edits, REPLACEMENT_EDIT_MAX_COUNT) &&
-    value.edits.every(exactReplacementEdit) &&
+    hasAllowedKeys(value, ["edits", "deletions", "renames", "files", "selectedFiles"]) &&
+    exactReplacementOperations(value) &&
     boundedArray(value.files, REPLACEMENT_EDIT_MAX_COUNT) &&
     value.files.every(exactReplacementFile) &&
     (value.selectedFiles === undefined ||
@@ -546,8 +545,39 @@ export function isExactReplacementChangeset(
   );
 }
 
+// #3873 follow-up: `edits` may be empty when a call only renames or deletes; `deletions` and
+// `renames` may be omitted (the provider descriptor requires them, this wire boundary accepts their
+// omission like `selectedFiles`). Every path is held to the governed read-path rule, so a denied
+// segment or a workspace escape never reaches the materializer.
+function exactReplacementOperations(value: Record<string, unknown>): boolean {
+  return (
+    boundedList(value.edits, REPLACEMENT_EDIT_MAX_COUNT, exactReplacementEdit) &&
+    (value.deletions === undefined ||
+      boundedList(value.deletions, REPLACEMENT_EDIT_MAX_COUNT, isGovernedReadPath)) &&
+    (value.renames === undefined ||
+      boundedList(value.renames, REPLACEMENT_EDIT_MAX_COUNT, exactReplacementRename))
+  );
+}
+
+function exactReplacementRename(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["from", "to"]) &&
+    isGovernedReadPath(value.from) &&
+    isGovernedReadPath(value.to)
+  );
+}
+
 function boundedArray(value: unknown, maximum: number): value is readonly unknown[] {
   return Array.isArray(value) && value.length >= 1 && value.length <= maximum;
+}
+
+function boundedList(
+  value: unknown,
+  maximum: number,
+  entry: (candidate: unknown) => boolean,
+): boolean {
+  return Array.isArray(value) && value.length <= maximum && value.every(entry);
 }
 
 function exactReplacementEdit(value: unknown): boolean {

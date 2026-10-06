@@ -1195,6 +1195,22 @@ function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => vo
   }, [runId, retry]);
 }
 
+// Lab ledger F2 (#3873): a streamed answer grows inside one message, whose activity timestamp stays
+// the message's creation time, so the session stream's follow key also counts the feed's visible
+// text and reasoning. Live growth then stays in view while the reader is at the bottom.
+export function sessionGrowthKey(
+  runtimeEventSignal: number,
+  feed: ReturnType<typeof useCodingWorkbenchSafeActivity>["feed"],
+  questionCount: number,
+): string {
+  let contentLength = 0;
+  for (const message of feed?.turns.flatMap((turn) => turn.messages) ?? []) {
+    contentLength += message.reasoning?.text.length ?? 0;
+    for (const segment of message.segments) contentLength += segment.text.length;
+  }
+  return `${String(runtimeEventSignal)}:${feed?.updatedAt ?? ""}:${String(contentLength)}:${String(questionCount)}`;
+}
+
 function workbenchStartBlocker(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -1346,7 +1362,7 @@ function WorkbenchColumns({
   const sessionStreamRef = useRef<HTMLDivElement>(null);
   const { onScroll: onStreamScroll, resume: followNewest } = useFollowNewest(
     sessionStreamRef,
-    `${String(runtimeEventSignal)}:${activity.feed?.updatedAt ?? ""}:${String(questions.questions.length)}`,
+    sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length),
   );
   const runId = state.run.value?.runId;
   useEffect(() => {

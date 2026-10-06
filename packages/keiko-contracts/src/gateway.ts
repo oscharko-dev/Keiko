@@ -811,6 +811,18 @@ export interface UsageMetadata {
   readonly completionTokens: number;
   readonly latencyMs: number;
   readonly costClass: CostClass;
+  /**
+   * The provider's own count of the completion tokens spent on reasoning
+   * (`usage.completion_tokens_details.reasoning_tokens`). Absent when the provider does not report
+   * it; never estimated (#3878).
+   */
+  readonly reasoningTokens?: number | undefined;
+  /**
+   * UTF-8 size of the reasoning (`reasoning_content`) the provider returned with this answer, as a
+   * count only. Present when the answer carried reasoning, also where the gateway discarded the
+   * reasoning itself, so its share of the completion stays measurable (#3878).
+   */
+  readonly reasoningBytes?: number | undefined;
 }
 
 // ─── Normalised response ──────────────────────────────────────────────────────
@@ -825,6 +837,15 @@ export interface NormalizedResponse {
   readonly toolCalls: readonly NormalizedToolCall[];
   readonly structuredOutput: Record<string, unknown> | null;
   readonly usage: UsageMetadata;
+  /**
+   * The model's own reasoning beside the answer (#3878): what an OpenAI-compatible provider returns
+   * as `reasoning_content` (LiteLLM's normalization of a reasoning parser's output or of Anthropic
+   * thinking). Never part of `content`, unverified model text, and a body: it never enters the
+   * Activity Log, a support export or run evidence, where only its counts may appear. Present only
+   * when non-empty, and only on a call whose surface displays reasoning (the gateway discards it
+   * everywhere else).
+   */
+  readonly reasoning?: string | undefined;
 }
 
 // ─── Streaming (schema only — Wave 1 adapter does not process chunked streams) ─

@@ -87,6 +87,36 @@ describe("Coding Workbench translations", () => {
     expect(en).not.toMatch(/\bverified\b(?!\s*evaluation)/u);
   });
 
+  // #3878: the timeline shows the model's reasoning now, so its boundary copy says what is shown
+  // instead of promising that reasoning is never exposed, and the reasoning is called unverified.
+  it("describes the timeline's model reasoning as unverified in both catalogs", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.activity.reasoningBoundary");
+    const de = translateCodingWorkbench("de", "codingWorkbench.activity.reasoningBoundary");
+    expect(en).not.toContain("never exposes private reasoning");
+    expect(en).toContain("model's own reasoning");
+    expect(en).toContain("unverified");
+    expect(de).not.toContain("niemals offengelegt");
+    expect(de).toContain("ungeprüft");
+  });
+
+  it.each([
+    "codingWorkbench.activity.reasoning.title",
+    "codingWorkbench.activity.reasoning.badge",
+    "codingWorkbench.activity.reasoning.note",
+  ] as const)("localizes the reasoning label %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  it("addresses the reader informally in the German reasoning note", () => {
+    const note = translateCodingWorkbench("de", "codingWorkbench.activity.reasoning.note");
+    expect(note).toMatch(/\bdich\b/u);
+    expect(note).not.toMatch(/\b(?:Ihnen|Ihre?)\b/u);
+  });
+
   it("interpolates runtime state and revision in both catalogs", () => {
     expect(
       translateCodingWorkbench("en", "codingWorkbench.announcement.runRevision", {

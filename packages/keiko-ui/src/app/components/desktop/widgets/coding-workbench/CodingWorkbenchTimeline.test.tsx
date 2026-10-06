@@ -575,3 +575,197 @@ it("joins short provider message IDs through the real diagnostic transport", () 
     vi.restoreAllMocks();
   }
 });
+
+// #3878: the model's own reasoning (`reasoning_content`) shows as a collapsible block, labelled as
+// unverified model reasoning. It streams open while its turn is live and collapses once the turn
+// completes.
+describe("CodingWorkbenchTimeline model reasoning", () => {
+  function feedWithReasoning(
+    reasoning: { readonly text: string; readonly truncated: boolean },
+    answer = "Fixed the parser.",
+  ): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-reasoning",
+          messages: [
+            {
+              messageId: "message-user",
+              role: "user",
+              occurredAt: AT,
+              segments: [{ kind: "text", text: "Fix the parser", truncated: false }],
+              truncated: false,
+            },
+            {
+              messageId: "message-reasoned",
+              role: "assistant",
+              occurredAt: AT,
+              segments:
+                answer.length === 0 ? [] : [{ kind: "text", text: answer, truncated: false }],
+              truncated: false,
+              reasoning,
+            },
+          ],
+          tools: [],
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  function reasoningBlock(container: HTMLElement): HTMLDetailsElement {
+    const block = container.querySelector<HTMLDetailsElement>(`details.${styles.cmpReasoning}`);
+    if (block === null) throw new TypeError("expected the model reasoning block");
+    return block;
+  }
+
+  const THOUGHT = { text: "The quoted field splits on its comma.", truncated: false };
+
+  it("labels the reasoning as unverified model reasoning apart from the answer", () => {
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike(feedWithReasoning(THOUGHT))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const block = reasoningBlock(container);
+    expect(block.querySelector("summary")).toHaveTextContent("Model reasoning");
+    expect(block.querySelector("summary")).toHaveTextContent("Unverified");
+    expect(block).toHaveTextContent("Unverified model reasoning");
+    expect(block).toHaveTextContent(THOUGHT.text);
+    const answer = container.querySelector(
+      `[data-message-role="assistant"] .${styles.messageText}`,
+    );
+    expect(answer).toHaveTextContent("Fixed the parser.");
+    expect(answer).not.toHaveTextContent(THOUGHT.text);
+  });
+
+  it("streams open while its turn is live and collapses once the turn completes", () => {
+    const feed = feedWithReasoning(THOUGHT, "");
+    const { container, rerender } = render(
+      <Timeline active events={[]} activity={activityLike(feed)} questions={IDLE_QUESTIONS} />,
+    );
+    expect(reasoningBlock(container)).toHaveAttribute("open");
+    expect(reasoningBlock(container)).toHaveAttribute("data-reasoning-live", "true");
+
+    rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithReasoning(THOUGHT))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(reasoningBlock(container)).not.toHaveAttribute("open");
+  });
+
+  it("collapses an earlier turn's reasoning as soon as a newer message arrives", () => {
+    const feed = feedWithReasoning(THOUGHT);
+    const [turn] = feed.turns;
+    if (turn === undefined) throw new TypeError("expected a turn");
+    const newer: AvailableCodingSafeActivityFeed = {
+      ...feed,
+      turns: [
+        {
+          ...turn,
+          messages: [
+            ...turn.messages,
+            {
+              messageId: "message-next",
+              role: "assistant",
+              occurredAt: "2026-07-19T12:00:01.000Z",
+              segments: [{ kind: "text", text: "Next step.", truncated: false }],
+              truncated: false,
+            },
+          ],
+        },
+      ],
+    };
+    const { container } = render(
+      <Timeline active events={[]} activity={activityLike(newer)} questions={IDLE_QUESTIONS} />,
+    );
+    expect(reasoningBlock(container)).not.toHaveAttribute("open");
+  });
+
+  it("shows a reasoning-only message while the answer has not started", () => {
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike(feedWithReasoning(THOUGHT, ""))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(reasoningBlock(container)).toHaveTextContent(THOUGHT.text);
+  });
+
+  it("marks shortened reasoning", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithReasoning({ text: "Partial thought", truncated: true }))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(reasoningBlock(container)).toHaveTextContent("Output truncated");
+  });
+
+  it("reports a reader's toggle but not the automatic collapse", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const { container, rerender } = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithReasoning(THOUGHT))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const block = reasoningBlock(container);
+      block.open = false;
+      fireEvent(block, new Event("toggle"));
+      expect(writer).toHaveBeenCalledWith(
+        "[keiko] coding workbench model reasoning toggled",
+        undefined,
+      );
+      writer.mockClear();
+      block.open = true;
+      rerender(
+        <Timeline
+          active={false}
+          events={[]}
+          activity={activityLike(feedWithReasoning(THOUGHT))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      fireEvent(block, new Event("toggle"));
+      expect(writer).not.toHaveBeenCalledWith(
+        "[keiko] coding workbench model reasoning toggled",
+        undefined,
+      );
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("has no serious or critical axe violations with a reasoning block rendered", async () => {
+    const { container } = render(
+      <Timeline
+        active
+        events={[]}
+        activity={activityLike(feedWithReasoning(THOUGHT))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+});

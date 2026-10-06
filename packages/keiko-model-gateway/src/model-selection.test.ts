@@ -640,6 +640,46 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     });
   });
 
+  // Lab ledger F2 (#3873): the profile was hard-coded as non-streaming, so the sidecar buffered every
+  // answer of a provider that streams and a slow self-hosted model showed only "Working" until the
+  // whole answer existed. Owner decision 2026-10-06: streaming is the default wherever the model
+  // streams, and `codingStreaming: "off"` is the operator's opt-out.
+  describe("streaming", () => {
+    function streamingProfile(
+      capability: Partial<ModelCapability>,
+      codingStreaming?: GatewayConfig["codingStreaming"],
+    ): ReturnType<typeof resolveCodingSafeSidecarGatewayProfile> {
+      return resolveCodingSafeSidecarGatewayProfile({
+        ...config(["streaming-coder"], [codingSidecarCapability("streaming-coder", capability)]),
+        ...(codingStreaming === undefined ? {} : { codingStreaming }),
+      });
+    }
+
+    it("streams by default when the coding model's capability streams", () => {
+      expect(streamingProfile({ streaming: true })).toMatchObject({
+        status: "available",
+        supportsStreaming: true,
+      });
+      expect(streamingProfile({ streaming: true }, "on")).toMatchObject({
+        supportsStreaming: true,
+      });
+    });
+
+    it("stays buffered for a model whose capability does not stream", () => {
+      expect(streamingProfile({ streaming: false })).toMatchObject({
+        status: "available",
+        supportsStreaming: false,
+      });
+    });
+
+    it("stays buffered when the operator switched coding streaming off", () => {
+      expect(streamingProfile({ streaming: true }, "off")).toMatchObject({
+        status: "available",
+        supportsStreaming: false,
+      });
+    });
+  });
+
   it("preserves the independent input ceiling in the coding sidecar projection", () => {
     const result = resolveCodingSafeSidecarGatewayProfile(
       config(
@@ -686,7 +726,8 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       profileId: "coding-safe-openai-compatible",
       modelAlias: "azure-coding-model",
       localEndpointPath: "/api/coding-sidecar/gateway",
-      supportsStreaming: false,
+      // The capability streams and no operator switched it off (lab ledger F2).
+      supportsStreaming: true,
       supportsToolCalling: true,
       runMetadata: {
         maxPromptTokens: 128_000,

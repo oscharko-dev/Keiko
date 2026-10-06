@@ -28,7 +28,11 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
-import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import {
+  CodingWorkbenchWindow,
+  sessionGrowthKey,
+  type CodingWorkbenchGitTarget,
+} from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -3757,5 +3761,51 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
     expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
     expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
+  });
+});
+
+// Lab ledger F2 (#3873): a streamed answer grows inside one message whose activity timestamp stays
+// the message's creation time, so the session stream only followed it if its follow key also saw
+// the text grow.
+describe("sessionGrowthKey", () => {
+  function streamingFeed(answer: string, reasoning?: string): AvailableCodingSafeActivityFeed {
+    return {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-growth",
+      updatedAt: "2026-07-19T12:00:00.000Z",
+      turns: [
+        {
+          turnId: "turn-growth",
+          messages: [
+            {
+              messageId: "message-growth",
+              role: "assistant",
+              occurredAt: "2026-07-19T12:00:00.000Z",
+              segments: [{ kind: "text", text: answer, truncated: false }],
+              truncated: false,
+              ...(reasoning === undefined
+                ? {}
+                : { reasoning: { text: reasoning, truncated: false } }),
+            },
+          ],
+          tools: [],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+  }
+
+  it("changes as streamed text and reasoning grow under an unchanged activity timestamp", () => {
+    const keys = [
+      sessionGrowthKey(4, streamingFeed("Hel"), 0),
+      sessionGrowthKey(4, streamingFeed("Hello"), 0),
+      sessionGrowthKey(4, streamingFeed("Hello", "Thinking"), 0),
+    ];
+    expect(new Set(keys).size).toBe(3);
+    expect(sessionGrowthKey(4, streamingFeed("Hello"), 0)).toBe(keys[1]);
+    expect(sessionGrowthKey(4, null, 0)).toBe("4::0:0");
   });
 });

@@ -700,6 +700,63 @@ defect, not at the window.
 
 ---
 
+## Coding Workbench shows no model reasoning, or the answer only once it is complete
+
+| Field             | Value                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| Severity          | Low                                                                                                |
+| Surface           | Coding Workbench                                                                                   |
+| Stable identifier | `chat.response.streamed` (`reasoningEvents`) / `gateway.stream.completed` (`reasoningDisposition`) |
+
+**Symptom**
+
+A reasoning model (Gemma 4 behind vLLM with a reasoning parser, or an Anthropic model with
+thinking) works through a Workbench run, but the timeline shows no "Model reasoning" block, or the
+answer appears in one piece only once it is complete.
+
+**Root Cause**
+
+The model's reasoning reaches Keiko only through the field LiteLLM normalises it into:
+`reasoning_content` on each streamed delta and on a buffered message (a server that names the
+field `reasoning` is read the same way). The Workbench streams a turn live and shows its reasoning
+by default; both are operator opt-outs in the gateway configuration. Nothing reaches the timeline
+when the model server does not separate the reasoning (no reasoning parser for the model family, so
+the reasoning stays inside the answer text or is not produced), when the LiteLLM route merges it
+back into the answer (`merge_reasoning_content_in_choices: true`) or drops the request parameter
+that switches it on (`drop_params` removing `reasoning_effort` on a model that needs it), or when
+the configuration sets `codingReasoningDisplay: "off"`. The answer arrives in one piece when the
+configuration sets `codingStreaming: "off"` or the model's capability does not stream.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>`, then per model turn:
+
+- `chat.response.streamed` with `reasoningEvents: 0` and `reasoningBytes: 0`: the provider sent no
+  `reasoning_content`; check the model server and the LiteLLM route.
+- `reasoningEvents` above 0 with `gateway.stream.completed` (or `gateway.chat.completed`)
+  `reasoningDisposition: discarded`: the reasoning arrived and the display switch discarded it.
+- `coding-sidecar.gateway.usage-settled` records the turn's share as counts: `contentBytes`,
+  `reasoningBytes`, the provider's own `reasoningTokens` when it reports them, beside `outputBytes`;
+  `coding-sidecar.gateway.outcome` `reasoningFrames` counts the frames that carried reasoning to
+  the coding runtime, and `coding-runtime.history-projection` `reasoningSignalCount` the pieces that
+  reached the timeline.
+- A coding turn read with `gateway.stream.started` streams live; `gateway.chat.started` means the
+  turn was buffered (`codingStreaming: "off"`, or a capability without streaming).
+
+**Resolution**
+
+- Enable the model server's reasoning parser for the model family (vLLM `--reasoning-parser`).
+- In the LiteLLM route, leave `merge_reasoning_content_in_choices` unset (or `false`) so the
+  reasoning stays in `reasoning_content`, and make sure `drop_params` does not strip the reasoning
+  parameter the model needs.
+- Remove `codingReasoningDisplay: "off"` and `codingStreaming: "off"` from the gateway
+  configuration to restore the defaults (both `"on"`; the only accepted values are `"on"` and
+  `"off"`).
+- Shown reasoning is unverified model output. It is never kept in Coding History, evidence, a
+  support export or the Activity Log, which record only its counts.
+
+---
+
 ## A discovered rerank model does not reach retrieval
 
 | Field             | Value                                                                   |

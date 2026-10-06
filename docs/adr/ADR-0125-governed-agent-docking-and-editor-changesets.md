@@ -175,6 +175,29 @@ any file is eligible. Any unverifiable action or file precondition fails the who
 applies nothing. After selection, the selected subpatch is derived and revalidated before one atomic
 transaction; a selected transaction either applies every selected file or rolls back every file.
 
+**The governed sidecar's edit form (#3873 and its follow-up).** The managed OpenCode sidecar never
+writes a patch: `keiko_changeset_edit` takes ordered exact-text replacements (`changeset.edits`:
+`file`, `oldString` copied from the latest governed read, `newString`, `replaceAll`; an empty
+`oldString` creates a file), whole-file deletions (`changeset.deletions`) and moves
+(`changeset.renames`: `from`, `to`), and the server materializes them against the hash-bound current
+text into the unified-diff changeset this decision governs: a deletion as the file's full pre-image
+to `/dev/null`, a rename as that deletion plus the creation of `to` with identical content. Within
+one call renames apply first, then edits (an edit addresses a moved file by its new path), then
+deletions. An edit or deletion of a path that no longer exists after the renames, a rename target
+that collides with another path in the call or already exists, a duplicate deletion, a deletion of
+an edited file, and a touched path missing from `files` or `selectedFiles` are refused closed with
+the existing `INVALID_EDITS`/`PRECONDITION_REQUIRED` codes before any editor action exists; a
+supplied `selectedFiles` must therefore cover every touched path, never select half a rename. The
+materialization reads are the same governed workspace reads the model's own `keiko_workspace_read`
+uses, logged with their purpose, and its preconditions use the digest those reads report. Every
+touched path, both halves of a rename included, counts against the 50-file cap; an edited file may
+not grow past the governed read ceiling, projected from the match count before any result is built;
+the rendered changeset is held to the 65,536-byte cap; and the run's `maxPatchBytes` is charged
+with the materialized diff, not merely with the replacement text the model sent. The result travels
+through the same review decision, containment, denied-path and hash gates as any other
+`applyChangeset`, and the settled and refused edit lines record the edit form with body-free
+deletion and rename counts and, for a refusal, its closed class.
+
 The server routes this through the existing `keiko-tools` patch validation and
 atomic apply/rollback path. Closed files may be changed by that governed server workspace
 transaction after the mode and Authority Envelope permit it. Open or dirty files remain governed by

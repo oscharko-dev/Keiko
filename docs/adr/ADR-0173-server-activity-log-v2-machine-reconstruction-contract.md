@@ -1582,9 +1582,14 @@ retains the pre-call reservation. Its closed settlement status distinguishes a s
 reconciliation from a reservation retained after an authority refusal, an unverified result, or a
 deployment without a settlement port. A refused or unverified settlement reports the retained
 reservation rather than the provider count requested by the caller.
+The usage line also records the turn's share of answer text and model reasoning as counts (#3878):
+`contentBytes` (the UTF-8 size of the answer text), `reasoningBytes` (the UTF-8 size of the
+`reasoning_content` the provider returned, also when the reasoning display discarded it) and, only
+when the provider reports it, its own `reasoningTokens`; the reasoning text itself is never recorded.
 `coding-sidecar.gateway.outcome`
 records the closed accepted, cancelled, failed, or output-limit result under that same request and
-run correlation; streamed acceptance is recorded after the terminal frame is written. These records
+run correlation, and `reasoningFrames` counts the frames that carried reasoning to the coding
+runtime; streamed acceptance is recorded after the terminal frame is written. These records
 contain request and run correlations, counts, closed states, and the source, without message bodies.
 Generic provider policy refusals remain terminal; an error
 that identifies the optional `stream_options` or `include_usage` field may take the bounded

@@ -739,6 +739,8 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
                 replaceAll: false,
               },
             ],
+            deletions: [],
+            renames: [],
             files: [{ file: "../outside.txt", expectedContentHash: "0".repeat(64) }],
             selectedFiles: ["../outside.txt"],
           },
@@ -825,7 +827,8 @@ function question(): Record<string, unknown> {
   };
 }
 
-// The model-visible edit form (#3873): one exact replacement, bound to the file's read digest.
+// The model-visible edit form (#3873): one exact replacement, bound to the file's read digest. The
+// catalog requires every changeset member, so the empty `deletions` and `renames` are spelled out.
 function edit(script: ScriptState): Record<string, unknown> {
   return {
     changeset: {
@@ -837,6 +840,8 @@ function edit(script: ScriptState): Record<string, unknown> {
           replaceAll: false,
         },
       ],
+      deletions: [],
+      renames: [],
       files: [{ file: "src/example.ts", expectedContentHash: digest(script.old) }],
       selectedFiles: ["src/example.ts"],
     },

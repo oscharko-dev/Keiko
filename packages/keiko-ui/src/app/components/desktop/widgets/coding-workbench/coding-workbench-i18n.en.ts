@@ -498,7 +498,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.previousPath": " (previously {path})",
   "codingWorkbench.changes.diff.elevatedReview": "Elevated review",
   "codingWorkbench.activity.reasoningBoundary":
-    "This timeline shows observable conversation and work activity. It never exposes private reasoning.",
+    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
+  "codingWorkbench.activity.reasoning.title": "Model reasoning",
+  "codingWorkbench.activity.reasoning.badge": "Unverified",
+  "codingWorkbench.activity.reasoning.note":
+    "Unverified model reasoning: how the model approached this step. It can be wrong; the answer and the changes are what count.",
   "codingWorkbench.activity.status.idle": "No run yet.",
   "codingWorkbench.activity.status.loading": "Connecting activity…",
   "codingWorkbench.activity.status.live": "Live.",

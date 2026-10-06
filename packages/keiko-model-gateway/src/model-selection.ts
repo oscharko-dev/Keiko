@@ -230,9 +230,18 @@ function provenWindowCapability(capability: ModelCapability): ModelCapability {
   return proven;
 }
 
+// Lab ledger F2 (#3873): the profile used to be hard-coded as non-streaming, so the sidecar buffered
+// the whole answer even from a provider that streams and the Workbench showed only "Working" until
+// it existed. It streams wherever the model's capability streams, unless the operator switched coding
+// streaming off (owner decision 2026-10-06: on by default, opt-out only).
+function codingSidecarStreams(config: GatewayConfig, capability: ModelCapability): boolean {
+  return capability.streaming && config.codingStreaming !== "off";
+}
+
 function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
+  supportsStreaming: boolean,
 ): CodingWorkbenchSidecarGatewayProjection {
   const contextProfile = deriveContextProfileFromCapability(provenWindowCapability(capability));
   return {
@@ -240,7 +249,7 @@ function codingSidecarProjection(
     profileId: "coding-safe-openai-compatible",
     modelAlias: capability.id,
     localEndpointPath: "/api/coding-sidecar/gateway",
-    supportsStreaming: false,
+    supportsStreaming,
     supportsToolCalling: true,
     runMetadata: {
       maxPromptTokens: contextProfile.maxInputTokens,
@@ -362,7 +371,11 @@ export function resolveCodingSafeSidecarGatewayProfile(
   if (!hasCredential(provider)) {
     return codingSidecarUnavailable("missing-credentials");
   }
-  return codingSidecarProjection(selected, options.gatewayVerification ?? UNVERIFIED_GATEWAY);
+  return codingSidecarProjection(
+    selected,
+    options.gatewayVerification ?? UNVERIFIED_GATEWAY,
+    codingSidecarStreams(config, selected),
+  );
 }
 
 // Completion-oriented model selection (Issue #1210, ADR-0042 D5). Resolves the configured

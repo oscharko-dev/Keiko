@@ -147,10 +147,22 @@ function parsedProviderBody(init: RequestInit | undefined): Record<string, unkno
   return JSON.parse(init.body) as Record<string, unknown>;
 }
 
+// #3873: the catalog's changeset is the replacement form with every member required, so the
+// invalid call carries a schema-valid `edits` entry (and the empty `deletions`/`renames` the
+// dialect demands) while `files` and `selectedFiles` stay the two invalid properties the pins count.
 function invalidArguments(callId: string): Response {
   return providerResponse(callId, "keiko_changeset_edit", {
     changeset: {
-      patch: INVALID_ARGUMENT_SECRET,
+      edits: [
+        {
+          file: "src/a.ts",
+          oldString: INVALID_ARGUMENT_SECRET,
+          newString: INVALID_ARGUMENT_SECRET,
+          replaceAll: false,
+        },
+      ],
+      deletions: [],
+      renames: [],
       files: INVALID_ARGUMENT_SECRET,
       selectedFiles: [],
     },
@@ -215,8 +227,8 @@ describe("Gateway bounded tool-schema repair", () => {
     // Run 7 (2026-09-10): the correction names the declared properties that failed, in the
     // schema's vocabulary, so the model can fix the call instead of repeating it; the arguments
     // themselves are never quoted back.
-    // (`files` is a string, `selectedFiles` is empty against minItems 1; the producer's `patch`
-    // schema bounds only the length, so the secret string passes it.)
+    // (`files` is a string, `selectedFiles` is empty against minItems 1; the `edits` entry is
+    // schema-valid, its strings bounded only by length, so the secret passes it.)
     expect(serializedRepair).toContain(
       "Properties whose value does not match the schema: changeset.files, changeset.selectedFiles.",
     );

@@ -5,13 +5,18 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeDelegationUsage,
+  EditorAgentAction,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 
 import {
   createCodingToolAuthorityPort,
   createCodingToolAuthorityPreview,
   createRuntimeCodingToolFacade,
 } from "./codingToolAuthorityPort.js";
+import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
+import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   codingToolApprovalBindingDigest,
   createCodingToolApprovalBridge,
@@ -992,6 +997,8 @@ describe("CodingToolAuthorityPort", () => {
         idempotencyKey: "registry-key",
         changeset: {
           edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+          deletions: [],
+          renames: [],
           files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
           selectedFiles: ["src/a.ts"],
         },
@@ -1099,6 +1106,8 @@ describe("CodingToolAuthorityPort", () => {
       idempotencyKey: "reconnect-edit-key",
       changeset: {
         edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+        deletions: [],
+        renames: [],
         files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
         selectedFiles: ["src/a.ts"],
       },
@@ -1671,6 +1680,8 @@ describe("CodingToolAuthorityPort", () => {
           idempotencyKey: "catalog-edit-key",
           changeset: {
             edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+            deletions: [],
+            renames: [],
             files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
             selectedFiles: ["src/a.ts"],
           },
@@ -1690,6 +1701,159 @@ describe("CodingToolAuthorityPort", () => {
       for (const event of catalogEvents) expect(event.correlationId).toBe("d".repeat(36));
       const started = catalogEvents[2]?.extra as Record<string, unknown>;
       expect(started.toolCanonicalId).toBe("keiko.changeset.edit");
+    });
+
+    // #3873 review: the run's maxPatchBytes used to be charged with what the model sent (six bytes
+    // for `foo` -> `bar`), not with the diff Keiko applies. The materialized diff is charged against
+    // the same authority record once it exists, before the editor sees the action; a charge the
+    // budget refuses refuses the edit, and the editor never receives it.
+    function materializedEditFixture(
+      budgetAccepts: (usage: CodingWorkbenchRuntimeDelegationUsage) => boolean,
+    ): {
+      readonly runtime: ReturnType<typeof createRuntimeCodingToolFacade>;
+      readonly usages: CodingWorkbenchRuntimeDelegationUsage[];
+      readonly actions: EditorAgentAction[];
+      readonly delegations: CodingRuntimeCapabilityDelegationInput[];
+      readonly text: string;
+      readonly log: ReturnType<typeof createBufferedServerLogSink>;
+    } {
+      const text = "foo\n".repeat(200);
+      const context = { ...runtimeContext(), authorityExpiresAt: "2099-01-01T00:00:00.000Z" };
+      const binding = {
+        runId: context.runId,
+        envelopeDigest: context.envelopeDigest,
+        workspaceId: liveFacts.binding.workspaceId,
+        workspaceRootDigest: liveFacts.binding.workspaceRootDigest,
+        expiresAt: context.authorityExpiresAt,
+      };
+      const usages: CodingWorkbenchRuntimeDelegationUsage[] = [];
+      const delegations: CodingRuntimeCapabilityDelegationInput[] = [];
+      const actions: EditorAgentAction[] = [];
+      const log = createBufferedServerLogSink();
+      const authority = {
+        resolveCapabilityForDelegation: vi.fn((input: CodingRuntimeCapabilityDelegationInput) => {
+          usages.push(input.usage);
+          delegations.push(input);
+          return budgetAccepts(input.usage)
+            ? { ok: true as const, envelope: fullyAuthorizedEnvelope }
+            : { ok: false as const, reason: "authority-budget-exceeded" as const };
+        }),
+        revalidateCapabilityForMutation: vi.fn(() => ({
+          ok: true as const,
+          envelope: fullyAuthorizedEnvelope,
+        })),
+      };
+      const ports = createCodingToolReadEditPorts({
+        activityLog: log,
+        secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true as const, text }) },
+        editorAgentClient: {
+          action: (action) => {
+            actions.push(action);
+            return Promise.resolve({
+              ok: true as const,
+              value: {
+                result: {
+                  schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                  actionId: action.actionId,
+                  sessionId: action.sessionId,
+                  status: "queued" as const,
+                },
+              },
+            });
+          },
+        },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-charge",
+          authorityRef: { runId: binding.runId, envelopeDigest: binding.envelopeDigest },
+          origin: "agent",
+          workspaceId: binding.workspaceId,
+          workspaceRootDigest: binding.workspaceRootDigest,
+          expiresAt: binding.expiresAt,
+        }),
+        resolveRepositoryReadContext: () => binding,
+        mutationLeaseCoordinator: {
+          register: () => true,
+          discard: () => true,
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
+      });
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        () => context,
+        { ...governedPorts(), editorChangeset: ports.editorChangeset },
+        {
+          invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
+          catalogActivityLog: log,
+          reserveEditDelegation: true,
+        },
+      );
+      return { runtime, usages, actions, delegations, text, log };
+    }
+
+    function replaceAllBody(text: string): string {
+      return JSON.stringify({
+        action: "edit",
+        actionId: "edit-charge",
+        idempotencyKey: "edit-charge-key",
+        changeset: {
+          edits: [{ file: "src/a.ts", oldString: "foo", newString: "bar", replaceAll: true }],
+          deletions: [],
+          renames: [],
+          files: [{ file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(text) }],
+          selectedFiles: ["src/a.ts"],
+        },
+      });
+    }
+
+    it("charges the run's patch budget with the materialized diff of a replaceAll edit (#3873 review)", async () => {
+      const fixture = materializedEditFixture(() => true);
+
+      const result = await fixture.runtime.execute({
+        body: replaceAllBody(fixture.text),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result.status).toBe("completed");
+      const patch = fixture.actions[0]?.changeset?.patch ?? "";
+      const materializedBytes = Buffer.byteLength(patch, "utf8");
+      expect(materializedBytes).toBeGreaterThan(1_000);
+      expect(fixture.usages.map((usage) => usage.toolCalls)).toEqual([1, 0]);
+      expect(fixture.usages.reduce((sum, usage) => sum + usage.patchBytes, 0)).toBe(
+        materializedBytes,
+      );
+      expect(fixture.delegations[1]).toMatchObject({
+        delegationId: expect.stringMatching(/^materialized-patch:[a-f0-9]{64}$/u) as string,
+        idempotencyKey: expect.stringMatching(/^materialized-patch:[a-f0-9]{64}$/u) as string,
+        usage: { toolCalls: 0, promptTokens: 0 },
+      });
+    });
+
+    it("refuses the edit before any editor action when the materialized diff does not fit the budget", async () => {
+      const fixture = materializedEditFixture((usage) => usage.toolCalls === 1);
+
+      const result = await fixture.runtime.execute({
+        body: replaceAllBody(fixture.text),
+        capability: "runtime-capability-secret",
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "LIMIT_EXCEEDED" }],
+      });
+      expect(fixture.actions).toEqual([]);
+      expect(fixture.usages).toHaveLength(2);
+      const refused = fixture.log.events.find(
+        (event) => event.op === "coding-runtime.edit.refused",
+      );
+      expect(refused).toMatchObject({
+        level: "warn",
+        errorKind: "validation-failed",
+        extra: {
+          reasonCode: "LIMIT_EXCEEDED",
+          replacementRefusal: "patch-budget-exhausted",
+          editForm: "replacements",
+        },
+      });
     });
 
     it("denies a staged edit before the editor delegate ever runs when the catalog budget denies it", async () => {
@@ -1722,6 +1886,8 @@ describe("CodingToolAuthorityPort", () => {
           idempotencyKey: "catalog-edit-denied-key",
           changeset: {
             edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+            deletions: [],
+            renames: [],
             files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
             selectedFiles: ["src/a.ts"],
           },
@@ -1756,6 +1922,8 @@ describe("CodingToolAuthorityPort", () => {
           idempotencyKey: "catalog-edit-failed-key",
           changeset: {
             edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+            deletions: [],
+            renames: [],
             files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
             selectedFiles: ["src/a.ts"],
           },

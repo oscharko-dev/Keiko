@@ -214,9 +214,10 @@ enterprise proxy and custom-CA path, and any official authentication navigation 
 server-side against the closed official-origin policy before the browser may open it. Credentials
 never enter browser intent, runtime events, or adapter launch configuration.
 
-Content-bearing live prompt, response, diff, and diagnostic events are transient, bounded, and
-access-controlled. Durable operational events and evidence are a separate content-free projection;
-they carry only ids, digests, counts, booleans, closed states/codes, and safe labels.
+Content-bearing live prompt, response, model-reasoning (see the Issue #3878 amendment), diff, and
+diagnostic events are transient, bounded, and access-controlled. Durable operational events and
+evidence are a separate content-free projection; they carry only ids, digests, counts, booleans,
+closed states/codes, and safe labels.
 
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
@@ -344,3 +345,27 @@ takeover, signal, crash, restart, reconciliation, and cleanup therefore apply to
 and all of its descendants; there is no separately owned sidecar outside the tree. Successful launch
 returns only content-free attestation binding the backend/platform, runtime/model sources, Authority
 Envelope digest, reviewed-egress receipt, and policy/proxy/CA digests.
+
+## Amendment — Issue #3878 shows the model's reasoning in the live timeline (2026-10-06)
+
+Owner decision (2026-10-06): the Coding Workbench timeline shows the model's own reasoning. Until
+now the timeline stated that it "never exposes private reasoning", and the model gateway discarded
+the reasoning that providers return beside the answer (LiteLLM's `reasoning_content`).
+
+### D8 — Model reasoning is transient live content, labelled, opt-out, and never evidence
+
+- **Default on, operator opt-out.** A coding-workbench call forwards the model's reasoning unless
+  the gateway configuration sets `codingReasoningDisplay: "off"`; with the switch off the gateway
+  still parses the reasoning and discards it. Every other surface always discards it (ADR-0003).
+- **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
+  `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
+  projection carries it beside its assistant message, never inside the answer. The timeline shows
+  it as a collapsible "Model reasoning" block labelled as unverified model reasoning, open while its
+  turn streams and collapsed once the turn completes; the boundary copy says what is shown instead
+  of promising that reasoning is never exposed.
+- **Bounded, and the first content to go.** Reasoning keeps to half of a message's live byte
+  budget, yields room to the answer within its message, and is the first content evicted under turn
+  or feed byte pressure; the newest message keeps the reasoning that may still be streaming.
+- **Never evidence.** D4's durable rule is unchanged: reasoning never enters Coding History,
+  evidence, a support export or the Activity Log. Durable lines record only counts — reasoning
+  events, bytes, provider-reported reasoning tokens, frames and a closed disposition — never text.

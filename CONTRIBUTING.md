@@ -135,6 +135,15 @@ for an answer read aloud in the voice dialogue, under the correlation its synthe
 `search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
 assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
 (`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
+provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
+`reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,
+the provider-reported `reasoningTokens` (absent when not reported, never estimated) and
+`reasoningDisposition` (`none`, `forwarded`, `discarded`); `coding-sidecar.gateway.usage-settled`
+records `contentBytes`, `reasoningBytes` and `reasoningTokens` beside `outputBytes`;
+`coding-sidecar.gateway.outcome` records the `reasoningFrames` forwarded to the coding runtime; and
+`coding-runtime.history-projection` the `reasoningSignalCount` that reached the timeline. The
+reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`

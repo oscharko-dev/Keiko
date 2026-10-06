@@ -15,6 +15,7 @@ import {
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
   CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
   CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
   CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
@@ -24,6 +25,7 @@ import {
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
+  type CodingSafeActivityReasoning,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
@@ -126,6 +128,8 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
         "tool-transition-refused",
         "tool-name-missing",
         "feed-unavailable",
+        // #3878: model reasoning addressed to a message that is not the assistant's.
+        "reasoning-role-invalid",
       ],
     },
     lossState: {
@@ -164,6 +168,12 @@ export type CodingSafeActivitySignal =
     })
   | (SignalBase & {
       readonly kind: "text";
+      readonly messageId: string;
+      readonly text: string;
+    })
+  // #3878: a piece of the model's reasoning for an assistant message, appended like its text.
+  | (SignalBase & {
+      readonly kind: "reasoning";
       readonly messageId: string;
       readonly text: string;
     })
@@ -209,6 +219,7 @@ export interface CodingSafeActivityProjectionLimits {
   readonly maxSegmentsPerMessage?: number | undefined;
   readonly maxToolsPerTurn?: number | undefined;
   readonly maxMessageBytes?: number | undefined;
+  readonly maxReasoningBytes?: number | undefined;
   readonly maxTurnBytes?: number | undefined;
   readonly maxTotalBytes?: number | undefined;
   readonly maxPlanSteps?: number | undefined;
@@ -264,6 +275,7 @@ interface MutableMessage {
   occurredAt: string;
   segments: CodingSafeActivityTextSegment[];
   truncated: boolean;
+  reasoning?: CodingSafeActivityReasoning;
 }
 
 interface MutableTurn {
@@ -316,6 +328,7 @@ interface ResolvedLimits {
   readonly maxSegmentsPerMessage: number;
   readonly maxToolsPerTurn: number;
   readonly maxMessageBytes: number;
+  readonly maxReasoningBytes: number;
   readonly maxTurnBytes: number;
   readonly maxTotalBytes: number;
   readonly maxPlanSteps: number;
@@ -332,7 +345,8 @@ type ProjectionRejection =
   | "message-unknown"
   | "tool-transition-refused"
   | "tool-name-missing"
-  | "feed-unavailable";
+  | "feed-unavailable"
+  | "reasoning-role-invalid";
 
 type SignalApplication =
   "accepted" | "capacity-dropped" | "restatement-superseded" | ProjectionRejection;
@@ -757,6 +771,10 @@ function resolvedLimits(input: CodingSafeActivityProjectionLimits = {}): Resolve
     ),
     maxToolsPerTurn: capped(input.maxToolsPerTurn, CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN),
     maxMessageBytes: capped(input.maxMessageBytes, CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES),
+    maxReasoningBytes: capped(
+      input.maxReasoningBytes,
+      CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
+    ),
     maxTurnBytes: capped(input.maxTurnBytes, CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES),
     maxTotalBytes: capped(input.maxTotalBytes, CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES),
     maxPlanSteps: capped(input.maxPlanSteps, CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS),
@@ -785,6 +803,7 @@ function applySignal(
   if (entry.feed.availability !== "available") return "feed-unavailable";
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
   if (signal.kind === "text") return applyText(entry, signal, limits);
+  if (signal.kind === "reasoning") return applyReasoning(entry, signal, limits);
   if (signal.kind === "plan") return applyPlan(entry, signal, limits);
   return applyTool(entry, signal, limits);
 }
@@ -863,18 +882,151 @@ function applyText(
   const located = locateMessage(entry, signal.messageId);
   if (located === undefined) return "message-unknown";
   const { message, turn } = located;
-  if (message.truncated) return "accepted";
-  if (message.segments.length >= limits.maxSegmentsPerMessage) {
-    markMessageTruncated(message, turn);
-    return "accepted";
+  let rest = stripUnsafeFormatChars(signal.text);
+  while (rest.length > 0 && !message.truncated) {
+    rest = appendTextPiece(message, turn, rest, limits);
   }
-  const cleaned = stripUnsafeFormatChars(signal.text);
-  const clipped = clipTextForMessage(message, cleaned, limits.maxMessageBytes);
-  if (clipped.text.length > 0) {
-    message.segments.push({ kind: "text", text: clipped.text, truncated: clipped.truncated });
-  }
-  if (clipped.truncated) markMessageTruncated(message, turn);
   return "accepted";
+}
+
+// Lab ledger F2 (#3873): a streamed answer reaches the projection as many small text signals, one
+// per history pull, and each used to open a segment of its own, so a streamed answer hit the
+// segment bound after its first 32 pulls and the rest of it was dropped. A signal now continues the
+// message's last segment up to the segment's character bound and opens a new segment only beyond
+// it. Places one segment's worth of `text` and returns what is left; the message is marked
+// truncated once nothing more fits, which ends the caller's loop.
+function appendTextPiece(
+  message: MutableMessage,
+  turn: MutableTurn,
+  text: string,
+  limits: ResolvedLimits,
+): string {
+  const last = message.segments.at(-1);
+  const continuing = last !== undefined && continuesSegment(last, text);
+  if (!continuing && message.segments.length >= limits.maxSegmentsPerMessage) {
+    markMessageTruncated(message, turn);
+    return "";
+  }
+  const prefix = continuing ? last.text : "";
+  const characters = boundedCharacters(
+    text,
+    CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS - prefix.length,
+  );
+  const fits = (candidate: string, truncated: boolean): boolean =>
+    textCandidateBytes(message, continuing, prefix + candidate, truncated) <=
+    limits.maxMessageBytes;
+  cedeReasoningRoom(message, turn, () => fits(characters.join(""), false));
+  const clipped = clipToBudget(characters, fits);
+  if (clipped.text.length > 0) {
+    const segment: CodingSafeActivityTextSegment = {
+      kind: "text",
+      text: prefix + clipped.text,
+      truncated: clipped.truncated,
+    };
+    if (continuing) message.segments[message.segments.length - 1] = segment;
+    else message.segments.push(segment);
+  }
+  if (clipped.truncated) {
+    markMessageTruncated(message, turn);
+    return "";
+  }
+  return text.slice(characters.join("").length);
+}
+
+// A segment takes more text while it is whole and has room for at least the next code point.
+function continuesSegment(segment: CodingSafeActivityTextSegment, text: string): boolean {
+  const next = text.codePointAt(0) ?? 0;
+  const nextLength = next > 0xff_ff ? 2 : 1;
+  return (
+    !segment.truncated &&
+    segment.text.length + nextLength <= CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS
+  );
+}
+
+function textCandidateBytes(
+  message: MutableMessage,
+  continuing: boolean,
+  text: string,
+  truncated: boolean,
+): number {
+  const segment: CodingSafeActivityTextSegment = { kind: "text", text, truncated };
+  const segments = continuing
+    ? [...message.segments.slice(0, -1), segment]
+    : [...message.segments, segment];
+  return bytes({ ...message, segments, truncated });
+}
+
+// The longest prefix of `characters` that `fits`; `truncated` once any of them was left out.
+function clipToBudget(
+  characters: readonly string[],
+  fits: (candidate: string, truncated: boolean) => boolean,
+): { readonly text: string; readonly truncated: boolean } {
+  const whole = characters.join("");
+  if (fits(whole, false)) return { text: whole, truncated: false };
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(characters.slice(0, middle).join(""), true)) low = middle;
+    else high = middle - 1;
+  }
+  return { text: characters.slice(0, low).join(""), truncated: true };
+}
+
+// #3878: inside one message the answer has priority over the model's reasoning. When the answer
+// needs room the reasoning is cut back first, keeping its beginning and marking it shortened, and
+// removed only when the answer needs all of it (the turn then records the eviction).
+function cedeReasoningRoom(message: MutableMessage, turn: MutableTurn, fits: () => boolean): void {
+  const reasoning = message.reasoning;
+  if (reasoning === undefined || fits()) return;
+  const characters = codePoints(reasoning.text);
+  const keep = (count: number): boolean => {
+    if (count === 0) delete message.reasoning;
+    else message.reasoning = { text: characters.slice(0, count).join(""), truncated: true };
+    return fits();
+  };
+  let low = 0;
+  let high = characters.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (keep(middle)) low = middle;
+    else high = middle - 1;
+  }
+  keep(low);
+  if (low === 0) turn.truncated = true;
+}
+
+function applyReasoning(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "reasoning" }>,
+  limits: ResolvedLimits,
+): SignalApplication {
+  const located = locateMessage(entry, signal.messageId);
+  if (located === undefined) return "message-unknown";
+  const { message } = located;
+  if (message.role !== "assistant") return "reasoning-role-invalid";
+  if (message.reasoning?.truncated !== true) {
+    appendReasoning(message, stripUnsafeFormatChars(signal.text), limits);
+  }
+  return "accepted";
+}
+
+// #3878: the model's reasoning grows with every streamed piece inside its own bound (half the
+// message budget, so the answer keeps room of its own) and the message budget. Clipped once, it
+// takes no further piece, so the shown reasoning is always a true prefix of what the model wrote.
+function appendReasoning(message: MutableMessage, text: string, limits: ResolvedLimits): void {
+  const prefix = message.reasoning?.text ?? "";
+  const clipped = clipToBudget(codePoints(text), (candidate, truncated) => {
+    const reasoning = { text: prefix + candidate, truncated };
+    return (
+      bytes(reasoning.text) <= limits.maxReasoningBytes &&
+      bytes({ ...message, reasoning }) <= limits.maxMessageBytes
+    );
+  });
+  const reasoningText = prefix + clipped.text;
+  if (reasoningText.length > 0) {
+    message.reasoning = { text: reasoningText, truncated: clipped.truncated };
+  }
 }
 
 function applyTool(
@@ -1032,15 +1184,35 @@ function isFeedNearProjectionLimit(entry: ProjectionEntry, limits: ResolvedLimit
 
 function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void {
   if (entry.feed.availability !== "available") return;
-  for (const turn of entry.feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
-  while (bytes(entry.feed) > limits.maxTotalBytes && entry.feed.turns.length > 0) {
-    const removed = entry.feed.turns.shift();
+  const feed = entry.feed;
+  for (const turn of feed.turns) shrinkTurn(entry, turn, limits.maxTurnBytes);
+  shedSettledReasoning(feed.turns, () => bytes(feed) > limits.maxTotalBytes);
+  while (bytes(feed) > limits.maxTotalBytes && feed.turns.length > 0) {
+    const removed = feed.turns.shift();
     if (removed !== undefined) releaseTurn(entry, removed);
-    entry.feed.truncated = true;
+    feed.truncated = true;
+  }
+}
+
+// #3878: under byte pressure the model's reasoning yields first. The reasoning of every message but
+// the newest one goes, oldest first, before any answer text, tool or turn is evicted; the newest
+// message keeps the reasoning that may still be streaming.
+function shedSettledReasoning(turns: readonly MutableTurn[], over: () => boolean): void {
+  const newest = turns.at(-1)?.messages.at(-1);
+  for (const turn of turns) {
+    for (const message of turn.messages) {
+      // Only a message with settled reasoning costs a size check, so a feed without reasoning
+      // pays nothing for this pass.
+      if (message === newest || message.reasoning === undefined) continue;
+      if (!over()) return;
+      delete message.reasoning;
+      turn.truncated = true;
+    }
   }
 }
 
 function shrinkTurn(entry: ProjectionEntry, turn: MutableTurn, maxBytes: number): void {
+  shedSettledReasoning([turn], () => bytes(turn) > maxBytes);
   while (bytes(turn) > maxBytes && turn.messages.length > 0) {
     const message = turn.messages[0];
     if (message !== undefined && message.segments.length > 0) message.segments.shift();
@@ -1074,25 +1246,9 @@ function markMessageTruncated(message: MutableMessage, turn: MutableTurn): void 
   turn.truncated = true;
 }
 
-function clipTextForMessage(
-  message: MutableMessage,
-  value: string,
-  maxBytes: number,
-): { readonly text: string; readonly truncated: boolean } {
-  const characters = boundedCharacters(value, CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
-  const bounded = characters.join("");
-  if (bounded === value && candidateMessageBytes(message, bounded, false) <= maxBytes) {
-    return { text: bounded, truncated: false };
-  }
-  let low = 0;
-  let high = characters.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const candidate = characters.slice(0, middle).join("");
-    if (candidateMessageBytes(message, candidate, true) <= maxBytes) low = middle;
-    else high = middle - 1;
-  }
-  return { text: characters.slice(0, low).join(""), truncated: true };
+// Whole code points, so a clip never splits a surrogate pair.
+function codePoints(value: string): readonly string[] {
+  return boundedCharacters(value, value.length);
 }
 
 function boundedCharacters(value: string, maxChars: number): readonly string[] {
@@ -1104,11 +1260,6 @@ function boundedCharacters(value: string, maxChars: number): readonly string[] {
     usedChars += character.length;
   }
   return characters;
-}
-
-function candidateMessageBytes(message: MutableMessage, text: string, truncated: boolean): number {
-  const segment: CodingSafeActivityTextSegment = { kind: "text", text, truncated };
-  return bytes({ ...message, segments: [...message.segments, segment], truncated });
 }
 
 const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
@@ -1151,7 +1302,7 @@ function allowedToolTransition(
 function validSignal(signal: CodingSafeActivitySignal): boolean {
   if (!validSignalBase(signal)) return false;
   if (signal.kind === "message") return validMessageSignal(signal);
-  if (signal.kind === "text") return validTextSignal(signal);
+  if (signal.kind === "text" || signal.kind === "reasoning") return validTextSignal(signal);
   if (signal.kind === "plan") return validPlanSignal(signal);
   return validToolSignal(signal);
 }
@@ -1174,7 +1325,7 @@ function validMessageSignal(
 }
 
 function validTextSignal(
-  signal: Extract<CodingSafeActivitySignal, { readonly kind: "text" }>,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "text" | "reasoning" }>,
 ): boolean {
   return safeId(signal.messageId) && typeof signal.text === "string" && signal.text.length > 0;
 }
@@ -1214,7 +1365,10 @@ function signalDropReason(
   signal: CodingSafeActivitySignal,
 ): CodingSafeActivityDropReason | undefined {
   if (!validSignal(signal)) return "validation-rejected";
-  if (signal.kind === "text" && stripUnsafeFormatChars(signal.text).length === 0) {
+  if (
+    (signal.kind === "text" || signal.kind === "reasoning") &&
+    stripUnsafeFormatChars(signal.text).length === 0
+  ) {
     return "redactor-collapsed";
   }
   return signal.kind === "plan" && signal.steps.length > 0 && planCollapses(signal.steps)
@@ -1255,6 +1409,7 @@ const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
 const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
   message: ["messageId", "role", "parentMessageId"],
   text: ["messageId", "text"],
+  reasoning: ["messageId", "text"],
   plan: ["anchorMessageId", "steps"],
   tool: ["messageId", "callId", "tool", "state"],
 };

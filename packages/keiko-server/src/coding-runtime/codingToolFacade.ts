@@ -788,22 +788,27 @@ function validVerificationFailureLocations(
 // closed reason code -- never derived from content. Before this the model received the bare code
 // and, in the probe rehearsal of 2026-09-08, resent the same rejected patch six times and then
 // ended its run without delivering (#3390).
+// #3873: the model sees one edit form, exact replacements plus deletions and renames, so these
+// sentences name that form and never a patch the schema does not offer.
 const EDIT_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
   CONTENT_HASH_MISMATCH:
-    "The file changed after the read that produced expectedContentHash; an earlier successful edit of yours changes it too. Re-read the file with keiko_workspace_read and rebuild the patch against its current content and digest. Do not resend the same patch.",
+    "The file changed after the read that produced expectedContentHash; an earlier successful edit of yours changes it too. Re-read the file with keiko_workspace_read, copy its current text and digest, and submit a fresh edit. Do not resend the same edit.",
   INVALID_EDITS:
-    "The edit does not apply to the file as it is now: an oldString is missing or not unique, or a unified-diff hunk's context, line numbers or header no longer match. Re-read the file, copy its exact current text into oldString (prefer edits over patch), and submit one fresh edit that declares every file it touches.",
+    "The edit does not apply to the file as it is now: an oldString is missing or not unique, or a path is named twice, addressed after being renamed away, or missing from files or selectedFiles. Re-read the file, copy its exact current text into oldString, and submit one fresh call that declares every path it touches.",
   PRECONDITION_REQUIRED:
     "Read the file with keiko_workspace_read first and bind the edit to the digest that read returns.",
+  LIMIT_EXCEEDED:
+    "The edit is larger than the run or one changeset allows. Narrow replaceAll, split the call into smaller changesets, or finish with the changes already applied; do not resend it unchanged.",
   OUT_OF_SCOPE:
     "The path is outside the workspace or protected by policy. This is a decision, not a transient error; do not retry it.",
 };
-// The refusals whose route sentence is structural (paths, hunk indexes, line numbers) and therefore
-// safe to show; every other code keeps the code alone.
+// The refusals whose route sentence is structural (paths, hunk indexes, line numbers, sizes) and
+// therefore safe to show; every other code keeps the code alone.
 const EDIT_FAILURE_DETAIL_REASON_CODES: ReadonlySet<string> = new Set([
   "CONTENT_HASH_MISMATCH",
   "INVALID_EDITS",
   "PRECONDITION_REQUIRED",
+  "LIMIT_EXCEEDED",
   "OUT_OF_SCOPE",
 ]);
 // One printable ASCII line, bounded: anything else is not a route sentence and is dropped.

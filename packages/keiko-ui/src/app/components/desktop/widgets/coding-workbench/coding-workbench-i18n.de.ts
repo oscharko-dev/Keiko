@@ -522,7 +522,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.previousPath": " (zuvor {path})",
   "codingWorkbench.changes.diff.elevatedReview": "Erweiterte Prüfung",
   "codingWorkbench.activity.reasoningBoundary":
-    "Diese Zeitleiste zeigt beobachtbare Konversation und Arbeitsaktivität. Private Gedankengänge werden niemals offengelegt.",
+    "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, die Überlegungen des Modells. Diese Überlegungen sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
+  "codingWorkbench.activity.reasoning.title": "Überlegungen des Modells",
+  "codingWorkbench.activity.reasoning.badge": "Ungeprüft",
+  "codingWorkbench.activity.reasoning.note":
+    "Ungeprüfte Überlegungen des Modells: So ist es an diesen Schritt herangegangen. Sie können falsch sein; für dich zählen die Antwort und die Änderungen.",
   "codingWorkbench.activity.status.idle": "Noch kein Lauf gestartet.",
   "codingWorkbench.activity.status.loading": "Aktivität wird verbunden…",
   "codingWorkbench.activity.status.live": "Live.",

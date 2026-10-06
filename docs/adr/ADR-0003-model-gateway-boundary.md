@@ -683,6 +683,36 @@ from the same effective timeout. Retrieval, indexing and voice retain their own,
 floor (above). The gateway's body-free call-started line records the effective `timeoutMs` so a
 slow self-hosted provider can be distinguished from a hung turn.
 
+**The streamed chunk model and model reasoning (#3878, 2026-10-06).** `GatewayStreamChunk` has
+three kinds: `delta` (answer text), `reasoning` (the model's own reasoning, which LiteLLM normalises
+as `reasoning_content` for a reasoning parser behind vLLM and for Anthropic thinking; a server that
+names it `reasoning` is read the same way) and the terminal `done`. Reasoning never enters
+`content`: the normalized response carries it as `reasoning`, its UTF-8 size as
+`usage.reasoningBytes`, and the provider's own `usage.completion_tokens_details.reasoning_tokens`
+as `usage.reasoningTokens` when the provider reports it (never estimated). It passes the same
+secret redaction as the answer, in a hold-back lane of its own, and a reasoning-only answer still
+fails as output-exhausted or empty. The gateway hands reasoning only to a `coding-workbench` call,
+and only while the configuration's `codingReasoningDisplay` is not `"off"` (owner decision
+2026-10-06: on by default, opt-out only); every other surface keeps its answer without reasoning.
+Discarded reasoning chunks are dropped where the provider stream is read, below the commit point:
+a discarded thought is never a delivered chunk, so it neither starts the caller's answer nor ends
+the startup retries, while forwarded reasoning commits the stream exactly like a content delta.
+Reasoning is a body: `chat.response.streamed` records its events and bytes, and
+`gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
+and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.
+
+**Coding sidecar streaming (lab ledger F2, #3873, 2026-10-06).** The coding sidecar profile used
+to be hard-coded as non-streaming, so the sidecar read a streaming provider in full before OpenCode
+saw a byte. It now streams wherever the coding model's capability streams and the configuration's
+`codingStreaming` is not `"off"` (default on): OpenCode receives each answer and reasoning delta as
+an OpenAI-compatible SSE frame (`content`, `reasoning_content`) as it arrives, and the tool calls,
+assembled from their fragments and bound against the catalog first, as complete `tool_calls`
+deltas with their `index`. Usage and prompt settlement, the spend reservation and the completion
+evidence still settle before the terminal `[DONE]`. The answer (text and tool calls) and the
+forwarded reasoning are each bounded by the turn's output allowance in bytes, apart from each
+other, so a reasoning model keeps its whole answer budget. `codingStreaming: "off"` restores the
+buffered answer.
+
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:
 

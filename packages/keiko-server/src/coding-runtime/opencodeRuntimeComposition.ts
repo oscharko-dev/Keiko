@@ -975,9 +975,10 @@ function readinessV2Ports(
         );
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      for await (const event of client.events(combined)) {
-        yield v2SyncHint(event, fixedSessionId, input.onQuestionObserved);
-      }
+      const sessionId = fixedSessionId;
+      yield* coalescedSyncHints(client.events(combined), (event) =>
+        v2SyncHint(event, sessionId, input.onQuestionObserved),
+      );
     },
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
       if (fixedSessionId === undefined) throw new Error("opencode-v2-session-missing");
@@ -1025,6 +1026,94 @@ function v2ExecutionState(type: unknown): "activity" | "terminal" | undefined {
   )
     return "terminal";
   return undefined;
+}
+
+function plainSyncHint(hint: OpenCodeSyncHint | undefined): boolean {
+  return hint !== undefined && !("id" in hint) && hint.control === undefined;
+}
+
+// A plain hint asks for one history read. One already queued covers the new one, and a control
+// hint's own read covers every plain hint queued before it; control hints keep their order.
+function enqueueSyncHint(pending: OpenCodeSyncHint[], hint: OpenCodeSyncHint): void {
+  if (plainSyncHint(hint)) {
+    if (!plainSyncHint(pending.at(-1))) pending.push(hint);
+    return;
+  }
+  while (plainSyncHint(pending.at(-1))) pending.pop();
+  pending.push(hint);
+}
+
+/**
+ * Lab ledger F2 (#3873): a live turn can emit a runtime event for every streamed token, and every
+ * hint costs one full history read, so a burst of events used to queue one read each and the live
+ * timeline fell further behind the model the longer it answered. Events are read as they arrive and
+ * the hints that pile up while a read runs collapse into one, since the next read sees the whole
+ * history anyway; control hints are never dropped and keep their order. A stream failure surfaces
+ * on the next pull, after the hints read before it.
+ */
+export async function* coalescedSyncHints(
+  events: AsyncIterable<Readonly<Record<string, unknown>>>,
+  toHint: (event: Readonly<Record<string, unknown>>) => OpenCodeSyncHint,
+): AsyncGenerator<OpenCodeSyncHint> {
+  const pump: SyncHintPump = {
+    source: events[Symbol.asyncIterator](),
+    toHint,
+    pending: [],
+    ended: false,
+    stopped: false,
+  };
+  pullSyncHint(pump);
+  try {
+    for (;;) {
+      const hint = pump.pending.shift();
+      if (hint !== undefined) yield hint;
+      else if (pump.failure !== undefined) throw pump.failure.error;
+      else if (pump.ended) return;
+      else
+        await new Promise<void>((resolve) => {
+          pump.wake = resolve;
+        });
+    }
+  } finally {
+    // The read still in flight ends with the caller's abort signal, or closes the source once it
+    // resolves; nothing here waits on it.
+    pump.stopped = true;
+  }
+}
+
+interface SyncHintPump {
+  readonly source: AsyncIterator<Readonly<Record<string, unknown>>>;
+  readonly toHint: (event: Readonly<Record<string, unknown>>) => OpenCodeSyncHint;
+  readonly pending: OpenCodeSyncHint[];
+  ended: boolean;
+  stopped: boolean;
+  failure?: { readonly error: unknown };
+  wake?: () => void;
+}
+
+// Reads the next event without waiting for the consumer. A failure is kept for the consumer, who
+// receives it on its next pull, after every hint read before it.
+function pullSyncHint(pump: SyncHintPump): void {
+  const settle = (error?: unknown): void => {
+    if (error !== undefined) pump.failure ??= { error };
+    pump.ended = true;
+    pump.wake?.();
+  };
+  const onNext = (next: IteratorResult<Readonly<Record<string, unknown>>>): void => {
+    if (next.done === true) {
+      settle();
+      return;
+    }
+    if (pump.stopped) {
+      settle();
+      void pump.source.return?.(undefined).then(undefined, settle);
+      return;
+    }
+    enqueueSyncHint(pump.pending, pump.toHint(next.value));
+    pump.wake?.();
+    pullSyncHint(pump);
+  };
+  void pump.source.next().then(onNext).then(undefined, settle);
 }
 
 function v2SyncHint(

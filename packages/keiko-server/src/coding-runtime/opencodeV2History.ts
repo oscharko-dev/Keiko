@@ -2,6 +2,7 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -25,6 +26,9 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     eventCount: { type: "integer", dataClass: "count", required: true },
     signalCount: { type: "integer", dataClass: "count", required: true },
     emptyTextCount: { type: "integer", dataClass: "count", required: true },
+    // #3878: how many of the signals carried model reasoning to the live timeline; a count only.
+    // `required: false`: lines written before this field existed lack it.
+    reasoningSignalCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -241,6 +245,44 @@ function textCandidate(id: string, index: number, text: string, occurredAt: stri
   });
 }
 
+// #3878: the live timeline shows at most CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES of a
+// message's reasoning, so a reasoning part is read up to twice that and no further: a long reasoner
+// neither fails the history read like an oversized answer nor costs a digest of its whole text on
+// every pull. The prefix grows with the part until the bound and then stays fixed.
+const MAX_PROJECTED_REASONING_UTF8_BYTES = 2 * CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES;
+
+function projectedReasoning(text: string): string {
+  if (Buffer.byteLength(text, "utf8") <= MAX_PROJECTED_REASONING_UTF8_BYTES) return text;
+  let used = 0;
+  let end = 0;
+  for (const character of text) {
+    used += Buffer.byteLength(character, "utf8");
+    if (used > MAX_PROJECTED_REASONING_UTF8_BYTES) break;
+    end += character.length;
+  }
+  return text.slice(0, end);
+}
+
+// OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content part. It
+// grows by suffix like text and is projected into its own live signal; Coding History never
+// captures it (conversationMessages keeps text only). An empty part reconciles its identity only.
+function reasoningCandidate(
+  id: string,
+  index: number,
+  text: string,
+  occurredAt: string,
+): Candidate {
+  const key = `${id}:reasoning:${String(index)}`;
+  const shown = projectedReasoning(text);
+  if (shown.length === 0) return candidate(key, "observation", shown);
+  return candidate(key, "observation", shown, {
+    kind: "reasoning",
+    messageId: id,
+    text: shown,
+    occurredAt,
+  });
+}
+
 function visibleUserText(message: Readonly<Record<string, unknown>>): string {
   const text = message.text;
   if (typeof text !== "string") throw new OpenCodeV2HistoryError("reason=user-text-invalid");
@@ -334,6 +376,8 @@ function assistantPartCandidates(
   const part = record(value);
   if (part?.type === "text" && typeof part.text === "string")
     return [textCandidate(messageId, index, part.text, occurredAt)];
+  if (part?.type === "reasoning" && typeof part.text === "string")
+    return [reasoningCandidate(messageId, index, part.text, occurredAt)];
   if (part?.type !== "tool") return [];
   const signal = toolState(part, messageId);
   return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
@@ -433,9 +477,17 @@ function makePending(
   return { nextKnown, events, signals, emptyTextCount };
 }
 
+type GrowingTextSignal = Extract<CodingSafeActivitySignal, { readonly kind: "text" | "reasoning" }>;
+
+// Answer text and model reasoning both grow by suffix and are projected by their new characters.
+function growingTextSignal(item: Candidate): GrowingTextSignal | undefined {
+  const signal = item.signal;
+  return signal?.kind === "text" || signal?.kind === "reasoning" ? signal : undefined;
+}
+
 function candidateText(item: Candidate): string | undefined {
   if (item.emptyText) return "";
-  return item.signal?.kind === "text" ? item.signal.text : undefined;
+  return growingTextSignal(item)?.text;
 }
 
 function incrementalSignal(
@@ -447,7 +499,8 @@ function incrementalSignal(
   if (text === undefined || offset === undefined) return item.signal;
   if (offset > text.length || digest([item.key, text.slice(0, offset)]) !== previous?.digest)
     throw new OpenCodeV2HistoryError("reason=text-prefix-invalid");
-  return item.signal?.kind === "text" ? { ...item.signal, text: text.slice(offset) } : item.signal;
+  const growing = growingTextSignal(item);
+  return growing === undefined ? item.signal : { ...growing, text: text.slice(offset) };
 }
 
 function recordNativeQuestions(
@@ -487,6 +540,9 @@ function recordHistoryProjection(
         eventCount: pending.events.length,
         signalCount: pending.signals.size,
         emptyTextCount: pending.emptyTextCount,
+        reasoningSignalCount: [...pending.signals.values()].filter(
+          (signal) => signal.kind === "reasoning",
+        ).length,
       },
     ),
   );

@@ -335,11 +335,14 @@ function repositorySearchSpec(): OpenCodeToolSpec {
 }
 
 // #3873: the managed-runtime dialect requires every declared argument, so the model-visible edit
-// form is exactly one: ordered exact-text replacements. Dispatch materializes them into the unified
-// diff the governed editor path validates, reviews and applies (codingToolReplacementEdits.ts).
+// form is exactly one: ordered exact-text replacements, plus whole-file deletions and renames
+// (follow-up). Dispatch materializes all three into the unified diff the governed editor path
+// validates, reviews and applies (codingToolReplacementEdits.ts).
+const CHANGESET_PATH_SCHEMA: CatalogJsonObject = { type: "string", minLength: 1, maxLength: 512 };
+
 const CHANGESET_FILE_ENTRY_SCHEMA = managedObjectSchema(
   {
-    file: { type: "string", minLength: 1, maxLength: 512 },
+    file: CHANGESET_PATH_SCHEMA,
     // #3414 AC1: exact real wire pattern (opencodeToolSchemas.ts's `expectedContentHash`).
     expectedContentHash: {
       type: "string",
@@ -353,7 +356,7 @@ const CHANGESET_FILE_ENTRY_SCHEMA = managedObjectSchema(
 
 const REPLACEMENT_EDIT_SCHEMA = managedObjectSchema(
   {
-    file: { type: "string", minLength: 1, maxLength: 512 },
+    file: CHANGESET_PATH_SCHEMA,
     oldString: { type: "string", maxLength: 65_536 },
     newString: { type: "string", maxLength: 65_536 },
     replaceAll: { type: "boolean" },
@@ -361,36 +364,43 @@ const REPLACEMENT_EDIT_SCHEMA = managedObjectSchema(
   ["file", "newString", "oldString", "replaceAll"],
 );
 
+const CHANGESET_RENAME_SCHEMA = managedObjectSchema(
+  { from: CHANGESET_PATH_SCHEMA, to: CHANGESET_PATH_SCHEMA },
+  ["from", "to"],
+);
+
 function changesetEditSpec(): OpenCodeToolSpec {
-  // The provider descriptor requires selectedFiles and replaceAll explicitly; the runtime source
-  // also accepts their omission. Both preserve the closed nested objects. Dispatch-time changeset
-  // validation remains authoritative and never gains permissions from this advisory projection.
+  // The provider descriptor requires selectedFiles, replaceAll, deletions and renames explicitly;
+  // the runtime source also accepts their omission. Both preserve the closed nested objects.
+  // Dispatch-time changeset validation remains authoritative and never gains permissions from this
+  // advisory projection. `edits` may be empty: a call may only rename or delete.
   const changeset = managedObjectSchema(
     {
-      edits: { type: "array", minItems: 1, maxItems: 50, items: REPLACEMENT_EDIT_SCHEMA },
+      edits: { type: "array", maxItems: 50, items: REPLACEMENT_EDIT_SCHEMA },
+      deletions: { type: "array", maxItems: 50, items: CHANGESET_PATH_SCHEMA },
+      renames: { type: "array", maxItems: 50, items: CHANGESET_RENAME_SCHEMA },
       files: { type: "array", minItems: 1, maxItems: 50, items: CHANGESET_FILE_ENTRY_SCHEMA },
-      selectedFiles: {
-        type: "array",
-        minItems: 1,
-        maxItems: 50,
-        items: { type: "string", minLength: 1, maxLength: 512 },
-      },
+      selectedFiles: { type: "array", minItems: 1, maxItems: 50, items: CHANGESET_PATH_SCHEMA },
     },
-    ["edits", "files", "selectedFiles"],
+    ["edits", "deletions", "renames", "files", "selectedFiles"],
   );
   return {
     canonicalId: "keiko.changeset.edit",
     alias: "keiko_changeset_edit",
     description:
-      "Edit workspace files through workspace governance with exact text replacements. " +
-      "changeset.edits lists, in order, each file, its oldString copied byte for byte from the " +
-      "latest keiko_workspace_read (without the <text N ...> framing), the newString, and " +
-      "replaceAll (false replaces exactly one occurrence, which must then be unique; true " +
-      "replaces every occurrence). An empty oldString creates a new file. List every touched " +
-      "file in files with expectedContentHash and in selectedFiles. For an existing file copy " +
-      "the exact whole-file digest from its most recent keiko_workspace_read; for a new file " +
-      `use the empty-content SHA-256 ${sha256Hex("")}. On a hash mismatch or a missing ` +
-      "oldString, re-read the file and rebuild the edit from its current text.",
+      "Edit workspace files through workspace governance with exact text replacements, " +
+      "deletions and renames. changeset.edits lists, in order, each file, its oldString copied " +
+      "byte for byte from the latest keiko_workspace_read (without the <text N ...> framing), " +
+      "the newString, and replaceAll (false replaces exactly one occurrence, which must then be " +
+      "unique; true replaces every occurrence). An empty oldString creates a new file. " +
+      "changeset.renames moves files ({from, to}; to must not exist) and changeset.deletions " +
+      "removes files entirely; pass [] for a member you do not use. One call applies renames " +
+      "first, then edits (address a moved file by its new path), then deletions; a deleted file " +
+      "cannot also be edited. List every touched path in files with expectedContentHash and in " +
+      "selectedFiles: for an existing file, a deleted file or a rename's from copy the exact " +
+      "whole-file digest from its most recent keiko_workspace_read; for a new file or a " +
+      `rename's to use the empty-content SHA-256 ${sha256Hex("")}. On a hash mismatch or a ` +
+      "missing oldString, re-read the file and rebuild the edit from its current text.",
     inputSchema: managedObjectSchema({ changeset }, ["changeset"]),
     effects: ["workspace-write"],
     idempotency: "server-key-required",

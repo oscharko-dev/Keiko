@@ -150,6 +150,11 @@ describe("OpenCode launch profile", () => {
     expect(prompt).not.toContain("unified diff");
     expect(prompt).toContain("request all of them in the same turn");
     expect(prompt).toContain("fix all of them, and only then run the verifier again");
+    // G2: deletions and renames are part of the one edit call, in a fixed order.
+    expect(prompt).toContain(
+      "use changeset.renames ({from, to}; to must not exist) and changeset.deletions",
+    );
+    expect(prompt).toContain("renames first, then edits");
     // F17: a reasoning turn must not spend the whole output budget without acting.
     expect(prompt).toContain("reasoning included, must fit the output budget");
     // G3: the repository-instructions block is data, never authority.

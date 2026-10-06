@@ -40,6 +40,7 @@ import type {
   FigmaConnectorConfig,
   GatewayBrandingConfig,
   GatewayConfig,
+  GatewayFeatureSwitch,
   GroundedAnswersConfig,
   InfillingAlignment,
   LatencyClass,
@@ -2236,6 +2237,30 @@ function parseCodingOutageWindow(value: unknown): number | undefined {
   return windowMs;
 }
 
+// Owner decision (2026-10-06): what improves the coding experience is on by default and an operator
+// opts out explicitly. Present-only like the outage window: an undeclared switch keeps the default
+// ("on"), and only the closed values are accepted, so a typo fails at load instead of silently
+// switching a default.
+const GATEWAY_FEATURE_SWITCH_VALUES: readonly GatewayFeatureSwitch[] = ["on", "off"];
+
+function parseFeatureSwitch(value: unknown, path: string): GatewayFeatureSwitch | undefined {
+  return value === undefined ? undefined : requireEnum(value, path, GATEWAY_FEATURE_SWITCH_VALUES);
+}
+
+function codingSwitches(
+  raw: Record<string, unknown>,
+): Pick<GatewayConfig, "codingStreaming" | "codingReasoningDisplay"> {
+  const codingStreaming = parseFeatureSwitch(raw.codingStreaming, "codingStreaming");
+  const codingReasoningDisplay = parseFeatureSwitch(
+    raw.codingReasoningDisplay,
+    "codingReasoningDisplay",
+  );
+  return {
+    ...(codingStreaming === undefined ? {} : { codingStreaming }),
+    ...(codingReasoningDisplay === undefined ? {} : { codingReasoningDisplay }),
+  };
+}
+
 function buildGatewayConfig(
   raw: Record<string, unknown>,
   providersRaw: readonly unknown[],
@@ -2263,6 +2288,7 @@ function buildGatewayConfig(
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
     ...(codingOutageWindowMs === undefined ? {} : { codingOutageWindowMs }),
+    ...codingSwitches(raw),
     ...(capabilities.length === 0 ? {} : { capabilities }),
     ...(grounding !== undefined ? { grounding } : {}),
     ...(reranker !== undefined ? { reranker } : {}),

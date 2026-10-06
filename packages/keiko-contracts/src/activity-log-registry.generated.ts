@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "11b8100dc0afb9e83e3a3afef3c00e92114430b5d98afffde5e9268f3def250a" as const;
+  "7d5d45be246806ea442dce2e34daf64036d5a07d06f660ee60b662cd241b1588" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5217,6 +5217,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "deletionCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "editForm",
               type: "string",
               dataClass: "closed-enum",
@@ -5229,13 +5235,31 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "readReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "reasonCode",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "renameCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "replacementRefusal",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -5259,9 +5283,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "deletionCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "editForm",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "renameCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -5271,7 +5307,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -9504,6 +9540,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "reasoningSignalCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "signalCount",
               type: "integer",
               dataClass: "count",
@@ -9907,6 +9949,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "reasoningFrames",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "runId",
               type: "string",
               dataClass: "opaque-id",
@@ -10010,6 +10058,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "contentBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "outputBytes",
               type: "integer",
               dataClass: "count",
@@ -10032,6 +10086,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "reasoningBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reasoningTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "runId",
@@ -10584,6 +10650,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "maxLines",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "purpose",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -16450,6 +16522,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "reasoningBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reasoningDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "reasoningTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "requestId",
               type: "string",
               dataClass: "opaque-id",
@@ -19497,6 +19587,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "reasoningBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reasoningDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "reasoningTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "requestId",
               type: "string",
               dataClass: "opaque-id",
@@ -19727,6 +19835,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "readBudgetMs",
               type: "number",
               dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "reasoningBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reasoningEvents",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
