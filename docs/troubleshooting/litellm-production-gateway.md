@@ -624,6 +624,47 @@ setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, 
 
 ---
 
+## Coding Workbench run during a gateway overload or short outage
+
+| Field             | Value                                                                        |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Severity          | High                                                                         |
+| Surface           | Coding Workbench                                                             |
+| Stable identifier | `gateway.retry.scheduled` / `gateway.circuit.wait` under the run correlation |
+
+**Symptom**
+
+At peak load the LiteLLM gateway or the model server behind it answers 429 or 503, or stops
+answering, for a few minutes. A Workbench run keeps showing "Working" instead of failing.
+
+**Root Cause**
+
+Before #3873 a coding turn stopped after the provider's configured attempt count (by default three
+attempts within about two seconds) and, once the circuit breaker opened, every further attempt was
+refused at once. The coding runtime then gave up after about ten of its own retries, so a three-minute
+overload failed the whole run although the gateway recovered.
+
+A coding-workbench call now keeps retrying a transiently unavailable provider for up to ten minutes
+with capped, jittered backoff and any announced `Retry-After`, and waits through an open breaker's
+cooldown instead of being refused. The breaker still admits only its half-open probes, so waiting runs
+do not add load while the gateway recovers. Interactive chat keeps its fail-fast behavior.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>` shows each retry as
+`gateway.retry.scheduled` (`httpStatus`, `delayMs`, `retryAfterHeader`), a breaker transition as
+`gateway.circuit.opened` / `gateway.circuit.half-open`, and a wait as `gateway.circuit.wait`
+(`reason`, `outcome`). A call that outlasted the window ends with `gateway.retry.exhausted
+reason=budget`.
+
+**Resolution**
+
+- A run that recovered needs nothing; the gap in its timeline is the outage.
+- A turn that still failed after the ten-minute window points at a sustained outage: check the
+  gateway's and model server's health and capacity before retrying the task.
+
+---
+
 ## A discovered rerank model does not reach retrieval
 
 | Field             | Value                                                                   |

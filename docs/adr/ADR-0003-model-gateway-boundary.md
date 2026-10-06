@@ -84,6 +84,16 @@ production the clock delegates to `Date.now()` and `setTimeout`. In tests the cl
 deterministic stub — no `vi.useFakeTimers`, no actual delays. This makes resilience tests fast and
 mutation-robust.
 
+A call marked with the `coding-workbench` latency profile is an autonomous agent turn, not an
+interactive answer a person waits on, so it tolerates an outage instead of failing fast (#3873). It
+keeps retrying a transiently unavailable provider (408, 429, 5xx, a refused connection, a silent
+attempt) for `GATEWAY_CODING_OUTAGE_WINDOW_MS` (10 minutes) rather than stopping after the
+provider's `maxRetries`, and it waits through an open circuit breaker's cooldown and probe slot
+instead of receiving `CircuitOpenError` at once. The capped exponential backoff with jitter, any
+provider-announced `Retry-After`, the half-open probe limit, and the call's end-to-end budget all
+still apply, so waiting callers never add load to a recovering provider. Every other surface keeps its
+configured attempt count and fail-fast breaker.
+
 ### D7 — Secret redaction at the boundary
 
 A `redact()` helper in `src/gateway/redaction.ts` strips known secret patterns (API keys, bearer

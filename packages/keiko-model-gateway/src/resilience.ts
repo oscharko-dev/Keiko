@@ -323,6 +323,9 @@ export interface RetryConfig {
   // left of `timeoutMs`, so an attempt that hangs ends in time for its retry and no attempt
   // outlives the end-to-end budget.
   readonly attemptTimeoutMs?: number | undefined;
+  // When set, the call keeps scheduling retries after transient provider failures for this long
+  // instead of stopping after `maxRetries`; `timeoutMs` still bounds the whole call (#3873).
+  readonly retryWindowMs?: number | undefined;
 }
 
 // Equal jitter over the capped exponential ladder: half the delay is fixed, half
@@ -374,12 +377,13 @@ function retryDecision(
   lastError: Error,
   attempt: number,
   config: RetryConfig,
-  remainingMs: number,
+  budget: { readonly remainingMs: number; readonly elapsedMs: number },
   random: () => number,
 ): RetryDecision {
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
     return { stop: "terminal" };
-  if (attempt > config.maxRetries) return { stop: "max-retries" };
+  if (config.retryWindowMs === undefined && attempt > config.maxRetries)
+    return { stop: "max-retries" };
   const delayMs = retryDelayMs(
     lastError,
     attempt,
@@ -387,6 +391,10 @@ function retryDecision(
     random,
     config.jitterProviderCooldown,
   );
+  const remainingMs =
+    config.retryWindowMs === undefined
+      ? budget.remainingMs
+      : Math.min(budget.remainingMs, config.retryWindowMs - budget.elapsedMs);
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
   return { sleepMs: delayMs };
 }
@@ -640,7 +648,7 @@ async function executeRetryAttempt<T>(
 ): Promise<RetryAttemptResult<T>> {
   const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
   const maxAttempts = config.maxRetries + 1;
-  if (Number.isNaN(maxAttempts) || attempt > maxAttempts)
+  if (Number.isNaN(maxAttempts) || (config.retryWindowMs === undefined && attempt > maxAttempts))
     throw state.lastError ?? new CancelledError("request timeout budget exhausted after retries");
   assertNotAborted(signal);
   const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
@@ -653,7 +661,13 @@ async function executeRetryAttempt<T>(
     rethrowTerminalAdmission(error);
     state.lastError = asError(error);
     const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
-    const decision = retryDecision(state.lastError, attempt, config, remainingMs, random);
+    const decision = retryDecision(
+      state.lastError,
+      attempt,
+      config,
+      { remainingMs, elapsedMs: clock.now() - start },
+      random,
+    );
     const failureLog: RetryFailureLogInput = {
       sink,
       context,
@@ -758,6 +772,19 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
   };
 }
 
+// #3873: how long a coding-workbench call keeps retrying a transiently unavailable provider (408,
+// 429, 5xx, a refused connection, a silent attempt) and waits through an open breaker, instead of
+// failing after the provider's configured attempt count. At peak load a customer's LiteLLM gateway
+// sheds load for minutes, and an autonomous coding run that gave up after three attempts within two
+// seconds failed outright although the gateway recovered (live chaos qualification). The breaker
+// still admits only its half-open probes, so waiting callers do not add load while it recovers.
+export const GATEWAY_CODING_OUTAGE_WINDOW_MS = 600_000;
+
+/** The retry policy of a coding-workbench call: the provider's budget, an outage-length window. */
+export function codingWorkbenchRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
+  return { ...providerRetryConfig(provider), retryWindowMs: GATEWAY_CODING_OUTAGE_WINDOW_MS };
+}
+
 export interface CircuitBreakerAdmission {
   readonly halfOpen: boolean;
   settle(outcome: "success" | "failure" | "non-provider-fault", error?: unknown): void;
@@ -769,6 +796,9 @@ interface CircuitAdmissionWait {
   readonly signal?: AbortSignal | undefined;
   readonly correlationId?: string | undefined;
   readonly jitterMs: number | (() => number);
+  // Wait for an open breaker's cooldown and probe slot even without a provider-announced cooldown,
+  // instead of refusing at once (the coding-workbench outage policy, #3873).
+  readonly waitThroughOpenCircuit?: boolean | undefined;
 }
 
 type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
@@ -899,6 +929,7 @@ export class CircuitBreaker {
       const announced = this.providerCooldownUntil > start;
       const recovering =
         announced ||
+        options.waitThroughOpenCircuit === true ||
         (options.previousError !== undefined &&
           providerErrorDetail(options.previousError).retryAfterMs !== undefined);
       const advance = async (): Promise<void> => {

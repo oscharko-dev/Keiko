@@ -51,6 +51,7 @@ import {
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   GATEWAY_SILENCE_FLOOR_MS,
   providerRequestBudgetMs,
+  codingWorkbenchRetryConfig,
   providerRetryConfig,
   streamRequestBudgetMs,
   systemClock,
@@ -610,6 +611,20 @@ const NON_PROVIDER_FAULTS = [
   ProviderEmptyAnswerError,
 ] as const;
 
+// #3873: a coding-workbench call keeps retrying a transiently unavailable provider for an outage
+// window (and waits through an open breaker); every other buffered call keeps its attempt count.
+function bufferedRetryConfig(
+  request: GatewayCallRequest,
+  provider: ModelProviderConfig,
+): RetryConfig {
+  return {
+    ...(request.latencyProfile === "coding-workbench"
+      ? codingWorkbenchRetryConfig(provider)
+      : providerRetryConfig(provider)),
+    jitterProviderCooldown: true,
+  };
+}
+
 function isNonProviderFault(error: unknown): boolean {
   return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
 }
@@ -998,7 +1013,7 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        { ...providerRetryConfig(route.provider), jitterProviderCooldown: true },
+        bufferedRetryConfig(request, route.provider),
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -1735,6 +1750,7 @@ export class Gateway {
       signal: request.cancellationSignal,
       correlationId,
       jitterMs: (): number => Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
+      waitThroughOpenCircuit: request.latencyProfile === "coding-workbench",
     });
   }
 
