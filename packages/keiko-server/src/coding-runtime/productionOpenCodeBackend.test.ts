@@ -1,5 +1,5 @@
 import * as composition from "./opencodeRuntimeComposition.js";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,6 +43,44 @@ import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 describe("production OpenCode backend composition", () => {
+  it("binds native filesystem roots from trusted macOS production inputs", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
+    const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+    try {
+      const portable = {
+        ...releaseQualifiedNativeRuntime(root),
+        target: "macos-arm64" as const,
+        qualification: {
+          platform: "darwin" as const,
+          arch: "arm64" as const,
+          backend: "macos-app-sandbox" as const,
+          releaseReceipt: `sha256:${"a".repeat(64)}`,
+        },
+      };
+      const stateRoot = join(root, ".keiko");
+      mkdirSync(stateRoot, { mode: 0o700 });
+      const input = runInput(root);
+      const run = createProductionOpenCodeBackend({
+        ...backendInput(root, portable),
+        runtimeStateRoot: stateRoot,
+      }).createRun(input);
+      expect(factory.mock.calls[0]?.[0].gatewayConfinement?.filesystem).toEqual({
+        workspaceRoot: input.context.workspaceRoot,
+        workspaceAccess: "read-only",
+        privateStateRoot: join(
+          stateRoot,
+          "coding-runtime",
+          "opencode",
+          input.minted.authorityRef.runId,
+        ),
+        runtimeReadRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+      });
+      await run.dispose?.();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("owns presented facts when bridge completion arrives before the native call identity", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-tool-presentation-race-"));
     const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");

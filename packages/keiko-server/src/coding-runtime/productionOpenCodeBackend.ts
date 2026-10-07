@@ -1,5 +1,6 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
@@ -670,6 +671,23 @@ function runtimeGatewayConfinement(
     envelopeDigest: run.minted.authorityRef.envelopeDigest,
     runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
     modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
+    ...(portable.target === "macos-arm64" || portable.target === "macos-x64"
+      ? {
+          filesystem: {
+            workspaceRoot: run.context.workspaceRoot,
+            workspaceAccess: "read-only" as const,
+            privateStateRoot: join(
+              realpathSync(input.runtimeStateRoot),
+              "coding-runtime",
+              "opencode",
+              run.minted.authorityRef.runId,
+            ),
+            runtimeReadRoot: realpathSync(
+              join(portable.installRoot, portable.sidecar.payloadRootPath),
+            ),
+          },
+        }
+      : {}),
   });
 }
 

@@ -3,7 +3,7 @@
 // that attaches a gateway-allowlist confinement policy must get a closed refusal, never an
 // unconfined spawn. New file (not an edit to the existing suite) per the write-scope split.
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -11,7 +11,9 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRuntimeGatewayConfinement,
+  buildRuntimeGatewaySeatbeltCommand,
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
+  type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 
 import {
@@ -19,7 +21,13 @@ import {
   type NativeRuntimeHelperProcess,
   type NativeRuntimeHelperSpawn,
 } from "./nativeRuntimeProcessBackend.js";
-import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
+import {
+  createRuntimeProcessSupervisor,
+  type RuntimeSupervisorLaunchRequest,
+} from "./runtimeProcessSupervisor.js";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
+import { encodeLaunchPacket } from "./nativeRuntimeProcessProtocol.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -60,7 +68,9 @@ function fixture(): {
   return { helper, runtime, workspace };
 }
 
-function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement> {
+function gatewayConfinement(
+  filesystem?: RuntimeGatewayFilesystem,
+): ReturnType<typeof createRuntimeGatewayConfinement> {
   return createRuntimeGatewayConfinement({
     gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
     runId: "run-2951",
@@ -68,6 +78,7 @@ function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement
     envelopeDigest: "b".repeat(64),
     runtimeArtifactDigest: "c".repeat(64),
     modelProfileDigest: "d".repeat(64),
+    ...(filesystem === undefined ? {} : { filesystem }),
   });
 }
 
@@ -106,6 +117,106 @@ function request(runtime: string, workspace: string): RuntimeSupervisorLaunchReq
 }
 
 describe("native runtime process backend and gateway confinement", () => {
+  it("passes the exact gateway wrapper through the macOS sealed helper after supervisor preparation", () => {
+    const paths = fixture();
+    const helper = new FakeHelper();
+    const packets: Buffer[] = [];
+    helper.controlInput.on("data", (packet: Buffer) => {
+      packets.push(packet);
+    });
+    const activityLog = createBufferedServerLogSink();
+    const privateStateRoot = join(realpathSync(paths.workspace), ".keiko", "native-run");
+    mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+    const policy = gatewayConfinement({
+      workspaceRoot: realpathSync(paths.workspace),
+      workspaceAccess: "read-only",
+      privateStateRoot,
+      runtimeReadRoot: realpathSync(join(paths.runtime, "..")),
+    });
+    const git = { path: "/usr/bin/git", sha256: "e".repeat(64), source: "selected" as const };
+    const identity = {
+      platform: "darwin" as const,
+      arch: "arm64" as const,
+      backend: "macos-app-sandbox" as const,
+    };
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      identity,
+      gatewayConfinement: policy,
+      activityLog,
+      spawnHelper: () => helper,
+      resolveGitExecutable: () => git,
+      probeAvailability: () => ({
+        bubblewrap: false,
+        unshare: false,
+        seatbelt: true,
+        docker: false,
+        podman: false,
+      }),
+    });
+    const launch = {
+      ...request(paths.runtime, paths.workspace),
+      qualification: { ...request(paths.runtime, paths.workspace).qualification, ...identity },
+    };
+    const supervisor = createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [launch.qualification],
+      planSandbox: (input) =>
+        planLongLivedRuntimeSandbox(
+          input,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
+    });
+    expect(supervisor.spawnOwnedTree(launch).ok).toBe(true);
+    const wrapped = buildRuntimeGatewaySeatbeltCommand(
+      policy,
+      realpathSync(paths.runtime),
+      launch.args,
+      git.path,
+    );
+    expect(Buffer.concat(packets)).toEqual(
+      encodeLaunchPacket(
+        { ...launch, args: wrapped.args },
+        { executable: wrapped.command, cwd: realpathSync(paths.workspace) },
+      ),
+    );
+    expect(activityLog.events.map((event) => event.op)).toEqual(["runtime.confinement.spawned"]);
+    expect(activityLog.events[0]?.extra).toMatchObject({
+      filesystemPolicy: "native-root-union-v1",
+      workspaceAccess: "read-only-outside-private-state",
+      privateStateAccess: "read-write",
+    });
+    expect(JSON.stringify(activityLog.events)).not.toContain(paths.workspace);
+  });
+  it("refuses unsupported gateway confinement even after supervisor preparation", () => {
+    const paths = fixture();
+    const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => new FakeHelper());
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      gatewayConfinement: gatewayConfinement(),
+      spawnHelper: spawn,
+    });
+    const launch = request(paths.runtime, paths.workspace);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [launch.qualification],
+      planSandbox: (input) =>
+        planLongLivedRuntimeSandbox(
+          input,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
+    });
+
+    expect(supervisor.spawnOwnedTree(launch)).toEqual({ ok: false, failureCode: "spawn-failed" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("spawns exactly as before when no gateway confinement is configured (no regression)", () => {
     const paths = fixture();
     const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => new FakeHelper());

@@ -338,6 +338,25 @@ install; metadata faults now refuse it, while ordinary absence remains valid. Si
 controls and 275 focused tests passed. Nine obsolete legacy register entries were pruned without
 adding an exception or a new log operation.
 
+The native filesystem foundation reuses the existing gateway confinement and Seatbelt owners.
+Both prepared and direct process launches derive the exact server-owned gateway policy; a generic
+prepared wrapper can no longer replace it. The normal repository-contained `.keiko` state remains
+writable while this service configuration denies source-file writes. Runtime metadata records the
+private-state exception explicitly. Roots are copied as closed data, bound into the policy digest,
+and revalidated before launch; the final native-helper arguments retain its existing size limits.
+
+Independent qualification of the frozen increment on `d09f184dc` passed 76 sandbox tests,
+119 server tests (including 35 unchanged repository-search controls), strict affected-graph and
+test typechecking, scoped lint and formatting. An actual pinned OpenCode 2.0.10 fixture in a
+Git-initialized workspace, with nested private state, advertised the original Read tool, returned
+the contained sentinel and refused an external symlink without returning its contents. Actual OS
+controls also denied external reads/writes and source writes while allowing private-state writes
+and attested Git repository detection. The sealed-helper control uses a fake helper and proves
+packet/log composition; it does not qualify native release containment. Generated log outputs
+match their producer. Production native workspace tools remain denied: a sensitive/private-state
+permission and IO boundary, the original toolchain and gateway/media compatibility still require
+qualification. Keiko Chat repository and recursive search are preserved.
+
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations
 is a separate case: Keiko then starts from the setup placeholder until its long-context probe

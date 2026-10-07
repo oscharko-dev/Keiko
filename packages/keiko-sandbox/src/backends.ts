@@ -5,8 +5,16 @@
 import { basename, dirname, isAbsolute } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { linuxGatewayLauncherPath } from "./runtime.js";
-import { executionRootSeatbeltProfile } from "./seatbelt-execution-root.js";
-import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
+import {
+  executionRootSeatbeltProfile,
+  gatewayFilesystemSeatbeltRules,
+} from "./seatbelt-execution-root.js";
+import type {
+  IsolatedRunPlan,
+  NetworkGatewayPolicy,
+  RuntimeGatewayFilesystem,
+  SandboxBackend,
+} from "./types.js";
 
 export interface WrappedCommand {
   readonly command: string;
@@ -202,6 +210,7 @@ export function buildGatewaySeatbeltCommand(
   command: string,
   args: readonly string[],
   childExecutable: string,
+  filesystem?: RuntimeGatewayFilesystem,
 ): WrappedCommand {
   const closedGateway = copyNetworkGatewayPolicy(gateway);
   if (closedGateway === undefined) throw new TypeError("gateway-network-policy-invalid");
@@ -210,6 +219,7 @@ export function buildGatewaySeatbeltCommand(
     "(version 1)(allow default)(deny network*)" +
     gatewayProcessExecPolicy(command, childExecutable) +
     "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
+    (filesystem === undefined ? "" : gatewayFilesystemSeatbeltRules(filesystem, childExecutable)) +
     `(allow network-outbound (remote ${family} "localhost:${String(closedGateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
@@ -269,6 +279,7 @@ export function buildWrappedCommand(
           plan.command,
           plan.args,
           plan.gatewayChildExecutable ?? "",
+          plan.gatewayFilesystem,
         );
       }
       if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");

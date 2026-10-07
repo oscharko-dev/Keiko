@@ -1,11 +1,13 @@
-import { basename, dirname, isAbsolute } from "node:path";
-import type { IsolatedRunPlan } from "./types.js";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import type { IsolatedRunPlan, RuntimeGatewayFilesystem } from "./types.js";
 
 const MACOS_RUNTIME_READ_ROOTS = [
   "/System",
   "/System/Volumes/Preboot/Cryptexes/OS",
   "/Library/Apple",
   "/private/var/db/dyld",
+  // Bun's native Intl.Segmenter loads the immutable macOS ICU data file during startup.
+  "/usr/share/icu",
 ] as const;
 const READ_LITERALS = [
   "/dev/null",
@@ -38,6 +40,92 @@ function commandReadRoots(command: string): readonly string[] {
   return npmLauncher && basename(directory) === "bin" && basename(npmRoot) === "npm"
     ? [npmRoot]
     : [directory];
+}
+
+const GATEWAY_FILESYSTEM_KEYS = new Set([
+  "workspaceRoot",
+  "workspaceAccess",
+  "privateStateRoot",
+  "runtimeReadRoot",
+]);
+
+function validRoot(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 4_096 &&
+    isAbsolute(value) &&
+    value !== "/" &&
+    !/[\0\r\n]/u.test(value) &&
+    resolve(value) === value
+  );
+}
+
+/** Copy data only; an input accessor must never execute at the isolation boundary. */
+export function copyRuntimeGatewayFilesystem(value: unknown): RuntimeGatewayFilesystem | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  try {
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Reflect.ownKeys(descriptors).length !== GATEWAY_FILESYSTEM_KEYS.size) return undefined;
+    if (
+      !Object.entries(descriptors).every(
+        ([key, entry]) => GATEWAY_FILESYSTEM_KEYS.has(key) && Object.hasOwn(entry, "value"),
+      )
+    )
+      return undefined;
+    const record = Object.fromEntries(
+      Object.entries(descriptors).map(([key, entry]) => [key, entry.value as unknown]),
+    );
+    return validGatewayFilesystem(record) ? Object.freeze(record) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function validGatewayFilesystem(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & RuntimeGatewayFilesystem {
+  if (
+    value.workspaceAccess !== "read-only" ||
+    !validRoot(value.workspaceRoot) ||
+    !validRoot(value.privateStateRoot) ||
+    !validRoot(value.runtimeReadRoot)
+  )
+    return false;
+  // The normal <workspace>/.keiko private metadata subtree remains writable. It must never
+  // contain the workspace itself or overlap the immutable runtime capability.
+  return (
+    outsideRoot(value.privateStateRoot, value.workspaceRoot) &&
+    outsideRoot(value.privateStateRoot, value.runtimeReadRoot) &&
+    outsideRoot(value.runtimeReadRoot, value.privateStateRoot)
+  );
+}
+
+function outsideRoot(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === ".." || path.startsWith("../") || isAbsolute(path);
+}
+
+/**
+ * Compose native service containment with the existing gateway network/exec owner. This limits
+ * the process to the admitted root union. Sensitive/model access within that union still requires
+ * the native permission hook; the runtime itself must read its own state and Git metadata.
+ */
+export function gatewayFilesystemSeatbeltRules(
+  filesystem: RuntimeGatewayFilesystem,
+  childExecutable: string,
+): string {
+  const closed = copyRuntimeGatewayFilesystem(filesystem);
+  if (closed === undefined) throw new TypeError("gateway-seatbelt-filesystem-invalid");
+  const roots = [closed.workspaceRoot, closed.privateStateRoot, closed.runtimeReadRoot];
+  const reads = [...roots, ...MACOS_RUNTIME_READ_ROOTS, ...commandReadRoots(childExecutable)];
+  return (
+    "(deny file-read* file-write*)" +
+    `(allow file-read* ${pathFilters("subpath", reads)} ${pathFilters("literal", READ_LITERALS)})` +
+    `(allow file-read-metadata ${pathFilters("literal", roots.flatMap(ancestors))})` +
+    `(allow file-write* (subpath ${JSON.stringify(closed.privateStateRoot)}) (literal "/dev/null"))`
+  );
 }
 
 export function executionRootSeatbeltProfile(

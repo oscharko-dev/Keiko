@@ -403,8 +403,26 @@ adapter-internal server concerns deliberately excluded from the public contract.
 
 Long-lived managed runtimes execute only inside the active task-workspace confinement boundary and
 communicate with the BFF over authenticated loopback IPC. Runtime permission observations are never
-authority: every filesystem, command, network, connector, and delivery effect must be mediated by a
-Keiko-owned governed tool boundary.
+authority: filesystem, command, network, connector and delivery effects must remain inside
+Keiko's accepted workspace, authority and evidence boundaries. The native OpenCode service owns
+planning, context and the coding loop. Preserve its original tool implementations where supported
+native hooks plus the process boundary can enforce those contracts; a mapped Keiko tool is an
+integration mechanism, not a requirement to replace every native executor. Production currently
+continues to deny native workspace effect tools while these boundaries are being qualified.
+
+The first macOS filesystem foundation composes read-only accepted-workspace access, writable
+private per-run native state and read-only immutable runtime/OS support with the existing exact
+gateway and runtime/attested-Git executable policy. Both direct and supervisor-prepared launches
+use the same policy producer. Accepted workspace resolver identity and Chat search remain unchanged.
+Private per-run state may live in the existing `<workspace>/.keiko` application metadata subtree;
+that exact subtree is the writable exception to workspace reads. Its root must not contain the
+workspace or overlap the immutable runtime. No external state resolver is introduced. The logged
+workspace access fact is `read-only-outside-private-state`.
+The kernel enforces the union of admitted roots, not the caller's intent within that union: native
+runtime state and Git metadata required by the service are also process-readable. A canonical
+native permission hook must separately deny model access to sensitive workspace paths, private
+state and realpath escapes before any production native Read/Search/Edit/Shell admission. This
+foundation is not full native capability parity and grants no workspace write authority.
 
 Codex subscription traffic remains a distinct runtime/model source. Its egress uses Keiko's shared
 enterprise proxy and custom-CA path, and any official authentication navigation target is validated

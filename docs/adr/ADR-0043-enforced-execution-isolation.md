@@ -352,9 +352,8 @@ container bridge implements the same contract. Invalid/accessor-backed gateway v
 `network:"none"` shape.
 
 Windows remains a reasoned refusal rather than silent non-enforcement:
-`nativeRuntimeProcessBackend.ts` (the backend used for the Windows dev lane and every
-release-qualified platform) now accepts an optional `gatewayConfinement` and, when one is attached,
-refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
+`nativeRuntimeProcessBackend.ts` accepts an optional `gatewayConfinement` and, on Windows when one
+is attached, refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
 `planIsolatedRun` would produce, rather than a silent unconfined spawn — its native launch-packet
 protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
 body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
@@ -362,9 +361,29 @@ Windows refusal leaves the same evidence a support report can reconstruct. Produ
 (`productionOpenCodeBackend.ts`) always supplies the exact gateway policy, including Windows dev
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before
-spawning a helper and records `runtime.confinement.failed`; omitting the policy to keep a launch
-working is a fail-open defect. The macOS app-sandbox and dev lanes enforce the same policy through
-Seatbelt. #2951 remains open for #3423's Windows-native WFP enforcement. The Linux target is
+spawning a Windows helper and records `runtime.confinement.failed`; omitting the policy to keep a
+launch working is a fail-open defect. The macOS app-sandbox, npm-runtime and explicit dev lanes
+enforce the same policy through Seatbelt. A generic supervisor-prepared loopback wrapper never bypasses the exact gateway policy:
+both prepared and direct backend launches derive the final wrapper from the same server-owned
+policy. The sealed helper receives that exact wrapper in its existing launch packet.
+
+For the staged native-service filesystem foundation, this same Seatbelt owner denies filesystem
+access by default and admits a root union: read-only accepted workspace, read/write private per-run
+native state, immutable runtime and narrowly required OS/Git support. Canonical roots are revalidated
+immediately before launch, private state must belong to the current user with no group/other access,
+and its writable root must never contain the accepted workspace or overlap the immutable runtime.
+The normal `<workspace>/.keiko` per-run private metadata subtree remains writable; workspace code
+files outside that exact subtree remain read-only. The closed logged workspace access fact is
+`read-only-outside-private-state`, rather than an unconditional read-only claim. Root identity is transient and
+bound into the existing policy digest; existing `runtime.confinement.spawned` evidence adds only
+closed filesystem/access facts, never paths. Actual OS probes prove workspace writes and foreign
+file/symlink reads are denied while private-state writes remain possible. The kernel cannot
+separate runtime-internal reads from model reads of the same admitted inode: canonical native
+permission enforcement for sensitive workspace paths and private-state access remains mandatory
+before production native tools are admitted. Workspace reads in this foundation do not widen any
+mode's mutation authority; production native workspace effect tools remain denied.
+
+#2951 remains open for #3423's Windows-native WFP enforcement. The Linux target is
 represented only after #3451's exact staged payload, offline-attested qualification, fresh-runner
 verification, and reference-runner proof all pass; no source-only or declared Boolean can qualify
 it.

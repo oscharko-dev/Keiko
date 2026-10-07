@@ -6,7 +6,13 @@
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { buildWrappedCommand } from "./backends.js";
 import { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
-import type { BackendAvailability, IsolatedRunDecision, IsolatedRunPlan } from "./types.js";
+import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
+import type {
+  BackendAvailability,
+  IsolatedRunDecision,
+  IsolatedRunPlan,
+  NetworkGatewayPolicy,
+} from "./types.js";
 
 const FAIL_CLOSED_REASON =
   'execution isolation was requested (network: "none" or filesystem: "execution-root") but no compatible sandbox backend ' +
@@ -39,6 +45,19 @@ function validFilesystemPolicy(value: unknown): boolean {
   return value === "inherit" || value === "execution-root";
 }
 
+function gatewayFilesystemIsAdmissible(
+  plan: IsolatedRunPlan,
+  gateway: NetworkGatewayPolicy | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  if (plan.gatewayFilesystem === undefined) return true;
+  return (
+    gateway !== undefined &&
+    platform === "darwin" &&
+    copyRuntimeGatewayFilesystem(plan.gatewayFilesystem) !== undefined
+  );
+}
+
 export function planIsolatedRun(
   plan: IsolatedRunPlan,
   availability: BackendAvailability,
@@ -53,6 +72,14 @@ export function planIsolatedRun(
       attestation: noneEnforcedAttestation(platform),
     };
   }
+  const gateway = copyNetworkGatewayPolicy(network);
+  if (!gatewayFilesystemIsAdmissible(plan, gateway, platform)) {
+    return {
+      kind: "fail-closed",
+      reason: "gateway-filesystem-isolation-unsupported",
+      attestation: noneEnforcedAttestation(platform),
+    };
+  }
   if (network === "inherit" && filesystem === "inherit") {
     return {
       kind: "passthrough",
@@ -61,7 +88,6 @@ export function planIsolatedRun(
       attestation: noneEnforcedAttestation(platform),
     };
   }
-  const gateway = copyNetworkGatewayPolicy(network);
   if (gateway !== undefined) {
     if (filesystem === "execution-root") {
       return {
@@ -128,6 +154,11 @@ function planGatewayRun(
     kind: "wrapped",
     command: wrapped.command,
     args: wrapped.args,
-    attestation: { backend, networkEnforced: true, filesystemEnforced: false, platform },
+    attestation: {
+      backend,
+      networkEnforced: true,
+      filesystemEnforced: plan.gatewayFilesystem !== undefined,
+      platform,
+    },
   };
 }

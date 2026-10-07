@@ -33,13 +33,8 @@ export function validateLaunchPacketRequest(
   if (!options.runtimeRoots.some((root) => options.pathIsContained(root, executable)))
     options.invalidRequest();
   if (!options.pathIsContained(options.workspaceRoot, cwd)) options.invalidRequest();
-  if (
-    request.args.length > MAX_ARGUMENTS ||
-    Object.keys(request.env).length > MAX_ENVIRONMENT_ENTRIES
-  )
-    options.invalidRequest();
-  for (const argument of request.args)
-    validateText(argument, MAX_ARGUMENT_BYTES, options.invalidRequest);
+  validateLaunchArguments(request.args, options.invalidRequest);
+  if (Object.keys(request.env).length > MAX_ENVIRONMENT_ENTRIES) options.invalidRequest();
   for (const [name, value] of Object.entries(request.env)) {
     if (!ENVIRONMENT_NAME_PATTERN.test(name)) options.invalidRequest();
     validateText(value, MAX_ENVIRONMENT_VALUE_BYTES, options.invalidRequest);
@@ -51,6 +46,9 @@ export function encodeLaunchPacket(
   request: RuntimeSupervisorLaunchRequest,
   paths: ValidatedLaunchPacketPaths,
 ): Buffer {
+  // The final wrapper may have replaced originally validated arguments. Preserve the native
+  // helper's exact limits before sending any packet or spawning that helper.
+  validateLaunchArguments(request.args, invalidRequest);
   const environment = Object.entries(request.env).sort(([left], [right]) =>
     left.localeCompare(right),
   );
@@ -102,6 +100,11 @@ function protocolHeader(magic: string, kind: number, payloadLength: number): Buf
 
 function validateText(value: string, maxBytes: number, fail: () => never): void {
   if (value.includes("\0") || Buffer.byteLength(value, "utf8") > maxBytes) fail();
+}
+
+function validateLaunchArguments(args: readonly string[], fail: () => never): void {
+  if (args.length > MAX_ARGUMENTS) fail();
+  for (const argument of args) validateText(argument, MAX_ARGUMENT_BYTES, fail);
 }
 
 function invalidRequest(): never {

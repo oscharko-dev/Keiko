@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand as buildRuntimeGatewaySeatbeltCommandCore,
@@ -34,6 +34,63 @@ function buildRuntimeGatewaySeatbeltCommand(
 }
 
 describe("long-lived gateway network confinement", () => {
+  it("rejects writable private state containing the workspace or overlapping immutable runtime", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-only" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    for (const changed of [
+      { ...filesystem, privateStateRoot: "/accepted" },
+      { ...filesystem, privateStateRoot: "/immutable" },
+      { ...filesystem, privateStateRoot: "/immutable/runtime/state" },
+      { ...filesystem, privateStateRoot: filesystem.runtimeReadRoot },
+    ])
+      expect(() => createRuntimeGatewayConfinement({ ...input, filesystem: changed })).toThrow();
+  });
+  it("owns and binds the closed native filesystem capability without widening legacy policies", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-only" as const,
+      privateStateRoot: "/private/native-state",
+      runtimeReadRoot: "/immutable/native-runtime",
+    };
+    const policy = createRuntimeGatewayConfinement({ ...input, filesystem });
+    expect(policy.filesystem).toEqual(filesystem);
+    expect(Object.isFrozen(policy.filesystem)).toBe(true);
+    expect(policy.policyDigest).not.toBe(createRuntimeGatewayConfinement(input).policyDigest);
+    filesystem.workspaceRoot = "/replaced/workspace";
+    expect(policy.filesystem?.workspaceRoot).toBe("/accepted/workspace");
+    expect(
+      isRuntimeGatewayConfinement({
+        ...policy,
+        filesystem: { ...policy.filesystem, privateStateRoot: "/other/state" },
+      }),
+    ).toBe(false);
+    expect(
+      isRuntimeGatewayConfinement({
+        ...policy,
+        filesystem: { ...policy.filesystem, rawOutput: "synthetic" },
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses prototype-bearing filesystem input and a writable ancestor with a dot-prefix child", () => {
+    const filesystem = {
+      workspaceRoot: "/private/state/..accepted",
+      workspaceAccess: "read-only" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    expect(() => createRuntimeGatewayConfinement({ ...input, filesystem })).toThrow();
+    const prototypeBearing = { ...filesystem, workspaceRoot: "/accepted" };
+    Object.setPrototypeOf(prototypeBearing, { extra: true });
+    expect(() =>
+      createRuntimeGatewayConfinement({ ...input, filesystem: prototypeBearing }),
+    ).toThrow();
+  });
+
   it("rejects accessors without invoking them before compiling a wrapper", () => {
     const policy = createRuntimeGatewayConfinement(input);
     let reads = 0;
@@ -247,6 +304,63 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
   const canProveOnThisHost = platformIsDarwin && seatbeltAvailable;
 
   it.skipIf(!canProveOnThisHost)(
+    "separates readonly workspace and writable native state and denies external symlink access",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-fs-proof-")));
+      const workspaceRoot = join(root, "workspace");
+      const privateStateRoot = join(workspaceRoot, ".keiko", "native-state");
+      mkdirSync(workspaceRoot);
+      mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+      expect(
+        spawnSync(gitExecutable, ["init", "-q", workspaceRoot], {
+          env: {
+            HOME: privateStateRoot,
+            PATH: dirname(gitExecutable),
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+          },
+        }).status,
+      ).toBe(0);
+      writeFileSync(join(workspaceRoot, "source.txt"), "synthetic");
+      writeFileSync(join(root, "outside.txt"), "synthetic");
+      symlinkSync(join(root, "outside.txt"), join(workspaceRoot, "escape.txt"));
+      const script = filesystemProbe(workspaceRoot, privateStateRoot, root);
+      try {
+        const control = run("/usr/bin/ruby", ["--disable-gems", "-e", script]);
+        expect(JSON.parse(control.stdout)).toMatchObject({ externalRead: true, symlinkRead: true });
+        const policy = createRuntimeGatewayConfinement({
+          ...input,
+          filesystem: {
+            workspaceRoot,
+            workspaceAccess: "read-only",
+            privateStateRoot,
+            runtimeReadRoot: "/usr/bin",
+          },
+        });
+        const wrapped = buildRuntimeGatewaySeatbeltCommand(policy, "/usr/bin/ruby", [
+          "--disable-gems",
+          "-e",
+          script,
+        ]);
+        expect(run(wrapped.command, wrapped.args)).toEqual({
+          status: 0,
+          stdout: JSON.stringify({
+            workspaceRead: true,
+            workspaceWrite: false,
+            privateStateWrite: true,
+            externalRead: false,
+            externalWrite: false,
+            symlinkRead: false,
+            gitHandshakeRead: true,
+          }),
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!canProveOnThisHost)(
     "denies an unapproved child executable while permitting the real Apple git chain",
     () => {
       const policy = createRuntimeGatewayConfinement(input);
@@ -371,3 +485,20 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
     expect(canProveOnThisHost).toBe(false);
   });
 });
+
+function filesystemProbe(workspace: string, state: string, root: string): string {
+  return [
+    "facts={};",
+    `workspace=${JSON.stringify(workspace)};state=${JSON.stringify(state)};root=${JSON.stringify(root)};`,
+    "checks={",
+    '"workspaceRead"=>-> {File.read(workspace+"/source.txt")},',
+    '"workspaceWrite"=>-> {File.write(workspace+"/edit.txt","synthetic")},',
+    '"privateStateWrite"=>-> {File.write(state+"/state.txt","synthetic")},',
+    '"externalRead"=>-> {File.read(root+"/outside.txt")},',
+    '"externalWrite"=>-> {File.write(root+"/outside-write.txt","synthetic")},',
+    '"symlinkRead"=>-> {File.read(workspace+"/escape.txt")}};',
+    "checks.each {|key,check| begin;check.call;facts[key]=true;rescue SystemCallError;facts[key]=false;end};",
+    `begin;pid=Process.spawn({"HOME"=>state,"GIT_CONFIG_NOSYSTEM"=>"1","GIT_CONFIG_GLOBAL"=>"/dev/null"},${JSON.stringify(gitExecutable)},"rev-parse","--is-inside-work-tree",chdir:workspace,out:File::NULL,err:File::NULL);facts["gitHandshakeRead"]=Process.wait2(pid).last.success?;rescue SystemCallError;facts["gitHandshakeRead"]=false;end;`,
+    `print '{'+facts.map {|key,value| '"'+key+'":'+value.to_s}.join(',')+'}';`,
+  ].join("");
+}

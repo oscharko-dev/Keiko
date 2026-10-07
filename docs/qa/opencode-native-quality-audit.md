@@ -1,5 +1,9 @@
 # OpenCode 1.17.17 native quality audit
 
+Historical evidence for OpenCode 1.17.17 only. This document does not describe or qualify the
+currently pinned 2.0.10 native service, prompts, tools or lifecycle. See
+[the current capability inventory](opencode-capability-parity.md) and its per-head live ledger.
+
 This audit compares Keiko's managed coding runtime with the exact pinned OpenCode source at
 commit [`474abdd7`](https://github.com/anomalyco/opencode/tree/474abdd7ee60f4b67476cfcef7e5311beff4a824).
 It identifies small native quality features that fit the existing governed runtime and records

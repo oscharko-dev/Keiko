@@ -9,6 +9,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRuntimeGatewayConfinement,
+  buildRuntimeGatewaySeatbeltCommand,
   currentPlatform,
   probeBackends,
 } from "@oscharko-dev/keiko-sandbox";
@@ -25,6 +26,7 @@ import {
 } from "./devLaneRuntimeProcessBackend.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  createRuntimeProcessSupervisor,
   type PreparedRuntimeSandboxLaunch,
   type RuntimeProcessBackend,
   type RuntimeProcessTree,
@@ -174,6 +176,33 @@ afterEach(() => {
 });
 
 describe("dev-lane runtime process backend", () => {
+  it("enforces the exact gateway and executable policy through supervisor preparation", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    const spawn = vi.fn<DevLaneRuntimeSpawn>(() => fakeChild(4711));
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      spawnRuntime: spawn,
+    });
+    const request = launchRequest(fixture);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [request.qualification],
+    });
+
+    expect(supervisor.spawnOwnedTree(request).ok).toBe(true);
+    const profile = spawn.mock.calls[0]?.[1][1];
+    expect(profile).toContain('(remote tcp4 "localhost:1983")');
+    expect(profile).toContain("(deny process-exec)");
+    expect(profile).not.toContain('(remote ip "localhost:*")');
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({ op: "runtime.confinement.spawned", correlationId: request.runId }),
+    );
+  });
+
   it("does not mistake a live child's error event for a completed process tree", async () => {
     const fixture = stageFixture();
     const child = fakeChild(4711);
@@ -276,7 +305,14 @@ describe("dev-lane runtime process backend", () => {
     const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.executable).toBe(SANDBOX.command);
-    expect(spawned[0]?.args).toEqual(SANDBOX.args);
+    expect(spawned[0]?.args).toEqual(
+      buildRuntimeGatewaySeatbeltCommand(
+        gatewayConfinement(),
+        fixture.executable,
+        ["serve"],
+        TEST_GIT.path,
+      ).args,
+    );
     expect(spawned[0]?.options.detached).toBe(true);
     expect(spawned[0]?.options.shell).toBe(false);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);

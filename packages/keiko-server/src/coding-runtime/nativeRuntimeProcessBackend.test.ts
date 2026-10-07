@@ -142,6 +142,15 @@ function response(kind: number, payload = Buffer.alloc(0)): Buffer {
 }
 
 describe("native runtime process backend", () => {
+  it("revalidates the final prepared wrapper arguments before encoding a helper packet", () => {
+    const launch = request("/runtime/opencode", "/accepted/workspace");
+    expect(() =>
+      encodeLaunchPacket(
+        { ...launch, args: ["-p", "x".repeat(4097)] },
+        { executable: "/usr/bin/sandbox-exec", cwd: launch.cwd },
+      ),
+    ).toThrow("native-runtime-request-invalid");
+  });
   it("encodes the exact executable and workspace paths accepted by validation", () => {
     const launch = request("/untrusted/runtime.exe", "/untrusted/workspace");
     const validated = validateLaunchPacketRequest(launch, {

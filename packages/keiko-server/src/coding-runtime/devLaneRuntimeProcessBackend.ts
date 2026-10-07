@@ -8,17 +8,13 @@ import {
   LINUX_GATEWAY_DIAGNOSTIC_FD,
   LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   parseLinuxGatewayDiagnosticLine,
-  planIsolatedRun,
   probeBackends,
   resolveDarwinGitExecutable,
   type AttestedDarwinGitExecutable,
   type BackendAvailability,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
-import type {
-  LinuxGatewayDiagnosticKind,
-  NetworkGatewayPolicy,
-} from "@oscharko-dev/keiko-contracts";
+import type { LinuxGatewayDiagnosticKind } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
   type ActivityLogErrorKind,
@@ -29,7 +25,6 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { createCodingRuntimeLineParser } from "./codingRuntimeProcessIo.js";
 import {
   RUNTIME_CONFINEMENT_FAILED_OPERATION,
-  RUNTIME_CONFINEMENT_SPAWNED_OPERATION,
   RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
 } from "./codingRuntimeActivityOperations.js";
 
@@ -46,6 +41,10 @@ import type {
   RuntimeSupervisorLaunchRequest,
   RuntimeTreeSignal,
 } from "./runtimeProcessSupervisor.js";
+import {
+  prepareRuntimeGatewayProcessSandbox,
+  recordRuntimeGatewayConfinementSpawned,
+} from "./runtimeGatewayProcessSandbox.js";
 
 /**
  * Gateway-enforcing POSIX process backend. macOS uses Seatbelt for development/evaluation while a
@@ -160,7 +159,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
   ): RuntimeProcessTree {
     let launchPhase: DevLaneLaunchPhase = "gateway-policy";
     try {
-      return sandbox === undefined
+      return sandbox === undefined || this.gatewayConfinement !== undefined
         ? this.spawnConfinedTree(request, (phase) => {
             launchPhase = phase;
           })
@@ -220,15 +219,16 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
     // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
     setLaunchPhase("sandbox-plan");
-    const decision = wrappedGatewayDecision(
+    const decision = prepareRuntimeGatewayProcessSandbox({
       request,
       executable,
       cwd,
       policy,
       gitExecutable,
-      this.probeAvailability(),
-      this.platform,
-    );
+      runtimeRoots: [this.runtimeRoot],
+      availability: this.probeAvailability(),
+      platform: this.platform,
+    });
     setLaunchPhase("process-spawn");
     const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
@@ -246,13 +246,12 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       this.killProcessGroup,
     );
     setLaunchPhase("tree-ownership");
-    recordConfinementSpawned(
+    recordRuntimeGatewayConfinementSpawned(
       this.activityLog,
       request.runId,
-      decision.attestation.backend,
+      recordedConfinementBackend(decision.attestation.backend),
       policy,
-      gitExecutable?.sha256,
-      gitExecutable?.source,
+      gitExecutable,
     );
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
       recordChildConfinementFailure(this.activityLog, request.runId, child, error);
@@ -351,30 +350,6 @@ function platformGitExecutable(
   return identity.platform === "darwin" ? resolveGitExecutable() : undefined;
 }
 
-function wrappedGatewayDecision(
-  request: RuntimeSupervisorLaunchRequest,
-  executable: string,
-  cwd: string,
-  policy: RuntimeGatewayConfinement,
-  gitExecutable: AttestedDarwinGitExecutable | undefined,
-  availability: BackendAvailability,
-  platform: NodeJS.Platform,
-): Extract<ReturnType<typeof planIsolatedRun>, { readonly kind: "wrapped" }> {
-  const decision = planIsolatedRun(
-    {
-      command: executable,
-      args: request.args,
-      cwd,
-      network: gatewayNetworkPolicy(policy),
-      ...(gitExecutable === undefined ? {} : { gatewayChildExecutable: gitExecutable.path }),
-    },
-    availability,
-    platform,
-  );
-  if (decision.kind !== "wrapped") throw new Error("runtime-gateway-confinement-unavailable");
-  return decision;
-}
-
 function runtimeEnvironment(
   environment: Readonly<Record<string, string>>,
   gitExecutable: AttestedDarwinGitExecutable | undefined,
@@ -382,14 +357,6 @@ function runtimeEnvironment(
   return gitExecutable === undefined
     ? { ...environment }
     : { ...environment, PATH: dirname(gitExecutable.path) };
-}
-
-function gatewayNetworkPolicy(policy: RuntimeGatewayConfinement): NetworkGatewayPolicy {
-  return {
-    mode: "gateway",
-    host: policy.addressFamily === "ipv4" ? "127.0.0.1" : "::1",
-    port: policy.port,
-  };
 }
 
 function recordConfinementFailure(
@@ -451,37 +418,6 @@ function recordConfinementUnavailable(
       RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
       { level: "info", correlationId: runId },
       { platform: identity.platform, arch: identity.arch, backend: identity.backend },
-    ),
-  );
-}
-
-function recordConfinementSpawned(
-  sink: ServerLogSink,
-  runId: string,
-  backend: string,
-  policy: RuntimeGatewayConfinement,
-  childExecutableDigest: string | undefined,
-  childExecutableSource: AttestedDarwinGitExecutable["source"],
-): void {
-  sink.write(
-    activityLogEvent(
-      RUNTIME_CONFINEMENT_SPAWNED_OPERATION,
-      { correlationId: runId },
-      {
-        backend: recordedConfinementBackend(backend),
-        policyDigest: policy.policyDigest,
-        authorityDigest: policy.envelopeDigest,
-        runtimeArtifactDigest: policy.runtimeArtifactDigest,
-        modelProfileDigest: policy.modelProfileDigest,
-        treeBindingId: policy.treeBindingId,
-        profile: policy.profile,
-        childExecutablePolicy:
-          childExecutableDigest === undefined
-            ? "namespace-inherited"
-            : "runtime-and-attested-git-only",
-        ...(childExecutableDigest === undefined ? {} : { childExecutableDigest }),
-        ...(childExecutableSource === undefined ? {} : { childExecutableSource }),
-      },
     ),
   );
 }

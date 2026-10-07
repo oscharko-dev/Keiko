@@ -18,6 +18,24 @@ const basePlan: IsolatedRunPlan = {
 };
 
 describe("planIsolatedRun", () => {
+  it("does not ignore a gateway filesystem capability on a passthrough request", () => {
+    const decision = planIsolatedRun(
+      {
+        ...basePlan,
+        network: "inherit",
+        gatewayFilesystem: {
+          workspaceRoot: "/accepted/workspace",
+          workspaceAccess: "read-only",
+          privateStateRoot: "/private/state",
+          runtimeReadRoot: "/immutable/runtime",
+        },
+      },
+      NONE,
+      "darwin",
+    );
+    expect(decision.kind).toBe("fail-closed");
+    expect(decision.attestation.filesystemEnforced).toBe(false);
+  });
   it("passes through an inherited-network run with no enforcement", () => {
     const decision = planIsolatedRun({ ...basePlan, network: "inherit" }, NONE, "linux");
     expect(decision.kind).toBe("passthrough");

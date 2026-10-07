@@ -8,6 +8,10 @@ import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contract
 import {
   copyRuntimeGatewayConfinement,
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
+  probeBackends,
+  resolveDarwinGitExecutable,
+  type AttestedDarwinGitExecutable,
+  type BackendAvailability,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
 import {
@@ -18,7 +22,11 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
-import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
+import {
+  encodeLaunchPacket,
+  validateLaunchPacketRequest,
+  type ValidatedLaunchPacketPaths,
+} from "./nativeRuntimeProcessProtocol.js";
 import {
   RUNTIME_CONFINEMENT_FAILED_OPERATION,
   RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
@@ -30,6 +38,10 @@ import {
   safeRealFile,
 } from "./nativeRuntimeProcessPaths.js";
 import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRuntimeProcessTree.js";
+import {
+  prepareRuntimeGatewayProcessSandbox,
+  recordRuntimeGatewayConfinementSpawned,
+} from "./runtimeGatewayProcessSandbox.js";
 import type {
   PreparedRuntimeSandboxLaunch,
   RuntimeProcessBackend,
@@ -61,16 +73,16 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly identity?: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper?: NativeRuntimeHelperSpawn | undefined;
   /**
-   * When a caller attaches a gateway-allowlist policy (ADR-0043 D14, #2951), every launch through
-   * this backend fails closed: the native launch-packet protocol has no field for a network
-   * policy, and no backend behind the Windows Job Object / native helper protocol can bind that
-   * process to exactly one loopback destination today. This option exists so a caller CAN express
-   * "this run requires gateway confinement" and get an honest refusal rather than an unconfined
-   * spawn; it does not (yet) enforce anything at the OS level.
+   * macOS derives the exact Seatbelt wrapper from this server-owned policy for both prepared and
+   * direct launches. Windows still refuses: its native helper has no qualifying WFP path binding
+   * the child to exactly one gateway destination. A generic prepared wrapper never substitutes
+   * for the requested gateway policy.
    */
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
   /** Activity-log port for the closed gateway-confinement refusal below; defaults to the process sink. */
   readonly activityLog?: ServerLogSink | undefined;
+  readonly probeAvailability?: (() => BackendAvailability) | undefined;
+  readonly resolveGitExecutable?: (() => AttestedDarwinGitExecutable) | undefined;
 }
 
 export interface NativeRuntimeRecoveryPort {
@@ -86,6 +98,8 @@ interface ValidatedBackendOptions {
   readonly spawnHelper: NativeRuntimeHelperSpawn;
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
   readonly activityLog: ServerLogSink;
+  readonly probeAvailability: () => BackendAvailability;
+  readonly resolveGitExecutable: () => AttestedDarwinGitExecutable;
 }
 
 export function createNativeRuntimeProcessBackend(
@@ -126,13 +140,17 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     request: RuntimeSupervisorLaunchRequest,
     sandbox?: PreparedRuntimeSandboxLaunch,
   ): RuntimeProcessTree {
-    if (sandbox === undefined) {
-      try {
-        assertGatewayConfinementUnsupported(this.options.gatewayConfinement, request);
-      } catch (error) {
-        recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
-        throw error;
-      }
+    try {
+      assertNativeGatewaySupported(
+        this.options.gatewayConfinement,
+        request,
+        this.identity.platform,
+      );
+    } catch (error) {
+      recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
+      throw error;
+    }
+    if (sandbox === undefined && this.options.gatewayConfinement === undefined) {
       recordNativeConfinementUnavailable(this.options.activityLog, request.runId, this.identity);
     }
     const paths = validateLaunchPacketRequest(request, {
@@ -142,14 +160,10 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       pathIsContained,
       invalidRequest,
     });
+    const gateway = prepareNativeGatewayLaunch(this.options, request, paths);
+    const effectiveSandbox = gateway?.decision ?? sandbox;
     const recoveryHandle = request.recoveryHandle;
-    const packet =
-      sandbox === undefined
-        ? encodeLaunchPacket(request, paths)
-        : encodeLaunchPacket(
-            { ...request, executable: sandbox.command, args: sandbox.args },
-            { executable: sandbox.command, cwd: paths.cwd },
-          );
+    const packet = effectiveLaunchPacket(request, paths, effectiveSandbox);
     const child = spawnVerifiedHelper(
       this.options.helperPath,
       this.options.expectedHelperSha256,
@@ -158,6 +172,14 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     );
     const tree = new NativeRuntimeTree(recoveryHandle, child);
     child.controlInput.write(packet);
+    if (gateway !== undefined)
+      recordRuntimeGatewayConfinementSpawned(
+        this.options.activityLog,
+        request.runId,
+        "seatbelt",
+        gateway.policy,
+        gateway.git,
+      );
     return tree;
   }
 
@@ -175,6 +197,19 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
   public reconcileTreeExit(tree: RuntimeProcessTree): Promise<boolean> {
     return Promise.resolve(nativeTree(tree).hasReapProof());
   }
+}
+
+function effectiveLaunchPacket(
+  request: RuntimeSupervisorLaunchRequest,
+  paths: ValidatedLaunchPacketPaths,
+  sandbox: Pick<PreparedRuntimeSandboxLaunch, "command" | "args"> | undefined,
+): Buffer {
+  return sandbox === undefined
+    ? encodeLaunchPacket(request, paths)
+    : encodeLaunchPacket(
+        { ...request, executable: sandbox.command, args: sandbox.args },
+        { executable: sandbox.command, cwd: paths.cwd },
+      );
 }
 
 function validateBackendOptions(
@@ -202,6 +237,8 @@ function validateBackendOptions(
       }),
     spawnHelper: options.spawnHelper ?? spawnNativeHelper,
     activityLog: options.activityLog ?? processServerLogSink(),
+    probeAvailability: options.probeAvailability ?? probeBackends,
+    resolveGitExecutable: options.resolveGitExecutable ?? resolveDarwinGitExecutable,
     ...(gatewayConfinement === undefined ? {} : { gatewayConfinement }),
   };
 }
@@ -264,15 +301,47 @@ function validGatewayConfinement(
  * the identical "unsupported-on-this-host" refusal `planIsolatedRun` would produce for the same
  * unsupported host instead of a second, independently-worded string.
  */
-function assertGatewayConfinementUnsupported(
+function assertNativeGatewaySupported(
   policy: RuntimeGatewayConfinement | undefined,
   request: RuntimeSupervisorLaunchRequest,
+  platform: string,
 ): void {
   if (policy === undefined) return;
   if (policy.runId !== request.runId || policy.treeBindingId !== request.treeBindingId) {
     throw new Error("runtime-gateway-confinement-drift");
   }
-  throw new Error(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
+  if (platform !== "darwin") throw new Error(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
+}
+
+function prepareNativeGatewayLaunch(
+  options: ValidatedBackendOptions,
+  request: RuntimeSupervisorLaunchRequest,
+  paths: { readonly executable: string; readonly cwd: string },
+):
+  | {
+      readonly decision: ReturnType<typeof prepareRuntimeGatewayProcessSandbox>;
+      readonly policy: RuntimeGatewayConfinement;
+      readonly git: AttestedDarwinGitExecutable;
+    }
+  | undefined {
+  if (options.gatewayConfinement === undefined) return undefined;
+  try {
+    const git = options.resolveGitExecutable();
+    const decision = prepareRuntimeGatewayProcessSandbox({
+      request,
+      executable: paths.executable,
+      cwd: paths.cwd,
+      runtimeRoots: options.runtimeRoots,
+      policy: options.gatewayConfinement,
+      gitExecutable: git,
+      availability: options.probeAvailability(),
+      platform: "darwin",
+    });
+    return { decision, policy: options.gatewayConfinement, git };
+  } catch (error) {
+    recordNativeConfinementFailure(options.activityLog, request.runId, error);
+    throw error;
+  }
 }
 
 function validExpectedHelperSha256(value: string | undefined): string | undefined {

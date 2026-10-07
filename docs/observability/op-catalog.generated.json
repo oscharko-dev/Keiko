@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "74d39f99747e4c85b2ba67178488023832ed87ddb7b2efe0d17558ebb0ae8f5e",
+    "catalogDigest": "be9979dbbdde30e0f09493585ccf9dbbec812055513c67cf25872638bdf7826f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6076,9 +6076,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:62",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:63",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:771"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:789"
         ]
       },
       {
@@ -18922,7 +18922,7 @@
         "failureClasses": ["git-ci-repair-budget"],
         "proofIds": ["git.ci-repair.budget.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:329",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:347",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:210",
           "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:457",
@@ -23188,7 +23188,7 @@
         "failureClasses": ["verified-commit-authority"],
         "proofIds": ["git.verified-commit.authority.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:284",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:302",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/codingRuntimeVerifiedCommitAuthorityStore.ts:48",
           "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.ts:570"
@@ -27740,9 +27740,9 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:180",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:402",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:505",
-          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:218"
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:369",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:441",
+          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
       {
@@ -27822,6 +27822,24 @@
             "dataClass": "closed-enum",
             "required": false,
             "values": ["selected", "command-line-tools"]
+          },
+          "filesystemPolicy": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["native-root-union-v1"]
+          },
+          "workspaceAccess": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["read-only-outside-private-state"]
+          },
+          "privateStateAccess": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["read-write"]
           }
         },
         "causal": "correlation",
@@ -27832,7 +27850,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:227",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:467"
+          "packages/keiko-server/src/coding-runtime/runtimeGatewayProcessSandbox.ts:60"
         ]
       },
       {
@@ -27885,8 +27903,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:187",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:450",
-          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:244"
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:417",
+          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
       {
@@ -78263,6 +78281,12 @@
                   "required": false
                 },
                 {
+                  "name": "filesystemPolicy",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "modelProfileDigest",
                   "type": "string",
                   "dataClass": "digest",
@@ -78273,6 +78297,12 @@
                   "type": "string",
                   "dataClass": "digest",
                   "required": true
+                },
+                {
+                  "name": "privateStateAccess",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "profile",
@@ -78291,6 +78321,12 @@
                   "type": "string",
                   "dataClass": "opaque-id",
                   "required": true
+                },
+                {
+                  "name": "workspaceAccess",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -88934,7 +88970,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:65",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:66",
       "package": "keiko-server"
     },
     {
@@ -90029,7 +90065,7 @@
     {
       "op": "git.ci-repair.budget",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:332",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:350",
       "package": "keiko-server"
     },
     {
@@ -90455,7 +90491,7 @@
     {
       "op": "git.verified-commit.authority",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:287",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:305",
       "package": "keiko-server"
     },
     {
