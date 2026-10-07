@@ -91,6 +91,25 @@ may still need the explicit output-token parameter described below.
 
 ---
 
+## Coding Workbench cannot read repository instructions or a small window from a large file
+
+Read `coding-runtime.dev-lane.activated` first: `secureReadHelperSha256` and `secureReadByteCap`
+identify the admitted native helper without recording its path or source contents. The current
+helper reads whole files up to 1 MiB while `keiko_workspace_read` returns at most 64 KiB per model
+window; request fewer lines if the requested window itself is too large. Initial root `AGENTS.md`
+context stays bounded to 16 KiB and 800 lines and reports `truncated` with whole-file counts/digest.
+
+The approved npm runtime 1.1.3 helper retains a 64 KiB whole-file bound during an application
+upgrade. Larger files still return `workspace-read-too-large` on that legacy helper. Large-file
+support requires the rebuilt native runtime package as well as the application update. Do not
+replace a helper by hand or override its digest. Unknown or changed helper bytes fail closed.
+
+A server/helper mismatch appears as `protocol-invalid` on `coding-runtime.workspace-read` and as
+`refused` on `coding-runtime.repository-instructions.context`. It is a runtime packaging problem;
+changing LiteLLM credentials or model settings cannot repair it. In a development checkout use the
+existing trusted `npm run dev:start` path, which stages and verifies current native sources before
+launch. Final package qualification must use the runtime packages built from the same source.
+
 ## Coding Workbench turn has no assistant reply
 
 For a Workbench run that accepted a message but has no assistant reply, note the run id and export a

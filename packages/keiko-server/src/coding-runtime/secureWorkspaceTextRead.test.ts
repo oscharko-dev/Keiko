@@ -79,12 +79,50 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("SecureWorkspaceTextReadPort", () => {
+  it("uses the verified legacy helper's request ceiling during a runtime upgrade", async () => {
+    const caps: number[] = [];
+    const run = (request: { readonly stdin: Uint8Array }): Promise<Uint8Array> => {
+      caps.push(Buffer.from(request.stdin).readUInt32LE(16));
+      return Promise.resolve(response(0, Buffer.from("safe\n")));
+    };
+    const port = createSecureWorkspaceTextReadPort({
+      resolveWorkspaceRoot: () => "/server-owned/workspace",
+      artifact: { ...artifact, byteCap: 65_536 },
+      artifactVerifier: { verify: () => true },
+      processFactory: { create: () => ({ run }) },
+      platform: { os: "darwin", arch: "arm64" },
+    });
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: true,
+      text: "safe\n",
+    });
+    expect(caps).toEqual([65_536]);
+  });
+
   it("reads a repository instruction file above the former 64 KiB ceiling", async () => {
     const text = "Repository convention.\n".repeat(4_000);
     const { port } = createPort(() => Promise.resolve(response(0, Buffer.from(text))));
     await expect(port.readText({ relativePath: "AGENTS.md" })).resolves.toEqual({
       ok: true,
       text,
+    });
+  });
+
+  it("rejects a legacy helper response above that artifact's verified ceiling", async () => {
+    const port = createSecureWorkspaceTextReadPort({
+      resolveWorkspaceRoot: () => "/server-owned/workspace",
+      artifact: { ...artifact, byteCap: 65_536 },
+      artifactVerifier: { verify: () => true },
+      processFactory: {
+        create: () => ({
+          run: (): Promise<Uint8Array> => Promise.resolve(response(0, Buffer.alloc(65_537, 0x61))),
+        }),
+      },
+      platform: { os: "darwin", arch: "arm64" },
+    });
+    await expect(port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "protocol-invalid",
     });
   });
 

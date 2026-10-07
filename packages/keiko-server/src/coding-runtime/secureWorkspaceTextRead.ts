@@ -171,7 +171,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     const frame = encodeSecureWorkspaceReadRequest({
       root: workspaceRoot,
       relativePath: request.relativePath,
-      byteCap: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      byteCap: verifiedArtifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
     });
     try {
       const signal = readSignal(request.signal);
@@ -183,7 +183,10 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       } catch (error) {
         return processRunFailure(error, signal, request.signal);
       }
-      const answer = decodeHelperResponse(response);
+      const answer = decodeHelperResponse(
+        response,
+        verifiedArtifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      );
       if (answer.kind === "settled") return answer.result;
       return await refinedAccessDenial(
         workspaceRoot,
@@ -230,9 +233,12 @@ function isMappedResponse(
   return decoded.status !== "access-denied";
 }
 
-function decodeHelperResponse(response: Uint8Array): HelperAnswer {
+function decodeHelperResponse(response: Uint8Array, byteCap: number): HelperAnswer {
   try {
     const decoded = decodeSecureWorkspaceReadResponse(response);
+    if (decoded.status === "ok" && decoded.bytes.byteLength > byteCap) {
+      return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
+    }
     return isMappedResponse(decoded)
       ? { kind: "settled", result: mappedHelperResult(decoded) }
       : { kind: "access-denied" };

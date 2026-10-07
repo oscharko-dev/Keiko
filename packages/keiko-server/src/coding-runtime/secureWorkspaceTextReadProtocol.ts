@@ -3,6 +3,7 @@
  * binary and closed: neither side accepts JSON, optional fields, or trailing bytes.
  */
 export const SECURE_WORKSPACE_TEXT_READ_MAX_BYTES = 1_048_576;
+export const SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES = 65_536;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES = 32_768;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES = 4_096;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_FRAME_BYTES =
@@ -77,7 +78,7 @@ export function encodeSecureWorkspaceReadRequest(
       SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
     );
     const maxBytes = request.byteCap;
-    if (!Number.isInteger(maxBytes) || maxBytes !== SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) {
+    if (!isSecureWorkspaceReadByteCap(maxBytes)) {
       throw new Error("secure-workspace-read-invalid-request");
     }
     const frame = Buffer.allocUnsafe(
@@ -118,7 +119,7 @@ export function decodeSecureWorkspaceReadRequest(
     bytes.readUInt16LE(6) !== 0 ||
     rootLength > SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES ||
     pathLength > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES ||
-    maxBytes !== SECURE_WORKSPACE_TEXT_READ_MAX_BYTES ||
+    !isSecureWorkspaceReadByteCap(maxBytes) ||
     REQUEST_HEADER_BYTES + rootLength + pathLength !== bytes.byteLength
   ) {
     throw new Error("secure-workspace-read-malformed-request");
@@ -198,6 +199,13 @@ export function decodeSecureWorkspaceText(
   } catch {
     return { ok: false, reason: "not-text" };
   }
+}
+
+export function isSecureWorkspaceReadByteCap(value: number): boolean {
+  return (
+    value === SECURE_WORKSPACE_TEXT_READ_MAX_BYTES ||
+    value === SECURE_WORKSPACE_TEXT_READ_LEGACY_MAX_BYTES
+  );
 }
 
 function encodeBoundedUtf8(value: string, limit: number): Buffer {

@@ -107,6 +107,40 @@ afterEach(() => {
 });
 
 describe("npm-lane OpenCode discovery", () => {
+  it("keeps a previously approved helper usable with its narrower wire capability", () => {
+    const install = globalInstall();
+    const previous = { ...install.approval, helperMaxBytes: 65_536 };
+    const current = { ...install.approval, helperSha256: sha256("new-helper-binary") };
+    const discovery = discoverNpmLaneOpenCode({
+      env: install.env,
+      platform: "darwin",
+      arch: "arm64",
+      npmLaneApprovals: { "macos-arm64": current },
+      npmLanePreviousApprovals: { "macos-arm64": previous },
+    });
+    expect(discovery.outcome).toBe("activated");
+    if (discovery.outcome !== "activated") return;
+    expect(discovery.runtime.secureRead.artifact).toMatchObject({
+      sha256: previous.helperSha256,
+      sourceTreeSha256: previous.helperSourceTreeSha256,
+      byteCap: 65_536,
+    });
+    write(
+      join(install.runtimeRoot, "native", "keiko-secure-workspace-read"),
+      "unknown-helper",
+      0o755,
+    );
+    expect(
+      discoverNpmLaneOpenCode({
+        env: install.env,
+        platform: "darwin",
+        arch: "arm64",
+        npmLaneApprovals: { "macos-arm64": current },
+        npmLanePreviousApprovals: { "macos-arm64": previous },
+      }),
+    ).toEqual({ outcome: "refused", reason: "secure-read-helper-stale" });
+  });
+
   it("activates the runtime package installed next to a globally installed Keiko", () => {
     const install = globalInstall();
     const discovery = discover(install);

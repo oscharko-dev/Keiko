@@ -269,6 +269,8 @@ describe("production OpenCode activation", () => {
       extra: { lane: "dev-checkout", target: "windows-x64" },
     });
     expect(event.extra?.runtimeSupervisorSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(event.extra?.secureReadByteCap).toBe(1_048_576);
+    expect(event.extra?.secureReadHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
     const activatedProof = expectActivityLogProof(
       "coding-runtime.dev-lane.activated.emitted-line",
       formatActivityLogProofLine(event),

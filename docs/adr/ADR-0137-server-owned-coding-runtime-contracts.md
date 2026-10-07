@@ -99,6 +99,16 @@ remain capped at 16 KiB and 800 lines. An oversized requested model window retur
 smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
 override the pinned helper ceiling.
 
+An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
+helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
+refused. The verified artifact, never a tool argument, selects one of the two closed protocol caps.
+A legacy helper response above its own cap is rejected even though the current response codec can
+carry 1 MiB. Current helper approvals are rebuilt from the checked-in native source for both macOS
+architectures. `coding-runtime.dev-lane.activated` records the selected helper digest and byte cap,
+so support can distinguish an old installed helper from the current one. A release that delivers
+large-file reads must also publish and select the rebuilt runtime packages; application-only
+updates keep the legacy bound rather than breaking ordinary reads.
+
 ### D2 — One server aggregate owns runtime authority
 
 The BFF resolves the authenticated local operator and the live active task workspace before minting.

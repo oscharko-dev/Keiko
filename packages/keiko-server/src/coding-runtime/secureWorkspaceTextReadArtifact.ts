@@ -1,4 +1,8 @@
 import type { SecureWorkspaceReadPlatform } from "./secureWorkspaceTextReadProcess.js";
+import {
+  isSecureWorkspaceReadByteCap,
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+} from "./secureWorkspaceTextReadProtocol.js";
 
 export type SecureWorkspaceReadTarget = "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64";
 
@@ -11,6 +15,8 @@ export interface SecureWorkspaceTextReadArtifact {
   readonly sourceCommit: string;
   readonly sourceTreeSha256: string;
   readonly signed: boolean;
+  /** Server-pinned helper capability; absent for the current portable/dev helper. */
+  readonly byteCap?: number;
 }
 
 export interface SecureWorkspaceTextReadArtifactVerifier {
@@ -56,6 +62,7 @@ export function isValidSecureWorkspaceTextReadArtifact(
     artifact.installRelativePath === expectedPath &&
     artifact.protocol === "KSR1/KSS1" &&
     artifact.signed &&
+    isSecureWorkspaceReadByteCap(artifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) &&
     /^[a-f0-9]{64}$/.test(artifact.sha256) &&
     /^[a-f0-9]{40}$/.test(artifact.sourceCommit) &&
     /^[a-f0-9]{64}$/.test(artifact.sourceTreeSha256)

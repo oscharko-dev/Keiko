@@ -31,6 +31,7 @@ import {
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
 import type {
   ProductionOpenCodeBackendInput,
@@ -77,6 +78,12 @@ const CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION = defineActivityLogOperation({
       dataClass: "digest",
       required: false,
       maxLength: 64,
+    },
+    secureReadHelperSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    secureReadByteCap: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
     },
   },
   causal: "correlation",
@@ -315,6 +322,9 @@ function recordDevLaneDiscovery(
           lane: discovery.runtime.lane,
           target: discovery.runtime.target,
           evidenceClass: discovery.runtime.evidenceClass,
+          secureReadHelperSha256: discovery.runtime.secureRead.artifact.sha256,
+          secureReadByteCap:
+            discovery.runtime.secureRead.artifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
           ...(discovery.runtime.nativeHelperSha256 === undefined
             ? {}
             : { runtimeSupervisorSha256: discovery.runtime.nativeHelperSha256 }),

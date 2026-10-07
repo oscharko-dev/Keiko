@@ -15,8 +15,10 @@ import { productionUpdateFacts } from "../update-install-mode.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   NPM_LANE_RUNTIME_APPROVALS,
+  NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   type NpmLaneRuntimeApproval,
 } from "./npmLaneRuntimeApprovals.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
@@ -94,6 +96,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
   readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
+  readonly npmLanePreviousApprovals?:
+    Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
 }
 
 export function devLaneEnvEnabled(value: string | undefined): boolean {
@@ -178,7 +182,16 @@ export function discoverNpmLaneOpenCode(
   try {
     const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
     if (packageRoot === undefined) return { outcome: "inactive" };
-    return discoverNpmLanePackage(join(packageRoot, NPM_LANE_RUNTIME_DIR), target, approval);
+    const previous =
+      input.npmLaneApprovals === undefined
+        ? NPM_LANE_PREVIOUS_RUNTIME_APPROVALS[target]
+        : input.npmLanePreviousApprovals?.[target];
+    return discoverNpmLanePackage(
+      join(packageRoot, NPM_LANE_RUNTIME_DIR),
+      target,
+      approval,
+      previous,
+    );
   } catch (error) {
     // A verification that cannot be completed (an unreadable file, a directory that changed under
     // the walk) is a refusal, and the reason it could not be completed is evidence of its own.
@@ -218,15 +231,14 @@ function discoverNpmLanePackage(
   runtimeRoot: string,
   target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
   approval: NpmLaneRuntimeApproval,
+  previous: NpmLaneRuntimeApproval | undefined,
 ): DevLaneOpenCodeDiscovery {
   const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval);
   if (!payload.ok) return refused(payload.refusal);
   const helperPath = join(runtimeRoot, helperRelativePath(target));
   if (!isRegularFile(helperPath)) return refused("secure-read-helper-missing");
-  if (
-    sha256File(helperPath) !== approval.helperSha256 ||
-    statSync(helperPath).size !== approval.helperSizeBytes
-  ) {
+  const helper = matchingNpmHelperApproval(helperPath, approval, previous);
+  if (helper === undefined) {
     return refused("secure-read-helper-stale");
   }
   if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
@@ -234,14 +246,15 @@ function discoverNpmLanePackage(
   }
   const secureRead: DevLaneSecureReadBinding = {
     helperPath,
-    helperSizeBytes: approval.helperSizeBytes,
+    helperSizeBytes: helper.helperSizeBytes,
     artifact: {
       target: secureReadTarget(target),
       installRelativePath: `runtime/${helperRelativePath(target)}`,
-      sha256: approval.helperSha256,
+      sha256: helper.helperSha256,
       protocol: "KSR1/KSS1",
-      sourceCommit: approval.helperSourceCommit,
-      sourceTreeSha256: approval.helperSourceTreeSha256,
+      sourceCommit: helper.helperSourceCommit,
+      sourceTreeSha256: helper.helperSourceTreeSha256,
+      byteCap: helper.helperMaxBytes ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
       // Verified by its content digest against the server's own pin, never by a signature chain.
       signed: true,
     },
@@ -253,6 +266,19 @@ function discoverNpmLanePackage(
     payload.sidecar,
     secureRead,
     undefined,
+  );
+}
+
+function matchingNpmHelperApproval(
+  helperPath: string,
+  approval: NpmLaneRuntimeApproval,
+  previous: NpmLaneRuntimeApproval | undefined,
+): NpmLaneRuntimeApproval | undefined {
+  const sha256 = sha256File(helperPath);
+  const size = statSync(helperPath).size;
+  const candidates = previous === undefined ? [approval] : [approval, previous];
+  return candidates.find(
+    (candidate) => candidate.helperSha256 === sha256 && candidate.helperSizeBytes === size,
   );
 }
 

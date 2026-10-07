@@ -6015,6 +6015,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      secureReadHelperSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      secureReadByteCap: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "start",
