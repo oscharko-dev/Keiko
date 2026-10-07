@@ -553,6 +553,8 @@ export interface ProductionManagedWorktreeToolInput {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
   readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
+  /** The server-wide record of the diff text the edit port renders itself (PR #3876 review). */
+  readonly materializedPatches?: CodingToolReadEditPortDeps["materializedPatches"];
   readonly invocationRegistry: CodingToolInvocationRegistry;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly skillCatalog?: SkillCatalog | undefined;
@@ -847,6 +849,7 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     ...(input.mutationLeaseCoordinator
       ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }
       : {}),
+    ...(input.materializedPatches ? { materializedPatches: input.materializedPatches } : {}),
   });
 }
 

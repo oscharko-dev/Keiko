@@ -373,6 +373,10 @@ import {
   type CodingRuntimeEditorMutationLeasePort,
 } from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
+  createMaterializedPatchRegistry,
+  type MaterializedPatchRegistry,
+} from "./coding-runtime/materializedPatchRegistry.js";
+import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshotStore,
 } from "./coding-runtime/codingRuntimeSnapshotStore.js";
@@ -796,6 +800,11 @@ export interface UiHandlerDeps {
   // Optional server-private final mutation claim for managed-runtime editor changesets. #2256 owns
   // composition; absence preserves the established local editor action path.
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
+  // Server-owned record of the diff text the coding runtime's edit port rendered itself, read by the
+  // editor route to lift keiko-tools' collapsed-diff heuristic for a registered diff alone (PR #3876
+  // review). The same instance the runtime's edit port writes (assembleUiHandlerDeps); only the read
+  // side is exposed here. Absent, the heuristic stays for every diff.
+  readonly materializedPatches?: Pick<MaterializedPatchRegistry, "lookup" | "stats"> | undefined;
   // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
   // routes keep the root evidence store clean and fall back to diagnostics-only observability.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
@@ -5624,13 +5633,21 @@ function buildCodingRuntimeControlPlaneDeps(
   };
 }
 
+// The editor route's two runtime-mutation ports: the final claim on a mutation, and the record of
+// which diff text the runtime's edit port rendered itself. Both come from the one qualified
+// composition, so the route reads the same instances the runtime writes.
 function buildRuntimeMutationLeaseDependency(
   options: BuildHandlerDepsOptions,
   runtimeComposition: ReturnType<typeof productionRuntimeResolver>,
-): Partial<Pick<UiHandlerDeps, "runtimeMutationLease">> {
+): Partial<Pick<UiHandlerDeps, "runtimeMutationLease" | "materializedPatches">> {
   if (options.codingRuntimeResolver !== undefined) return {};
   if (runtimeComposition.runtimeMutationLease === undefined) return {};
-  return { runtimeMutationLease: runtimeComposition.runtimeMutationLease };
+  return {
+    runtimeMutationLease: runtimeComposition.runtimeMutationLease,
+    ...(runtimeComposition.materializedPatches === undefined
+      ? {}
+      : { materializedPatches: runtimeComposition.materializedPatches }),
+  };
 }
 
 export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
@@ -5660,6 +5677,7 @@ interface ProductionRuntimeComposition {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
+  readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
 }
 
@@ -5843,7 +5861,7 @@ function productionRuntimeResolver(
   if (!materializedManagedRoot(managedTaskWorkspaceRoot, args.options.diagnostics)) {
     return unqualifiedComposition("runtime-unqualified");
   }
-  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
+  const mutationPorts = createRuntimeMutationPorts();
   return qualifiedProductionRuntimeComposition(
     qualifiedRuntimeResolver({
       args,
@@ -5852,29 +5870,43 @@ function productionRuntimeResolver(
       managedTaskWorkspaceRoot,
       ports,
       activated: resolution.activated,
-      runtimeMutationLeaseBroker,
+      ...mutationPorts,
       commandRunner,
       verificationRunner,
       editorSettingsControl,
       workspaceLifecycle,
     }),
     readiness,
-    runtimeMutationLeaseBroker,
+    mutationPorts,
     // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
     resolution.evidenceClass ?? "functional-not-platform-qualified",
   );
 }
 
-interface QualifiedRuntimeResolverInput {
+// The two server-owned ports of a runtime mutation, created once per composition: the final claim
+// on the mutation, and the record of the diff text the edit port rendered itself (PR #3876 review).
+// The runtime writes both and the editor route reads both, so each side must hold the same instance.
+interface RuntimeMutationPorts {
+  readonly runtimeMutationLeaseBroker: ReturnType<
+    typeof createCodingRuntimeEditorMutationLeaseBroker
+  >;
+  readonly materializedPatches: MaterializedPatchRegistry;
+}
+
+function createRuntimeMutationPorts(): RuntimeMutationPorts {
+  return {
+    runtimeMutationLeaseBroker: createCodingRuntimeEditorMutationLeaseBroker(),
+    materializedPatches: createMaterializedPatchRegistry(),
+  };
+}
+
+interface QualifiedRuntimeResolverInput extends RuntimeMutationPorts {
   readonly args: UiHandlerDepsAssemblyArgs;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly envelopeBounds: RuntimeEnvelopeBounds;
   readonly managedTaskWorkspaceRoot: string;
   readonly ports: ProductionCodingRuntimePorts;
   readonly activated: boolean;
-  readonly runtimeMutationLeaseBroker: ReturnType<
-    typeof createCodingRuntimeEditorMutationLeaseBroker
-  >;
   readonly commandRunner: PeripheralManagers["commandRunner"];
   readonly verificationRunner: PeripheralManagers["verificationRunner"];
   readonly editorSettingsControl: PeripheralManagers["editorSettingsControl"];
@@ -5906,6 +5938,7 @@ function qualifiedRuntimeResolver(
     ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
     ...(draftDelivery === undefined ? {} : { draftDelivery }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
+    materializedPatches: input.materializedPatches,
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
@@ -5965,9 +5998,10 @@ function runtimeDraftDeliveryDependencies(
 function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
-  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  mutationPorts: RuntimeMutationPorts,
   evidenceClass: CodingWorkbenchRuntimeEvidenceClass,
 ): ProductionRuntimeComposition {
+  const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {
     resolver: {
       resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
@@ -5980,6 +6014,7 @@ function qualifiedProductionRuntimeComposition(
     unavailableReason: undefined,
     evidenceClass,
     runtimeMutationLease: runtimeMutationLeaseBroker,
+    materializedPatches,
     dispose: (): void => {
       runtimeMutationLeaseBroker.dispose();
     },

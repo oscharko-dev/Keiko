@@ -96,6 +96,9 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
+import { createCodingToolReadEditPorts } from "../coding-runtime/codingToolReadEditPorts.js";
+import { materializeReplacementChangeset } from "../coding-runtime/codingToolReplacementEdits.js";
+import { createMaterializedPatchRegistry } from "../coding-runtime/materializedPatchRegistry.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
@@ -5149,6 +5152,314 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       effectClass: "content-mutation",
       reviewReason: "workspace-restricted",
     });
+  });
+});
+
+// PR #3876 review: keiko-tools refuses any diff that spells a backslash-n before +, - or a space, its
+// guard against a model that collapses a diff's lines into one. The edit port renders its diff itself
+// from the bytes of a governed read, so the route lifts that one heuristic for a diff whose exact
+// text the port registered, at admission, at the approved result and for the diff it projects from
+// the selected files. Every diff below is rendered by the production materializer from real text.
+describe("applyChangeset line-break provenance (PR #3876 review)", () => {
+  let workspaceRoot: string;
+  const SOURCE =
+    'export const header = "Name  Amount\\n----  ------\\n";\nexport const total = 1;\n';
+  const RESULT = SOURCE.replace("total = 1;", "total = 2;");
+
+  beforeEach(() => {
+    workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-agent-provenance-"));
+  });
+
+  afterEach(() => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  // The changeset the edit port would post for one replacement, with its diff rendered by the
+  // production materializer rather than restated here.
+  async function renderedAction(
+    edits: Readonly<Record<string, readonly [string, string]>> = {
+      "src/table.ts": ["total = 1;", "total = 2;"],
+    },
+    files: Readonly<Record<string, string>> = { "src/table.ts": SOURCE },
+    selectedFiles?: readonly string[],
+  ): Promise<EditorAgentAction> {
+    for (const [file, text] of Object.entries(files)) writeWorkspaceFile(workspaceRoot, file, text);
+    const rendered = await materializeReplacementChangeset(
+      {
+        readText: ({ relativePath }) =>
+          Promise.resolve({ ok: true as const, text: files[relativePath] ?? "" }),
+      },
+      {
+        edits: Object.entries(edits).map(([file, [oldString, newString]]) => ({
+          file,
+          oldString,
+          newString,
+        })),
+        files: Object.keys(files).map((file) => ({
+          file,
+          expectedContentHash: sha256(files[file] ?? ""),
+        })),
+      },
+      undefined,
+    );
+    if (rendered.status !== "materialized") throw new Error(`expected a diff: ${rendered.status}`);
+    return changesetActionFor(
+      workspaceRoot,
+      rendered.changeset.patch,
+      Object.keys(files),
+      selectedFiles,
+    );
+  }
+
+  function patchOf(proposed: EditorAgentAction): string {
+    const patch = proposed.changeset?.patch;
+    if (patch === undefined) throw new Error("expected a changeset");
+    return patch;
+  }
+
+  it("renders a diff that spells a backslash-n before a dash, the shape the heuristic refuses", async () => {
+    const proposed = await renderedAction();
+
+    expect(patchOf(proposed)).toContain(String.raw`Amount\n----`);
+    expect(parseUnifiedDiff(patchOf(proposed)).files.map((file) => file.path)).toEqual([
+      "src/table.ts",
+    ]);
+  });
+
+  it("admits and applies a registered diff byte for byte", async () => {
+    const proposed = await renderedAction();
+    const registry = createMaterializedPatchRegistry();
+    registry.register(patchOf(proposed));
+    const deps = { materializedPatches: registry };
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/table.ts", ["src/table.ts"]);
+
+    const queued = await handleEditorAgentActions(context(proposed), deps);
+    const reviewed = lastEmittedAction(bridge.frames());
+    const committed = await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
+
+    expect(queued.status).toBe(202);
+    expect(reviewed.changeset?.patch).toBe(patchOf(proposed));
+    expect(reviewed.changeset?.prepared?.files.map((file) => file.file)).toEqual(["src/table.ts"]);
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(readWorkspaceFile(workspaceRoot, "src/table.ts")).toBe(RESULT);
+    expect(auditRecords().map((record) => record.outcome)).toEqual(["queued", "succeeded"]);
+  });
+
+  it.each(["an empty registry", "no registry at all"] as const)(
+    "still refuses the same rendered diff with %s, with the engine's reason",
+    async (wiring) => {
+      const proposed = await renderedAction();
+      const bridge = await registerChangesetSnapshot(workspaceRoot, "src/table.ts", [
+        "src/table.ts",
+      ]);
+      const deps =
+        wiring === "no registry at all"
+          ? undefined
+          : { materializedPatches: createMaterializedPatchRegistry() };
+
+      const refused = await handleEditorAgentActions(context(proposed), deps);
+
+      expect(refused.status).toBe(409);
+      expect(actionConflictCode(refused.body)).toBe("INVALID_EDITS");
+      expect(actionResult(refused.body).conflict?.message).toContain("escaped newline");
+      expect(bridge.frames()).not.toContain("event: editor-agent:action");
+      expect(readWorkspaceFile(workspaceRoot, "src/table.ts")).toBe(SOURCE);
+    },
+  );
+
+  // The registry answers for exact text. A diff that differs by one byte from a registered one is
+  // another diff, and no other producer's text is certified by the digest of this one.
+  it("does not grant the provenance of one rendered diff to another", async () => {
+    const registered = await renderedAction();
+    const other = await renderedAction({ "src/table.ts": ["total = 1;", "total = 3;"] });
+    const registry = createMaterializedPatchRegistry();
+    registry.register(patchOf(registered));
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/table.ts", ["src/table.ts"]);
+
+    const refused = await handleEditorAgentActions(context(other), {
+      materializedPatches: registry,
+    });
+
+    expect(patchOf(other)).not.toBe(patchOf(registered));
+    expect(refused.status).toBe(409);
+    expect(actionConflictCode(refused.body)).toBe("INVALID_EDITS");
+    expect(bridge.frames()).not.toContain("event: editor-agent:action");
+  });
+
+  // The human's review can take as long as the editor's own review timeout. A registration that
+  // ended in the meantime must fail the approved change closed, never apply it unchecked.
+  it("fails an approved change closed when its registration ended during the review", async () => {
+    let now = 1_000_000;
+    const registry = createMaterializedPatchRegistry({ now: () => now, ttlMs: 60_000 });
+    const proposed = await renderedAction();
+    registry.register(patchOf(proposed));
+    const deps = { materializedPatches: registry };
+    await registerChangesetSnapshot(workspaceRoot, "src/table.ts", ["src/table.ts"]);
+    expect((await handleEditorAgentActions(context(proposed), deps)).status).toBe(202);
+
+    now += 60_000;
+    const committed = await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
+
+    expect(actionConflictCode(committed.body)).toBe("INVALID_EDITS");
+    // The engine's own reason, so the refusal reads as what it is: a diff without provenance.
+    expect(actionResult(committed.body).conflict?.message).toContain("escaped newline");
+    expect(readWorkspaceFile(workspaceRoot, "src/table.ts")).toBe(SOURCE);
+  });
+
+  // The route re-validates the diff it projects from the selected files. That diff re-renders the
+  // same literal text, so it takes the provenance of the diff it was projected from.
+  it("re-validates the diff projected from the selected files with the provenance of the full diff", async () => {
+    const proposed = await renderedAction(
+      { "src/table.ts": ["total = 1;", "total = 2;"], "src/plain.ts": ["one", "two"] },
+      { "src/table.ts": SOURCE, "src/plain.ts": "one\n" },
+      ["src/table.ts"],
+    );
+    const registry = createMaterializedPatchRegistry();
+    registry.register(patchOf(proposed));
+    const deps = { materializedPatches: registry };
+    await registerChangesetSnapshot(workspaceRoot, "src/table.ts", [
+      "src/table.ts",
+      "src/plain.ts",
+    ]);
+
+    expect((await handleEditorAgentActions(context(proposed), deps)).status).toBe(202);
+    const committed = await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
+
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(readWorkspaceFile(workspaceRoot, "src/table.ts")).toBe(RESULT);
+    expect(readWorkspaceFile(workspaceRoot, "src/plain.ts")).toBe("one\n");
+  });
+
+  // AGENTS.md §8: every decision the route takes on a changeset's diff leaves body-free evidence on
+  // the existing Activity Log, under the action's own correlation, through the real registered
+  // formatter. The line names the stage, what the registry answered and the registry's own counts,
+  // so a refusal after a long review reads as an ended registration and not as an engine defect.
+  it("records each provenance decision as body-free evidence, with the registry's counts", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      let now = 1_000_000;
+      const registry = createMaterializedPatchRegistry({ now: () => now, ttlMs: 60_000 });
+      const proposed = await renderedAction();
+      registry.register(patchOf(proposed));
+      const deps = { materializedPatches: registry };
+      await registerChangesetSnapshot(workspaceRoot, "src/table.ts", ["src/table.ts"]);
+      await handleEditorAgentActions(context(proposed), deps);
+      now += 60_000;
+      await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
+
+      const lines = sink.events
+        .filter((event) => event.op === "editor.agent.changeset-provenance")
+        .map(formatActivityLogProofLine);
+      expect(lines).toHaveLength(2);
+      const [admission, result] = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      expectActivityLogProof("editor.agent.changeset-provenance.emitted-line", lines[0] ?? "");
+      expect(admission).toMatchObject({
+        level: "info",
+        // The Authority Envelope's run id: the timeline the coding runtime's own lines are on.
+        correlationId: "run-2121",
+        stage: "admission",
+        provenance: "materialized",
+        patchBytes: Buffer.byteLength(patchOf(proposed), "utf8"),
+        patchSha256: registry.lookup(patchOf(proposed)).patchSha256,
+        registryEntries: 1,
+        registryEvicted: 0,
+        registryExpired: 0,
+      });
+      expect(result).toMatchObject({
+        stage: "result",
+        provenance: "unregistered",
+        patchSha256: admission?.patchSha256,
+        registryEntries: 0,
+        registryExpired: 1,
+      });
+      const serialized = lines.join("");
+      for (const body of ["src/table.ts", "Amount", "total", workspaceRoot]) {
+        expect(serialized).not.toContain(body);
+      }
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("says so when no registry is wired, and writes no line for another action type", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const proposed = await renderedAction();
+      await registerChangesetSnapshot(workspaceRoot, "src/table.ts", ["src/table.ts"]);
+      await handleEditorAgentActions(context(proposed));
+      await handleEditorAgentActions(context(action({ actionId: "save-1", type: "save" })));
+
+      const lines = sink.events
+        .filter((event) => event.op === "editor.agent.changeset-provenance")
+        .map((event) => JSON.parse(formatActivityLogProofLine(event)) as Record<string, unknown>);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ stage: "admission", provenance: "registry-absent" });
+      expect(lines[0]).not.toHaveProperty("patchSha256");
+      expect(lines[0]).not.toHaveProperty("registryEntries");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // One registry, two owners: the edit port writes it and the route reads it. This wires the real
+  // port to the real route the way the loopback client does, so the digest the port registers is
+  // the digest of the text the route receives after one JSON round trip.
+  it("carries the provenance from the real edit port to the real route through one registry", async () => {
+    writeWorkspaceFile(workspaceRoot, "src/table.ts", SOURCE);
+    const registry = createMaterializedPatchRegistry();
+    const deps = { materializedPatches: registry };
+    await registerChangesetSnapshot(workspaceRoot, "src/table.ts", ["src/table.ts"]);
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: ({ relativePath }) =>
+          Promise.resolve(
+            relativePath === "src/table.ts"
+              ? { ok: true as const, text: SOURCE }
+              : { ok: false as const, reason: "not-found" as const },
+          ),
+      },
+      editorAgentClient: {
+        action: async (posted) => {
+          const routed = await handleEditorAgentActions(context(posted), deps);
+          return { ok: true as const, value: { result: actionResult(routed.body) } };
+        },
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-1",
+        authorityRef: agentAuthorityRef ?? { runId: "run-2121", envelopeDigest: HASH },
+        origin: "agent",
+      }),
+      materializedPatches: registry,
+      activityLog: { write: vi.fn() },
+    });
+
+    const outcome = await ports.editorChangeset.execute(
+      {
+        action: "edit",
+        actionId: "edit-chain",
+        idempotencyKey: "edit-chain-key",
+        changeset: {
+          edits: [{ file: "src/table.ts", oldString: "total = 1;", newString: "total = 2;" }],
+          files: [{ file: "src/table.ts", expectedContentHash: sha256(SOURCE) }],
+        },
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    const committed = await postActionResult(
+      action({ actionId: "edit-chain", type: "applyChangeset" }),
+      "succeeded",
+      "session-1",
+      undefined,
+      deps,
+    );
+
+    expect(outcome).toEqual({ status: "completed" });
+    expect(registry.stats().entries).toBe(1);
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(readWorkspaceFile(workspaceRoot, "src/table.ts")).toBe(RESULT);
   });
 });
 

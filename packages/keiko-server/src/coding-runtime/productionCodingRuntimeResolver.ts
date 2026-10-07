@@ -141,7 +141,6 @@ import {
 } from "./codingRuntimeContextUsage.js";
 import {
   createCodingRuntimeRunEffortRegistry,
-  type CodingRuntimeModelCallId,
   type CodingRuntimeRunEffortRegistry,
 } from "./codingRuntimeRunEffort.js";
 
@@ -209,6 +208,12 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
   readonly runtimeMutationLeaseBroker?:
     Pick<CodingRuntimeEditorMutationLeaseBroker, "attach"> | undefined;
+  /**
+   * The server-wide record of the diff text the edit port renders itself. The same instance reaches
+   * the editor route as `UiHandlerDeps.materializedPatches` (deps.ts), which is how a registered
+   * diff is read verbatim there and no other is (PR #3876 review).
+   */
+  readonly materializedPatches?: ProductionManagedWorktreeToolInput["materializedPatches"];
   readonly gatewayEgress?: ProductionManagedWorktreeToolInput["gatewayEgress"] | undefined;
   readonly childModelPortFactory?:
     ProductionManagedWorktreeToolInput["childModelPortFactory"] | undefined;
@@ -525,7 +530,7 @@ function composedMintLaunch(
 // gateway hands it back with the settlement, so a call is timed from its own reservation and never
 // from another call's of the same size (#3873 review).
 type PromptReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> & {
-  readonly modelCallId?: CodingRuntimeModelCallId;
+  readonly modelCallId?: number;
 };
 
 function runtimeCapabilityAuthenticatorFor(
@@ -537,7 +542,7 @@ function runtimeCapabilityAuthenticatorFor(
     capability: string,
     reservedPromptTokens: number,
     actualPromptTokens: number,
-    modelCallId?: CodingRuntimeModelCallId,
+    modelCallId?: number,
   ) => unknown;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
   // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
@@ -1342,7 +1347,6 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     minted,
     authority,
     invocationRegistry,
-    leases,
     research,
     skillCatalog,
     explicitSkills,
@@ -1371,7 +1375,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     editorAgentClient: input.editorAgentClient,
-    mutationLeaseCoordinator: leases,
+    ...mutationPortOptions(options),
     invocationRegistry,
     repositorySemanticSearch: options.semanticSearch,
     observeEditOutcome: runEditOutcomeObserver(options.editOutcomes, minted.authorityRef.runId),
@@ -1385,6 +1389,23 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     ...runObservers(options),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+// The edit port's two mutation-side ports: this run's lease coordinator, and the server-wide record
+// of the diff text the port renders itself, which the editor route reads (PR #3876 review).
+function mutationPortOptions({
+  input,
+  leases,
+}: Pick<ManagedToolFacadeInput, "input" | "leases">): Pick<
+  ProductionManagedWorktreeToolInput,
+  "mutationLeaseCoordinator" | "materializedPatches"
+> {
+  return {
+    mutationLeaseCoordinator: leases,
+    ...(input.materializedPatches === undefined
+      ? {}
+      : { materializedPatches: input.materializedPatches }),
+  };
 }
 
 // The run's own observers on its tool facade: the runtime event sink, and the counter of the run's

@@ -44,19 +44,14 @@ export interface CodingRuntimeRunEffortRollUp extends CodingRuntimeHostRunEffort
   readonly operatorWaitMs: number;
 }
 
-/** The identity a reserved model call answers, which its settlement names. Opaque and never reused. */
-export type CodingRuntimeModelCallId = number;
-
 export interface CodingRuntimeRunEffortRegistry {
   readonly read: (runId: string) => CodingRuntimeHostRunEffort | undefined;
   /**
    * The run's model-gateway capability reserved the prompt estimate of a call it dispatches. Answers
-   * the call's identity, or `undefined` for an estimate that is not a count (nothing is tracked).
+   * the call's identity (an opaque number its settlement names, never reused), or `undefined` for
+   * an estimate that is not a count (nothing is tracked).
    */
-  readonly modelCallReserved: (
-    runId: string,
-    reservedPromptTokens: number,
-  ) => CodingRuntimeModelCallId | undefined;
+  readonly modelCallReserved: (runId: string, reservedPromptTokens: number) => number | undefined;
   /**
    * The same capability settled the call it reserved, naming it, with the call's settled prompt
    * count; zero releases a call that was never dispatched. A settlement that names no open call of
@@ -64,7 +59,7 @@ export interface CodingRuntimeRunEffortRegistry {
    */
   readonly modelCallSettled: (
     runId: string,
-    modelCallId: CodingRuntimeModelCallId | undefined,
+    modelCallId: number | undefined,
     settledPromptTokens: number,
   ) => void;
   /** The run's tool facade answered one call, naming its closed action when the call named one. */
@@ -76,7 +71,7 @@ export interface CodingRuntimeRunEffortRegistry {
 }
 
 interface OpenModelCall {
-  readonly id: CodingRuntimeModelCallId;
+  readonly id: number;
   readonly reservedPromptTokens: number;
   readonly startedAtMs: number;
 }
@@ -137,10 +132,7 @@ function retained<T>(records: Map<string, T>, runId: string, create: () => T, li
 
 // The open call a settlement names, removed once taken: a call is settled or released exactly once,
 // and never against another call's reservation.
-function takeOpenCall(
-  record: HostEffortRecord,
-  modelCallId: CodingRuntimeModelCallId,
-): OpenModelCall | undefined {
+function takeOpenCall(record: HostEffortRecord, modelCallId: number): OpenModelCall | undefined {
   const index = record.openModelCalls.findIndex((call) => call.id === modelCallId);
   return index < 0 ? undefined : record.openModelCalls.splice(index, 1)[0];
 }
@@ -199,7 +191,7 @@ export function createCodingRuntimeRunEffortRegistry(
       const record = records.get(runId);
       return record === undefined ? undefined : hostEffort(record);
     },
-    modelCallReserved: (runId, reservedPromptTokens): CodingRuntimeModelCallId | undefined => {
+    modelCallReserved: (runId, reservedPromptTokens): number | undefined => {
       if (!validCount(reservedPromptTokens)) return undefined;
       const open = recordFor(runId).openModelCalls;
       const id = nextModelCallId;

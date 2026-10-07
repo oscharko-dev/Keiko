@@ -31,6 +31,7 @@ import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
 } from "./codingToolReadEditPorts.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import type {
   SecureWorkspaceTextReadPort,
   SecureWorkspaceTextReadResult,
@@ -2181,5 +2182,160 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
     expect(events[0]?.extra).toMatchObject({ editForm: "unified-diff" });
     expect(events[0]?.extra).not.toHaveProperty("deletionCount");
     expect(events[0]?.extra).not.toHaveProperty("renameCount");
+  });
+});
+
+// PR #3876 review: the editor route lifts keiko-tools' collapsed-diff heuristic only for a diff the
+// server rendered itself. This port is the one place that knows it did: it registers the exact patch
+// text it posts, once the run's budget is charged, and never the text a caller supplied.
+describe("CodingTool materialized patch provenance (#3873)", () => {
+  const liveBinding = { ...admittedBinding, expiresAt: "2099-01-01T00:00:00.000Z" };
+  const SOURCE =
+    'export const header = "Name  Amount\\n----  ------\\n";\nexport const total = 1;\n';
+  const SOURCE_DIGEST = createHash("sha256").update(SOURCE, "utf8").digest("hex");
+
+  interface Fixture {
+    readonly posted: EditorAgentAction[];
+    readonly registry: ReturnType<typeof createMaterializedPatchRegistry>;
+    readonly run: (
+      changeset: Parameters<
+        ReturnType<typeof createCodingToolReadEditPorts>["editorChangeset"]["execute"]
+      >[0]["changeset"],
+      guard?: Partial<CodingToolMutationGuard>,
+    ) => Promise<unknown>;
+  }
+
+  function fixture(): Fixture {
+    const posted: EditorAgentAction[] = [];
+    const registry = createMaterializedPatchRegistry();
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: ({ relativePath }) =>
+          Promise.resolve(
+            relativePath === "src/table.ts"
+              ? { ok: true, text: SOURCE }
+              : { ok: false, reason: "not-found" },
+          ),
+      },
+      resolveRepositoryReadContext: () => liveBinding,
+      editorAgentClient: {
+        action: (action) => {
+          posted.push(action);
+          return Promise.resolve({
+            ok: true as const,
+            value: {
+              result: {
+                schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                actionId: action.actionId,
+                sessionId: action.sessionId,
+                status: "queued" as const,
+              },
+            },
+          });
+        },
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-provenance",
+        authorityRef: { runId: liveBinding.runId, envelopeDigest: liveBinding.envelopeDigest },
+        origin: "agent",
+        workspaceId: liveBinding.workspaceId,
+        workspaceRootDigest: liveBinding.workspaceRootDigest,
+        expiresAt: liveBinding.expiresAt,
+      }),
+      requiresEditorReview: () => true,
+      mutationLeaseCoordinator: {
+        register: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+        waitForMutation: () => Promise.resolve("succeeded"),
+      },
+      materializedPatches: registry,
+      activityLog: { write: vi.fn() },
+    });
+    return {
+      posted,
+      registry,
+      run: (changesetInput, guard = {}) =>
+        ports.editorChangeset.execute(
+          {
+            action: "edit",
+            actionId: "edit-provenance",
+            idempotencyKey: "edit-provenance-key",
+            changeset: changesetInput,
+          },
+          undefined,
+          { check: (): true => true, binding: liveBinding, ...guard },
+        ),
+    };
+  }
+
+  const replacement = {
+    edits: [{ file: "src/table.ts", oldString: "total = 1;", newString: "total = 2;" }],
+    files: [{ file: "src/table.ts", expectedContentHash: SOURCE_DIGEST }],
+  };
+
+  it("registers the exact patch it posts to the editor route, only after the budget is charged", async () => {
+    const { posted, registry, run } = fixture();
+    const registeredAtCharge: number[] = [];
+    const charge = vi.fn((): MaterializedPatchCharge => {
+      registeredAtCharge.push(registry.stats().entries);
+      return { ok: true };
+    });
+
+    const result = await run(replacement, { chargeMaterializedPatch: charge });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(charge).toHaveBeenCalledOnce();
+    // A refused charge must leave nothing behind, so the digest is not there while the charge runs.
+    expect(registeredAtCharge).toEqual([0]);
+    const patch = posted[0]?.changeset?.patch;
+    if (patch === undefined) throw new Error("expected the edit to reach the editor route");
+    expect(patch).toContain(String.raw`Amount\n----`);
+    expect(registry.lookup(patch).registered).toBe(true);
+    expect(registry.stats().entries).toBe(1);
+  });
+
+  it("registers nothing when the run's budget does not take the diff", async () => {
+    const { posted, registry, run } = fixture();
+    const refusing = vi.fn((): MaterializedPatchCharge => ({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    }));
+
+    const result = await run(replacement, { chargeMaterializedPatch: refusing });
+
+    expect(result).toMatchObject({ status: "failed", reasonCode: "LIMIT_EXCEEDED" });
+    expect(posted).toEqual([]);
+    expect(registry.stats().entries).toBe(0);
+  });
+
+  it("registers nothing for a replacement the materializer refuses", async () => {
+    const { posted, registry, run } = fixture();
+
+    const result = await run({
+      edits: [{ file: "src/table.ts", oldString: "missing text", newString: "x" }],
+      files: [{ file: "src/table.ts", expectedContentHash: SOURCE_DIGEST }],
+    });
+
+    expect(result).toMatchObject({ status: "failed", reasonCode: "INVALID_EDITS" });
+    expect(posted).toEqual([]);
+    expect(registry.stats().entries).toBe(0);
+  });
+
+  // The provenance is the server's own rendering. A diff a caller wrote is model text to the engine,
+  // whatever it spells, and must keep meeting the guard that exists for it.
+  it("never registers a diff a caller supplied", async () => {
+    const { posted, registry, run } = fixture();
+    const supplied = {
+      patch:
+        '--- a/src/table.ts\n+++ b/src/table.ts\n@@ -1,2 +1,2 @@\n export const header = "Name  Amount\\n----  ------\\n";\n-export const total = 1;\n+export const total = 2;\n',
+      files: [{ file: "src/table.ts", expectedContentHash: SOURCE_DIGEST }],
+    };
+
+    const result = await run(supplied);
+
+    expect(result).toEqual({ status: "completed" });
+    expect(posted[0]?.changeset?.patch).toBe(supplied.patch);
+    expect(registry.lookup(supplied.patch).registered).toBe(false);
+    expect(registry.stats().entries).toBe(0);
   });
 });

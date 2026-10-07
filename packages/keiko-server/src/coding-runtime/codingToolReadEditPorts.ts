@@ -57,6 +57,7 @@ import type {
   CodingRuntimeEditorMutationLeaseRequest,
   CodingRuntimeMutationOutcome,
 } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import type { MaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -136,6 +137,13 @@ export interface CodingToolReadEditPortDeps {
   readonly mutationLeaseCoordinator?:
     | Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard" | "waitForMutation">
     | undefined;
+  /**
+   * The server's record of which diff text it rendered itself (PR #3876 review). Once a replacement
+   * changeset is materialized and the run's budget has taken its diff, the exact patch text is
+   * registered, so the editor route may lift keiko-tools' collapsed-diff heuristic for that diff
+   * alone. A diff a caller supplied is never registered. Absent, nothing is, and the heuristic stays.
+   */
+  readonly materializedPatches?: Pick<MaterializedPatchRegistry, "register"> | undefined;
   /**
    * When true, a mutationGuard that carries no `binding` property at all fails closed at the
    * preflight boundary — read/discover/edit return failed rather than proceeding as if no
@@ -1027,6 +1035,9 @@ async function materializedEdit(
   }
   const charge = chargedMaterialization(request.changeset, result.changeset.patch, mutationGuard);
   if (!charge.ok) return { outcome: materializedChargeRefused(deps, charge.reason, evidence) };
+  // Registered only now: a diff the run's budget refused never reaches an editor action, so it
+  // must not leave provenance behind. The route asks for it again at admission and at the result.
+  deps.materializedPatches?.register(result.changeset.patch);
   return { request: { ...request, changeset: result.changeset }, evidence };
 }
 

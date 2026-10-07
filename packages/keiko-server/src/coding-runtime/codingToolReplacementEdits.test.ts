@@ -9,10 +9,12 @@ import {
   changesetPayloadBytes,
   EMPTY_CONTENT_SHA256,
   materializeReplacementChangeset,
+  REPLACEMENT_REFUSALS,
   type CodingToolReplacementChangeset,
   type CodingToolReplacementEdit,
   type ReplacementMaterialization,
 } from "./codingToolReplacementEdits.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
   secureWorkspaceTextDigest,
   type SecureWorkspaceTextReadPort,
@@ -74,11 +76,13 @@ function workspace(root: string): WorkspaceInfo {
 
 /**
  * Applies a materialized patch with the real patch engine and returns the resulting files; a file
- * the patch deleted is reported as `undefined`.
+ * the patch deleted is reported as `undefined`. A patch is applied the way the editor route applies
+ * the diff of a registered materialization when `lineBreakMarkers` is `"verbatim"`.
  */
 function applied(
   files: Readonly<Record<string, string>>,
   result: ReplacementMaterialization,
+  lineBreakMarkers: "reject" | "verbatim" = "reject",
 ): Readonly<Record<string, string | undefined>> {
   if (result.status !== "materialized") throw new Error(`expected a patch, got ${result.status}`);
   const root = mkdtempSync(join(tmpdir(), "keiko-replacement-"));
@@ -90,6 +94,7 @@ function applied(
   applyPatch(workspace(root), result.changeset.patch, {
     applyEnabled: true,
     signal: new AbortController().signal,
+    lineBreakMarkers,
   });
   return Object.fromEntries(
     result.changeset.files.map(({ file }) => [
@@ -97,6 +102,28 @@ function applied(
       existsSync(join(root, file)) ? readFileSync(join(root, file), "utf8") : undefined,
     ]),
   );
+}
+
+// What the editor route does with a rendered diff (agentRoutes.ts): the edit port registers its exact
+// text, and the route validates with verbatim line-break markers only for a registered text.
+function engineMode(patch: string, registered: boolean): "reject" | "verbatim" {
+  const registry = createMaterializedPatchRegistry();
+  if (registered) registry.register(patch);
+  return registry.lookup(patch).registered ? "verbatim" : "reject";
+}
+
+function engineVerdict(
+  files: Readonly<Record<string, string>>,
+  patch: string,
+  registered: boolean,
+): ReturnType<typeof validatePatch> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-verdict-"));
+  roots.push(root);
+  for (const [file, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), text);
+  }
+  return validatePatch(workspace(root), patch, { lineBreakMarkers: engineMode(patch, registered) });
 }
 
 function patchOf(result: ReplacementMaterialization): string {
@@ -870,9 +897,11 @@ describe("materializeReplacementChangeset deletions and renames", () => {
   });
 
   // keiko-tools refuses any diff text with a literal backslash-n followed by +, - or a space (its
-  // guard against model-collapsed diffs, pinned there). A deletion renders the whole file, so a file
-  // with such text in a string can never pass it; the materializer says so up front.
-  it("refuses deleting a file whose text the editor's escaped-line-break guard refuses", async () => {
+  // guard against a model collapsing a diff's lines into one, pinned there). The materializer renders
+  // its diff itself, from the bytes of a governed read, so such text is file text here: a deletion
+  // renders the whole file, and a file that spells one in a string is deleted like any other. The
+  // editor route lifts that one heuristic for the registered diff (PR #3876 review).
+  it("materializes the deletion of a file whose text spells a backslash-n before a space", async () => {
     const text = 'const s = "a\\n b";\n';
     const files = { "s.ts": text };
 
@@ -882,22 +911,87 @@ describe("materializeReplacementChangeset deletions and renames", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({
-      status: "refused",
-      reasonCode: "LIMIT_EXCEEDED",
-      refusal: "escaped-line-break",
+    expect(result).toMatchObject({ status: "materialized" });
+    expect(patchOf(result)).toContain(`-${text}`);
+    expect(engineVerdict(files, patchOf(result), true).ok).toBe(true);
+    expect(applied(files, result, engineMode(patchOf(result), true))).toEqual({
+      "s.ts": undefined,
     });
-    expect(result).toHaveProperty("message", expect.stringContaining("s.ts cannot be deleted"));
-    // The engine really refuses that shape: the pre-check mirrors a refusal that exists.
-    const root = mkdtempSync(join(tmpdir(), "keiko-escaped-"));
-    roots.push(root);
-    writeFileSync(join(root, "s.ts"), text);
-    const engine = validatePatch(
-      workspace(root),
-      `--- a/s.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-${text}`,
+  });
+
+  it("materializes the move of such a file with its text intact", async () => {
+    const text = 'export const header = "Name  Amount\\n----  ------\\n";\n';
+    const files = { "table.ts": text };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "moved.ts": undefined },
+        { renames: [{ from: "table.ts", to: "moved.ts" }] },
+      ),
+      undefined,
     );
-    expect(engine.ok).toBe(false);
-    expect(engine.reasons.map((reason) => reason.message).join(" ")).toContain("escaped newline");
+
+    expect(result).toMatchObject({ status: "materialized" });
+    expect(applied(files, result, engineMode(patchOf(result), true))).toEqual({
+      "table.ts": undefined,
+      "moved.ts": text,
+    });
+  });
+
+  // An edit beside such text, and an edit that writes such text, were refused up to six times in a
+  // row by the pre-check this replaces, and the run ended `edit-retries-exhausted` (PR #3876 review).
+  it("materializes an edit beside literal backslash-n text and one that writes it", async () => {
+    const source = [
+      'export const header = "Name  Amount\\n----  ------\\n";',
+      "export const rows = 2;",
+      "export const total = 40;",
+      "",
+    ].join("\n");
+    const files = { "src/table.ts": source };
+    const note = 'export const note = "first\\n- second\\n+ third";';
+
+    const result = await materialize(files, [
+      {
+        file: "src/table.ts",
+        oldString: "export const total = 40;",
+        newString: `export const total = 42;\n${note}`,
+      },
+    ]);
+
+    expect(result).toMatchObject({ status: "materialized" });
+    expect(patchOf(result)).toContain(String.raw`Amount\n----`);
+    expect(patchOf(result)).toContain(`+${note}`);
+    expect(engineVerdict(files, patchOf(result), true).ok).toBe(true);
+    expect(applied(files, result, engineMode(patchOf(result), true))).toEqual({
+      "src/table.ts": source.replace("total = 40;", `total = 42;\n${note}`),
+    });
+  });
+
+  // The engine's guard is unchanged: the same rendered text, without the registration only the edit
+  // port that rendered it can give, is still refused as malformed. The pin that rejects a model's
+  // collapsed diff stays in keiko-tools; this one proves the rendered diff meets it unregistered.
+  it("keeps the engine's refusal for the same text when the diff is not registered", async () => {
+    const source =
+      'export const header = "Name  Amount\\n----  ------\\n";\nexport const total = 40;\n';
+    const files = { "src/table.ts": source };
+
+    const result = await materialize(files, [
+      { file: "src/table.ts", oldString: "total = 40;", newString: "total = 42;" },
+    ]);
+
+    const unregistered = engineVerdict(files, patchOf(result), false);
+    expect(unregistered.ok).toBe(false);
+    expect(unregistered.reasons.map((reason) => reason.code)).toContain("malformed");
+    expect(unregistered.reasons.map((reason) => reason.message).join(" ")).toContain(
+      "escaped newline",
+    );
+    expect(() => applied(files, result)).toThrow();
+    expect(engineVerdict(files, patchOf(result), true).ok).toBe(true);
+  });
+
+  it("no longer lists a backslash-n before +, - or a space as a refusal class", () => {
+    expect(REPLACEMENT_REFUSALS).not.toContain("escaped-line-break");
   });
 
   it("still advises splitting an edit-only changeset over the patch byte cap", async () => {

@@ -15,6 +15,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeHost,
@@ -64,6 +65,10 @@ const editOutcomeCapture = vi.hoisted(() => ({
   observers: [] as ((outcome: { readonly kind: "refused"; readonly reasonCode: string }) => void)[],
 }));
 
+// PR #3876 review: the registry of rendered diffs the resolver hands each run's managed tool facade,
+// captured at the same composition site.
+const materializedPatchesCapture = vi.hoisted(() => ({ registries: [] as unknown[] }));
+
 vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./productionManagedWorktreeTools.js")>();
   return {
@@ -73,6 +78,7 @@ vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
     ): ReturnType<typeof original.createProductionManagedWorktreeToolFacade> => {
       const observe = args[0].observeEditOutcome;
       if (observe !== undefined) editOutcomeCapture.observers.push(observe);
+      materializedPatchesCapture.registries.push(args[0].materializedPatches);
       return original.createProductionManagedWorktreeToolFacade(...args);
     },
   };
@@ -415,6 +421,39 @@ describe("production coding runtime resolver", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
+  });
+
+  // PR #3876 review: a run's edit port registers the diff it renders in the one registry the editor
+  // route reads. A facade composed without the composition's registry would register nothing, and
+  // every edit beside a backslash-n would meet the engine's heuristic again, with no test red.
+  it.each([
+    ["hands the composition's registry to each run's tool facade", true],
+    ["composes the facade without a registry when the composition has none", false],
+  ] as const)("%s", (_name, supplied) => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const registry = createMaterializedPatchRegistry();
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        createRun,
+        confirmations.consumer,
+        undefined,
+        supplied ? { materializedPatches: registry } : {},
+      ),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    materializedPatchesCapture.registries.length = 0;
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    host.launchResolver.resolve(request);
+
+    expect(materializedPatchesCapture.registries).toHaveLength(1);
+    expect(materializedPatchesCapture.registries[0]).toBe(supplied ? registry : undefined);
   });
 
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {

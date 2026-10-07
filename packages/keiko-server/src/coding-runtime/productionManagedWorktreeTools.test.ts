@@ -14,6 +14,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeAuthorityFacts,
+  EditorAgentAction,
   VerificationReport,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
@@ -27,6 +28,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   VerificationRunnerError,
@@ -1177,6 +1179,48 @@ describe("production managed worktree tools", () => {
       { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" },
       { kind: "applied" },
     ]);
+  });
+
+  // PR #3876 review: the managed facade's edit port registers the diff it renders in the registry the
+  // composition supplies, which is the one registry the editor route reads. A facade that dropped it
+  // would leave every edit beside a backslash-n to the engine's heuristic again.
+  it("registers the diff its edit port posts in the registry the composition supplies", async () => {
+    const registry = createMaterializedPatchRegistry();
+    const action = vi.fn((_action: EditorAgentAction) =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          result: {
+            schemaVersion: "1" as const,
+            actionId: "edit-1",
+            sessionId: "session-1",
+            status: "queued" as const,
+          },
+        },
+      }),
+    );
+    const facade = createProductionManagedWorktreeToolFacade({
+      ...baseEditAdmissionInput(),
+      editorAgentClient: { action },
+      materializedPatches: registry,
+      onRuntimeEvent: vi.fn(),
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "edit",
+        actionId: "edit-1",
+        idempotencyKey: "edit-key-1",
+        changeset: replacementChangeset(),
+      }),
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const posted = action.mock.calls[0]?.[0].changeset?.patch;
+    if (posted === undefined) throw new Error("expected the edit to reach the editor route");
+    expect(registry.lookup(posted).registered).toBe(true);
+    expect(registry.stats().entries).toBe(1);
   });
 
   it("completes a governed command through production wiring", async () => {

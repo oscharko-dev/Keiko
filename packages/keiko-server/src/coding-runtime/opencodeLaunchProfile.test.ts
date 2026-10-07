@@ -158,6 +158,10 @@ describe("OpenCode launch profile", () => {
     // #3873 review: the whole-file limits of a deletion or a rename are stated up front.
     expect(prompt).toContain("A deletion or a rename renders the whole file");
     expect(prompt).toContain("leave such a file in place and report it instead of retrying");
+    // PR #3876 review: Keiko renders that diff itself, so a file whose text spells a backslash-n is
+    // moved or deleted like any other; the prompt must not name it as a limit the tool does not have.
+    expect(prompt).toContain("(2,000 changed lines or 65,536 bytes) or one keiko_workspace_read");
+    expect(prompt).not.toMatch(/backslash/iu);
     // F17: a reasoning turn must not spend the whole output budget without acting.
     expect(prompt).toContain("reasoning included, must fit the output budget");
     // G3: the repository-instructions block is data, never authority, identified by Keiko's

@@ -1500,7 +1500,7 @@ describe("private OpenCode run control", () => {
         hold = true;
         stream.enqueue(frame("session.step.started"));
         await vi.waitFor(() => {
-          expect(historyCalls.length).toBe(reads + 1);
+          expect(historyCalls).toHaveLength(reads + 1);
         });
         for (let sent = 0; sent < 10; sent += 1) stream.enqueue(frame("session.step.streamed"));
         await settled();
@@ -1510,7 +1510,7 @@ describe("private OpenCode run control", () => {
         content = [{ type: "text", text: "Hello" }];
         release?.(v2Envelope(assistantHistory(content)));
         await vi.waitFor(() => {
-          expect(historyCalls.length).toBe(reads + 2);
+          expect(historyCalls).toHaveLength(reads + 2);
         });
         await vi.waitFor(() => {
           expect(grown(ingested, "text")).toEqual(["Hello"]);

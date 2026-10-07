@@ -156,4 +156,38 @@ describe("buildRestorePatch", () => {
     const restore = buildRestorePatch(info, CREATE_DIFF, { allowOverwrite: true });
     expect(restore).toBeUndefined();
   });
+
+  // #3876 review: a restore proposal validates the forward diff with the options it was given, so a
+  // caller that rendered that diff itself must not be refused for text the diff carries verbatim,
+  // and any other caller still is.
+  it("validates the forward diff with the caller's line-break provenance", () => {
+    const before = 'const header = "Name  Amount\\n----  ------\\n";\nconst total = 1;\n';
+    write("src/table.ts", before);
+    const diff = [
+      "--- a/src/table.ts",
+      "+++ b/src/table.ts",
+      "@@ -1,2 +1,2 @@",
+      ' const header = "Name  Amount\\n----  ------\\n";',
+      "-const total = 1;",
+      "+const total = 2;",
+      "",
+    ].join("\n");
+
+    const restore = buildRestorePatch(info, diff, { lineBreakMarkers: "verbatim" });
+
+    expect(restore).toBeDefined();
+    expect(() => buildRestorePatch(info, diff)).toThrow(PatchValidationError);
+    if (restore === undefined) throw new Error("expected a content-safe restore diff");
+    applyPatch(info, diff, {
+      applyEnabled: true,
+      signal: liveSignal(),
+      lineBreakMarkers: "verbatim",
+    });
+    applyPatch(info, restore, {
+      applyEnabled: true,
+      signal: liveSignal(),
+      lineBreakMarkers: "verbatim",
+    });
+    expect(read("src/table.ts")).toBe(before);
+  });
 });

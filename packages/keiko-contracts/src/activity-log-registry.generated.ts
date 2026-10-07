@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5639c0fd720e8fc28cd18ede54a059aac3b3682b25c91f29fdfac5945446f7f0" as const;
+  "cb22eae62e931687a96b69cb5270cecade7e6bb92ad3a10a00017218e83c642f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5182,7 +5182,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.editor-review.decided"],
+        state: ["coding-runtime.editor-review.decided", "editor.agent.changeset-provenance"],
         end: ["coding-runtime.editor-mutation.settled"],
         failure: ["coding-runtime.edit.refused"],
         loss: [],
@@ -5200,11 +5200,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "coding-runtime.editor-review.decided",
           mode: "correlation",
         },
+        {
+          op: "editor.agent.changeset-provenance",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
         "coding-runtime.editor-mutation.settled",
         "coding-runtime.editor-review.decided",
+        "editor.agent.changeset-provenance",
       ],
       replayReferences: [],
       operations: [
@@ -5349,6 +5354,66 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.editor-review.decided.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "editor.agent.changeset-provenance",
+          owner: "keiko-server",
+          category: "security",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "patchBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "patchSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "provenance",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "registryEntries",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "registryEvicted",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "registryExpired",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "stage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["editor.agent.changeset-provenance.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -39711,6 +39776,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "consolidation.log.sink-failed": "memory-knowledge",
     "consolidation.summary.fallback": "memory-knowledge",
     "dap.debug-runtime.selected": "editor-delivery",
+    "editor.agent.changeset-provenance": "editor-delivery",
     "editor.buffer-safety.state": "editor-delivery",
     "editor.local-history.rekey.completed": "editor-delivery",
     "editor.local-history.rekey.failed": "editor-delivery",

@@ -33,6 +33,13 @@ import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadP
  * patch budget is charged, with a closed reason the model can act on, instead of failing later as
  * an opaque invalid changeset. A deletion or a rename renders its whole file and cannot be split, so
  * one that alone exceeds a call's bounds is refused as `whole-file-too-large`, never "split it".
+ *
+ * Line-break text (PR #3876 review): the diff is rendered here, from the bytes of a governed read,
+ * so a body line that spells a backslash and an "n" before `+`, `-` or a space is file text, never a
+ * model's collapsed diff. This module does not refuse it. The edit port that calls it registers the
+ * rendered diff's digest (materializedPatchRegistry.ts) once the run's budget is charged, and the
+ * editor route validates and applies a registered diff with `lineBreakMarkers: "verbatim"`, the one
+ * keiko-tools heuristic that would otherwise refuse it; every other check stays.
  */
 export interface CodingToolReplacementEdit {
   readonly file: string;
@@ -104,7 +111,6 @@ export const REPLACEMENT_REFUSALS = [
   // #3873 review: the bounds the editor route applies, checked before the run's budget is charged.
   "changed-lines-exceeded",
   "whole-file-too-large",
-  "escaped-line-break",
 ] as const;
 export type ReplacementRefusal = (typeof REPLACEMENT_REFUSALS)[number];
 
@@ -204,18 +210,6 @@ export async function materializeReplacementChangeset(
   return assembled(changes);
 }
 
-// The editor route refuses any diff text that carries a literal "\n" followed by "+", "-" or a space:
-// keiko-tools' guard against a model collapsing a diff's lines into one (`hasEscapedDiffLineBreak`,
-// pinned there by "rejects escaped newline artifacts inside diff body lines"). A rendered section
-// carries file text, so a file line with such text, or a newString that writes one, can never pass
-// that guard. It is refused here, before the run's patch budget is charged, with an action the model
-// can take (#3873 review); a test runs the rendered diff through the engine to keep the two in step.
-const ESCAPED_LINE_BREAK_MARKERS = [String.raw`\n+`, String.raw`\n-`, String.raw`\n `] as const;
-
-function carriesEscapedLineBreak(section: string): boolean {
-  return ESCAPED_LINE_BREAK_MARKERS.some((marker) => section.includes(marker));
-}
-
 // The lines a rendered section adds or removes; its two header lines are not counted.
 function changedLineCount(section: string): number {
   return section
@@ -231,13 +225,6 @@ function wholeFileRefusal(step: Step, changes: readonly FileChange[]): Refusal |
   if (step.kind === "edit") return undefined;
   const file = step.kind === "rename" ? step.from : step.file;
   const verb = step.kind === "rename" ? "moved" : "deleted";
-  if (changes.some((change) => carriesEscapedLineBreak(change.section))) {
-    return refused(
-      "LIMIT_EXCEEDED",
-      "escaped-line-break",
-      `${file} cannot be ${verb} with keiko_changeset_edit: its text contains a literal backslash-n followed by +, - or a space, which the governed editor refuses in a diff. Leave it in place and report it to the operator.`,
-    );
-  }
   const bytes = changes.reduce((sum, change) => sum + Buffer.byteLength(change.section, "utf8"), 0);
   const lines = changes.reduce((sum, change) => sum + changedLineCount(change.section), 0);
   if (
@@ -254,14 +241,6 @@ function wholeFileRefusal(step: Step, changes: readonly FileChange[]): Refusal |
 }
 
 function assembled(changes: readonly FileChange[]): ReplacementMaterialization {
-  const escaped = changes.find((change) => carriesEscapedLineBreak(change.section));
-  if (escaped !== undefined) {
-    return refused(
-      "INVALID_EDITS",
-      "escaped-line-break",
-      `The edit of ${escaped.binding.file} would render a literal backslash-n followed by +, - or a space (from newString, or from a file line within three lines of the edit), which the governed editor refuses in a diff. Keep such text out of newString, or edit lines further away from it.`,
-    );
-  }
   const patch = changes.map((change) => change.section).join("");
   if (Buffer.byteLength(patch, "utf8") > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) {
     return refused(

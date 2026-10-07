@@ -17,6 +17,7 @@ import {
   renderDryRun,
   type PatchInspection,
   type PatchInspectionFile,
+  type PatchLineBreakMarkers,
   validatePatch,
 } from "./patch.js";
 import {
@@ -60,6 +61,21 @@ const CREATE_DIFF = "--- /dev/null\n+++ b/src/new.txt\n@@ -0,0 +1,1 @@\n+created
 const DELETE_DIFF = "--- a/src/old.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-old\n";
 const SOURCE_FILE_MAX_BYTES = 1_000_000;
 const SOURCE_TOTAL_MAX_BYTES = 4_000_000;
+
+// A test file whose string literal spells a backslash, an "n" and dashes (a table header), and a diff
+// that keeps that line as context: the shape keiko-tools' guard against a model-collapsed diff also
+// matches, though no line break was escaped here (#3876 review).
+const TABLE_FILE = 'const header = "Name  Amount\\n----  ------\\n";\nconst total = 1;\n';
+const TABLE_DIFF = [
+  "--- a/tests/table.test.js",
+  "+++ b/tests/table.test.js",
+  "@@ -1,2 +1,2 @@",
+  ' const header = "Name  Amount\\n----  ------\\n";',
+  "-const total = 1;",
+  "+const total = 2;",
+  "",
+].join("\n");
+const TABLE_RESULT = 'const header = "Name  Amount\\n----  ------\\n";\nconst total = 2;\n';
 
 function modifyFirstLineDiff(path: string, before = "old", after = "new"): string {
   return `--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n-${before}\n+${after}\n`;
@@ -422,6 +438,55 @@ describe("validatePatch — rejections", () => {
     expect(v.reasons[0]?.message).toContain("escaped newline");
   });
 
+  // #3876 review: Keiko renders some diffs itself, from the bytes of a governed file read, so a body
+  // line carries file text verbatim and a literal backslash-n in it is two characters of that text,
+  // not a model collapsing diff lines into one. The caller that rendered the diff says so; the guard
+  // above stays the default for every other diff.
+  it("applies a diff whose body carries literal backslash-n text byte for byte when the caller rendered it", () => {
+    write("tests/table.test.js", TABLE_FILE);
+
+    const v = validatePatch(info, TABLE_DIFF, { lineBreakMarkers: "verbatim" });
+    const result = applyPatch(info, TABLE_DIFF, {
+      applyEnabled: true,
+      signal: liveSignal(),
+      lineBreakMarkers: "verbatim",
+    });
+
+    expect(v.ok).toBe(true);
+    expect(v.reasons).toEqual([]);
+    expect(result.changedFiles).toEqual(["tests/table.test.js"]);
+    expect(read("tests/table.test.js")).toBe(TABLE_RESULT);
+  });
+
+  it("still rejects that same diff, as malformed, without the caller's provenance", () => {
+    write("tests/table.test.js", TABLE_FILE);
+
+    const byDefault = validatePatch(info, TABLE_DIFF);
+    const explicit = validatePatch(info, TABLE_DIFF, { lineBreakMarkers: "reject" });
+    // The option is a closed vocabulary: a value the engine does not know (an untyped caller, a
+    // value read from JSON) reads as the default, never as the provenance only "verbatim" states.
+    const unknown = validatePatch(info, TABLE_DIFF, {
+      lineBreakMarkers: "lenient" as unknown as PatchLineBreakMarkers,
+    });
+
+    for (const v of [byDefault, explicit, unknown]) {
+      expect(v.ok).toBe(false);
+      expect(v.reasons.map((r) => r.code)).toContain("malformed");
+      expect(v.reasons[0]?.message).toContain("escaped newline");
+    }
+    expect(() =>
+      applyPatch(info, TABLE_DIFF, { applyEnabled: true, signal: liveSignal() }),
+    ).toThrow(PatchValidationError);
+    expect(() =>
+      applyPatch(info, TABLE_DIFF, {
+        applyEnabled: true,
+        signal: liveSignal(),
+        lineBreakMarkers: "lenient" as unknown as PatchLineBreakMarkers,
+      }),
+    ).toThrow(PatchValidationError);
+    expect(read("tests/table.test.js")).toBe(TABLE_FILE);
+  });
+
   it("accepts a valid modify against matching content", () => {
     write("src/x.txt", "one\ntwo\n");
     const v = validatePatch(info, MODIFY_DIFF);
@@ -590,6 +655,83 @@ describe("validatePatch — rejections", () => {
     } finally {
       rmSync(outside.root, { recursive: true, force: true });
     }
+  });
+});
+
+// The option lifts the one heuristic and nothing else: every refusal below carries the same literal
+// backslash-n text the option exists to admit, and each must still fire (#3876 review).
+describe("validatePatch — verbatim line-break markers lift only that heuristic", () => {
+  const MARKER_TEXT = '"a\\n-b"';
+
+  it.each([
+    {
+      title: "an out-of-workspace target",
+      diff: `--- a/../../etc/passwd\n+++ b/../../etc/passwd\n@@ -1,1 +1,1 @@\n-x\n+${MARKER_TEXT}\n`,
+      code: "path-unsafe",
+      limits: undefined,
+    },
+    {
+      title: "a denied target",
+      diff: `--- /dev/null\n+++ b/.env\n@@ -0,0 +1,1 @@\n+SECRET=${MARKER_TEXT}\n`,
+      code: "path-denied",
+      limits: undefined,
+    },
+    {
+      title: "a git binary patch",
+      diff: `--- a/x\n+++ b/x\nGIT binary patch\nliteral ${MARKER_TEXT}\n`,
+      code: "binary",
+      limits: undefined,
+    },
+    {
+      title: "too many changed lines",
+      diff: TABLE_DIFF,
+      code: "line-limit",
+      limits: { maxPatchBytes: 9_999, maxChangedLines: 0, maxFilesChanged: 9 },
+    },
+    {
+      title: "an oversized diff",
+      diff: TABLE_DIFF,
+      code: "size-limit",
+      limits: { maxPatchBytes: 5, maxChangedLines: 9, maxFilesChanged: 9 },
+    },
+  ])("still rejects $title", ({ diff, code, limits }) => {
+    write("tests/table.test.js", TABLE_FILE);
+
+    const v = validatePatch(info, diff, {
+      lineBreakMarkers: "verbatim",
+      ...(limits === undefined ? {} : { limits }),
+    });
+
+    expect(v.ok).toBe(false);
+    expect(v.reasons.map((r) => r.code)).toContain(code);
+    expect(v.reasons.map((r) => r.message).join(" ")).not.toContain("escaped newline");
+  });
+
+  it("still reports a context-mismatch conflict", () => {
+    write("tests/table.test.js", "DIFFERENT\ncontent\n");
+
+    const v = validatePatch(info, TABLE_DIFF, { lineBreakMarkers: "verbatim" });
+
+    expect(v.ok).toBe(false);
+    expect(v.conflicts).toHaveLength(1);
+    expect(v.conflicts[0]?.path).toBe("tests/table.test.js");
+  });
+
+  // A route that validates a changeset re-validates the diff it projects from the selected files.
+  // That diff re-renders the same literal text, so it needs the provenance the full diff had, and
+  // the engine must keep refusing it without.
+  it("re-validates a projected diff only with the provenance of the diff it was projected from", () => {
+    write("tests/table.test.js", TABLE_FILE);
+    write("src/a.txt", "A0\n");
+    const full = `${TABLE_DIFF}--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1 +1 @@\n-A0\n+A1\n`;
+    const validation = validatePatch(info, full, { lineBreakMarkers: "verbatim" });
+
+    const projected = projectValidatedPatch(validation, ["tests/table.test.js"]);
+
+    expect(projected).toContain(String.raw`Amount\n----`);
+    expect(projected).not.toContain("src/a.txt");
+    expect(validatePatch(info, projected, { lineBreakMarkers: "verbatim" }).ok).toBe(true);
+    expect(validatePatch(info, projected).ok).toBe(false);
   });
 });
 
