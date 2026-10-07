@@ -125,6 +125,27 @@ describe("resolveTargetedTests", () => {
 });
 
 describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => {
+  it("selects the nested Vitest project without widening the repository execution root", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile(
+      "packages/ui/package.json",
+      JSON.stringify({ scripts: { test: "vitest run" }, devDependencies: { vitest: "4.1.11" } }),
+    );
+    ws.writeFile("packages/ui/src/deep/Toggle.test.tsx", "");
+
+    const steps = planDirectTargetedTests(ws.info, ["packages/ui/src/deep/Toggle.test.tsx"]);
+
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.args).toEqual([
+      "vitest",
+      "run",
+      "--root",
+      "packages/ui",
+      "src/deep/Toggle.test.tsx",
+    ]);
+    expect(steps[0]?.limits.network).toBe("none");
+  });
+
   it("builds a bounded Node native test invocation for the exact existing target", () => {
     const ws = makeWorkspace({ testFramework: "node-test" });
     ws.writeFile("test/average.test.js", "");
@@ -168,6 +189,12 @@ describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => 
   it("returns no step when no file resolves", () => {
     const ws = makeWorkspace({ testFramework: "vitest" });
     expect(planDirectTargetedTests(ws.info, ["src/none.test.ts"])).toEqual([]);
+  });
+
+  it("refuses directory targets instead of expanding to a whole test suite", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile("src/deep/a.test.ts", "");
+    expect(planDirectTargetedTests(ws.info, ["src/deep"])).toEqual([]);
   });
 
   it("returns no step for an unknown framework", () => {

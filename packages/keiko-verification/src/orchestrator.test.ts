@@ -44,6 +44,69 @@ function depsWith(
 }
 
 describe("runVerification — repository filesystem containment", () => {
+  it("runs one nested Vitest test with the repository still mounted as the execution root", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("packages/ui/package.json", JSON.stringify({ scripts: { test: "vitest run" } }));
+    ws.writeFile("packages/ui/src/deep/Toggle.test.tsx", "");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const target = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["vitest", "run", "--root", "packages/ui", "src/deep/Toggle.test.tsx"],
+    });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("passed");
+    expect(rec.calls()[0]?.args).toEqual(
+      expect.arrayContaining(["--bind", realpathSync(ws.info.root), "/keiko-execution-root"]),
+    );
+    expect(rec.calls()[0]?.args).toEqual(expect.arrayContaining(target.args));
+  });
+
+  it("returns nested Vitest failure locations relative to the bound repository", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("packages/ui/src/deep/Toggle.test.tsx", "");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, {
+      exitCode: 1,
+      stdout:
+        " FAIL  src/deep/Toggle.test.tsx > keyboard behavior\n ❯ src/deep/Toggle.test.tsx:12:3",
+    });
+    const target = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["vitest", "run", "--root", "packages/ui", "src/deep/Toggle.test.tsx"],
+    });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("failed");
+    expect(report.results[0]?.locations).toEqual([
+      expect.objectContaining({ file: "packages/ui/src/deep/Toggle.test.tsx", line: 12 }),
+    ]);
+  });
+
+  it.each([
+    ["vitest", "run", "--root", "../outside", "src/a.test.ts"],
+    ["vitest", "run", "--root", "/outside", "src/a.test.ts"],
+    ["vitest", "run", "--root", "--config", "src/a.test.ts"],
+    ["vitest", "run", "--root", "packages/ui"],
+    ["vitest", "run", "--root", "packages/ui", "--passWithNoTests"],
+  ])("refuses malformed project selection before spawning: %j", async (...args) => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const target = step({ kind: "targeted-test", scriptName: undefined, command: "npx", args });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
   const strictBackend = {
     bubblewrap: true,
     unshare: false,

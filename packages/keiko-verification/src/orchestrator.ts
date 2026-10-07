@@ -23,7 +23,13 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { join } from "node:path";
+import {
+  assertContainedRealPath,
+  resolveWithinWorkspace,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { classifyOutcome, type AbortReason } from "./classify.js";
 import {
   planDependencyBootstrap,
@@ -297,7 +303,11 @@ function isValidTargetedStep(step: VerificationStep): boolean {
 
 function isValidNpxTargetedArgs(args: readonly string[]): boolean {
   if (args[0] === "vitest") {
-    return args[1] === "run" && args.length >= 3 && args.slice(2).every(isGeneratedTargetPath);
+    const targets = args[2] === "--root" ? args.slice(4) : args.slice(2);
+    const rootValid = args[2] !== "--root" || isGeneratedTargetPath(args[3] ?? "");
+    return (
+      args[1] === "run" && rootValid && targets.length > 0 && targets.every(isGeneratedTargetPath)
+    );
   }
   if (args[0] === "jest") {
     return args.length >= 2 && args.slice(1).every(isGeneratedTargetPath);
@@ -370,6 +380,7 @@ async function runStep(
     return child;
   };
   try {
+    assertTargetedProjectRoot(step, deps);
     const result = await runCommand(
       {
         command: step.command,
@@ -386,6 +397,21 @@ async function runStep(
   } finally {
     stop?.();
     deps.signal?.removeEventListener("abort", onHarnessAbort);
+  }
+}
+
+function assertTargetedProjectRoot(step: VerificationStep, deps: VerificationDeps): void {
+  if (step.kind !== "targeted-test" || step.command !== "npx" || step.args[2] !== "--root") return;
+  const directory = step.args[3];
+  if (directory === undefined) throw new TypeError("Targeted test project is unavailable.");
+  const path = assertContainedRealPath(
+    deps.fs ?? nodeWorkspaceFs,
+    deps.workspace.root,
+    resolveWithinWorkspace(deps.workspace.root, directory),
+    "targeted test project",
+  );
+  if (!(deps.fs ?? nodeWorkspaceFs).stat(path).isDirectory) {
+    throw new TypeError("Targeted test project is unavailable.");
   }
 }
 
@@ -472,7 +498,7 @@ function toResult(
   // Issue #2211 (ADR-0126 D3): populate structured failure locations from the already-redacted output
   // before outputDigest discards it. Only attached when non-empty, so a result with no parseable
   // failure keeps its exact prior shape (additive, backward-compatible).
-  const locations = extractFailureLocations(step.kind, run.result, workspaceRoot);
+  const locations = stepFailureLocations(step, run.result, workspaceRoot);
   return {
     kind: step.kind,
     scriptName: step.scriptName,
@@ -494,6 +520,24 @@ function toResult(
     detail: detailFor(status, run),
     ...(locations.length > 0 ? { locations } : {}),
   };
+}
+
+function stepFailureLocations(
+  step: VerificationStep,
+  result: CommandResult | undefined,
+  workspaceRoot: string,
+): ReturnType<typeof extractFailureLocations> {
+  const project =
+    step.kind === "targeted-test" && step.command === "npx" && step.args[2] === "--root"
+      ? step.args[3]
+      : undefined;
+  if (project === undefined) return extractFailureLocations(step.kind, result, workspaceRoot);
+  return extractFailureLocations(step.kind, result, join(workspaceRoot, project)).map(
+    (location) => ({
+      ...location,
+      file: join(project, location.file).replaceAll("\\", "/"),
+    }),
+  );
 }
 
 function detailFor(status: VerificationStatus, run: StepRun): string | undefined {
