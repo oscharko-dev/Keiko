@@ -60,13 +60,21 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
   "tool-calling-unverified": "codingWorkbench.source.unavailableReason.tool-calling-unverified",
 };
 
+function sourceUnavailableReasonKey(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
+): CodingWorkbenchMessageKey | undefined {
+  if (source === null || source.available || source.unavailableReason === undefined) {
+    return undefined;
+  }
+  return SOURCE_UNAVAILABLE_REASON_KEYS[source.unavailableReason];
+}
+
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
 function sourceUnavailableReasonText(
   source: CodingWorkbenchRuntimeState["source"]["value"],
   t: CodingWorkbenchTranslate,
 ): string | null {
-  if (source === null || source.available || source.unavailableReason === undefined) return null;
-  const key = SOURCE_UNAVAILABLE_REASON_KEYS[source.unavailableReason];
+  const key = sourceUnavailableReasonKey(source);
   return key === undefined ? null : t(key);
 }
 
@@ -98,14 +106,11 @@ function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchT
   });
 }
 
-function setupAnnouncement(
-  status: CodingWorkbenchResourceStatus,
-  t: CodingWorkbenchTranslate,
-): string {
-  if (status === "ready") return t("codingWorkbench.announcement.setupReady");
-  if (status === "loading") return t("codingWorkbench.announcement.setupChecking");
-  if (status === "unavailable") return t("codingWorkbench.announcement.setupUnavailable");
-  return "";
+function setupKey(status: CodingWorkbenchResourceStatus): CodingWorkbenchMessageKey | undefined {
+  if (status === "ready") return "codingWorkbench.announcement.setupReady";
+  if (status === "loading") return "codingWorkbench.announcement.setupChecking";
+  if (status === "unavailable") return "codingWorkbench.announcement.setupUnavailable";
+  return undefined;
 }
 
 function researchAnnouncement(
@@ -115,15 +120,31 @@ function researchAnnouncement(
   return grant === null ? "" : t("codingWorkbench.announcement.researchActive");
 }
 
+function withClosingPunctuation(sentence: string): string {
+  return /[.!?]$/u.test(sentence) ? sentence : `${sentence}.`;
+}
+
+// Sentences read one after another: a part that lacks its closing punctuation (the header's "Not
+// ready to start") gets a full stop, so the facts that follow it never run into it.
 function joinedAnnouncements(announcements: readonly string[]): string {
-  return announcements.filter((announcement) => announcement.length > 0).join(" ");
+  return announcements
+    .filter((announcement) => announcement.length > 0)
+    .reduce(
+      (joined, announcement) =>
+        joined.length === 0 ? announcement : `${withClosingPunctuation(joined)} ${announcement}`,
+      "",
+    );
 }
 
 /**
  * What the run itself is doing, for the live run status region: its state and revision, a
- * completed recovery acknowledgement and an active research grant. #3873 live review: the region
- * used to open with the readiness facts below, so a reader heard "Model source ready. …" before
- * learning whether the run was still working; those facts now live in the readiness details.
+ * completed recovery acknowledgement and an active research grant, then — only when there are any —
+ * the readiness facts that need attention (`readinessAttentionFacts`). #3873 live review: the
+ * region used to open with all the readiness facts, so a reader heard "Model source ready. …"
+ * before learning whether the run was still working; the healthy facts now live in the readiness
+ * details. #3873 review: moving every fact there also left an unavailable runtime or an unpaired
+ * window announced to no one, so a fact that says the Workbench cannot start stays in this polite,
+ * atomic sentence, where it is also visible text, and the setup layout announces it as well.
  */
 export function runStatusAnnouncement(
   state: CodingWorkbenchRuntimeState,
@@ -139,14 +160,30 @@ export function runStatusAnnouncement(
     runAnnouncement(state, t),
     recovery,
     researchAnnouncement(researchGrant, t),
+    readinessAttentionFacts(state, t),
   ]);
 }
 
-/** The technical readiness facts behind a start, shown in the collapsed readiness details. */
-export function readinessFacts(
-  state: CodingWorkbenchRuntimeState,
-  t: CodingWorkbenchTranslate,
-): string {
+// The readiness announcements that say a part of the Workbench is missing or failing. They — and
+// only they — join the live run status sentence. A fact that states what is not selected, not yet
+// checked or still being checked is not on this list, and neither is the unverified evaluation
+// runtime, which the readiness details state plainly (ADR-0163 D9, audit F-01): nothing here claims
+// a plain "Runtime ready." over it, and a healthy Workbench keeps the run's own state first.
+const ATTENTION_ANNOUNCEMENT_KEYS: ReadonlySet<CodingWorkbenchMessageKey> =
+  new Set<CodingWorkbenchMessageKey>([
+    "codingWorkbench.pairing.unpaired",
+    "codingWorkbench.announcement.modelSource.unavailable",
+    "codingWorkbench.announcement.modelSource.refreshFailed",
+    "codingWorkbench.announcement.authenticationUnavailable",
+    "codingWorkbench.announcement.authenticationRequired",
+    "codingWorkbench.announcement.workspace.unavailable",
+    "codingWorkbench.announcement.workspace.refreshFailed",
+    "codingWorkbench.announcement.runtime.unavailable",
+    "codingWorkbench.announcement.runtime.refreshFailed",
+    "codingWorkbench.announcement.setupUnavailable",
+  ]);
+
+function readinessKeys(state: CodingWorkbenchRuntimeState): readonly CodingWorkbenchMessageKey[] {
   // F-01: the stated readiness must match the projected one — a source whose last probe failed is
   // stated as unavailable, not ready, exactly as `projectReadiness` treats it.
   const sourceAvailable =
@@ -155,33 +192,48 @@ export function readinessFacts(
     !gatewayVerificationContradictsReadiness(state.source.value.verification);
   const workspaceAvailable = state.workspace.value?.health === "healthy";
   const runtimeAvailable = state.runtime.value?.runtimeAvailable === true;
-  return joinedAnnouncements([
-    pairingAnnouncement(state, t),
-    readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
-    sourceReasonAnnouncement(state, t),
-    authenticationAnnouncement(state, t),
-    readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
-    runtimeAssuranceAnnouncement(state, runtimeAvailable, t),
-    setupAnnouncement(state.codexSetup.status, t),
-  ]);
+  return [
+    pairingKey(state),
+    readinessKey("modelSource", state.source.status, sourceAvailable),
+    sourceUnavailableReasonKey(state.source.value),
+    authenticationKey(state),
+    readinessKey("workspace", state.workspace.status, workspaceAvailable),
+    runtimeAssuranceKey(state, runtimeAvailable),
+    setupKey(state.codexSetup.status),
+  ].filter((key): key is CodingWorkbenchMessageKey => key !== undefined);
+}
+
+/** The technical readiness facts behind a start, shown in the collapsed readiness details. */
+export function readinessFacts(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return joinedAnnouncements(readinessKeys(state).map((key) => t(key)));
+}
+
+/**
+ * The readiness facts that need attention: the subset of `readinessFacts` that says a part of the
+ * Workbench is missing or failing (an unpaired window, an unavailable source, workspace or runtime,
+ * a failed refresh, a missing authentication). It is empty for a healthy Workbench, and it never
+ * holds the facts that merely state what is not selected or not yet checked.
+ */
+export function readinessAttentionFacts(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return joinedAnnouncements(
+    readinessKeys(state)
+      .filter((key) => ATTENTION_ANNOUNCEMENT_KEYS.has(key))
+      .map((key) => t(key)),
+  );
 }
 
 // Release-audit F-08/RG-12: an unpaired window's run start is guaranteed to fail authority
 // resolution (ADR-0141), so the narration must name pairing as the missing input instead of
 // narrating "Workspace ready. Runtime ready." over a start that can never succeed. Silent while
 // pairing is unconfirmed — the narration never claims a truth the workspaces read has not answered.
-function sourceReasonAnnouncement(
-  state: CodingWorkbenchRuntimeState,
-  t: CodingWorkbenchTranslate,
-): string {
-  return sourceUnavailableReasonText(state.source.value, t) ?? "";
-}
-
-function pairingAnnouncement(
-  state: CodingWorkbenchRuntimeState,
-  t: CodingWorkbenchTranslate,
-): string {
-  return state.pairing === "unpaired" ? t("codingWorkbench.pairing.unpaired") : "";
+function pairingKey(state: CodingWorkbenchRuntimeState): CodingWorkbenchMessageKey | undefined {
+  return state.pairing === "unpaired" ? "codingWorkbench.pairing.unpaired" : undefined;
 }
 
 type ReadinessAnnouncementState =
@@ -205,53 +257,47 @@ function readinessAnnouncementState(
  * channel that the pill's plain "Ready to start" is on screen (audit F-01, ADR-0163 D9).
  *
  * It is a dedicated helper rather than a new `ReadinessAnnouncementState` member because
- * `readinessAnnouncement` builds its key as a template literal typed against
+ * `readinessKey` builds its key as a template literal typed against
  * `CodingWorkbenchMessageKey`: adding a state would force `modelSource.evaluation` and
  * `workspace.evaluation` keys to exist for resources that can never have that state.
  */
-function runtimeAssuranceAnnouncement(
+function runtimeAssuranceKey(
   state: CodingWorkbenchRuntimeState,
   runtimeAvailable: boolean,
-  t: CodingWorkbenchTranslate,
-): string {
+): CodingWorkbenchMessageKey {
   if (
     runtimeAvailable &&
     state.runtime.status === "ready" &&
     state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
   ) {
-    return t("codingWorkbench.announcement.runtime.evaluation");
+    return "codingWorkbench.announcement.runtime.evaluation";
   }
-  return readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t);
+  return readinessKey("runtime", state.runtime.status, runtimeAvailable);
 }
 
-function readinessAnnouncement(
+function readinessKey(
   resource: "modelSource" | "workspace" | "runtime",
   status: CodingWorkbenchResourceStatus,
   available: boolean,
-  t: CodingWorkbenchTranslate,
-): string {
-  const state = readinessAnnouncementState(status, available);
-  return t(`codingWorkbench.announcement.${resource}.${state}`);
+): CodingWorkbenchMessageKey {
+  return `codingWorkbench.announcement.${resource}.${readinessAnnouncementState(status, available)}`;
 }
 
-function authenticationAnnouncement(
-  state: CodingWorkbenchRuntimeState,
-  t: CodingWorkbenchTranslate,
-): string {
+function authenticationKey(state: CodingWorkbenchRuntimeState): CodingWorkbenchMessageKey {
   if (state.runtimePreference !== "codex-subscription") {
-    return t("codingWorkbench.announcement.authenticationNotSelected");
+    return "codingWorkbench.announcement.authenticationNotSelected";
   }
-  if (state.profile.status === "loading")
-    return t("codingWorkbench.announcement.authenticationChecking");
+  if (state.profile.status === "loading") {
+    return "codingWorkbench.announcement.authenticationChecking";
+  }
   if (state.profile.status === "error" || state.profile.status === "unavailable") {
-    return t("codingWorkbench.announcement.authenticationUnavailable");
+    return "codingWorkbench.announcement.authenticationUnavailable";
   }
   const profile = state.profile.value;
-  if (profile?.status === "connected") return t("codingWorkbench.announcement.authenticationReady");
-  if (profile?.status === "missing")
-    return t("codingWorkbench.announcement.authenticationRequired");
-  if (profile !== null) return t("codingWorkbench.announcement.authenticationUnavailable");
-  return t("codingWorkbench.announcement.authenticationNotChecked");
+  if (profile?.status === "connected") return "codingWorkbench.announcement.authenticationReady";
+  if (profile?.status === "missing") return "codingWorkbench.announcement.authenticationRequired";
+  if (profile !== null) return "codingWorkbench.announcement.authenticationUnavailable";
+  return "codingWorkbench.announcement.authenticationNotChecked";
 }
 
 /**
@@ -273,6 +319,17 @@ export function activeRunState(state: CodingWorkbenchRuntimeStateName | undefine
     state === "paused" ||
     state === "stopping"
   );
+}
+
+/**
+ * True while the run's model may still be producing text: before its first turn and while it runs.
+ * An `awaiting-approval` run has finished its turn and waits for the operator, a `paused` run takes
+ * no further turn and a `stopping` run is ending, so an answer shown then is finished and keeps its
+ * code highlighting and Copy button (#3873 review). Narrower than `activeRunState`, which keeps the
+ * end controls and the bridge lease for the whole live run.
+ */
+export function generatingRunState(state: CodingWorkbenchRuntimeStateName | undefined): boolean {
+  return state === "starting" || state === "ready" || state === "running";
 }
 
 export function eventTitle(
@@ -319,14 +376,19 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
 ]);
 
-// F9 (#3873): a run settles `cancelled` only from the stop the operator asked for, so its terminal
-// entry says so instead of leaving a bare "Stopped" a reader could take for a failure.
+// F9 (#3873): a run that settles `cancelled` was stopped, which is not a failure, so its terminal
+// entry says so instead of leaving a bare "Stopped" a reader could take for one. It never says WHO
+// stopped it: the operator's Stop and `CodingRuntimeOrchestrator.shutdown()` (an update, a restart
+// or a machine shutdown) take the same stop path, and the settled snapshot and its terminal status
+// event are identical for both — only `coding-runtime.run.shutdown` in the server's Activity Log
+// names a shutdown. An attribution here would blame the operator for a stop they never asked for
+// (#3873 review).
 function eventStoppedDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
   return event.kind === "status" && event.state === "cancelled"
-    ? t("codingWorkbench.event.stopped.operator")
+    ? t("codingWorkbench.event.stopped")
     : "";
 }
 

@@ -4,7 +4,10 @@ import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
 import { DE_CODING_WORKBENCH_MESSAGES } from "./coding-workbench-i18n.de";
-import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
+import {
+  EN_CODING_WORKBENCH_MESSAGES,
+  type CodingWorkbenchMessageKey,
+} from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
   it.each([
@@ -356,15 +359,52 @@ describe("Coding Workbench translations", () => {
     ).toMatch(/could not be reached/iu);
   });
 
-  it("says an operator-stopped run was stopped on request and that nothing failed", () => {
-    const en = translateCodingWorkbench("en", "codingWorkbench.event.stopped.operator");
-    const de = translateCodingWorkbench("de", "codingWorkbench.event.stopped.operator");
-    expect(en).toMatch(/you stopped this run/iu);
+  // #3873 review: both settings are read once when Keiko starts and both have a hard cap, so an
+  // operator who sets the variable in a running Keiko, or past its cap, saw the same limit again.
+  // Each message states the cap and that Keiko must be restarted, in both languages. The caps are
+  // pinned against the server's own constants by tests/qa/coding-limit-message-parity.test.ts.
+  it.each([
+    [
+      "codingWorkbench.event.failure.prompt-allowance-exhausted",
+      "20,000,000 tokens",
+      "20.000.000 Tokens",
+    ],
+    ["codingWorkbench.event.failure.envelope-duration-exhausted", "480 minutes", "480 Minuten"],
+  ] as const)("states the cap and the restart in %s", (key, enCap, deCap) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain(`up to ${enCap}`);
+    expect(en).toMatch(/reads the setting only when it starts/iu);
+    expect(en).toMatch(/restart Keiko after changing it/iu);
+    expect(de).toContain(`bis höchstens ${deCap}`);
+    expect(de).toMatch(/liest die Einstellung nur beim Start/iu);
+    expect(de).toMatch(/muss Keiko neu gestartet werden/iu);
+  });
+
+  // #3873 review: a `cancelled` run does not record who stopped it — the operator's Stop and a
+  // Keiko shutdown (an update, a restart, a machine shutdown) settle identically — so the sentence
+  // says the run was stopped and that nothing failed, in both catalogs, and never attributes the
+  // stop to the operator.
+  it("says a stopped run was stopped and that nothing failed, without attributing the stop", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.event.stopped");
+    const de = translateCodingWorkbench("de", "codingWorkbench.event.stopped");
+    expect(en).not.toBe("codingWorkbench.event.stopped");
+    expect(de).not.toBe("codingWorkbench.event.stopped");
+    expect(de).not.toBe(en);
+    expect(en).toMatch(/this run was stopped/iu);
     expect(en).toMatch(/nothing failed/iu);
     expect(en).not.toMatch(/internal error/iu);
-    expect(de).toMatch(/du hast diesen Lauf gestoppt/iu);
+    expect(en).not.toMatch(/\byou stopped\b|\bstopped by you\b|\boperator\b/iu);
+    expect(de).toMatch(/dieser Lauf wurde gestoppt/iu);
     expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(de).not.toMatch(/\bdu hast\b|\bvon dir\b|\bBetreiber\b/iu);
     expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("no longer carries the operator-attributed stop key", () => {
+    for (const catalog of [EN_CODING_WORKBENCH_MESSAGES, DE_CODING_WORKBENCH_MESSAGES]) {
+      expect(Object.keys(catalog)).not.toContain("codingWorkbench.event.stopped.operator");
+    }
   });
 
   it("keeps the internal-error sentence for a genuine internal failure", () => {

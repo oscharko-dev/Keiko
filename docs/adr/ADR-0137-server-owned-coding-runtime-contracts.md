@@ -267,9 +267,14 @@ connection, a stream that broke before the answer completed), or `model-turn-fai
 failed-call cause, which the failed turn's own frame names), and `runtime-failed` (the runtime
 crashed or failed internally) only when no such cause is on record. A run whose refused edits
 escalated (above) comes before all of these facts: it settles `edits-blocked` or
-`edit-retries-exhausted` whatever its last model call reported. A run the operator stopped
-settles `cancelled`, as before, and the Workbench says the operator stopped it. Nothing is read
-from OpenCode's error text. `coding-runtime.run.settled` records the cause with `failureBasis`
+`edit-retries-exhausted` whatever its last model call reported. A run that is stopped settles
+`cancelled`, as before. The Workbench says the run was stopped and that nothing failed, and never
+who stopped it: the operator's Stop and `shutdown()` — which ends the live run when the server goes
+away (an update, a restart, a machine shutdown) — take the same stop path, so the settled snapshot
+and its terminal status event are identical, and only `coding-runtime.run.shutdown` in the
+server's Activity Log names a shutdown. An earlier text claimed "You stopped this run" for every
+`cancelled` run, which blamed the operator for a restart (#3873 review). Nothing is read from
+OpenCode's error text. `coding-runtime.run.settled` records the cause with `failureBasis`
 (`prompt-allowance`, `envelope-duration`, `model-call-failure`, `no-model-call-failure`, or
 `refusal-escalation` for an escalated run) and
 `modelCallFailure`, and an error class that matches it instead of `internal`. The gateway reports a
@@ -465,12 +470,49 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 - **Shown as what it is.** The sidecar hands reasoning to the managed runtime as
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows
-  it as a collapsible "Model reasoning" block labelled as unverified model reasoning, open while its
-  turn streams and collapsed once the turn completes; the boundary copy says what is shown instead
-  of promising that reasoning is never exposed.
+  it as a collapsible "Model reasoning" block labelled as unverified model reasoning, collapsed
+  until the reader opens it — also while its turn streams. The session stream is a `role="log"`,
+  whose additions a screen reader announces, so up to 8 KiB of unverified reasoning per message
+  must not crowd out the answer: a collapsed block exposes only its summary, and an opened block
+  keeps its streaming text out of the announcement with a nested `aria-live="off"` (#3873 review;
+  an earlier text opened the block while its turn streamed). The boundary copy says what is shown
+  instead of promising that reasoning is never exposed.
 - **Bounded, and the first content to go.** Reasoning keeps to half of a message's live byte
   budget, yields room to the answer within its message, and is the first content evicted under turn
   or feed byte pressure; the newest message keeps the reasoning that may still be streaming.
 - **Never evidence.** D4's durable rule is unchanged: reasoning never enters Coding History,
   evidence, a support export or the Activity Log. Durable lines record only counts — reasoning
   events, bytes, provider-reported reasoning tokens, frames and a closed disposition — never text.
+
+## Amendment — the run status names a model gateway that is being retried (2026-10-07)
+
+Review of PR #3876 (F11/F21 of the live qualification, #3873): during a provider outage the coding
+sidecar gateway retries for its outage window (ADR-0003, default ten minutes), the turn waits
+silently, and the run status read "Waiting for the model" for the whole window — the same words as a
+slow generation.
+
+### D9 — The sidecar route publishes two body-free gateway facts to the run's event replay
+
+- **Where they come from.** `GatewayCallRequest.retryObserver` (ADR-0003) hears the retry loop of a
+  call: a failure that says the provider is unavailable (a timeout, a refused connection, a
+  retryable 5xx, a rate limit) was met with a scheduled retry, or a call it heard retry settled. The
+  coding sidecar route hands every model call such an observer. The first retry of a call is
+  published as `model-gateway-retrying`, however many retries the outage takes; the answer that ends
+  it as `model-gateway-recovered`. A call that fails for good publishes no recovery: its turn-failure
+  frame (D3) follows. A steered repair or a schema correction answers the model's own output, so it
+  is never announced.
+- **What they are.** Two SSE-only runtime event kinds of their own (`CodingWorkbenchGatewayEventKind`),
+  not adapter events: the runtime never produces them. A frame carries no count, text, identifier,
+  failure code, outcome or trust marker, and the contract validator refuses any of those on it. They
+  are ordinary, evictable replay frames: never critical, never the run's last model-call failure, so
+  a retry is no failure and cannot demote or crowd out a real turn failure.
+- **What the Workbench does with them.** The newest event the Workbench holds for the run decides:
+  while it is `model-gateway-retrying`, the run status names the phase "Model gateway unavailable,
+  retrying" instead of "Waiting for the model". The recovery fact, and any later event of the run
+  (a failed turn, a pause, a settlement), ends the phase, so a lost recovery frame cannot leave the
+  status claiming an outage for good. A decision the run waits for still takes precedence.
+- **Evidence.** Each publication, refused or not, leaves one body-free
+  `coding-sidecar.gateway.retry-surfaced` line under the run's correlation: the run revision and
+  state, the fact, the failed attempt and the retry policy of a `retrying` fact, and whether the
+  replay took it (`published`, `publicationReason`). A refused publication is a warning. The
+  gateway's own `gateway.retry.scheduled` lines remain the record of every individual retry.

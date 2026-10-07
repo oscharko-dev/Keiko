@@ -142,6 +142,24 @@ describe("CodingWorkbenchRunStatus", () => {
     expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
   });
 
+  // #3873 review: an outage rides on for minutes, and "Waiting for the model" read the same as a
+  // slow generation. The phase names a model gateway that is unavailable and being retried.
+  it("names a model gateway that is unavailable and being retried as the run's phase", async () => {
+    const { container } = render(
+      <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="gateway" />,
+    );
+
+    expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(
+      "Model gateway unavailable, retrying",
+    );
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      /^Running\. Revision 4\.$/u,
+    );
+
+    vi.useRealTimers();
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
   it("ticks once a second while the run lives and stops at settlement", () => {
     const { rerender } = render(
       <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />,
@@ -198,6 +216,65 @@ describe("CodingWorkbenchRunStatus", () => {
     expect(announcement).toHaveTextContent(/^Running\. Revision 4\.$/u);
     expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
     expect(screen.queryByRole("timer")).toBeNull();
+  });
+
+  // #3873 review: the readiness facts moved into the collapsed details, which left an unavailable
+  // runtime announced to no one. The fact that says the Workbench cannot start is appended to the
+  // polite, atomic status sentence — visible text of a live region — while the details keep the
+  // complete list and the healthy facts stay out of the sentence.
+  it("appends an unavailable runtime to the run status and keeps the details complete", async () => {
+    const unavailable: CodingWorkbenchRuntimeState = {
+      ...RUNNING,
+      runtime: {
+        status: "ready",
+        value: {
+          schemaVersion: "1",
+          requestedMode: "supervised-coding",
+          deploymentCeiling: "autonomous-delivery",
+          effectiveMode: "supervised-coding",
+          runtimeAvailable: false,
+          runtimeUnavailableReason: "runtime-unqualified",
+        },
+        error: null,
+      } as CodingWorkbenchRuntimeState["runtime"],
+    };
+    const { container } = render(
+      <CodingWorkbenchRunStatus state={unavailable} researchGrant={null} phase="model" />,
+    );
+
+    const announcement = screen.getByTestId("coding-runtime-announcement");
+    expect(announcement).toHaveAttribute("role", "status");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+    expect(announcement).toBeVisible();
+    expect(announcement).toHaveTextContent(/^Running\. Revision 4\. Runtime unavailable\.$/u);
+    expect(announcement).not.toHaveTextContent(/Model source ready|Workspace ready/u);
+
+    const readiness = screen.getByTestId("coding-runtime-readiness");
+    expect(readiness).toHaveTextContent("Runtime unavailable.");
+    expect(readiness).toHaveTextContent("Model source ready.");
+    expect(readiness.closest("details")).not.toHaveAttribute("open");
+
+    vi.useRealTimers();
+    expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  it("announces an unavailable runtime where setup is centred, in the same polite, atomic status", () => {
+    const unavailable: CodingWorkbenchRuntimeState = {
+      ...RUNNING,
+      pairing: "unpaired",
+      run: { status: "ready", value: snapshot("idle", { runId: undefined }), error: null },
+    };
+    render(<CodingWorkbenchRunAnnouncement state={unavailable} researchGrant={null} />);
+
+    const announcement = screen.getByRole("status");
+    expect(announcement).toHaveClass("sr-only");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+    expect(announcement).toHaveTextContent(
+      "Workbench is not paired. Open Keiko from the launcher.",
+    );
+    expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
   });
 
   it("shows no elapsed time when the run's start is not known", () => {

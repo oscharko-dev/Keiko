@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5cc824d68f2459f89fb20d18d9b8f359f71620854728254b20a7ef0cee4944de" as const;
+  "08fc652733cded3cf2b3dda8831d974e745e030bf7eb1fb6d2b55c15addfb657" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 337,
-  completeClassCount: 337,
+  supportedClassCount: 338,
+  completeClassCount: 338,
   completeness: "complete",
   classes: [
     {
@@ -10333,6 +10333,104 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-sidecar.gateway.usage-settled.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-sidecar-gateway-retry",
+      requirementContract: "coding-sidecar-gateway-retry",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-sidecar.gateway.retry-surfaced"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-sidecar.gateway.retry-surfaced",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-sidecar.gateway.retry-surfaced"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-sidecar.gateway.retry-surfaced",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "attempt",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "fact",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "publicationReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "published",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "retryPolicy",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "revision",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-sidecar.gateway.retry-surfaced.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -39548,6 +39646,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-sidecar.gateway.readiness-insufficient": "tools-workflows",
     "coding-sidecar.gateway.rejected": "tools-workflows",
     "coding-sidecar.gateway.request-validated": "tools-workflows",
+    "coding-sidecar.gateway.retry-surfaced": "tools-workflows",
     "coding-sidecar.gateway.tool-availability": "tools-workflows",
     "coding-sidecar.gateway.turn-failed": "tools-workflows",
     "coding-sidecar.gateway.usage-settled": "tools-workflows",

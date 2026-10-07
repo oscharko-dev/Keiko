@@ -926,6 +926,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.duration.minutes": "{minutes} min {seconds} s",
   "codingWorkbench.runStatus.duration.hours": "{hours} h {minutes} min",
   "codingWorkbench.runStatus.phase.model": "Waiting for the model",
+  "codingWorkbench.runStatus.phase.gateway": "Model gateway unavailable, retrying",
   "codingWorkbench.runStatus.phase.verifier": "Running a verifier",
   "codingWorkbench.runStatus.phase.tool": "Running a tool",
   "codingWorkbench.runStatus.phase.decision": "Waiting for your decision",
@@ -980,6 +981,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Child agent completed",
   "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
+  "codingWorkbench.event.model-gateway-retrying": "Model gateway unavailable, retrying",
+  "codingWorkbench.event.model-gateway-recovered": "Model gateway answered again",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
   "codingWorkbench.event.failure.edits-blocked":
@@ -991,13 +994,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":
-    "The run used up its prompt allowance, the total prompt tokens one run may send to the model, so Keiko refused its next model call. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh allowance, or split the task into smaller ones. An operator can raise the allowance with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS.",
+    "The run used up its prompt allowance, the total prompt tokens one run may send to the model, so Keiko refused its next model call. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh allowance, or split the task into smaller ones. An operator can raise the allowance with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS, up to 20,000,000 tokens. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
-    "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES.",
+    "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
   "codingWorkbench.event.failure.output-exhausted-repeated":
     "The run ended because the model used its whole output budget again without calling a tool or answering, even after a repair attempt. The model usually spends that budget on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then start the task again; your changes so far stay in the task workspace.",
-  "codingWorkbench.event.stopped.operator":
-    "You stopped this run. Nothing failed, and your changes so far stay in the task workspace.",
+  "codingWorkbench.event.stopped":
+    "This run was stopped. Nothing failed, and your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.provider-unavailable":
     "The run ended because the model provider could not be reached or stopped answering, even after Keiko waited and retried. Nothing was rejected. Check that the model gateway and its provider are running, then start the task again; your changes so far stay in the task workspace. An operator can lengthen the wait with the gateway setting codingOutageWindowMs.",
   "codingWorkbench.event.failure.model-turn-failed":

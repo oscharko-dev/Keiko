@@ -72,7 +72,10 @@ type TimelineItem =
       readonly order: number;
       readonly message: CodingSafeActivityMessage;
       readonly runId: string;
-      /** The newest message of an active run: its answer and reasoning may still be streaming. */
+      /**
+       * The open message of a run that is generating: its answer may still be streaming. A finished
+       * answer is never live, however long the run then waits for a decision.
+       */
       readonly live: boolean;
     }
   | {
@@ -100,6 +103,13 @@ type TimelineItem =
 
 export interface CodingWorkbenchTimelineProps {
   readonly active?: boolean;
+  /**
+   * True while the run's model may still be producing text: the run is starting or running, not
+   * waiting for a decision, paused or stopping. Defaults to `active`; the Workbench passes the
+   * narrower fact, so an answer that is finished keeps its code highlighting and Copy button while
+   * the run waits for the operator (#3873 review).
+   */
+  readonly generating?: boolean;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly activity: UseCodingWorkbenchSafeActivityResult;
   readonly questions: UseCodingWorkbenchQuestionsResult;
@@ -108,6 +118,7 @@ export interface CodingWorkbenchTimelineProps {
 
 export function Timeline({
   active = false,
+  generating = active,
   events,
   activity,
   questions,
@@ -117,16 +128,8 @@ export function Timeline({
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
   const titleRef = focusRef ?? internalTitleRef;
   const [showEvents, setShowEvents] = useState(false);
-  const allItems = useTimelineItems(events, activity.feed, active);
-  const items = useMemo(
-    () =>
-      groupCompletedTools(
-        allItems.filter(
-          (item) => showEvents || item.kind !== "event" || eventTone(item.event) === "attention",
-        ),
-      ),
-    [allItems, showEvents],
-  );
+  const allItems = useTimelineItems(events, activity.feed, generating);
+  const items = useShownItems(allItems, showEvents);
   const timeline = useTimelineWindow(items);
   if (
     !active &&
@@ -154,6 +157,22 @@ export function Timeline({
         t={t}
       />
     </section>
+  );
+}
+
+// The rows shown: routine events stay behind the run details toggle, attention events never do.
+function useShownItems(
+  allItems: readonly TimelineItem[],
+  showEvents: boolean,
+): readonly TimelineItem[] {
+  return useMemo(
+    () =>
+      groupCompletedTools(
+        allItems.filter(
+          (item) => showEvents || item.kind !== "event" || eventTone(item.event) === "attention",
+        ),
+      ),
+    [allItems, showEvents],
   );
 }
 
@@ -201,20 +220,33 @@ function RunDetailsToggle({
   );
 }
 
-// The newest message of an active run is live: its answer and its reasoning may still be streaming.
+// Only the open message of a generating run is live: its answer may still be streaming.
 function useTimelineItems(
   events: readonly CodingWorkbenchRuntimeSseEvent[],
   feed: UseCodingWorkbenchSafeActivityResult["feed"],
-  active: boolean,
+  generating: boolean,
 ): readonly TimelineItem[] {
   return useMemo(
-    () => timelineItems(events, feed, active ? newestMessageId(feed) : undefined),
-    [events, feed, active],
+    () => timelineItems(events, feed, openMessageId(feed, generating)),
+    [events, feed, generating],
   );
 }
 
-function newestMessageId(feed: UseCodingWorkbenchSafeActivityResult["feed"]): string | undefined {
-  return feed?.turns.at(-1)?.messages.at(-1)?.messageId;
+// The message that may still receive content: the newest message of the newest turn while the run
+// is generating, and only until the model moves on to a tool call. Text followed by a tool call is
+// finished — the model waits for the tool, or for the operator's approval of it — so a finished
+// answer keeps its code highlighting and Copy button however long that decision takes (#3873
+// review). A tool is "after" the message when it began at or after the message's own timestamp.
+function openMessageId(
+  feed: UseCodingWorkbenchSafeActivityResult["feed"],
+  generating: boolean,
+): string | undefined {
+  const turn = generating ? feed?.turns.at(-1) : undefined;
+  const message = turn?.messages.at(-1);
+  if (turn === undefined || message === undefined) return undefined;
+  return turn.tools.some((tool) => tool.occurredAt >= message.occurredAt)
+    ? undefined
+    : message.messageId;
 }
 
 function timelineItems(
@@ -711,7 +743,7 @@ function MessageRow({
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
         {item.message.reasoning === undefined ? null : (
-          <ModelReasoning reasoning={item.message.reasoning} live={item.live} t={t} />
+          <ModelReasoning reasoning={item.message.reasoning} t={t} />
         )}
         <div className={styles.messageText}>
           <MessageContent message={item.message} runId={item.runId} live={item.live} t={t} />
@@ -721,28 +753,25 @@ function MessageRow({
   );
 }
 
-// #3878: the model's own reasoning, apart from the answer and labelled as unverified. It is open
-// while its turn is live, so it streams in view, and collapses once the turn completes; the reader
-// can open or close it at any time. Only a reader's toggle is reported, never the automatic one.
+// #3878: the model's own reasoning, apart from the answer and labelled as unverified. It is
+// collapsed until the reader opens it, also while its turn streams, and its text is excluded from
+// the log's live announcements: the session stream is a `role="log"`, whose additions a screen
+// reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
+// the reader needs (#3873 review). A collapsed block exposes only its summary; an opened one keeps
+// its streaming text out of the announcement with a nested `aria-live="off"`. The collapsed state
+// is never driven from the run's state, so every toggle is the reader's and is reported.
 function ModelReasoning({
   reasoning,
-  live,
   t,
 }: {
   readonly reasoning: NonNullable<CodingSafeActivityMessage["reasoning"]>;
-  readonly live: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <details
       className={styles.cmpReasoning}
-      open={live}
-      data-reasoning-live={live}
-      onToggle={(event) => {
-        if (event.currentTarget.open !== live) {
-          reportClientDiagnostic("[keiko] coding workbench model reasoning toggled");
-        }
-      }}
+      aria-live="off"
+      onToggle={() => reportClientDiagnostic("[keiko] coding workbench model reasoning toggled")}
     >
       <summary className={styles.cmpActivitySummary}>
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
@@ -772,7 +801,8 @@ function MessageContent({
 }): ReactNode {
   if (message.role === "assistant") {
     // While the answer still streams, SafeMarkdown renders its code without highlighting or list
-    // evidence on every update; the finished answer renders in full once the turn completes.
+    // evidence on every update; the finished answer renders in full as soon as it is finished — also
+    // while the run waits for the operator's decision.
     return (
       <SafeMarkdownBoundary
         source={message.segments.map((segment) => segment.text).join("")}

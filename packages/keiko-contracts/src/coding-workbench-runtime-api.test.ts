@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
+import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
 import {
+  CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
@@ -950,6 +952,78 @@ describe("Coding Workbench runtime API failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, failureCode: "provider-failed" }).ok,
     ).toBe(false);
+  });
+
+  // #3873 review: the run status could not say that the model gateway was unavailable and being
+  // retried. The gateway facts are SSE-only runtime events of their own: they carry no count, text,
+  // identifier or failure code, and they are not adapter events.
+  describe("model gateway facts", () => {
+    const fact = {
+      schemaVersion: "1",
+      cursor: "run-1:4",
+      sequence: 4,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 3,
+    } as const;
+
+    it.each(CODING_WORKBENCH_GATEWAY_EVENT_KINDS)(
+      "accepts a %s frame on a runtime event",
+      (eventKind) => {
+        expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind })).toEqual({
+          ok: true,
+          value: { ...fact, eventKind },
+        });
+      },
+    );
+
+    it("lists exactly the two gateway facts, none of them an adapter event kind", () => {
+      expect(CODING_WORKBENCH_GATEWAY_EVENT_KINDS).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      for (const eventKind of CODING_WORKBENCH_GATEWAY_EVENT_KINDS) {
+        expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).not.toContain(eventKind);
+      }
+    });
+
+    it("refuses a gateway fact on a status frame, which carries no event kind", () => {
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent({
+          ...fact,
+          kind: "status",
+          eventKind: "model-gateway-retrying",
+        }).ok,
+      ).toBe(false);
+    });
+
+    it("carries nothing beside the kind: no failure code, outcome or trust marker", () => {
+      for (const extra of [
+        { failureCode: "provider-failed" },
+        { failureCode: "provider-unavailable" },
+        { auxiliaryOutcome: "unavailable" },
+        { contentTrust: "untrusted" },
+      ] as const) {
+        expect(
+          validateCodingWorkbenchRuntimeSseEvent({
+            ...fact,
+            eventKind: "model-gateway-retrying",
+            ...extra,
+          }),
+        ).toMatchObject({ ok: false });
+      }
+    });
+
+    it("refuses an unknown gateway fact and an adapter event kind spelled as one", () => {
+      for (const eventKind of ["model-gateway", "model-gateway-failed", "model-retrying"]) {
+        expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind })).toMatchObject({
+          ok: false,
+          errors: ["eventKind is invalid"],
+        });
+      }
+    });
   });
 
   // F5 (#3873): a run whose edits were refused again and again settles with the refusal class.

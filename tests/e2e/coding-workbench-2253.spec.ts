@@ -16,6 +16,9 @@ const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "22
 const WORKSPACE_KEY = "keiko.workspace.v4";
 const CONFIRMED_SOURCE = "Keiko Gateway";
 const UNAVAILABLE_ANNOUNCEMENT = "Subscription authentication not selected.";
+// What the status sentence appends when the runtime cannot start a run (#3873 review).
+const RUNTIME_UNAVAILABLE_ANNOUNCEMENT = "Runtime unavailable.";
+const READINESS_SUMMARY = "Readiness details";
 // WindowFrame's 2px border plus its one-pixel selection edge appear in scroll metrics but cannot
 // produce a horizontal scroll range. Anything beyond this is content overflow.
 const HORIZONTAL_OVERFLOW_TOLERANCE_PX = 3;
@@ -223,11 +226,16 @@ async function seedUnavailableWorkbench(page: Page, mode: ModeCase): Promise<voi
   );
 }
 
-async function openMode(page: Page, mode: ModeCase): Promise<void> {
+async function openMode(
+  page: Page,
+  mode: ModeCase,
+  runtime: { readonly runtimeAvailable?: boolean } = {},
+): Promise<void> {
   await page.setViewportSize(mode.viewport);
   await page.emulateMedia(mode.media);
   await installLiveCodingWorkbenchRuntime(page, {
     authStatus: "redistribution-unapproved",
+    ...runtime,
   });
   await seedUnavailableWorkbench(page, mode);
   await page.goto("/");
@@ -253,14 +261,42 @@ function confirmedSource(page: Page): Locator {
   return workbench(page).getByText(CONFIRMED_SOURCE, { exact: true });
 }
 
-// #3873: the readiness facts moved from the run status announcement into its collapsed details.
-// The announcement stays the polite, atomic live region; the facts are read by text content.
+// #3873 (ADR-0163 D9): the readiness facts moved from the run status announcement into its
+// collapsed readiness details. That is a relocation of the pin that held `UNAVAILABLE_ANNOUNCEMENT`
+// inside the polite, atomic `role="status"`, never a relaxation of it (#3873 review):
+//  - the status sentence stays that live region, and it also carries, as visible text, every fact
+//    that says a part of the Workbench is missing or failing; the unavailable-runtime test below
+//    makes the old pin's polite, atomic, in-the-region assertions on exactly such a fact;
+//  - every other fact is read from the disclosure, and `expectReadinessDisclosure` proves it is in
+//    the accessibility tree when expanded and not exposed while collapsed, so a fact left in a
+//    collapsed `<details>` cannot pass for an announced one.
 function runStatusAnnouncement(surface: Locator): Locator {
   return surface.locator('[data-testid="coding-runtime-announcement"]');
 }
 
 function readinessFacts(surface: Locator): Locator {
   return surface.locator('[data-testid="coding-runtime-readiness"]');
+}
+
+function readinessDisclosure(surface: Locator): Locator {
+  return surface.locator('details:has([data-testid="coding-runtime-readiness"])');
+}
+
+async function expectReadinessDisclosure(surface: Locator): Promise<void> {
+  const disclosure = readinessDisclosure(surface);
+  const facts = readinessFacts(surface);
+  await expect(disclosure).toBeVisible();
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  await expect(facts).toBeHidden();
+  expect(await disclosure.ariaSnapshot()).not.toContain(UNAVAILABLE_ANNOUNCEMENT);
+  await disclosure.getByText(READINESS_SUMMARY, { exact: true }).click();
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(facts).toBeVisible();
+  await expect(facts).toContainText(UNAVAILABLE_ANNOUNCEMENT);
+  expect(await disclosure.ariaSnapshot()).toContain(UNAVAILABLE_ANNOUNCEMENT);
+  // Collapsed again: every capture of this matrix shows the Workbench as a reader first meets it.
+  await disclosure.getByText(READINESS_SUMMARY, { exact: true }).click();
+  await expect(disclosure).not.toHaveAttribute("open", "");
 }
 
 async function expectUnapprovedProfile(page: Page): Promise<void> {
@@ -288,9 +324,10 @@ async function expectUnavailableSurface(page: Page): Promise<Locator> {
   await expect(confirmedSource(page)).toBeVisible();
   const announcement = runStatusAnnouncement(surface);
   await expect(announcement).toBeAttached();
+  await expect(announcement).toHaveAttribute("role", "status");
   await expect(announcement).toHaveAttribute("aria-live", "polite");
   await expect(announcement).toHaveAttribute("aria-atomic", "true");
-  await expect(readinessFacts(surface)).toContainText(UNAVAILABLE_ANNOUNCEMENT);
+  await expectReadinessDisclosure(surface);
   await expect(surface.getByRole("radiogroup", { name: "Runtime model source" })).toHaveCount(0);
   await expect(surface.getByText("ChatGPT/Codex subscription", { exact: true })).toHaveCount(0);
   await expect(surface.getByText("Needs setup", { exact: true })).toHaveCount(0);
@@ -534,6 +571,43 @@ function writeArtifacts(captures: readonly CaptureRecord[]): void {
   writeJsonArtifact("a11y-proof.json", a11yProof(captures, source));
   writeJsonArtifact("manifest.json", manifest(captures));
 }
+
+// #3873 review: the old pin held an unavailable fact inside the polite, atomic `role="status"`, and
+// moving the readiness facts into collapsed details left it announced to no one. The facts that say
+// a part of the Workbench is missing or failing are the status sentence's own visible text again,
+// so the same polite/atomic assertions are made here on a runtime that cannot start a run, and the
+// facts that are fine stay out of the sentence.
+test("Issue #2253 an unavailable runtime is announced by the polite, atomic status sentence", async ({
+  page,
+}) => {
+  const [mode] = MODES;
+  if (mode === undefined) throw new Error("the Issue #2253 matrix has no desktop mode");
+  await openMode(page, mode, { runtimeAvailable: false });
+  const surface = workbench(page);
+  await expect(surface).toBeVisible();
+  const announcement = runStatusAnnouncement(surface);
+  await expect(announcement).toHaveAttribute("role", "status");
+  await expect(announcement).toHaveAttribute("aria-live", "polite");
+  await expect(announcement).toHaveAttribute("aria-atomic", "true");
+  await expect(announcement).toBeVisible();
+  await expect(announcement).toContainText(RUNTIME_UNAVAILABLE_ANNOUNCEMENT);
+  await expect(announcement).not.toContainText("Model source ready.");
+  expect(await announcement.ariaSnapshot()).toContain(RUNTIME_UNAVAILABLE_ANNOUNCEMENT);
+});
+
+// The disclosure that now holds the readiness facts is proven from the accessibility tree, in a test
+// of its own: its result must not depend on the evidence matrix below, whose captures read the
+// confirmed source context from the Workbench surface.
+test("Issue #2253 the readiness facts are in the accessibility tree once their disclosure is expanded", async ({
+  page,
+}) => {
+  const [mode] = MODES;
+  if (mode === undefined) throw new Error("the Issue #2253 matrix has no desktop mode");
+  await openMode(page, mode);
+  const surface = workbench(page);
+  await expect(surface).toBeVisible();
+  await expectReadinessDisclosure(surface);
+});
 
 test("Issue #2253 unapproved Codex redistribution stays absent from the Workbench", async ({
   browser,

@@ -1,5 +1,8 @@
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchGatewayEventKind,
+  CodingWorkbenchTurnFailureCode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeFailureCode,
@@ -205,6 +208,29 @@ export class CodingRuntimeEventHub {
       revision,
       eventKind: "failure-redacted",
       failureCode,
+    });
+  }
+
+  /**
+   * Reports a content-free fact about the model gateway under the run's turn (#3873 review): it is
+   * retrying an unavailable provider, or got an answer again after doing so. Ordinary, evictable
+   * frames — never critical, and never the run's last model-call failure: a retry is no failure, and
+   * a turn that does fail is named by `publishTurnFailure`, whose frame follows these.
+   */
+  publishModelGatewayFact(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+    revision: number,
+    eventKind: CodingWorkbenchGatewayEventKind,
+  ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
+    if (this.runs.get(runId)?.terminal === true) return { ok: false, reason: "terminal-run" };
+    return this.publish({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      kind: "runtime-event",
+      runId,
+      state,
+      revision,
+      eventKind,
     });
   }
 

@@ -3126,6 +3126,7 @@ export const SUPPORT_CODE_TOKENS: readonly string[] = [
   "coding-safe-openai-compatible",
   "coding-sidecar-gateway.chat",
   "coding-sidecar-gateway.evidence-aggregation",
+  "coding-sidecar-gateway.retry-observer",
   "coding-sidecar-gateway.stream",
   "coding-sidecar-gateway.tool-adoption",
   "coding-sidecar-gateway.tool-contract",

@@ -17,6 +17,7 @@ import {
   type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
+  type GatewayRetryNotice,
   type GatewayStreamChunk,
   type ModelCapability,
   type ModelProviderConfig,
@@ -443,6 +444,9 @@ describe("coding-sidecar gateway", () => {
         outagePolicy: "outage-window",
         reasoningDelivery: "forward",
       });
+      // #3873 review: the call also carries the observer through which the route surfaces the
+      // gateway's retries to the run status; the default factories keep it.
+      expect(captured[0]?.retryObserver).toBeTypeOf("function");
     } finally {
       chat.mockRestore();
       chatStream.mockRestore();
@@ -7685,5 +7689,354 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
       reason: "body-empty-messages",
     });
     expect(JSON.stringify(sink.events)).not.toContain("private");
+  });
+});
+
+// #3873 review: while the gateway rides out a provider outage the turn waits silently, and the
+// Workbench's run status read "Waiting for the model" for the whole window. The route hands every
+// model call an observer of the gateway's retry loop; the first retry of an unavailable provider is
+// published to the run's event replay as `model-gateway-retrying`, and the answer that ends the
+// outage as `model-gateway-recovered`. Each publication leaves a body-free line on the Activity Log.
+describe("coding sidecar gateway retry facts (#3873 review)", () => {
+  afterEach(resetServerLogger);
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 4 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const retrySurfaced = (events: readonly ServerLogEvent[]): readonly ServerLogEvent[] =>
+    events.filter((event) => event.op === "coding-sidecar.gateway.retry-surfaced");
+  const SCHEDULED = { kind: "scheduled", attempt: 1, retryPolicy: "outage-window" } as const;
+  const ANSWERED = { kind: "settled", outcome: "answered" } as const;
+
+  function replayedFacts(hub: CodingRuntimeEventHub, runId: string): readonly unknown[] {
+    const replay = hub.replay(runId);
+    return replay.ok
+      ? replay.events.map((event) =>
+          event.kind === "runtime-event" ? event.eventKind : event.kind,
+        )
+      : [];
+  }
+
+  // A streamed turn whose gateway call tells the observer what the real retry loop tells it.
+  function streamingDeps(
+    runId: string,
+    hub: CodingRuntimeEventHub,
+    notices: readonly GatewayRetryNotice[],
+    orchestrator: UiHandlerDeps["codingRuntimeOrchestrator"] = runningOrchestrator,
+    ending: "answer" | "failure" = "answer",
+  ): UiHandlerDeps {
+    return {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayCallRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (request): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            for (const notice of notices) request.retryObserver?.(notice);
+            if (ending === "failure") throw new TransportError("provider down");
+            yield { type: "delta", token: "answer" };
+            yield { type: "done", response: assistantResponse("azure-coding-model") };
+          },
+      ),
+      codingRuntimeEventHub: hub,
+      codingRuntimeOrchestrator: orchestrator,
+    };
+  }
+
+  function streamedContext(content: string): RouteContext {
+    return {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content }],
+        tools: modelVisibleTools(),
+      }),
+      res: mockResponse({ captureBody: true }).res,
+    };
+  }
+
+  it("publishes one retrying frame per outage and a recovered frame once the call is answered", async () => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const deps = streamingDeps("run-retry-streamed", hub, [
+      SCHEDULED,
+      { ...SCHEDULED, attempt: 2 },
+      { ...SCHEDULED, attempt: 3 },
+      ANSWERED,
+    ]);
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("ride out an outage"), deps),
+    ).toBe(STREAMING);
+
+    expect(replayedFacts(hub, "run-retry-streamed")).toEqual([
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+    ]);
+    const lines = retrySurfaced(sink.events);
+    expect(lines.map((line) => line.extra)).toEqual([
+      expect.objectContaining({
+        runId: "run-retry-streamed",
+        revision: 4,
+        state: "running",
+        fact: "retrying",
+        attempt: 1,
+        retryPolicy: "outage-window",
+        published: true,
+        publicationReason: "published",
+        completeness: "complete",
+        loss: "none",
+      }),
+      expect.objectContaining({
+        runId: "run-retry-streamed",
+        fact: "recovered",
+        published: true,
+        publicationReason: "published",
+      }),
+    ]);
+    expect(lines[1]?.extra).not.toHaveProperty("attempt");
+    expect(lines[1]?.extra).not.toHaveProperty("retryPolicy");
+    expect(lines[0]?.correlationId).toBe("run-retry-streamed");
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.retry-surfaced.emitted-line",
+        formatActivityLogProofLine(lines[0] ?? {}),
+      ),
+    ).toMatchObject({ fact: "retrying", attempt: 1, published: true });
+  });
+
+  // The whole path, with nothing replaced between the route and the provider: a coding turn's real
+  // gateway call meets an overloaded provider, rides it out under the outage policy, and the run's
+  // replay says so while it happens and when it ends.
+  it("surfaces the real retry loop of a gateway call that meets an overloaded provider", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    let providerCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        providerCalls += 1;
+        if (providerCalls <= 2) {
+          return Promise.resolve(new Response("overloaded", { status: 503 }));
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: "chatcmpl-retry",
+              object: "chat.completion",
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: "done" },
+                  finish_reason: "stop",
+                },
+              ],
+              usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    try {
+      const runtimeConfig = probeVerifiedGatewayConfig(
+        configValue(provider({ maxRetries: 3, retryBaseDelayMs: 1 }), capability()),
+      );
+      const deps = {
+        ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-retry-real" } })),
+        gatewayConfig: runtimeConfig,
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "ride out the overload" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(providerCalls).toBe(3);
+      expect(replayedFacts(hub, "run-retry-real")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(retrySurfaced(sink.events)[0]?.extra).toMatchObject({
+        fact: "retrying",
+        attempt: 1,
+        retryPolicy: "outage-window",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  it("surfaces the retry of a buffered turn the same way", async () => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-retry-buffered" } }),
+        (): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => (request) => {
+          request.retryObserver?.(SCHEDULED);
+          request.retryObserver?.(ANSWERED);
+          return Promise.resolve(assistantResponse("azure-coding-model"));
+        },
+      ),
+      codingRuntimeEventHub: hub,
+      codingRuntimeOrchestrator: runningOrchestrator,
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "ride out an outage" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(replayedFacts(hub, "run-retry-buffered")).toEqual([
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+    ]);
+    expect(retrySurfaced(sink.events)).toHaveLength(2);
+  });
+
+  // A call that gives up publishes no recovery: its turn failure follows the retrying frame, and the
+  // status the operator reads ends on the failure.
+  it("publishes no recovered frame for a call that failed after its retries", async () => {
+    const hub = new CodingRuntimeEventHub();
+    const deps = streamingDeps(
+      "run-retry-failed",
+      hub,
+      [SCHEDULED, { kind: "settled", outcome: "failed" }],
+      runningOrchestrator,
+      "failure",
+    );
+
+    await handleCodingSidecarGatewayChatCompletions(streamedContext("give up"), deps);
+
+    expect(replayedFacts(hub, "run-retry-failed")).toEqual([
+      "model-gateway-retrying",
+      "failure-redacted",
+    ]);
+  });
+
+  it("surfaces a second outage of a later call, which has its own observer", async () => {
+    const hub = new CodingRuntimeEventHub();
+    for (const content of ["first outage", "second outage"]) {
+      const deps = streamingDeps("run-retry-twice", hub, [SCHEDULED, ANSWERED]);
+      await handleCodingSidecarGatewayChatCompletions(streamedContext(content), deps);
+    }
+    expect(replayedFacts(hub, "run-retry-twice")).toEqual([
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+    ]);
+  });
+
+  it.each([
+    { label: "has stopped", state: "stopping" as const },
+    { label: "is unknown to the orchestrator", state: undefined },
+  ])("surfaces nothing for a run that $label", async ({ state }) => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const orchestrator = {
+      getSnapshot: (): { readonly state: string; readonly revision: number } | undefined =>
+        state === undefined ? undefined : { state, revision: 4 },
+    } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+    const deps = streamingDeps("run-retry-not-live", hub, [SCHEDULED, ANSWERED], orchestrator);
+
+    await handleCodingSidecarGatewayChatCompletions(streamedContext("not live"), deps);
+
+    expect(replayedFacts(hub, "run-retry-not-live")).toEqual([]);
+    expect(retrySurfaced(sink.events)).toEqual([]);
+  });
+
+  it("records a publication the replay refused as a warning and never fails the turn", async () => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    hub.publish({
+      schemaVersion: "1",
+      kind: "runtime-event",
+      runId: "run-retry-settled",
+      state: "succeeded",
+      revision: 9,
+      eventKind: "runtime-stopped",
+    });
+    const deps = streamingDeps("run-retry-settled", hub, [SCHEDULED]);
+
+    expect(await handleCodingSidecarGatewayChatCompletions(streamedContext("settled"), deps)).toBe(
+      STREAMING,
+    );
+
+    const [line] = retrySurfaced(sink.events);
+    expect(line?.level).toBe("warn");
+    expect(line?.errorKind).toBe("unavailable");
+    expect(line?.extra).toMatchObject({
+      fact: "retrying",
+      published: false,
+      publicationReason: "terminal-run",
+    });
+  });
+
+  it("records an unavailable event hub as a refused publication", async () => {
+    const sink = captureServerLog("info");
+    const { codingRuntimeEventHub: _hub, ...withoutHub } = streamingDeps(
+      "run-retry-no-hub",
+      new CodingRuntimeEventHub(),
+      [SCHEDULED],
+    );
+
+    await handleCodingSidecarGatewayChatCompletions(streamedContext("no hub"), withoutHub);
+
+    expect(retrySurfaced(sink.events)[0]?.extra).toMatchObject({
+      published: false,
+      publicationReason: "event-hub-unavailable",
+    });
+  });
+
+  // The observer runs inside the gateway's retry loop: a failure to surface the fact is recorded on
+  // the operator diagnostic, never raised into the model call.
+  it("records a failing publication on the operator diagnostic instead of raising it", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const hub = new CodingRuntimeEventHub();
+    vi.spyOn(hub, "publishModelGatewayFact").mockImplementation(() => {
+      throw new Error("hub exploded with key sk-ABCDEFGHIJKLMNOPQRSTUV");
+    });
+    // A retry whose fact never reached the replay is surfaced again by the next retry, and an
+    // answer that follows it has no retrying fact to recover from.
+    const deps = {
+      ...streamingDeps("run-retry-throws", hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        ANSWERED,
+      ]),
+      diagnostics,
+    };
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        streamedContext("throws"),
+        deps as UiHandlerDeps,
+      ),
+    ).toBe(STREAMING);
+
+    const records = diagnostics.record.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry.source === "coding-sidecar-gateway.retry-observer");
+    expect(records).toHaveLength(2);
+    expect(records[0]?.correlationId).toBe("run-retry-throws");
+    expect(JSON.stringify(records)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
+    expect(JSON.stringify(records)).not.toContain("exploded");
   });
 });

@@ -74,6 +74,34 @@ describe("activityBus", () => {
     });
   });
 
+  // #3873 review: the model gateway facts of a coding turn project as routine steps on their own
+  // labels, never as a rejection — a retried provider is no failed run.
+  it.each([
+    ["model-gateway-retrying", "activity.event.modelGatewayRetrying"],
+    ["model-gateway-recovered", "activity.event.modelGatewayRecovered"],
+  ] as const)("projects the %s gateway fact as a step on its own label", (eventKind, labelKey) => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: `cursor-${eventKind}`,
+      sequence: 5,
+      occurredAt: "2026-06-15T10:00:05.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 4,
+      eventKind,
+    };
+
+    act(() => logRuntimeActivityEvents([event]));
+
+    expect(getActivity()[0]).toMatchObject({
+      id: `run-1:cursor-${eventKind}`,
+      type: "step",
+      labelKey,
+      agent: "runtime",
+    });
+  });
+
   // #3390 wave: `operator-decision` is a governed pause reason, not a routine step, so it must
   // project through the SAME RUNTIME_EVENT_PRESENTATION table as an approval carrying its own
   // label — never silently fall back to a generic step the way an unmapped kind would.

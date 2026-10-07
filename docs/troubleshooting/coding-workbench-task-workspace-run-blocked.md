@@ -583,7 +583,10 @@ attempt (`output-exhausted-repeated`), the model provider could not be reached o
 (`provider-unavailable`), or the last model step failed for the reason the failed step above it
 names (`model-turn-failed`). The run's `coding-runtime.run.settled` line carries the same
 `failureCode`, a `failureBasis` and, when one is on record, the `modelCallFailure` of the run's last
-failed model call. A run you stopped yourself settles `cancelled` and reads "You stopped this run".
+failed model call. A run that was stopped settles `cancelled` and reads "This run was stopped"; the
+Workbench does not say who stopped it, because the operator's Stop and a Keiko shutdown (an update,
+a restart, a machine shutdown) settle identically. A `coding-runtime.run.shutdown` line under the
+run's correlation names a shutdown.
 
 **Root Cause**
 

@@ -15,6 +15,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
   ModelCapability,
   WorkspaceBinding,
   WorkspaceInstance,
@@ -1509,6 +1510,162 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
 
+  // #3873 review: the readiness facts moved into collapsed details, which left an unavailable
+  // runtime and an unpaired window announced to no one — in the setup layout, which lays out no
+  // readiness text, as in the run layout. A fact that says the Workbench cannot start stays in the
+  // polite, atomic run status sentence, where it is also visible text; healthy facts stay in the
+  // details.
+  describe("readiness facts that need attention", () => {
+    const UNAVAILABLE_RUNTIME = {
+      status: "ready",
+      error: null,
+      value: {
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "supervised-coding",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "runtime-disabled",
+      },
+    } as const satisfies CodingWorkbenchRuntimeState["runtime"];
+
+    function expectPoliteAtomicStatus(announcement: HTMLElement): void {
+      expect(announcement).toHaveAttribute("role", "status");
+      expect(announcement).toHaveAttribute("aria-live", "polite");
+      expect(announcement).toHaveAttribute("aria-atomic", "true");
+    }
+
+    it("announces an unavailable runtime in the run status sentence, after the run itself", (): void => {
+      renderWorkbench(liveState({ canStart: false, runtime: UNAVAILABLE_RUNTIME }));
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveTextContent(/^Not ready to start\. Runtime unavailable\.$/u);
+      expect(announcement).not.toHaveTextContent(/Model source ready|Workspace ready/u);
+      const readiness = screen.getByTestId("coding-runtime-readiness");
+      expect(readiness).toHaveTextContent("Runtime unavailable.");
+      expect(readiness).toHaveTextContent("Model source ready.");
+      expect(readiness.closest("details")).not.toHaveAttribute("open");
+    });
+
+    it("announces an unpaired window in the run status sentence", (): void => {
+      renderWorkbench(liveState({ canStart: false, pairing: "unpaired" }));
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveTextContent(
+        /^Not ready to start\. Workbench is not paired\. Open Keiko from the launcher\.$/u,
+      );
+    });
+
+    it("announces an unavailable runtime where the setup is centred and lays out no status line", (): void => {
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ canStart: false, runtime: UNAVAILABLE_RUNTIME }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveClass("sr-only");
+      expect(announcement).toHaveTextContent("Runtime unavailable.");
+      expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
+    });
+
+    it("announces an unpaired window where the setup is centred and lays out no status line", (): void => {
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ canStart: false, pairing: "unpaired" }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveClass("sr-only");
+      expect(announcement).toHaveTextContent("Workbench is not paired.");
+      expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
+    });
+
+    it("keeps a healthy Workbench's status to the run itself", (): void => {
+      renderWorkbench(liveState({ canStart: true }));
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expect(announcement).not.toHaveTextContent(/unavailable|not paired|failed/iu);
+      expect(announcement).not.toHaveTextContent(/Model source|Workspace|Runtime/u);
+    });
+  });
+
+  // #3873 review: during a provider outage the run's gateway retries for minutes, and the status
+  // line read "Waiting for the model" for the whole window — the same as a slow generation. The
+  // gateway facts the sidecar route publishes to the run's events name the phase.
+  describe("a model gateway that is unavailable and being retried", () => {
+    function gatewayFact(
+      sequence: number,
+      eventKind: "model-gateway-retrying" | "model-gateway-recovered",
+    ): CodingWorkbenchRuntimeSseEvent {
+      return {
+        schemaVersion: "1",
+        cursor: `cursor-${String(sequence)}`,
+        sequence,
+        occurredAt: AT,
+        kind: "runtime-event",
+        runId: "run-1",
+        state: "running",
+        revision: 4,
+        eventKind,
+      };
+    }
+
+    function renderRunning(events: readonly CodingWorkbenchRuntimeSseEvent[]): void {
+      renderWorkbench(
+        liveState({
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({ state: "running", runId: "run-1", revision: 4 }),
+          },
+          events,
+        }),
+      );
+    }
+
+    it("says so in the run status instead of waiting for the model", (): void => {
+      renderRunning([gatewayFact(1, "model-gateway-retrying")]);
+
+      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(
+        "Model gateway unavailable, retrying",
+      );
+      expect(screen.getByTestId("coding-runtime-phase")).not.toHaveTextContent(
+        "Waiting for the model",
+      );
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+        /^Running\. Revision 4\.$/u,
+      );
+    });
+
+    it("waits for the model again once the gateway answered", (): void => {
+      renderRunning([
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-recovered"),
+      ]);
+
+      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
+    });
+
+    it("lists the facts among the run's details, apart from attention-grade failures", async (): Promise<void> => {
+      renderRunning([
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-recovered"),
+      ]);
+
+      expect(document.querySelector('[data-event-tone="attention"]')).toBeNull();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Run details" }));
+      const rows = screen.getByRole("list", { name: "Coding run event timeline" });
+      expect(rows).toHaveTextContent("Model gateway unavailable, retrying");
+      expect(rows).toHaveTextContent("Model gateway answered again");
+    });
+  });
+
   /**
    * ADR-0163 D9 / audit F-01. An unverified evaluation runtime must never render as plain green:
    * not in the idle pill's label, not in the run-state pill's colour, and not by silence in the
@@ -2894,9 +3051,16 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(
-      screen.getByText("Authentication setup plan unavailable.", { exact: false }),
-    ).toBeInTheDocument();
+    // #3873 review: an unavailable part is announced by the polite, atomic run status itself, and
+    // the readiness details keep the complete list.
+    const announcement = screen.getByTestId("coding-runtime-announcement");
+    expect(announcement).toHaveTextContent("Authentication setup plan unavailable.");
+    expect(announcement).toHaveAttribute("role", "status");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+    expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
+      "Authentication setup plan unavailable.",
+    );
   });
 
   it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", async () => {
@@ -4045,5 +4209,79 @@ describe("sessionGrowthKey", () => {
     expect(new Set(keys).size).toBe(3);
     expect(sessionGrowthKey(4, streamingFeed("Hello"), 0)).toBe(keys[1]);
     expect(sessionGrowthKey(4, null, 0)).toBe("4::0:0");
+  });
+});
+
+// #3873 review: `streaming` removes code highlighting and the Copy button, and the Workbench used
+// to hand it to every message of an active run, so an answer that was finished lost both for as
+// long as the operator took to decide. Only a run whose model may still produce text is generating.
+describe("CodingWorkbenchWindow finished answers", () => {
+  function codeAnswerFeed(): AvailableCodingSafeActivityFeed {
+    return {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-1",
+      updatedAt: AT,
+      turns: [
+        {
+          turnId: "turn-code",
+          messages: [
+            {
+              messageId: "message-code",
+              role: "assistant",
+              occurredAt: AT,
+              segments: [{ kind: "text", text: "Run:\n\n```sh\nnpm test\n```", truncated: false }],
+              truncated: false,
+            },
+          ],
+          tools: [],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+  }
+
+  function renderRunInState(state: CodingWorkbenchRuntimeStateName): void {
+    activityHookMock.mockReturnValue({
+      status: "live",
+      feed: codeAnswerFeed(),
+      errorCode: null,
+      retry: vi.fn(),
+    } satisfies UseCodingWorkbenchSafeActivityResult);
+    renderWorkbench(
+      liveState({
+        run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+      }),
+    );
+  }
+
+  function copyButtons(): readonly HTMLElement[] {
+    return within(screen.getByRole("list", { name: "Coding run event timeline" })).queryAllByRole(
+      "button",
+      { name: "Copy code block" },
+    );
+  }
+
+  it.each(["awaiting-approval", "paused", "stopping"] as const)(
+    "keeps Copy on a finished answer while the run is %s",
+    (state) => {
+      renderRunInState(state);
+      expect(copyButtons()).toHaveLength(1);
+    },
+  );
+
+  it.each(["running", "starting"] as const)(
+    "withholds Copy from an answer the %s run may still be streaming",
+    (state) => {
+      renderRunInState(state);
+      expect(copyButtons()).toHaveLength(0);
+    },
+  );
+
+  it("keeps Copy on the answer of a settled run", () => {
+    renderRunInState("succeeded");
+    expect(copyButtons()).toHaveLength(1);
   });
 });

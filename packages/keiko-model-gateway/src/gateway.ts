@@ -47,7 +47,9 @@ import {
   callOutageWindowMs,
   CircuitBreaker,
   type CircuitBreakerAdmission,
+  type GatewayRetryObserver,
   type RetryConfig,
+  type RetryLogContext,
   type RetryPolicy,
   type RetryRepairReason,
   type RetryResume,
@@ -178,6 +180,15 @@ export interface GatewayCallRequest extends GatewayRequest {
    * answer at once and never makes a hidden second generation.
    */
   readonly answerRepair?: "steered" | undefined;
+  /**
+   * Hears the call's retries (#3873 review); local, never serialized into a provider request. It is
+   * told when a failure that says the provider is unavailable is met with a scheduled retry, and
+   * when a call it heard retry settles, so a caller that surfaces an outage to its operator (the
+   * coding sidecar route, behind the Workbench's run status) knows the call is being retried
+   * instead of silently waiting. Counts and a closed policy only. The observer runs inside the
+   * retry loop and MUST NOT throw. Only the coding sidecar route sets it.
+   */
+  readonly retryObserver?: GatewayRetryObserver | undefined;
 }
 
 // The two ids a single gateway call carries.
@@ -1287,6 +1298,21 @@ export class Gateway {
     );
   }
 
+  // What the retry loop labels its lines with, and the call's own ear on the loop: the caller's
+  // `retryObserver` (#3873 review), which only the coding sidecar route sets.
+  private retryLogContext(
+    route: RoutedCall,
+    ids: CallIds,
+    request: GatewayCallRequest,
+  ): RetryLogContext {
+    return {
+      sink: this.log,
+      modelId: route.provider.modelId,
+      correlationId: ids.correlationId,
+      observer: request.retryObserver,
+    };
+  }
+
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
     const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
@@ -1312,7 +1338,7 @@ export class Gateway {
         this.clock,
         request.cancellationSignal,
         this.random,
-        { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
+        this.retryLogContext(route, ids, request),
       );
     } catch (error) {
       attachOutputRepair(error, attempt.state);
@@ -1924,7 +1950,7 @@ export class Gateway {
       this.clock,
       request.cancellationSignal,
       this.random,
-      { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
+      this.retryLogContext(route, ids, request),
       resume,
     );
   }

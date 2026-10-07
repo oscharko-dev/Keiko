@@ -623,12 +623,42 @@ async function sleepWithCancellation(
   assertNotAborted(signal);
 }
 
+/**
+ * What a call's retry loop tells the caller that asked to hear it (#3873 review): a failure that
+ * says the provider is unavailable — a timeout, a refused connection, a retryable 5xx, a rate
+ * limit — was met with a scheduled retry, or a call that had been retried settled. The retries a
+ * steered repair or a schema correction grant answer the model's own output, not an unavailable
+ * provider, and are never announced. Counts and a closed policy only — no provider text, no
+ * content. Local: never serialized into a provider request.
+ */
+export type GatewayRetryNotice =
+  | {
+      readonly kind: "scheduled";
+      /** The failed provider attempt this retry follows, counted from 1. */
+      readonly attempt: number;
+      readonly retryPolicy: RetryPolicy;
+    }
+  | {
+      /** Told only to a call that was retried before: it was answered, or it failed for good. */
+      readonly kind: "settled";
+      readonly outcome: "answered" | "failed";
+    };
+
+/**
+ * Runs inside the retry loop, synchronously, so it MUST NOT throw: it owns and logs its own
+ * failures (the same contract as `GatewayDeps.onContextWindowReported`).
+ */
+export type GatewayRetryObserver = (notice: GatewayRetryNotice) => void;
+
 // What the retry loop needs in order to LABEL its lines. Optional in full: an unwired caller
-// keeps the exact behaviour it had before instrumentation, down to the allocation count.
+// keeps the exact behaviour it had before instrumentation, down to the allocation count. The
+// observer is the one member that is not a label: the caller's own ear on the loop, set only by a
+// caller that surfaces an outage to its operator (the coding sidecar route).
 export interface RetryLogContext {
   readonly sink?: ModelGatewayLogSink | undefined;
   readonly modelId?: string | undefined;
   readonly correlationId?: string | undefined;
+  readonly observer?: GatewayRetryObserver | undefined;
 }
 
 function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string }> {
@@ -817,6 +847,8 @@ interface RetryState {
   // Steered repairs granted so far (#3873, F17): at most one per call. They sit on top of the
   // provider attempts, so `attempt - repairs` is what the attempt count and the backoff ladder see.
   repairs: number;
+  // Provider retries scheduled so far — the ones the call's observer was told about (#3873 review).
+  providerRetries: number;
   lastError: Error | undefined;
 }
 
@@ -883,8 +915,32 @@ async function recordFailedAttempt<T>(
   }
   if (decision.repair !== undefined) state.repairs += 1;
   logRetryScheduled(failureLog, decision);
+  announceProviderRetry(state, error, decision.repair, failureLog.retryPolicy);
   await sleepWithCancellation(clock, decision.sleepMs, signal);
   return { done: false };
+}
+
+// Tells the call's observer that a provider that says it is unavailable is being retried. A
+// steered repair or a schema correction answers the model's own output (`isNonProviderFault`), so
+// the provider was not unavailable and nothing is announced.
+function announceProviderRetry(
+  state: RetryState,
+  error: Error,
+  repair: RetryRepairReason | undefined,
+  retryPolicy: RetryPolicy,
+): void {
+  if (repair !== undefined || isNonProviderFault(error)) return;
+  state.providerRetries += 1;
+  state.context.observer?.({
+    kind: "scheduled",
+    attempt: state.attempt - state.repairs,
+    retryPolicy,
+  });
+}
+
+// Tells the observer that a call it heard retry has ended; a call that never retried stays silent.
+function announceSettled(state: RetryState, outcome: "answered" | "failed"): void {
+  if (state.providerRetries > 0) state.context.observer?.({ kind: "settled", outcome });
 }
 
 // The admission wait of one attempt: the call's remaining budget, clipped by what is left of a
@@ -925,18 +981,25 @@ export function executeWithRetry<T>(
       start: clock.now(),
       attempt: resume?.attempts ?? 1,
       repairs: resume?.repairs ?? 0,
+      providerRetries: 0,
       lastError: undefined,
+    };
+    const fail = (error: unknown): void => {
+      announceSettled(state, "failed");
+      reject(asError(error));
     };
     const advance = (): void => {
       // Return no successor promise: completed attempts are released rather than retained in a
       // recursive promise chain. Only the current provider attempt or its backoff is pending.
       void executeRetryAttempt(operation, state).then((result) => {
-        if (result.done) resolve(result.value);
-        else {
+        if (result.done) {
+          announceSettled(state, "answered");
+          resolve(result.value);
+        } else {
           state.attempt += 1;
           advance();
         }
-      }, reject);
+      }, fail);
     };
     if (resume === undefined) {
       advance();
@@ -948,7 +1011,7 @@ export function executeWithRetry<T>(
     void recordFailedAttempt(state, resume.failedAttempt).then(() => {
       state.attempt += 1;
       advance();
-    }, reject);
+    }, fail);
   });
 }
 

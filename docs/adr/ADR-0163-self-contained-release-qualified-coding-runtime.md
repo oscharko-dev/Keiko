@@ -435,6 +435,12 @@ it as plain green. This is the class audit finding F-01 closed, and it must not 
 Since #3873 the run status's live region announces the run's own state and revision first, and the
 readiness facts — this one included — sit in its collapsed readiness details, which assistive
 technology can open; the details never state a plain "Runtime ready." for an evaluation runtime.
+The facts that say a part of the Workbench is missing or failing (an unpaired window, an
+unavailable or failed model source, workspace, runtime or authentication) are the exception: they
+follow the run's own sentence inside the same polite, atomic live region — visible text, and
+announced by the setup layout's screen-reader-only copy of that sentence as well — so an
+unavailable runtime is never announced to no one. Moving every fact into the collapsed details had
+done exactly that; an evaluation runtime is not such a fact and stays in the details alone.
 
 ## Consequences
 

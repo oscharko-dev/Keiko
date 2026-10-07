@@ -2354,6 +2354,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-sidecar-gateway-retry",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-sidecar.gateway.retry-surfaced"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-sidecar.gateway.retry-surfaced"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-sidecar.gateway.retry-surfaced"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-sidecar.gateway.retry-surfaced"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-sidecar-gateway-request",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

@@ -24,6 +24,8 @@ import {
   type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
+  type GatewayRetryNotice,
+  type GatewayRetryObserver,
   type GatewayStreamChunk,
   type NormalizedToolCall,
   type NormalizedResponse,
@@ -560,6 +562,68 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
   analyzerProjection: "failure-cluster",
   failureClasses: ["coding-sidecar-gateway-turn-failure"],
   proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #3873 review: while the gateway rides out a provider outage the turn waits silently, and the
+// Workbench's run status read "Waiting for the model" for the whole window. The first retry of an
+// unavailable provider is published to the run's event replay as `model-gateway-retrying`, and the
+// answer that ends the outage as `model-gateway-recovered`; this line records each publication and
+// whether it reached the replay, so the status the operator saw can be rebuilt from the log. Counts
+// and closed words only: the attempt that was retried and the policy it ran under.
+const CODING_SIDECAR_GATEWAY_RETRY_SURFACED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.retry-surfaced",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.surfaceGatewayRetry",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["running", "paused"],
+    },
+    fact: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["retrying", "recovered"],
+    },
+    // The failed provider attempt the first retry followed, and the policy it ran under; both only
+    // on a `retrying` fact.
+    attempt: { type: "integer", dataClass: "count", required: false },
+    retryPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["attempts", "outage-window"],
+    },
+    published: { type: "boolean", dataClass: "closed-enum", required: true },
+    publicationReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "published",
+        "event-hub-unavailable",
+        "terminal-run",
+        "invalid-event",
+        "sequence-exhausted",
+        "capacity-pressure",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-retry"],
+  proofIds: ["coding-sidecar.gateway.retry-surfaced.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -1949,6 +2013,109 @@ function gatewayTurnFailurePublication(
   return publicationReason;
 }
 
+// The coding turn's ear on the gateway's retry loop (#3873 review): the first retry of an
+// unavailable provider is surfaced as `model-gateway-retrying`, and the answer that ends the outage
+// as `model-gateway-recovered`. One frame per outage of a call, however many retries it takes; a
+// call that fails for good surfaces nothing here, its turn-failure frame follows. The observer runs
+// inside the gateway's retry loop and must not throw, so a failure is recorded, never raised.
+function gatewayRetryObserver(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+): GatewayRetryObserver {
+  let retrying = false;
+  return (notice): void => {
+    try {
+      if (notice.kind === "scheduled") {
+        if (!retrying) surfaceGatewayRetry(ctx, deps, runId, "retrying", notice);
+        retrying = true;
+        return;
+      }
+      if (retrying && notice.outcome === "answered") {
+        surfaceGatewayRetry(ctx, deps, runId, "recovered");
+      }
+      retrying = false;
+    } catch (error) {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          ...gatewayDiagnosticCorrelation(ctx, runId),
+          operation: CODING_SIDECAR_GATEWAY_ROUTE,
+          source: "coding-sidecar-gateway.retry-observer",
+          error,
+          redact: (message) => String(deps.redactor(message)),
+        }),
+      );
+    }
+  };
+}
+
+type GatewayRetryFact = "retrying" | "recovered";
+
+interface LiveRunSnapshot {
+  readonly state: "running" | "paused";
+  readonly revision: number;
+}
+
+// The run's state while it can still show a status: running or paused. Any other run (stopping,
+// settled, unknown) has none, and the gateway's own retry line is its record.
+function liveRunSnapshot(deps: UiHandlerDeps, runId: string): LiveRunSnapshot | undefined {
+  const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
+  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return undefined;
+  return { state: snapshot.state, revision: snapshot.revision };
+}
+
+function publishGatewayRetryFact(
+  deps: UiHandlerDeps,
+  runId: string,
+  run: LiveRunSnapshot,
+  fact: GatewayRetryFact,
+): GatewayFailurePublicationReason {
+  const publication = deps.codingRuntimeEventHub?.publishModelGatewayFact(
+    runId,
+    run.state,
+    run.revision,
+    fact === "retrying" ? "model-gateway-retrying" : "model-gateway-recovered",
+  );
+  return publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");
+}
+
+// Publishes the fact to the run's event replay and records the publication.
+function surfaceGatewayRetry(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  fact: GatewayRetryFact,
+  scheduled?: Extract<GatewayRetryNotice, { readonly kind: "scheduled" }>,
+): void {
+  const run = liveRunSnapshot(deps, runId);
+  if (run === undefined) return;
+  const publicationReason = publishGatewayRetryFact(deps, runId, run, fact);
+  const published = publicationReason === "published";
+  const event = activityLogEvent(
+    CODING_SIDECAR_GATEWAY_RETRY_SURFACED_OPERATION,
+    {
+      ...gatewayDiagnosticCorrelation(ctx, runId),
+      ...(published ? {} : { errorKind: "unavailable" as const }),
+    },
+    {
+      runId,
+      revision: run.revision,
+      state: run.state,
+      fact,
+      ...(scheduled === undefined
+        ? {}
+        : { attempt: scheduled.attempt, retryPolicy: scheduled.retryPolicy }),
+      published,
+      publicationReason,
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+  if (published) getServerLogger().info(event);
+  else getServerLogger().warn(event);
+}
+
 function logGatewayTurnFailure(
   ctx: RouteContext,
   runId: string,
@@ -2702,16 +2869,20 @@ function requestForGatewayDelivery(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   delivery: GatewayChatDelivery,
   signal: AbortSignal,
+  retryObserver: GatewayRetryObserver,
 ): GatewayCallRequest {
-  return buildChatRequest(
-    parsed,
-    delivery.modelAlias,
-    signal,
-    delivery.maxOutputTokens,
-    ctx.correlationId,
-    delivery.reasoningEffort,
-    { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
-  );
+  return {
+    ...buildChatRequest(
+      parsed,
+      delivery.modelAlias,
+      signal,
+      delivery.maxOutputTokens,
+      ctx.correlationId,
+      delivery.reasoningEffort,
+      { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
+    ),
+    retryObserver,
+  };
 }
 
 async function executeGatewayChat(
@@ -2747,7 +2918,13 @@ async function dispatchGatewayChat(
   cancellation: GatewayRequestCancellation,
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
-  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
+  const request = requestForGatewayDelivery(
+    ctx,
+    parsed,
+    delivery,
+    cancellation.signal,
+    gatewayRetryObserver(ctx, deps, runId),
+  );
   const dispatch = {
     deps,
     binding,

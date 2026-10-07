@@ -17,6 +17,7 @@ import {
   providerRequestBudgetMs,
   providerRetryConfig,
   steeredAnswerRepair,
+  type GatewayRetryNotice,
 } from "./resilience.js";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
@@ -1273,5 +1274,194 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
       attempt: 4,
       reason: "terminal",
     });
+  });
+});
+
+// #3873 review: a coding turn rides out a provider outage for minutes, and the Workbench's run
+// status read "Waiting for the model" for the whole window. The call's observer hears every retry
+// of a provider that says it is unavailable, and the end of a call it heard retry — so the caller
+// can tell an outage being ridden out from a slow generation. It hears nothing else.
+describe("executeWithRetry — retry observer (#3873 review)", () => {
+  function observed(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly context: { readonly observer: (notice: GatewayRetryNotice) => void };
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return {
+      notices,
+      context: { observer: (notice: GatewayRetryNotice): void => void notices.push(notice) },
+    };
+  }
+
+  it("announces each scheduled provider retry with its attempt and policy, then the answer", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls < 3 ? Promise.reject(new TransportError("refused")) : Promise.resolve("ok");
+      },
+      { maxRetries: 3, retryBaseDelayMs: 500 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(value).toBe("ok");
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "scheduled", attempt: 2, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("names the outage-window policy a retry ran under", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1 ? Promise.reject(new TimeoutError("silent")) : Promise.resolve("ok");
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(notices[0]).toEqual({ kind: "scheduled", attempt: 1, retryPolicy: "outage-window" });
+  });
+
+  it("announces a call that gave up after its retries as failed", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    await expect(
+      executeWithRetry(
+        () => Promise.reject(new RateLimitError("overloaded")),
+        { maxRetries: 2, retryBaseDelayMs: 500 },
+        clock,
+        undefined,
+        () => 0.5,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "scheduled", attempt: 2, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+
+  it("stays silent for a call that was never retried, answered or failed", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    await executeWithRetry(
+      () => Promise.resolve("ok"),
+      RETRY_CONFIG,
+      clock,
+      undefined,
+      undefined,
+      context,
+    );
+    await expect(
+      executeWithRetry(
+        () => Promise.reject(new AuthenticationError("nope")),
+        RETRY_CONFIG,
+        clock,
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(notices).toEqual([]);
+  });
+
+  // The model's own output is not an unavailable provider: a steered repair or a schema correction
+  // is the provider answering, so the Workbench must not say the gateway is down.
+  it("does not announce the retry a steered repair or a model-output failure gets", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new ProviderOutputExhaustedError("m"))
+          : Promise.resolve("repaired");
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(value).toBe("repaired");
+    expect(notices).toEqual([]);
+  });
+
+  it("announces a retry after a repair as the provider attempt it follows", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    const failures = [new ProviderOutputExhaustedError("m"), new TransportError("reset")];
+    let index = 0;
+    await executeWithRetry(
+      () => {
+        const failure = failures[index];
+        index += 1;
+        return failure === undefined ? Promise.resolve("ok") : Promise.reject(failure);
+      },
+      { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("announces the retry a resumed stream grants its failed first attempt", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    await executeWithRetry(
+      () => Promise.resolve("ok"),
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+      { failedAttempt: new TransportError("reset after reasoning"), attempts: 1, repairs: 0 },
+    );
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("announces a cancellation during the backoff as the call failing", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    const controller = new AbortController();
+    await expect(
+      executeWithRetry(
+        () => {
+          controller.abort();
+          return Promise.reject(new TransportError("refused"));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500 },
+        clock,
+        controller.signal,
+        () => 0.5,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "failed" },
+    ]);
   });
 });

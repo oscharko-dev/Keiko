@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5cc824d68f2459f89fb20d18d9b8f359f71620854728254b20a7ef0cee4944de"
+    "catalogDigest": "08fc652733cded3cf2b3dda8831d974e745e030bf7eb1fb6d2b55c15addfb657"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 523,
-    "proofCount": 530,
-    "resolvedProofCount": 530,
-    "failureClassCount": 337,
+    "operationCount": 524,
+    "proofCount": 531,
+    "resolvedProofCount": 531,
+    "failureClassCount": 338,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -349,6 +349,7 @@
         "coding-sidecar.gateway.readiness-insufficient",
         "coding-sidecar.gateway.rejected",
         "coding-sidecar.gateway.request-validated",
+        "coding-sidecar.gateway.retry-surfaced",
         "coding-sidecar.gateway.tool-availability",
         "coding-sidecar.gateway.turn-failed",
         "coding-sidecar.gateway.usage-settled",
@@ -779,6 +780,7 @@
     "coding-sidecar-gateway-readiness": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-rejection": ["tools-workflows.rejection"],
     "coding-sidecar-gateway-turn-failure": ["tools-workflows.dependency-failure"],
+    "coding-sidecar-gateway-retry": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-request": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-availability": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-facade-rejection": ["tools-workflows.rejection"],
@@ -1446,6 +1448,9 @@
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.request-validated.line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
+    "coding-sidecar.gateway.retry-surfaced.emitted-line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.tool-availability.line": [

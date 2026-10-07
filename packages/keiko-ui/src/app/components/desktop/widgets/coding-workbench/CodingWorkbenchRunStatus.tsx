@@ -133,7 +133,11 @@ export interface CodingWorkbenchRunStatusProps {
  * The run status line (#3873 live review). The run's own state, how long it has been running, its
  * revision and, when known, its current phase come first; the technical readiness facts that used
  * to lead the status region sit in a collapsed disclosure an assistive technology can still open.
- * Only the state sentence is a live region: the elapsed time is a timer, which ticks silently.
+ * The exceptions are the facts that say a part of the Workbench is missing or failing (an
+ * unavailable runtime, an unpaired window — `readinessAttentionFacts`): they follow the run
+ * sentence inside the live region, so they are announced and visible without opening anything
+ * (#3873 review). Only the state sentence is a live region: the elapsed time is a timer, which
+ * ticks silently.
  */
 export function CodingWorkbenchRunStatus({
   state,

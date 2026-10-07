@@ -171,6 +171,10 @@ export { type ModelGatewayLogContext } from "./observability.js";
 // carry, instead of re-deriving it from the error a second time.
 export { providerErrorDetail, type ProviderErrorDetail } from "./resilience.js";
 
+// What a call's retry loop tells a caller that asked to hear it (`GatewayCallRequest.retryObserver`,
+// #3873 review): a retry of an unavailable provider was scheduled, or a retried call settled.
+export type { GatewayRetryNotice, GatewayRetryObserver } from "./resilience.js";
+
 // Fetch-seam and Clock replay doubles (ADR-0173 D5, §7.3): deterministic reconstruction of a
 // gateway call's retry/circuit-breaker behaviour from a scripted HTTP transcript, one layer below
 // `createScriptedModelPort` (`@oscharko-dev/keiko-evaluations`).

@@ -133,6 +133,17 @@ and breaker lines `gateway.retry.scheduled`, `gateway.retry.exhausted` and `gate
 carry the applied policy as the closed field `retryPolicy` (`attempts` or `outage-window`), so the
 Activity Log tells a deliberate outage window from a retry loop that ignored its attempt count.
 
+A caller that surfaces an outage to its operator hears the retry loop through the explicit,
+local `GatewayCallRequest.retryObserver` (#3873 review; never serialized into a provider request;
+only the coding sidecar route sets it). The observer is told when a failure that says the provider
+is unavailable (`isNonProviderFault` is false) is met with a scheduled retry — the failed provider
+attempt and the applied `retryPolicy` — and when a call it heard retry settles, `answered` or
+`failed`. The retries of a steered repair or a schema correction answer the model's own output and
+are never announced, and a call that was never retried stays silent. The observer runs inside the
+retry loop and must not throw; it owns and logs its own failures. The route turns these notices
+into the two body-free gateway facts of ADR-0137 D9, which name the Workbench's run phase while a
+provider outage is ridden out.
+
 ### D7 — Secret redaction at the boundary
 
 A `redact()` helper in `src/gateway/redaction.ts` strips known secret patterns (API keys, bearer

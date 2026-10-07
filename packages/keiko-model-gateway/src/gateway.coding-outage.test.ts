@@ -11,6 +11,8 @@ import {
   bufferedCallBudgetMs,
   codingWorkbenchProviderTimeoutMs,
   GATEWAY_CODING_OUTAGE_WINDOW_MS,
+  type GatewayRetryNotice,
+  type GatewayRetryObserver,
 } from "./resilience.js";
 import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import type {
@@ -720,5 +722,93 @@ describe("coding-workbench outage tolerance (streamed)", () => {
     });
     releaseProbe?.();
     await expect(holder).resolves.toBe("Synthetic answer");
+  });
+});
+
+// #3873 review: the run status read "Waiting for the model" for the whole outage window, because
+// nothing told the caller that the gateway was being retried. A coding turn's `retryObserver` hears
+// each retry of the unavailable provider and the end of the call, buffered and streamed alike.
+describe("coding-workbench retry observer", () => {
+  function listening(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly retryObserver: GatewayRetryObserver;
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return { notices, retryObserver: (notice) => void notices.push(notice) };
+  }
+
+  it("tells a buffered coding turn's observer about each retry and then the answer", async () => {
+    const { notices, retryObserver } = listening();
+    const provider = recoveringProvider(3);
+
+    await gatewayFor(provider.call, simulatedClock()).chat({
+      ...request("coding-turn"),
+      retryObserver,
+    });
+
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "outage-window" },
+      { kind: "scheduled", attempt: 2, retryPolicy: "outage-window" },
+      { kind: "scheduled", attempt: 3, retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("tells a streamed coding turn's observer about each retry and the opened stream", async () => {
+    const { notices, retryObserver } = listening();
+    const provider = recoveringStream(2, REFUSED);
+
+    const content = await streamedContent(
+      streamingGatewayFor(provider.callStream, simulatedClock()).chatStream({
+        ...request("coding-turn"),
+        retryObserver,
+      }),
+    );
+
+    expect(content).toBe("Synthetic answer");
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "outage-window" },
+      { kind: "scheduled", attempt: 2, retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("tells the observer that a coding turn which outlived its window failed", async () => {
+    const { notices, retryObserver } = listening();
+    const provider = recoveringProvider(Number.POSITIVE_INFINITY);
+
+    await expect(
+      gatewayFor(provider.call, simulatedClock()).chat({
+        ...request("coding-turn"),
+        retryObserver,
+      }),
+    ).rejects.toBeInstanceOf(ProviderError);
+
+    expect(notices.at(-1)).toEqual({ kind: "settled", outcome: "failed" });
+    expect(notices.filter((notice) => notice.kind === "scheduled").length).toBeGreaterThan(1);
+  });
+
+  it("names the policy of a call that does not ride out outages", async () => {
+    const { notices, retryObserver } = listening();
+    const provider = recoveringProvider(1);
+
+    await gatewayFor(provider.call, simulatedClock()).chat({
+      ...request("interactive"),
+      retryObserver,
+    });
+
+    expect(notices[0]).toEqual({ kind: "scheduled", attempt: 1, retryPolicy: "attempts" });
+  });
+
+  it("is silent for a call that is answered at once and for a request without an observer", async () => {
+    const { notices, retryObserver } = listening();
+
+    await gatewayFor(recoveringProvider(0).call, simulatedClock()).chat({
+      ...request("coding-turn"),
+      retryObserver,
+    });
+    await gatewayFor(recoveringProvider(2).call, simulatedClock()).chat(request("coding-turn"));
+
+    expect(notices).toEqual([]);
   });
 });

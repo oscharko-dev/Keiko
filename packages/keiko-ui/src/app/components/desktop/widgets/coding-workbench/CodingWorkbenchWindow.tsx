@@ -156,6 +156,7 @@ import {
   activeRunState,
   changesetDeliveryAlert,
   cx,
+  generatingRunState,
   modeLabel,
   modelSourceLabel,
   startBlockedReason,
@@ -1494,6 +1495,7 @@ function WorkbenchColumns({
       phase={runPhase({
         snapshot: state.run.value,
         feed: activity.feed,
+        events: state.events,
         pendingDecision: questions.questions.length > 0 || editorBridge.pendingReview !== null,
       })}
     />
@@ -1577,6 +1579,7 @@ function WorkbenchColumns({
           />
           <Timeline
             active={runIsActive}
+            generating={generatingRunState(state.run.value?.state)}
             events={timeline.events}
             activity={timeline.activity}
             questions={questions}

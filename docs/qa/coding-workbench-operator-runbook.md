@@ -98,8 +98,10 @@ slow self-hosted model reached 200,000 cumulative tokens in 17 turns and 27.5 mi
 refused edit.
 
 Two operator settings bound every newly minted envelope. Set them before starting the server; both
-are read once when the coding runtime is composed, before it activates, and an invalid value stops
-that composition with a `RangeError` instead of minting a silently defaulted envelope (fail closed):
+are read once when the coding runtime is composed, before it activates, so a running Keiko keeps its
+old value until it is restarted (the Workbench's limit messages say so, and name the maximum below).
+An invalid value, or one above the maximum, stops that composition with a `RangeError` instead of
+minting a silently defaulted envelope (fail closed):
 
 | Setting                                     | Meaning                                            | Default   | Accepted values                       |
 | ------------------------------------------- | -------------------------------------------------- | --------- | ------------------------------------- |

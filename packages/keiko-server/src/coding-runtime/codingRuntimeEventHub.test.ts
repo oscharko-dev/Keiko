@@ -82,6 +82,84 @@ describe("CodingRuntimeEventHub model-call failure fact", () => {
   });
 });
 
+// #3873 review: the Workbench's run status could not say that the model gateway was unavailable and
+// being retried. The two gateway facts are ordinary frames of the run's replay.
+describe("CodingRuntimeEventHub model gateway facts", () => {
+  it("publishes a retrying and a recovered frame that replay in order, carrying nothing else", () => {
+    const hub = new CodingRuntimeEventHub();
+    expect(
+      hub.publishModelGatewayFact("run-a", "running", 3, "model-gateway-retrying"),
+    ).toMatchObject({
+      ok: true,
+      event: { kind: "runtime-event", sequence: 0, state: "running", revision: 3 },
+    });
+    hub.publishModelGatewayFact("run-a", "running", 3, "model-gateway-recovered");
+    const replayed = hub.replay("run-a");
+    expect(
+      replayed.ok &&
+        replayed.events.map((event) => event.kind === "runtime-event" && event.eventKind),
+    ).toEqual(["model-gateway-retrying", "model-gateway-recovered"]);
+    for (const event of replayed.ok ? replayed.events : []) {
+      expect(Object.keys(event).sort()).toEqual([
+        "cursor",
+        "eventKind",
+        "kind",
+        "occurredAt",
+        "revision",
+        "runId",
+        "schemaVersion",
+        "sequence",
+        "state",
+      ]);
+    }
+  });
+
+  it("fans a gateway fact out to a connected subscriber", () => {
+    const hub = new CodingRuntimeEventHub();
+    const received: string[] = [];
+    hub.subscribe("run-a", undefined, {
+      write: (event) => {
+        if (event.kind === "runtime-event") received.push(event.eventKind);
+        return true;
+      },
+      close: () => undefined,
+    });
+    hub.publishModelGatewayFact("run-a", "running", 1, "model-gateway-retrying");
+    expect(received).toEqual(["model-gateway-retrying"]);
+  });
+
+  it("is no failure: it leaves the run's last model-call failure and its critical frames alone", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 3 });
+    hub.publishTurnFailure("run-a", "running", 1, "provider-failed");
+    hub.publishModelGatewayFact("run-a", "running", 1, "model-gateway-retrying");
+    expect(hub.lastModelCallFailure("run-a")).toBe("provider-failed");
+    // A burst of gateway facts evicts older ordinary frames, never the retained turn failure.
+    for (let index = 0; index < 6; index += 1) {
+      hub.publishModelGatewayFact("run-a", "running", 1, "model-gateway-retrying");
+    }
+    const kinds = (
+      hub.replay("run-a").ok
+        ? (hub.replay("run-a") as { events: readonly { kind: string; eventKind?: string }[] })
+            .events
+        : []
+    ).map((event) => event.eventKind);
+    expect(kinds).toContain("failure-redacted");
+    expect(hub.lastModelCallFailure("run-a")).toBe("provider-failed");
+  });
+
+  it("refuses a gateway fact for a settled run and for a run id the replay would refuse", () => {
+    const hub = new CodingRuntimeEventHub();
+    hub.publish(terminal("run-a", 4));
+    expect(hub.publishModelGatewayFact("run-a", "running", 5, "model-gateway-retrying")).toEqual({
+      ok: false,
+      reason: "terminal-run",
+    });
+    expect(hub.publishModelGatewayFact("../run", "running", 1, "model-gateway-retrying").ok).toBe(
+      false,
+    );
+  });
+});
+
 describe("CodingRuntimeEventHub", () => {
   it("retains every redacted gateway failure when separate turns share a task revision", () => {
     const hub = new CodingRuntimeEventHub({ maxEvents: 3 });

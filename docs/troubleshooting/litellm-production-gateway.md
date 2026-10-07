@@ -783,7 +783,10 @@ setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, 
 **Symptom**
 
 At peak load the LiteLLM gateway or the model server behind it answers 429 or 503, or stops
-answering, for a few minutes. A Workbench run keeps showing "Working" instead of failing.
+answering, for a few minutes. A Workbench run keeps working instead of failing: its status line
+reads "Model gateway unavailable, retrying" while the gateway is being retried, and returns to
+"Waiting for the model" once a call is answered again. With Run details open the timeline lists
+"Model gateway unavailable, retrying" and "Model gateway answered again".
 
 **Root Cause**
 
@@ -830,6 +833,12 @@ attempt count, within seconds, with `GIT_DELIVERY_COMMIT_DRAFT_FAILED`.
 (`reason`, `outcome`). A call that outlasted the window ends with `gateway.retry.exhausted reason=budget`, or, when the
 window ran out while it waited on an open breaker or a saturated probe slot, with
 `gateway.circuit.wait outcome=budget-refused`.
+
+The status line's phase is rebuilt from the run's `coding-sidecar.gateway.retry-surfaced` lines:
+`fact=retrying` (with the failed `attempt` and the `retryPolicy`) is one per outage of a call, and
+`fact=recovered` follows the answer that ends it. `published=false` with a `publicationReason`
+means the run's event replay refused the fact, so the status kept naming the model while the
+`gateway.retry.scheduled` lines show the outage.
 
 Each of these retry and wait lines names the policy it ran under in `retryPolicy`. `outage-window`
 is a coding turn riding out the outage, so retries beyond the provider's `maxRetries` are expected.

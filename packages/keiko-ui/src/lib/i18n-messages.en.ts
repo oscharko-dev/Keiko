@@ -325,6 +325,8 @@ export const EN_MESSAGES = {
   "activity.event.operatorDecisionExpired": "The decision window closed",
   "activity.event.operatorDecisionStopped": "The decision ended with the run",
   "activity.event.failureRedacted": "Runtime failure recorded",
+  "activity.event.modelGatewayRetrying": "Model gateway unavailable, retrying",
+  "activity.event.modelGatewayRecovered": "Model gateway answered again",
   "activity.kind.step": "Step",
   "activity.kind.approval": "Approval requested",
   "activity.kind.approved": "Approved",
