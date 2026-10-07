@@ -60,6 +60,16 @@ function startupDeps(
   return deps;
 }
 
+function startupModels(
+  deps: UiHandlerDeps,
+): NonNullable<ReturnType<typeof parseGatewayConfig>["capabilities"]> {
+  return deps.gatewayConfig?.current()?.capabilities ?? [];
+}
+
+function startupProviderIds(deps: UiHandlerDeps): readonly string[] {
+  return deps.gatewayConfig?.current()?.providers.map((provider) => provider.modelId) ?? [];
+}
+
 function discoveredCatalog(): {
   readonly modelIds: string[];
   readonly chatModelIds: string[];
@@ -135,9 +145,7 @@ it("discards an old catalog when the connection changes while discovery is in fl
   old.resolve({ modelIds: ["stale-chat"], chatModelIds: ["stale-chat"], embeddingModelIds: [] });
   await old.promise;
   await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(
-    deps.gatewayConfig?.current()?.providers.map((provider) => provider.modelId),
-  ).not.toContain("stale-chat");
+  expect(startupProviderIds(deps)).not.toContain("stale-chat");
   expect(deps.gatewayConfig?.current()?.providers[0]?.baseUrl).toBe(
     replacement.providers[0]?.baseUrl,
   );
@@ -190,7 +198,7 @@ it("reports background verification as pending while a fresh model has not prove
   }
 });
 
-it("discovers LiteLLM chat models and verifies tools at startup without opening a window", async () => {
+it("verifies configured LiteLLM models without adding or probing unselected discoveries", async () => {
   const discovery = vi.fn().mockResolvedValue({
     modelIds: ["chat-model", "new-chat"],
     chatModelIds: ["chat-model", "new-chat"],
@@ -227,15 +235,32 @@ it("discovers LiteLLM chat models and verifies tools at startup without opening 
   const config = startupConfig(32_000);
   deps.gatewayConfig?.set(config, true, "corr-startup-catalog");
   await vi.waitFor(() => {
-    expect(deps.gatewayConfig?.current()?.providers.map((provider) => provider.modelId)).toContain(
-      "new-chat",
-    );
-    expect(
-      deps.gatewayConfig?.current()?.capabilities?.find((model) => model.id === "new-chat")
-        ?.toolCalling,
-    ).toBe(true);
+    expect(startupProviderIds(deps)).toEqual(["chat-model"]);
+    expect(startupModels(deps).find((model) => model.id === "chat-model")?.toolCalling).toBe(true);
   });
   expect(discovery).toHaveBeenCalledTimes(1);
   expect(deps.gatewayConfig?.current()?.providers[0]?.baseUrl).toBe(config.providers[0]?.baseUrl);
-  expect(deps.gatewayConfig?.verifiedCapability("new-chat")?.fields.conversationReady).toBe(true);
+  expect(deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady).toBe(true);
+  expect(startupModels(deps)[0]?.contextWindow).toBe(32_000);
+});
+
+it("keeps a window refinement made while startup discovery is in flight", async () => {
+  stubReadyChat();
+  const pending = deferredValue<ReturnType<typeof discoveredCatalog>>();
+  const deps = startupDeps(() => pending.promise);
+  deps.gatewayConfig?.set(startupConfig(4096), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const current = deps.gatewayConfig?.current();
+  if (current === undefined) throw new TypeError("Expected gateway configuration.");
+  deps.gatewayConfig?.refine?.({
+    ...current,
+    capabilities: (current.capabilities ?? []).map((model) => ({
+      ...model,
+      contextWindow: 32_768,
+    })),
+  });
+  pending.resolve(discoveredCatalog());
+  await pending.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(startupModels(deps)[0]?.contextWindow).toBe(32_768);
 });

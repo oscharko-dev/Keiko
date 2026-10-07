@@ -2199,10 +2199,10 @@ export async function refreshLiteLlmGatewayCatalog(
     );
     signal.throwIfAborted();
     if (holder.generation() !== generation) return false;
-    const updated = refreshedLiteLlmCatalog(config, provider, normalizeDiscoveryResult(result));
-    if (updated.providers.length === config.providers.length)
-      holder.refine?.(updated, correlationId);
-    else holder.set(updated, true, correlationId);
+    const current = holder.current();
+    if (current === undefined) return false;
+    const updated = refreshedLiteLlmCatalog(current, provider, normalizeDiscoveryResult(result));
+    if (updated !== current) holder.refine?.(updated, correlationId);
     logSetupMetadataOutcome({ outcome: "available" }, trace, startedAt, correlationId);
     return true;
   } catch (cause) {
@@ -2252,38 +2252,21 @@ function refreshedLiteLlmCatalog(
   connection: ModelProviderConfig,
   discovery: SetupCandidateModels,
 ): GatewayConfig {
-  const providers = [...config.providers];
-  const capabilities = listConfiguredCapabilities(config).map((model) => {
-    const provider = providers.find((candidate) => candidate.modelId === model.id);
+  return listConfiguredCapabilities(config).reduce((updated, model) => {
+    const provider = config.providers.find((candidate) => candidate.modelId === model.id);
     const metadata = discovery.modelMetadata[model.id];
+    const window = metadata?.contextWindow;
     if (
+      model.kind !== "chat" ||
       provider === undefined ||
       !sharesStoredGatewayConnection(provider, connection) ||
-      metadata === undefined
+      window === undefined ||
+      !declaresContextWindow(metadata) ||
+      providerStatementLeavesWindow(model, window)
     )
-      return model;
-    const retained = refreshedSetupCapability(model, metadata) ?? model;
-    return withContextWindowProvenance(model, metadata, {
-      ...retained,
-      ...discoveredCapabilityFields(metadata),
-    });
-  });
-  for (const modelId of discovery.chatModelIds) {
-    if (
-      providers.length >= MAX_DISCOVERED_MODELS ||
-      providers.some((provider) => provider.modelId === modelId)
-    )
-      continue;
-    providers.push({ ...connection, modelId });
-    const metadata = discovery.modelMetadata[modelId];
-    capabilities.push(
-      withContextWindowProvenance(undefined, metadata, {
-        ...createDefaultChatCapability(modelId),
-        ...discoveredCapabilityFields(metadata),
-      }),
-    );
-  }
-  return { ...config, providers, capabilities };
+      return updated;
+    return replaceCapabilityContextWindow(updated, model, window);
+  }, config);
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {

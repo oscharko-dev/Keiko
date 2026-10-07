@@ -551,10 +551,27 @@ export async function defaultOpenExternal(
   platform: NodeJS.Platform,
   env: EnvSource,
 ): Promise<void> {
+  const { buildSandboxEnv } = await import("@oscharko-dev/keiko-tools");
   const opener = resolveExternalOpener(url, platform, env);
   const child = spawn(opener.command, [...opener.args], {
     detached: true,
     stdio: "ignore",
+    env: buildSandboxEnv(env, [
+      "PATH",
+      "HOME",
+      "USERPROFILE",
+      "SystemRoot",
+      "WINDIR",
+      "TEMP",
+      "TMP",
+      "DISPLAY",
+      "WAYLAND_DISPLAY",
+      "XAUTHORITY",
+      "XDG_RUNTIME_DIR",
+      "DBUS_SESSION_BUS_ADDRESS",
+      "LANG",
+      "LC_ALL",
+    ]),
   });
   await new Promise<void>((resolveSpawn, rejectSpawn) => {
     child.once("error", rejectSpawn);

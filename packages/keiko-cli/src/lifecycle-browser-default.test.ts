@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
@@ -15,16 +15,49 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import { KEIKO_START_SCRIPT } from "./init.js";
-import { runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
+import { defaultOpenExternal, runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
 import { createBrowserHandoffPoll } from "./ui-browser-handoff.js";
 import { KEIKO_UI_LAUNCH_ID_ENV, writeBrowserOpenRequest } from "./state-paths.js";
 
 const directories: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps launcher and provider secrets out of a cold browser process",
+  async () => {
+    const fixture = launchFixture();
+    const capture = join(fixture.root, "opener-env");
+    const probe = join(fixture.root, "probe.cjs");
+    writeFileSync(
+      probe,
+      `const fs = require("node:fs"); fs.writeFileSync(process.argv[2], JSON.stringify({ launcher: process.env.${CODING_APP_SESSION_LAUNCHER_SECRET_ENV} !== undefined, launchId: process.env.${KEIKO_UI_LAUNCH_ID_ENV} !== undefined, provider: process.env.KEIKO_DEFAULT_API_KEY !== undefined, path: process.env.PATH === process.argv[3] }));`,
+    );
+    writeFileSync(
+      join(fixture.root, "xdg-open"),
+      `#!/bin/sh\n'${process.execPath}' '${probe}' '${capture}' '${fixture.root}'\n`,
+      { mode: 0o700 },
+    );
+    vi.stubEnv("PATH", fixture.root);
+    vi.stubEnv(CODING_APP_SESSION_LAUNCHER_SECRET_ENV, "synthetic-launcher-secret");
+    vi.stubEnv(KEIKO_UI_LAUNCH_ID_ENV, "synthetic-launch-id");
+    vi.stubEnv("KEIKO_DEFAULT_API_KEY", "synthetic-provider-secret");
+    await defaultOpenExternal("http://127.0.0.1:1983", "linux", process.env);
+    await vi.waitFor(() => {
+      expect(existsSync(capture)).toBe(true);
+    });
+    expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual({
+      launcher: false,
+      launchId: false,
+      provider: false,
+      path: true,
+    });
+  },
+);
 
 function launchFixture(): {
   readonly root: string;

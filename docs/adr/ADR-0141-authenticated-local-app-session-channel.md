@@ -283,6 +283,9 @@ channel require a restart.
 The default also covers existing `keiko init` project scripts, whose plain `start` invocation must
 perform the authenticated browser hand-off without a script migration. The launcher preserves the
 project working directory, state directory, and gateway configuration environment during this hand-off.
+Platform browser openers receive only the allowlisted OS session environment. The launcher secret,
+launch identity, and provider credentials never enter the browser process tree.
+
 `cli.lifecycle.browser-handoff` records the headless/requested/delegated/failed outcome and whether the hand-off
 carried an attestation, without recording the URL, fragment, cookies, or secret.
 

@@ -65,8 +65,10 @@ Changed background catalogs notify the existing window bus, so an already open C
 refreshes its source and runtime posture without requiring Settings. This notification adopts the
 catalog already read; it neither invalidates the picker nor triggers a recursive catalog fetch.
 Recognized LiteLLM connections also reuse setup discovery at startup to refresh declared context
-limits and add newly discovered chat models with conservative capabilities. Existing connections,
-policy, and configured models are retained. A bounded serial queue verifies missing or expired
+limits for configured models. Startup never expands the operator's selected deployments or copies
+resolved credentials to another model. Context refinements use the current configuration and the
+existing monotonic window-adoption rule, preserving declared ceilings and concurrent refinements.
+Existing connections, policy, and configured models are retained. A bounded serial queue verifies missing or expired
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks retry after their one-minute
 cooldown. Catalog retries retain a connection-bound deadline across readiness refinements, so a
