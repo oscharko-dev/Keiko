@@ -2266,22 +2266,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["coding-runtime.verification"],
+      state: ["coding-runtime.run.verification-continuation", "coding-runtime.verification"],
       end: ["coding-runtime.verification-summarized"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "coding-runtime.run.verification-continuation",
       "coding-runtime.verification",
       "coding-runtime.verification-summarized",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "coding-runtime.run.verification-continuation",
       "coding-runtime.verification",
       "coding-runtime.verification-summarized",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "coding-runtime.run.verification-continuation",
       "coding-runtime.verification",
       "coding-runtime.verification-summarized",
     ],
@@ -2294,7 +2297,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "loss-state",
       "opaque-id",
     ],
-    requiredFrameOperations: ["coding-runtime.verification"],
+    requiredFrameOperations: [
+      "coding-runtime.run.verification-continuation",
+      "coding-runtime.verification",
+    ],
     requiredCauseOperations: ["coding-runtime.verification"],
   },
   {

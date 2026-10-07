@@ -412,6 +412,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
   ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
   ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+  ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
   ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
   ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
 ]);

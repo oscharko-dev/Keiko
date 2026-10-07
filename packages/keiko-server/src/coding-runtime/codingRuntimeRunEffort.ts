@@ -216,6 +216,8 @@ export function createCodingRuntimeRunEffortRegistry(
 
 interface OrchestratorEffortRecord {
   verificationCount: number;
+  verificationRequired: boolean;
+  verificationPassed: boolean;
   operatorDecisionCount: number;
   operatorWaitMs: number;
   waitingSinceMs: number | undefined;
@@ -251,9 +253,24 @@ export class CodingRuntimeRunEffortLedger {
     retained(this.runs, runId, newOrchestratorRecord, MAX_TRACKED_RUNS);
   }
 
-  verification(runId: string): void {
+  edit(runId: string): void {
     const run = this.runs.get(runId);
-    if (run !== undefined) run.verificationCount += 1;
+    if (run === undefined) return;
+    run.verificationRequired = true;
+    run.verificationPassed = false;
+  }
+
+  verification(runId: string, passed = false): void {
+    const run = this.runs.get(runId);
+    if (run === undefined) return;
+    run.verificationCount += 1;
+    run.verificationRequired = true;
+    run.verificationPassed = passed;
+  }
+
+  needsVerification(runId: string): boolean {
+    const run = this.runs.get(runId);
+    return run !== undefined && run.verificationRequired && !run.verificationPassed;
   }
 
   decision(runId: string): void {
@@ -300,6 +317,8 @@ export class CodingRuntimeRunEffortLedger {
 function newOrchestratorRecord(): OrchestratorEffortRecord {
   return {
     verificationCount: 0,
+    verificationRequired: false,
+    verificationPassed: false,
     operatorDecisionCount: 0,
     operatorWaitMs: 0,
     waitingSinceMs: undefined,

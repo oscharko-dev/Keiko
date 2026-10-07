@@ -1040,6 +1040,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Lauf wurde beendet, weil der Modellanbieter nicht erreichbar war oder aufgehört hat zu antworten – auch nachdem Keiko gewartet und es erneut versucht hat. Abgelehnt wurde nichts. Prüfe, ob das Modell-Gateway und sein Anbieter laufen, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich. Ein Betreiber kann die Wartezeit mit der Gateway-Einstellung codingOutageWindowMs verlängern.",
   "codingWorkbench.event.failure.model-turn-failed":
     "Der Lauf wurde beendet, weil sein letzter Modellschritt fehlgeschlagen ist – den Grund zeigt dieser Schritt oben. Behebe diesen Grund und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.failure.verification-not-evidenced":
+    "Die Aufgabe ist nicht verifiziert: Die Prüfungen sind fehlgeschlagen, wurden nicht ausgeführt oder fanden vor der letzten Änderung statt. Deine Änderungen bleiben im Aufgaben-Arbeitsbereich. Prüfe das letzte Verifikationsergebnis, behebe die Ursache und führe die passenden Prüfungen erneut aus, bevor die Aufgabe abgeschlossen wird.",
   "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",

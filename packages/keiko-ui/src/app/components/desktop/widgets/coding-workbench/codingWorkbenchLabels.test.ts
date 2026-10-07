@@ -283,6 +283,7 @@ describe("eventDetail auxiliary outcome", () => {
     ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
     ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
     ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+    ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
     ["runtime-failed", "codingWorkbench.event.failure.runtime"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });

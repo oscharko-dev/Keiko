@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "879d12bbe6dc52cd43b07b3de13d00272cd0d686abef2bef76f8ef2f1c1a47d0" as const;
+  "1003a1ca2bd4023e1ea3fe0b2e6eacb959e009c9791f832c4db96195d6988f1d" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -9684,12 +9684,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.verification"],
+        state: ["coding-runtime.run.verification-continuation", "coding-runtime.verification"],
         end: ["coding-runtime.verification-summarized"],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "coding-runtime.run.verification-continuation",
+          mode: "correlation",
+        },
         {
           op: "coding-runtime.verification",
           mode: "correlation",
@@ -9700,9 +9704,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.verification", "coding-runtime.verification-summarized"],
+      resourceSignals: [
+        "coding-runtime.run.verification-continuation",
+        "coding-runtime.verification",
+        "coding-runtime.verification-summarized",
+      ],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.run.verification-continuation",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "attempt",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "errorClass",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "max",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.run.verification-continuation.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.verification",
           owner: "keiko-server",
@@ -40038,6 +40107,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.run.settled": "tools-workflows",
     "coding-runtime.run.shutdown": "tools-workflows",
     "coding-runtime.run.started": "tools-workflows",
+    "coding-runtime.run.verification-continuation": "tools-workflows",
     "coding-runtime.safe-activity": "tools-workflows",
     "coding-runtime.sidecar-session.bound": "tools-workflows",
     "coding-runtime.skill-discovery": "tools-workflows",

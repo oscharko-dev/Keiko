@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 40;
+export const SCHEMA_VERSION = 41;
 
 interface Migration {
   readonly version: number;
@@ -1589,6 +1589,13 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// V41 (#3895): retain V40's complete table and indexes while admitting truthful verification
+// settlement. Reusing the frozen rebuild avoids a second copy of every column and CHECK.
+const V41_SQL = V40_SQL.replaceAll(
+  "coding_runtime_snapshots_v40",
+  "coding_runtime_snapshots_v41",
+).replace("'edit-retries-exhausted'))", "'edit-retries-exhausted','verification-not-evidenced'))");
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -1633,6 +1640,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 38, sql: V38_SQL },
   { version: 39, sql: V39_SQL },
   { version: 40, sql: V40_SQL },
+  { version: 41, sql: V41_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

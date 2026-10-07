@@ -153,6 +153,13 @@ evidence may still refuse a commit because the candidate is unstaged or has drif
 never reclassifies executed checks as unrun and never requires staging for ordinary coding work.
 Staging and fresh commit proof remain mandatory only for an accepted commit/delivery action.
 
+An applied edit invalidates the run's previous verification. An edited task, or a task whose
+verification failed or was partial, completes successfully only after a nonempty verification
+passes after the final edit. A model turn ending normally does not establish that proof. Up to two
+continuations use the existing task dispatcher and unchanged authority to inspect results, repair
+the diagnosed cause, and retest. A refused continuation or exhausted continuation budget settles
+`verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
+
 Runtime event contracts are content-free and closed. The shared event family includes:
 
 - runtime start/stop/health,

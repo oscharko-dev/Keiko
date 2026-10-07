@@ -1006,6 +1006,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The run ended because the model provider could not be reached or stopped answering, even after Keiko waited and retried. Nothing was rejected. Check that the model gateway and its provider are running, then start the task again; your changes so far stay in the task workspace. An operator can lengthen the wait with the gateway setting codingOutageWindowMs.",
   "codingWorkbench.event.failure.model-turn-failed":
     "The run ended because its last model step failed, for the reason shown on that step above. Address that reason, then start the task again; your changes so far stay in the task workspace.",
+  "codingWorkbench.event.failure.verification-not-evidenced":
+    "The task is not verified: its checks failed, did not run, or preceded the final edit. Your changes remain in the task workspace. Inspect the latest verification result, resolve its cause, and rerun the relevant checks before completing the task.",
   "codingWorkbench.event.runFailed": "Coding run failed",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",

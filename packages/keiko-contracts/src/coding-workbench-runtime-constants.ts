@@ -92,6 +92,8 @@ export type CodingWorkbenchRuntimeFailureCode =
   // delivery, and reporting it as success is a false claim the operator sees as green. An
   // issue-bound run that ends with no durable delivery evidence settles under this code instead.
   | "delivery-not-evidenced"
+  // An edited task or failed verification needs a nonempty pass after its final edit.
+  | "verification-not-evidenced"
   // #3565 Observation 17: a start whose launch could not be resolved names its cause instead of
   // collapsing into `authority-resolution-failed`. `model-unavailable`: the selected model is not
   // admitted for a coding run right now (tool-calling proof missing or aged out, context window
@@ -190,6 +192,7 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "issue-context-unavailable",
     "question-answer-rejected",
     "delivery-not-evidenced",
+    "verification-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
     "prompt-allowance-exhausted",
