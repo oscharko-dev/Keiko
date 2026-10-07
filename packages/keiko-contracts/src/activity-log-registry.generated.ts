@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "cb22eae62e931687a96b69cb5270cecade7e6bb92ad3a10a00017218e83c642f" as const;
+  "108f0dca192d46e719cbbb222a8cdee336a783f3cc7187bc13f65448042d35fb" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10530,6 +10530,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "waitReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
           ],
           evidenceClasses: [

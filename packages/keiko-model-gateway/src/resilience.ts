@@ -624,12 +624,13 @@ async function sleepWithCancellation(
 }
 
 /**
- * What a call's retry loop tells the caller that asked to hear it (#3873 review): a failure that
- * says the provider is unavailable — a timeout, a refused connection, a retryable 5xx, a rate
- * limit — was met with a scheduled retry, or a call that had been retried settled. The retries a
- * steered repair or a schema correction grant answer the model's own output, not an unavailable
- * provider, and are never announced. Counts and a closed policy only — no provider text, no
- * content. Local: never serialized into a provider request.
+ * What a call tells the caller that asked to hear it (#3873 review): a failure that says the
+ * provider is unavailable — a timeout, a refused connection, a retryable 5xx, a rate limit — was
+ * met with a scheduled retry; the call's admission is held, before an attempt, by an open circuit
+ * breaker, a saturated half-open probe slot or a cooldown the provider announced; or a call that
+ * had been retried or held settled. The retries a steered repair or a schema correction grant
+ * answer the model's own output, not an unavailable provider, and are never announced. Counts and
+ * closed words only — no provider text, no content. Local: never serialized into a provider request.
  */
 export type GatewayRetryNotice =
   | {
@@ -639,26 +640,80 @@ export type GatewayRetryNotice =
       readonly retryPolicy: RetryPolicy;
     }
   | {
-      /** Told only to a call that was retried before: it was answered, or it failed for good. */
+      /**
+       * Told when an admission begins to wait, for the first attempt of a buffered or a streamed
+       * call and for every retry's alike: no failed attempt of the call precedes the first one, so
+       * this is the only way a caller learns that the call is held. A wait that cannot fit what is
+       * left of the call's window never begins and is not announced; the `budget-refused` outcome
+       * of the `gateway.circuit.wait` line records that refusal.
+       */
+      readonly kind: "admission-wait";
+      readonly reason: CircuitWaitReason;
+      readonly retryPolicy: RetryPolicy;
+    }
+  | {
+      /**
+       * Told only to a call that was retried or held before, once, when the call ends: it was
+       * answered, or it failed for good (the window refused it, or it was cancelled, included).
+       */
       readonly kind: "settled";
       readonly outcome: "answered" | "failed";
     };
 
 /**
- * Runs inside the retry loop, synchronously, so it MUST NOT throw: it owns and logs its own
- * failures (the same contract as `GatewayDeps.onContextWindowReported`).
+ * Runs inside the retry loop and the admission wait, synchronously, so it MUST NOT throw: it owns
+ * and logs its own failures (the same contract as `GatewayDeps.onContextWindowReported`).
  */
 export type GatewayRetryObserver = (notice: GatewayRetryNotice) => void;
 
+/**
+ * One call's conversation with its observer (#3873 review): what the call does — a retry scheduled,
+ * an admission held — is told to the observer, and the call is remembered as owed exactly one
+ * settlement when it ends. The call's admission waits and every retry loop it runs share the one
+ * announcer, which is why a streamed call's first admission, ahead of its loop, settles with the
+ * loop that follows it. A call whose caller did not ask to hear it has no announcer and takes its
+ * exact path as before.
+ */
+export interface RetryAnnouncer {
+  /** A failure that says the provider is unavailable was met with a scheduled retry. */
+  scheduled(attempt: number, retryPolicy: RetryPolicy): void;
+  /** The call's admission began to wait for the breaker or a provider cooldown. */
+  admissionWait(reason: CircuitWaitReason, retryPolicy: RetryPolicy): void;
+  /** The call ended. Silent for a call the observer heard nothing about, and for a second end. */
+  settled(outcome: "answered" | "failed"): void;
+}
+
+export function retryAnnouncer(observer: GatewayRetryObserver): RetryAnnouncer {
+  // Set before the observer is told, so an observer that broke its contract still leaves the call
+  // owed its settlement.
+  let owed = false;
+  return {
+    scheduled: (attempt, retryPolicy): void => {
+      owed = true;
+      observer({ kind: "scheduled", attempt, retryPolicy });
+    },
+    admissionWait: (reason, retryPolicy): void => {
+      owed = true;
+      observer({ kind: "admission-wait", reason, retryPolicy });
+    },
+    settled: (outcome): void => {
+      if (!owed) return;
+      owed = false;
+      observer({ kind: "settled", outcome });
+    },
+  };
+}
+
 // What the retry loop needs in order to LABEL its lines. Optional in full: an unwired caller
 // keeps the exact behaviour it had before instrumentation, down to the allocation count. The
-// observer is the one member that is not a label: the caller's own ear on the loop, set only by a
-// caller that surfaces an outage to its operator (the coding sidecar route).
+// announcer is the one member that is not a label: the caller's own ear on the call, set only by a
+// caller that surfaces an outage to its operator (the coding sidecar route) and shared with the
+// call's admission waits.
 export interface RetryLogContext {
   readonly sink?: ModelGatewayLogSink | undefined;
   readonly modelId?: string | undefined;
   readonly correlationId?: string | undefined;
-  readonly observer?: GatewayRetryObserver | undefined;
+  readonly announcer?: RetryAnnouncer | undefined;
 }
 
 function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string }> {
@@ -847,8 +902,6 @@ interface RetryState {
   // Steered repairs granted so far (#3873, F17): at most one per call. They sit on top of the
   // provider attempts, so `attempt - repairs` is what the attempt count and the backoff ladder see.
   repairs: number;
-  // Provider retries scheduled so far — the ones the call's observer was told about (#3873 review).
-  providerRetries: number;
   lastError: Error | undefined;
 }
 
@@ -930,17 +983,13 @@ function announceProviderRetry(
   retryPolicy: RetryPolicy,
 ): void {
   if (repair !== undefined || isNonProviderFault(error)) return;
-  state.providerRetries += 1;
-  state.context.observer?.({
-    kind: "scheduled",
-    attempt: state.attempt - state.repairs,
-    retryPolicy,
-  });
+  state.context.announcer?.scheduled(state.attempt - state.repairs, retryPolicy);
 }
 
-// Tells the observer that a call it heard retry has ended; a call that never retried stays silent.
+// Tells the observer that a call it heard retry or wait has ended; a call it heard nothing about
+// stays silent, and so does one whose admission was refused before it ever began to wait.
 function announceSettled(state: RetryState, outcome: "answered" | "failed"): void {
-  if (state.providerRetries > 0) state.context.observer?.({ kind: "settled", outcome });
+  state.context.announcer?.settled(outcome);
 }
 
 // The admission wait of one attempt: the call's remaining budget, clipped by what is left of a
@@ -981,7 +1030,6 @@ export function executeWithRetry<T>(
       start: clock.now(),
       attempt: resume?.attempts ?? 1,
       repairs: resume?.repairs ?? 0,
-      providerRetries: 0,
       lastError: undefined,
     };
     const fail = (error: unknown): void => {
@@ -1155,6 +1203,10 @@ interface CircuitAdmissionWait {
   // and probe slot even without a provider-announced cooldown, instead of refusing at once; absent
   // means `attempts`, the fail-fast breaker. Every wait line reports it.
   readonly retryPolicy?: RetryPolicy | undefined;
+  // The waiting call's announcer (#3873 review), told each time the admission begins to wait. The
+  // admission before a call's first attempt follows no failed attempt, so the retry loop alone
+  // could never tell the call's observer that the breaker or a provider cooldown holds it.
+  readonly announcer?: RetryAnnouncer | undefined;
 }
 
 type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
@@ -1367,7 +1419,7 @@ export class CircuitBreaker {
       this.waiters.add(notify);
     });
     try {
-      this.logWait(reason, "started", delayMs, options);
+      this.beginWait(reason, delayMs, options);
       assertNotAborted(options.signal);
       const outcome = await Promise.race([
         changed,
@@ -1390,6 +1442,18 @@ export class CircuitBreaker {
       options.signal?.removeEventListener("abort", abort);
       controller.abort();
     }
+  }
+
+  // The moment an admission begins to wait: its `started` line first, then the call's announcer, so
+  // the observer hears of the wait the log already records. Both happen once per wait the call
+  // enters, never for a refusal that precedes the wait.
+  private beginWait(
+    reason: CircuitWaitReason,
+    delayMs: number,
+    options: CircuitAdmissionWait,
+  ): void {
+    this.logWait(reason, "started", delayMs, options);
+    options.announcer?.admissionWait(reason, options.retryPolicy ?? "attempts");
   }
 
   private logWait(

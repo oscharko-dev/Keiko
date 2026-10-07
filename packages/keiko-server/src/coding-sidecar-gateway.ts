@@ -587,10 +587,12 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
 
 // #3873 review: while the gateway rides out a provider outage the turn waits silently, and the
 // Workbench's run status read "Waiting for the model" for the whole window. The first retry of an
-// unavailable provider is published to the run's event replay as `model-gateway-retrying`, and the
+// unavailable provider, or the first wait of a call's admission behind the circuit breaker or a
+// provider cooldown, is published to the run's event replay as `model-gateway-retrying`, and the
 // answer that ends the outage as `model-gateway-recovered`; this line records each publication and
 // whether it reached the replay, so the status the operator saw can be rebuilt from the log. Counts
-// and closed words only: the attempt that was retried and the policy it ran under.
+// and closed words only: the attempt that was retried and the policy it ran under, or the reason
+// the admission was held.
 const CODING_SIDECAR_GATEWAY_RETRY_SURFACED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -613,9 +615,17 @@ const CODING_SIDECAR_GATEWAY_RETRY_SURFACED_OPERATION = defineActivityLogOperati
       required: true,
       values: ["retrying", "recovered"],
     },
-    // The failed provider attempt the first retry followed, and the policy it ran under; both only
-    // on a `retrying` fact.
+    // What the `retrying` fact followed, and the policy the call ran under; only on a `retrying`
+    // fact. A retry carries the failed provider `attempt` it followed. A call whose admission waited
+    // before any attempt of its own carries the `waitReason` that held it instead — the closed
+    // reason of the `gateway.circuit.wait` line it joins on — and no attempt.
     attempt: { type: "integer", dataClass: "count", required: false },
+    waitReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["provider-cooldown", "circuit-cooldown", "probe-saturated"],
+    },
     retryPolicy: {
       type: "string",
       dataClass: "closed-enum",
@@ -2049,11 +2059,13 @@ function gatewayTurnFailurePublication(
   return publicationReason;
 }
 
-// The coding turn's ear on the gateway's retry loop (#3873 review): the first retry of an
-// unavailable provider is surfaced as `model-gateway-retrying`, and the answer that ends the outage
-// as `model-gateway-recovered`. One frame per outage of a call, however many retries it takes; a
-// call that fails for good surfaces nothing here, its turn-failure frame follows. The observer runs
-// inside the gateway's retry loop and must not throw, so a failure is recorded, never raised.
+// The coding turn's ear on the gateway's outage (#3873 review): the first retry of an unavailable
+// provider, or the first wait of the call's admission behind the circuit breaker or a provider
+// cooldown (a call that follows no failed attempt of its own), is surfaced as
+// `model-gateway-retrying`, and the answer that ends the outage as `model-gateway-recovered`. One
+// frame per outage of a call, however many retries and waits it takes; a call that fails for good
+// surfaces nothing here, its turn-failure frame follows. The observer runs inside the gateway's
+// retry loop and admission wait and must not throw, so a failure is recorded, never raised.
 function gatewayRetryObserver(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2062,15 +2074,15 @@ function gatewayRetryObserver(
   let retrying = false;
   return (notice): void => {
     try {
-      if (notice.kind === "scheduled") {
-        if (!retrying) surfaceGatewayRetry(ctx, deps, runId, "retrying", notice);
-        retrying = true;
+      if (notice.kind === "settled") {
+        if (retrying && notice.outcome === "answered") {
+          surfaceGatewayRetry(ctx, deps, runId, "recovered");
+        }
+        retrying = false;
         return;
       }
-      if (retrying && notice.outcome === "answered") {
-        surfaceGatewayRetry(ctx, deps, runId, "recovered");
-      }
-      retrying = false;
+      if (!retrying) surfaceGatewayRetry(ctx, deps, runId, "retrying", notice);
+      retrying = true;
     } catch (error) {
       emitServerDiagnostic(
         deps.diagnostics,
@@ -2116,13 +2128,29 @@ function publishGatewayRetryFact(
   return publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");
 }
 
+// What a `retrying` fact followed: a retry the call's failed attempt was met with, or a wait of its
+// admission before any attempt of its own.
+type GatewayRetryCause = Exclude<GatewayRetryNotice, { readonly kind: "settled" }>;
+
+// The body-free fields the fact's line records for its cause: the failed attempt of a retry, or the
+// reason an admission was held, and the policy the call ran under either way.
+function gatewayRetryCauseFields(cause: GatewayRetryCause): {
+  readonly attempt?: number;
+  readonly waitReason?: Extract<GatewayRetryCause, { readonly kind: "admission-wait" }>["reason"];
+  readonly retryPolicy: GatewayRetryCause["retryPolicy"];
+} {
+  return cause.kind === "scheduled"
+    ? { attempt: cause.attempt, retryPolicy: cause.retryPolicy }
+    : { waitReason: cause.reason, retryPolicy: cause.retryPolicy };
+}
+
 // Publishes the fact to the run's event replay and records the publication.
 function surfaceGatewayRetry(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   fact: GatewayRetryFact,
-  scheduled?: Extract<GatewayRetryNotice, { readonly kind: "scheduled" }>,
+  cause?: GatewayRetryCause,
 ): void {
   const run = liveRunSnapshot(deps, runId);
   if (run === undefined) return;
@@ -2139,9 +2167,7 @@ function surfaceGatewayRetry(
       revision: run.revision,
       state: run.state,
       fact,
-      ...(scheduled === undefined
-        ? {}
-        : { attempt: scheduled.attempt, retryPolicy: scheduled.retryPolicy }),
+      ...(cause === undefined ? {} : gatewayRetryCauseFields(cause)),
       published,
       publicationReason,
       completeness: "complete",

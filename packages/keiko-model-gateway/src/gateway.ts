@@ -48,6 +48,7 @@ import {
   CircuitBreaker,
   type CircuitBreakerAdmission,
   type GatewayRetryObserver,
+  type RetryAnnouncer,
   type RetryConfig,
   type RetryLogContext,
   type RetryPolicy,
@@ -60,6 +61,7 @@ import {
   isNonProviderFault,
   providerRequestBudgetMs,
   codingWorkbenchRetryConfig,
+  retryAnnouncer,
   steeredAnswerRepair,
   streamedCallBudgetMs,
   streamRequestBudgetMs,
@@ -181,12 +183,14 @@ export interface GatewayCallRequest extends GatewayRequest {
    */
   readonly answerRepair?: "steered" | undefined;
   /**
-   * Hears the call's retries (#3873 review); local, never serialized into a provider request. It is
-   * told when a failure that says the provider is unavailable is met with a scheduled retry, and
-   * when a call it heard retry settles, so a caller that surfaces an outage to its operator (the
-   * coding sidecar route, behind the Workbench's run status) knows the call is being retried
-   * instead of silently waiting. Counts and a closed policy only. The observer runs inside the
-   * retry loop and MUST NOT throw. Only the coding sidecar route sets it.
+   * Hears the call's outage (#3873 review); local, never serialized into a provider request. It is
+   * told when a failure that says the provider is unavailable is met with a scheduled retry, when
+   * the call's admission waits for the circuit breaker or a provider cooldown (the wait before the
+   * first attempt included, which follows no failed attempt of the call), and when a call it heard
+   * settles, so a caller that surfaces an outage to its operator (the coding sidecar route, behind
+   * the Workbench's run status) knows the call is held by the gateway instead of silently waiting.
+   * Counts and closed words only. The observer runs inside the retry loop and the admission wait
+   * and MUST NOT throw. Only the coding sidecar route sets it.
    */
   readonly retryObserver?: GatewayRetryObserver | undefined;
 }
@@ -666,6 +670,13 @@ function callRetryConfig(
   };
 }
 
+// The call's conversation with its observer (#3873 review): one per call, shared by its admission
+// waits and by every retry loop it runs, and none for a call that set no `retryObserver`, which
+// keeps its exact path.
+function callAnnouncer(request: GatewayCallRequest): RetryAnnouncer | undefined {
+  return request.retryObserver === undefined ? undefined : retryAnnouncer(request.retryObserver);
+}
+
 // The admission owns exactly one outcome; cancellations and local refusal release only its own
 // probe, and a stale admission cannot mutate a later breaker generation.
 function recordProviderFailure(
@@ -699,6 +710,9 @@ interface PreparedStream {
   readonly outageWindowMs: number;
   readonly outputRepair: OutputRepairState;
   readonly attempts: StreamAttemptState;
+  // The call's conversation with its observer (#3873 review), shared by its first admission and by
+  // every loop the stream resumes; absent for a call that set no `retryObserver`.
+  readonly announcer: RetryAnnouncer | undefined;
 }
 
 // What a streamed call carries from one attempt to the next, across every loop it resumes
@@ -857,6 +871,9 @@ interface BufferedChatAttempt {
   readonly originalRequest: GatewayCallRequest;
   readonly promptAdmission: GatewayPromptAdmission;
   readonly correlationId: string;
+  // The call's conversation with its observer (#3873 review), shared by every attempt's admission
+  // and by the retry loop; absent for a call that set no `retryObserver`.
+  readonly announcer: RetryAnnouncer | undefined;
   readonly state: OutputRepairState & {
     request: GatewayCallRequest;
     attemptNumber: number;
@@ -1298,18 +1315,19 @@ export class Gateway {
     );
   }
 
-  // What the retry loop labels its lines with, and the call's own ear on the loop: the caller's
-  // `retryObserver` (#3873 review), which only the coding sidecar route sets.
+  // What the retry loop labels its lines with, and the call's own ear on the loop: the call's
+  // announcer (#3873 review), which exists only for a request that set a `retryObserver` — the
+  // coding sidecar route alone.
   private retryLogContext(
     route: RoutedCall,
     ids: CallIds,
-    request: GatewayCallRequest,
+    announcer: RetryAnnouncer | undefined,
   ): RetryLogContext {
     return {
       sink: this.log,
       modelId: route.provider.modelId,
       correlationId: ids.correlationId,
-      observer: request.retryObserver,
+      announcer,
     };
   }
 
@@ -1327,6 +1345,7 @@ export class Gateway {
       originalRequest: request,
       promptAdmission: this.promptAdmission(route, ids),
       correlationId: ids.correlationId,
+      announcer: callAnnouncer(request),
       state: { request, attemptNumber: 0, discarded: emptyDiscardedUsage() },
     };
     this.logCallStarted(ids, route, false, request, readsOverStream(route, adapter));
@@ -1338,7 +1357,7 @@ export class Gateway {
         this.clock,
         request.cancellationSignal,
         this.random,
-        this.retryLogContext(route, ids, request),
+        this.retryLogContext(route, ids, attempt.announcer),
       );
     } catch (error) {
       attachOutputRepair(error, attempt.state);
@@ -1624,6 +1643,7 @@ export class Gateway {
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
     const outageWindowMs = this.outageWindowMs(prepared);
+    const announcer = callAnnouncer(prepared);
     this.logCallStarted(ids, route, true, prepared, adapter.callStream !== undefined);
     // The admission before the first attempt waits under the same window clip as the admission
     // of every retry (#3873): an open breaker cannot hold a streamed call past its outage window,
@@ -1639,6 +1659,7 @@ export class Gateway {
       ids,
       elapsed,
       admissionBudgetMs,
+      announcer,
     );
     return {
       route,
@@ -1657,15 +1678,20 @@ export class Gateway {
         reasoningDelivered: false,
         discarded: emptyDiscardedUsage(),
       },
+      announcer,
     };
   }
 
+  // A first admission that waits is announced to the call's observer like every other wait; the
+  // loop that follows an admitted call settles it. No loop follows a refused one, so the call
+  // settles here: refused by its window, or cancelled while it waited.
   private async initialStreamAdmission(
     route: RoutedCall,
     request: GatewayCallRequest,
     ids: CallIds,
     elapsed: () => number,
     admissionBudgetMs: number,
+    announcer: RetryAnnouncer | undefined,
   ): ReturnType<CircuitBreaker["waitForAdmission"]> {
     try {
       return await this.providerAdmission(
@@ -1673,10 +1699,13 @@ export class Gateway {
         request,
         ids.correlationId,
         admissionBudgetMs,
+        undefined,
+        announcer,
       );
     } catch (error) {
       attachGatewayRequestId(error, ids.requestId);
       this.logStreamFailed(ids, route, 0, elapsed(), error);
+      announcer?.settled("failed");
       throw error;
     }
   }
@@ -1939,6 +1968,7 @@ export class Gateway {
             remainingMs ?? budget.remainingMs,
             previousError,
             admissionBudgetMs,
+            state.announcer,
           );
           admission = allowed.admission;
           remainingMs = allowed.remainingMs;
@@ -1950,7 +1980,7 @@ export class Gateway {
       this.clock,
       request.cancellationSignal,
       this.random,
-      this.retryLogContext(route, ids, request),
+      this.retryLogContext(route, ids, state.announcer),
       resume,
     );
   }
@@ -2177,6 +2207,7 @@ export class Gateway {
       admissionBudget(provider, bounds, remainingBudgetMs),
       previousError,
       admissionBudgetMs,
+      attempt.announcer,
     );
     provider = { ...provider, timeoutMs: Math.min(provider.timeoutMs, remainingMs) };
     bounds = clippedStreamBounds(bounds, remainingMs);
@@ -2210,8 +2241,9 @@ export class Gateway {
     }
   }
 
-  // The admission of a retry, buffered or streamed: the wait is clipped to the retry window, and
-  // the attempt keeps the call's own budget, less only the time it actually waited (#3873).
+  // The admission of an attempt, the first one's and a retry's, buffered or streamed: the wait is
+  // clipped to the retry window, and the attempt keeps the call's own budget, less only the time it
+  // actually waited (#3873). A wait that begins is announced to the call's observer (#3873 review).
   private async admitAttempt(
     provider: ModelProviderConfig,
     request: GatewayCallRequest,
@@ -2219,6 +2251,7 @@ export class Gateway {
     budgetMs: number,
     previousError: Error | undefined,
     admissionBudgetMs: number | undefined,
+    announcer: RetryAnnouncer | undefined,
   ): Promise<{ readonly admission: CircuitBreakerAdmission; readonly remainingMs: number }> {
     const waitBudgetMs = Math.min(budgetMs, admissionBudgetMs ?? budgetMs);
     const admitted = await this.providerAdmission(
@@ -2227,6 +2260,7 @@ export class Gateway {
       correlationId,
       waitBudgetMs,
       previousError,
+      announcer,
     );
     return {
       admission: admitted.admission,
@@ -2240,6 +2274,7 @@ export class Gateway {
     correlationId: string,
     remainingMs: number,
     previousError?: Error,
+    announcer?: RetryAnnouncer,
   ): ReturnType<CircuitBreaker["waitForAdmission"]> {
     return this.breakerFor(provider).waitForAdmission({
       remainingMs,
@@ -2248,6 +2283,7 @@ export class Gateway {
       correlationId,
       jitterMs: (): number => Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
       retryPolicy: this.retryPolicy(request),
+      announcer,
     });
   }
 

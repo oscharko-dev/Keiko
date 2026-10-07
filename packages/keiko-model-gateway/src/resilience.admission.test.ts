@@ -6,7 +6,14 @@ import {
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
+import {
+  CircuitBreaker,
+  executeWithRetry,
+  retryAnnouncer,
+  systemClock,
+  type GatewayRetryNotice,
+  type RetryAnnouncer,
+} from "./resilience.js";
 import type { Clock } from "./types.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import {
@@ -423,5 +430,151 @@ describe("provider admission decisions", () => {
     controller.abort();
     expect(await result).toBeInstanceOf(CancelledError);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// #3873 review (PR #3876): a call that waits for the breaker or a provider cooldown before its
+// first attempt follows no failed attempt of its own, so the retry loop alone could never tell its
+// observer. The wait itself does, through the call's announcer, at the moment it begins.
+describe("admission wait announcements", () => {
+  function announced(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly announcer: RetryAnnouncer;
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return {
+      notices,
+      announcer: retryAnnouncer((notice) => void notices.push(notice)),
+    };
+  }
+
+  it("announces the wait for an open breaker's cooldown when it begins, not when it ends", async () => {
+    vi.useFakeTimers();
+    const { breaker } = fixture(1);
+    const { notices, announcer } = announced();
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503));
+    const admitted = vi.fn();
+    const pending = breaker
+      .waitForAdmission({
+        remainingMs: 1_000,
+        jitterMs: 1,
+        retryPolicy: "outage-window",
+        announcer,
+      })
+      .then(admitted);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+    ]);
+    expect(admitted).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    await pending;
+    expect(admitted).toHaveBeenCalledTimes(1);
+    expect(notices).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("names the provider cooldown and the attempt policy of a call that says nothing else", async () => {
+    vi.useFakeTimers();
+    const { breaker } = fixture();
+    const { notices, announcer } = announced();
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503, [], 100));
+    const pending = breaker.waitForAdmission({ remainingMs: 1_000, jitterMs: 1, announcer });
+    await vi.advanceTimersByTimeAsync(101);
+    await pending;
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "provider-cooldown", retryPolicy: "attempts" },
+    ]);
+  });
+
+  it("announces the wait behind a saturated half-open probe", async () => {
+    vi.useFakeTimers();
+    const { breaker } = fixture(1);
+    const { notices, announcer } = announced();
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503));
+    await vi.advanceTimersByTimeAsync(201);
+    const probe = breaker.assertAllowed();
+    const pending = breaker
+      .waitForAdmission({
+        remainingMs: 1_000,
+        jitterMs: 1,
+        retryPolicy: "outage-window",
+        announcer,
+      })
+      .then((allowed) => allowed.admission);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "probe-saturated", retryPolicy: "outage-window" },
+    ]);
+    probe.settle("success");
+    (await pending).settle("success");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("announces each wait a call enters, one for every wait line it writes", async () => {
+    vi.useFakeTimers();
+    const { breaker, events } = fixture(1);
+    const { notices, announcer } = announced();
+    const first = breaker.assertAllowed();
+    const parallel = breaker.assertAllowed();
+    first.settle("failure", new ProviderError("Synthetic outage", 503, [], 100));
+    const controller = new AbortController();
+    const result = breaker
+      .waitForAdmission({
+        remainingMs: 1_000,
+        signal: controller.signal,
+        jitterMs: 1,
+        announcer,
+      })
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    parallel.settle("failure", new ProviderError("Synthetic longer outage", 503, [], 500));
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    expect(await result).toBeInstanceOf(CancelledError);
+    expect(waitEvents(events).filter((event) => event.extra?.outcome === "started")).toHaveLength(
+      2,
+    );
+    expect(notices.map((notice) => notice.kind)).toEqual(["admission-wait", "admission-wait"]);
+  });
+
+  it("announces nothing for an admission that is not held", async () => {
+    const { breaker } = fixture();
+    const { notices, announcer } = announced();
+    const allowed = await breaker.waitForAdmission({ remainingMs: 100, jitterMs: 1, announcer });
+    allowed.admission.settle("success");
+    expect(notices).toEqual([]);
+  });
+
+  it("announces nothing for a wait that cannot fit the budget and so never begins", async () => {
+    vi.useFakeTimers();
+    const { breaker, events } = fixture();
+    const { notices, announcer } = announced();
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503, [], 100));
+    await expect(
+      breaker.waitForAdmission({ remainingMs: 50, jitterMs: 1, announcer }),
+    ).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(notices).toEqual([]);
+    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["budget-refused"]);
+  });
+
+  it("waits the same, line for line, whether or not it is announced", async () => {
+    const lines = async (withAnnouncer: boolean): Promise<readonly unknown[]> => {
+      vi.useFakeTimers();
+      const { breaker, events } = fixture();
+      breaker
+        .assertAllowed()
+        .settle("failure", new ProviderError("Synthetic outage", 503, [], 100));
+      const pending = breaker.waitForAdmission({
+        remainingMs: 1_000,
+        jitterMs: 1,
+        ...(withAnnouncer ? { announcer: announced().announcer } : {}),
+      });
+      await vi.advanceTimersByTimeAsync(101);
+      await pending;
+      vi.useRealTimers();
+      return waitEvents(events).map((event) => [event.op, event.extra]);
+    };
+    expect(await lines(true)).toEqual(await lines(false));
   });
 });

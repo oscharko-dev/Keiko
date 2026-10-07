@@ -9946,6 +9946,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      waitReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["provider-cooldown", "circuit-cooldown", "probe-saturated"],
+      },
       retryPolicy: {
         type: "string",
         dataClass: "closed-enum",

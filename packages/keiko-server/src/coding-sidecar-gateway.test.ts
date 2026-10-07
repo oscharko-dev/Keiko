@@ -8177,6 +8177,192 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
     ]);
   });
 
+  // PR #3876 review: a call that queues behind an open breaker, a saturated probe or a provider
+  // cooldown before its first attempt follows no failed attempt, so only the gateway's admission
+  // wait can tell the Workbench that the gateway is the reason it is waiting.
+  describe("a call whose admission waits", () => {
+    const WAITING = {
+      kind: "admission-wait",
+      reason: "circuit-cooldown",
+      retryPolicy: "outage-window",
+    } as const;
+
+    it("publishes one retrying frame for the wait and a recovered frame once the call is answered", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps("run-wait-streamed", hub, [WAITING, ANSWERED]);
+
+      expect(
+        await handleCodingSidecarGatewayChatCompletions(streamedContext("queue behind"), deps),
+      ).toBe(STREAMING);
+
+      expect(replayedFacts(hub, "run-wait-streamed")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      const lines = retrySurfaced(sink.events);
+      expect(lines.map((line) => line.extra)).toEqual([
+        expect.objectContaining({
+          runId: "run-wait-streamed",
+          revision: 4,
+          state: "running",
+          fact: "retrying",
+          waitReason: "circuit-cooldown",
+          retryPolicy: "outage-window",
+          published: true,
+          publicationReason: "published",
+          completeness: "complete",
+          loss: "none",
+        }),
+        expect.objectContaining({ fact: "recovered", published: true }),
+      ]);
+      expect(lines[0]?.extra).not.toHaveProperty("attempt");
+      expect(lines[1]?.extra).not.toHaveProperty("waitReason");
+      expect(lines[1]?.extra).not.toHaveProperty("retryPolicy");
+      expect(lines[0]?.correlationId).toBe("run-wait-streamed");
+    });
+
+    it.each(["provider-cooldown", "circuit-cooldown", "probe-saturated"] as const)(
+      "records the %s that held it on a line the log's own proof accepts",
+      async (reason) => {
+        const sink = captureServerLog("info");
+        const hub = new CodingRuntimeEventHub();
+        const deps = streamingDeps(`run-wait-${reason}`, hub, [{ ...WAITING, reason }, ANSWERED]);
+
+        await handleCodingSidecarGatewayChatCompletions(streamedContext("held"), deps);
+
+        const [line] = retrySurfaced(sink.events);
+        expect(
+          expectActivityLogProof(
+            "coding-sidecar.gateway.retry-surfaced.emitted-line",
+            formatActivityLogProofLine(line ?? {}),
+          ),
+        ).toMatchObject({
+          fact: "retrying",
+          waitReason: reason,
+          retryPolicy: "outage-window",
+          published: true,
+        });
+      },
+    );
+
+    it("surfaces the wait of a buffered turn the same way", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-wait-buffered" } }),
+          (): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => (request) => {
+            request.retryObserver?.(WAITING);
+            request.retryObserver?.(ANSWERED);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+        ),
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "queue behind" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(replayedFacts(hub, "run-wait-buffered")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(retrySurfaced(sink.events)[0]?.extra).toMatchObject({
+        fact: "retrying",
+        waitReason: "circuit-cooldown",
+      });
+    });
+
+    // One outage of a call is one frame, whether it began with a wait or with a failed attempt and
+    // however many waits and retries follow: the first notice decides what the line says.
+    it("publishes one frame for an outage that mixes waits and retries, and names the first cause", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps("run-wait-mixed", hub, [WAITING, SCHEDULED, WAITING, ANSWERED]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("mixed"), deps);
+
+      expect(replayedFacts(hub, "run-wait-mixed")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      const [retrying] = retrySurfaced(sink.events);
+      expect(retrying?.extra).toMatchObject({ fact: "retrying", waitReason: "circuit-cooldown" });
+      expect(retrying?.extra).not.toHaveProperty("attempt");
+    });
+
+    it("names a failed attempt, not a wait, when the retry came first", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps("run-retry-then-wait", hub, [SCHEDULED, WAITING, ANSWERED]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("retry first"), deps);
+
+      const [retrying] = retrySurfaced(sink.events);
+      expect(retrying?.extra).toMatchObject({ fact: "retrying", attempt: 1 });
+      expect(retrying?.extra).not.toHaveProperty("waitReason");
+    });
+
+    // A call the window refused publishes no recovery: its turn failure follows the retrying frame,
+    // and the status the operator reads ends on the failure.
+    it("publishes no recovered frame for a call that failed after its wait", async () => {
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps(
+        "run-wait-failed",
+        hub,
+        [WAITING, { kind: "settled", outcome: "failed" }],
+        runningOrchestrator,
+        "failure",
+      );
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("refused"), deps);
+
+      expect(replayedFacts(hub, "run-wait-failed")).toEqual([
+        "model-gateway-retrying",
+        "failure-redacted",
+      ]);
+    });
+
+    // The observer runs inside the gateway's wait: a publication that threw is recorded on the
+    // operator diagnostic, never raised into the call, and the next wait surfaces the fact again.
+    it("surfaces the wait again when the first publication threw", async () => {
+      const sink = captureServerLog("info");
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const hub = new CodingRuntimeEventHub();
+      const publish = hub.publishModelGatewayFact.bind(hub);
+      vi.spyOn(hub, "publishModelGatewayFact")
+        .mockImplementationOnce(() => {
+          throw new Error("hub exploded");
+        })
+        .mockImplementation(publish);
+      const deps = {
+        ...streamingDeps("run-wait-twice", hub, [WAITING, WAITING, ANSWERED]),
+        diagnostics,
+      } as UiHandlerDeps;
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("again"), deps);
+
+      expect(retrySurfaced(sink.events).map((line) => line.extra?.fact)).toEqual([
+        "retrying",
+        "recovered",
+      ]);
+      expect(
+        diagnostics.record.mock.calls.filter(
+          ([entry]) => entry.source === "coding-sidecar-gateway.retry-observer",
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
   it("surfaces a second outage of a later call, which has its own observer", async () => {
     const hub = new CodingRuntimeEventHub();
     for (const content of ["first outage", "second outage"]) {

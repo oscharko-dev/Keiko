@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CancelledError,
   CircuitOpenError,
   ProviderError,
   TimeoutError,
@@ -811,4 +812,364 @@ describe("coding-workbench retry observer", () => {
 
     expect(notices).toEqual([]);
   });
+});
+
+// #3873 review (PR #3876): a coding call that queues behind an open breaker, a saturated half-open
+// probe or a provider cooldown BEFORE its first attempt follows no failed attempt of its own, so the
+// retry notices never reached the observer and the run status read "Waiting for the model" for the
+// whole wait. The observer is now told when the admission waits, and the notice settles like a
+// retry: answered once the call is, failed when the window refuses it or the call is cancelled.
+describe("coding-workbench retry observer (admission waits)", () => {
+  const BREAKER = { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 };
+  const CIRCUIT_WAIT = {
+    kind: "admission-wait",
+    reason: "circuit-cooldown",
+    retryPolicy: "outage-window",
+  } as const;
+  const PROBE_WAIT = {
+    kind: "admission-wait",
+    reason: "probe-saturated",
+    retryPolicy: "outage-window",
+  } as const;
+  const ANSWERED = { kind: "settled", outcome: "answered" } as const;
+  const FAILED = { kind: "settled", outcome: "failed" } as const;
+
+  function listening(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly retryObserver: GatewayRetryObserver;
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return { notices, retryObserver: (notice) => void notices.push(notice) };
+  }
+
+  // Two unavailable answers open the breaker, and the commit draft fails fast on it, as it does for
+  // a person who waits. Whatever follows meets an open breaker whose cooldown is still running.
+  async function openedBuffered(): Promise<{
+    readonly gateway: Gateway;
+    readonly provider: { readonly calls: () => number };
+    readonly events: ModelGatewayLogEvent[];
+  }> {
+    const events: ModelGatewayLogEvent[] = [];
+    const provider = recoveringProvider(2);
+    const gateway = gatewayFor(provider.call, simulatedClock(), config(BREAKER), events);
+    await expect(gateway.chat(request("commit-draft"))).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(provider.calls()).toBe(2);
+    return { gateway, provider, events };
+  }
+
+  async function openedStreamed(): Promise<{
+    readonly gateway: Gateway;
+    readonly provider: { readonly calls: () => number };
+    readonly events: ModelGatewayLogEvent[];
+  }> {
+    const events: ModelGatewayLogEvent[] = [];
+    const provider = recoveringStream(2);
+    const gateway = streamingGatewayFor(
+      provider.callStream,
+      simulatedClock(),
+      config(BREAKER),
+      events,
+    );
+    await expect(
+      streamedContent(gateway.chatStream(request("commit-draft"))),
+    ).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(provider.calls()).toBe(2);
+    return { gateway, provider, events };
+  }
+
+  // A half-open probe the provider holds until the test releases it.
+  function heldProbe(): {
+    readonly started: Promise<void>;
+    readonly hold: () => Promise<void>;
+    readonly release: () => void;
+  } {
+    let release: () => void = () => undefined;
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    return {
+      started,
+      hold: async (): Promise<void> => {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      },
+      release: (): void => {
+        release();
+      },
+    };
+  }
+
+  it("tells a buffered coding turn's observer that its first admission waits for an open breaker", async () => {
+    const { notices, retryObserver } = listening();
+    const { gateway, provider, events } = await openedBuffered();
+
+    const result = await gateway.chat({ ...request("coding-turn"), retryObserver });
+
+    expect(result.content).toBe("Synthetic answer");
+    expect(provider.calls()).toBe(3);
+    expect(notices).toEqual([CIRCUIT_WAIT, ANSWERED]);
+    const waits = linesOf(events, "gateway.circuit.wait");
+    expect(waits.map((line) => line.extra?.outcome)).toEqual(["started", "timer"]);
+    expect(waits[0]?.extra).toMatchObject({
+      reason: "circuit-cooldown",
+      retryPolicy: "outage-window",
+    });
+  });
+
+  it("tells a streamed coding turn's observer that its first admission waits for an open breaker", async () => {
+    const { notices, retryObserver } = listening();
+    const { gateway, provider, events } = await openedStreamed();
+
+    const content = await streamedContent(
+      gateway.chatStream({ ...request("coding-turn"), retryObserver }),
+    );
+
+    expect(content).toBe("Synthetic answer");
+    expect(provider.calls()).toBe(3);
+    expect(notices).toEqual([CIRCUIT_WAIT, ANSWERED]);
+    expect(linesOf(events, "gateway.circuit.wait")[0]?.extra).toMatchObject({
+      reason: "circuit-cooldown",
+    });
+  });
+
+  // A cooldown the provider announced (`Retry-After`) holds the next call of the model whatever the
+  // breaker says, for a call that rides out outages and for one that keeps its attempt count alike.
+  it.each([
+    { shape: "coding-turn" as const, retryPolicy: "outage-window" as const },
+    { shape: "interactive" as const, retryPolicy: "attempts" as const },
+  ])(
+    "tells a buffered $shape call's observer that its first admission waits for a provider cooldown",
+    async ({ shape, retryPolicy }) => {
+      const { notices, retryObserver } = listening();
+      let calls = 0;
+      const gateway = gatewayFor(
+        () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new ProviderError("Synthetic 503", 503, [], 5_000))
+            : Promise.resolve(answer());
+        },
+        simulatedClock(),
+        windowConfig(GATEWAY_CODING_OUTAGE_WINDOW_MS),
+      );
+      await expect(gateway.chat(request("commit-draft"))).rejects.toBeInstanceOf(ProviderError);
+
+      await gateway.chat({ ...request(shape), retryObserver });
+
+      expect(calls).toBe(2);
+      expect(notices).toEqual([
+        { kind: "admission-wait", reason: "provider-cooldown", retryPolicy },
+        ANSWERED,
+      ]);
+    },
+  );
+
+  it("tells a streamed coding turn's observer that its first admission waits for a provider cooldown", async () => {
+    const { notices, retryObserver } = listening();
+    let calls = 0;
+    const callStream: ProviderStream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      calls += 1;
+      await Promise.resolve();
+      if (calls === 1) throw new ProviderError("Synthetic 503", 503, [], 5_000);
+      yield { type: "delta", token: "Synthetic answer" };
+      yield { type: "done", response: answer() };
+    };
+    const gateway = streamingGatewayFor(
+      callStream,
+      simulatedClock(),
+      windowConfig(GATEWAY_CODING_OUTAGE_WINDOW_MS),
+    );
+    await expect(
+      streamedContent(gateway.chatStream(request("commit-draft"))),
+    ).rejects.toBeInstanceOf(ProviderError);
+
+    await streamedContent(gateway.chatStream({ ...request("coding-turn"), retryObserver }));
+
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "provider-cooldown", retryPolicy: "outage-window" },
+      ANSWERED,
+    ]);
+  });
+
+  // The retry after a failed attempt waits at its own admission too, and one outage of a call is one
+  // settlement however many retries and waits it holds.
+  it("announces the waits of a call's retries and settles the call once", async () => {
+    const { notices, retryObserver } = listening();
+    const provider = recoveringProvider(3);
+
+    await gatewayFor(provider.call, simulatedClock(), config(BREAKER)).chat({
+      ...request("coding-turn"),
+      retryObserver,
+    });
+
+    expect(notices.filter((notice) => notice.kind === "scheduled")).toHaveLength(3);
+    const waits = notices.filter((notice) => notice.kind === "admission-wait");
+    expect(waits.length).toBeGreaterThan(0);
+    expect(waits.every((notice) => notice.reason === "circuit-cooldown")).toBe(true);
+    expect(notices.filter((notice) => notice.kind === "settled")).toEqual([ANSWERED]);
+    expect(notices.at(-1)).toEqual(ANSWERED);
+  });
+
+  // The window, not the wait, decides: a call held behind another run's probe for the rest of its
+  // window is refused without ever making an attempt, and the observer hears it fail.
+  it("tells a buffered coding turn's observer that the window refused its wait behind a saturated probe", async () => {
+    const probe = heldProbe();
+    const { notices, retryObserver } = listening();
+    let calls = 0;
+    // Two 503s open the breaker; the half-open probe then hangs, so the slot stays saturated.
+    const gateway = gatewayFor(
+      async () => {
+        calls += 1;
+        if (calls <= 2) throw new ProviderError("Synthetic 503", 503);
+        await probe.hold();
+        return answer();
+      },
+      simulatedClock(),
+      config(BREAKER),
+    );
+    const holder = gateway.chat(request("coding-turn"));
+    await probe.started;
+    const callsBeforeWaiter = calls;
+
+    await expect(gateway.chat({ ...request("coding-turn"), retryObserver })).rejects.toBeInstanceOf(
+      CircuitOpenError,
+    );
+
+    expect(calls).toBe(callsBeforeWaiter);
+    expect(notices).toEqual([PROBE_WAIT, FAILED]);
+    probe.release();
+    await expect(holder).resolves.toMatchObject({ content: "Synthetic answer" });
+  });
+
+  it("tells a streamed coding turn's observer that the window refused its wait behind a saturated probe", async () => {
+    const probe = heldProbe();
+    const { notices, retryObserver } = listening();
+    let calls = 0;
+    const callStream: ProviderStream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      calls += 1;
+      if (calls <= 2) throw new ProviderError("Synthetic 503", 503);
+      await probe.hold();
+      yield { type: "delta", token: "Synthetic answer" };
+      yield { type: "done", response: answer() };
+    };
+    const gateway = streamingGatewayFor(callStream, simulatedClock(), config(BREAKER));
+    const holder = streamedContent(gateway.chatStream(request("coding-turn")));
+    await probe.started;
+    const callsBeforeWaiter = calls;
+
+    await expect(
+      streamedContent(gateway.chatStream({ ...request("coding-turn"), retryObserver })),
+    ).rejects.toBeInstanceOf(CircuitOpenError);
+
+    expect(calls).toBe(callsBeforeWaiter);
+    expect(notices).toEqual([PROBE_WAIT, FAILED]);
+    probe.release();
+    await expect(holder).resolves.toBe("Synthetic answer");
+  });
+
+  // A wait that cannot fit what is left of the window never begins: the call is refused at once, so
+  // there is nothing to announce and nothing to settle. `gateway.circuit.wait budget-refused` is the
+  // record of that refusal, and the turn-failure frame follows it.
+  it("stays silent for a call whose window cannot hold the wait at all", async () => {
+    const { notices, retryObserver } = listening();
+    const events: ModelGatewayLogEvent[] = [];
+    const provider = recoveringProvider(2);
+    const gateway = gatewayFor(
+      provider.call,
+      simulatedClock(),
+      { ...config(BREAKER), codingOutageWindowMs: 20_000 },
+      events,
+    );
+    await expect(gateway.chat(request("commit-draft"))).rejects.toBeInstanceOf(CircuitOpenError);
+
+    await expect(gateway.chat({ ...request("coding-turn"), retryObserver })).rejects.toBeInstanceOf(
+      CircuitOpenError,
+    );
+
+    expect(provider.calls()).toBe(2);
+    expect(notices).toEqual([]);
+    expect(linesOf(events, "gateway.circuit.wait").map((line) => line.extra?.outcome)).toEqual([
+      "budget-refused",
+    ]);
+  });
+
+  // The observer itself cancels the call while its admission waits: a cancellation exactly during
+  // the wait, with no timer involved.
+  it("tells a buffered coding turn's observer that a call cancelled during the wait failed", async () => {
+    const controller = new AbortController();
+    const notices: GatewayRetryNotice[] = [];
+    const retryObserver: GatewayRetryObserver = (notice) => {
+      notices.push(notice);
+      if (notice.kind === "admission-wait") controller.abort();
+    };
+    const { gateway, provider } = await openedBuffered();
+
+    await expect(
+      gateway.chat({
+        ...request("coding-turn"),
+        retryObserver,
+        cancellationSignal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+
+    expect(provider.calls()).toBe(2);
+    expect(notices).toEqual([CIRCUIT_WAIT, FAILED]);
+  });
+
+  it("tells a streamed coding turn's observer that a call cancelled during its first wait failed", async () => {
+    const controller = new AbortController();
+    const notices: GatewayRetryNotice[] = [];
+    const retryObserver: GatewayRetryObserver = (notice) => {
+      notices.push(notice);
+      if (notice.kind === "admission-wait") controller.abort();
+    };
+    const { gateway, provider, events } = await openedStreamed();
+
+    await expect(
+      streamedContent(
+        gateway.chatStream({
+          ...request("coding-turn"),
+          retryObserver,
+          cancellationSignal: controller.signal,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
+
+    expect(provider.calls()).toBe(2);
+    expect(notices).toEqual([CIRCUIT_WAIT, FAILED]);
+    expect(linesOf(events, "gateway.stream.failed").at(-1)?.extra).toMatchObject({
+      chunkCount: 0,
+    });
+  });
+
+  // An observer changes nothing the call does: the same attempts, the same waits, the same lines.
+  it.each(["buffered", "streamed"] as const)(
+    "waits exactly as it does without an observer on a %s call",
+    async (shape) => {
+      async function run(
+        observed: boolean,
+      ): Promise<{ readonly calls: number; readonly lines: readonly unknown[] }> {
+        const { gateway, provider, events } =
+          shape === "buffered" ? await openedBuffered() : await openedStreamed();
+        const call: GatewayCallRequest = {
+          ...request("coding-turn"),
+          ...(observed ? { retryObserver: listening().retryObserver } : {}),
+        };
+        if (shape === "buffered") await gateway.chat(call);
+        else await streamedContent(gateway.chatStream(call));
+        const lines = events
+          .filter(
+            (line) =>
+              line.op.startsWith("gateway.circuit.") || line.op.startsWith("gateway.retry."),
+          )
+          .map((line) => [line.op, line.extra]);
+        return { calls: provider.calls(), lines };
+      }
+
+      expect(await run(true)).toEqual(await run(false));
+    },
+  );
 });

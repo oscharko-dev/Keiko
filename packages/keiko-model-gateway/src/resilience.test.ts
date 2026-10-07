@@ -16,8 +16,10 @@ import {
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
+  retryAnnouncer,
   steeredAnswerRepair,
   type GatewayRetryNotice,
+  type RetryAnnouncer,
 } from "./resilience.js";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
@@ -1284,12 +1286,14 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
 describe("executeWithRetry — retry observer (#3873 review)", () => {
   function observed(): {
     readonly notices: GatewayRetryNotice[];
-    readonly context: { readonly observer: (notice: GatewayRetryNotice) => void };
+    readonly context: { readonly announcer: RetryAnnouncer };
   } {
     const notices: GatewayRetryNotice[] = [];
     return {
       notices,
-      context: { observer: (notice: GatewayRetryNotice): void => void notices.push(notice) },
+      context: {
+        announcer: retryAnnouncer((notice: GatewayRetryNotice): void => void notices.push(notice)),
+      },
     };
   }
 
@@ -1463,5 +1467,180 @@ describe("executeWithRetry — retry observer (#3873 review)", () => {
       { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
       { kind: "settled", outcome: "failed" },
     ]);
+  });
+});
+
+// #3873 review (PR #3876): one call, one conversation with its observer. A call that waits for the
+// breaker or a provider cooldown before its first attempt is owed the same settlement as a call that
+// was retried, from the same loop, so a streamed call's first admission (which precedes its loop)
+// and every admission inside it share one announcer.
+describe("retry announcer and admission waits (#3873 review)", () => {
+  function heard(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly announcer: RetryAnnouncer;
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return { notices, announcer: retryAnnouncer((notice) => void notices.push(notice)) };
+  }
+
+  // One failure opens it, and its cooldown outlasts the 375 ms backoff a retry sleeps, so the
+  // admission of a retry after a failed probe is held again.
+  const OPEN_BREAKER = { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 };
+
+  function openBreaker(clock: Clock): CircuitBreaker {
+    const breaker = new CircuitBreaker("announcer-model", OPEN_BREAKER, clock);
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503));
+    return breaker;
+  }
+
+  it("owes a settlement only to a call it announced, and only once", () => {
+    const { notices, announcer } = heard();
+    announcer.settled("answered");
+    expect(notices).toEqual([]);
+    announcer.admissionWait("circuit-cooldown", "outage-window");
+    announcer.settled("answered");
+    announcer.settled("failed");
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("owes a later outage of the same call its own settlement", () => {
+    const { notices, announcer } = heard();
+    announcer.scheduled(1, "attempts");
+    announcer.settled("answered");
+    announcer.admissionWait("probe-saturated", "outage-window");
+    announcer.settled("failed");
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+      { kind: "admission-wait", reason: "probe-saturated", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+
+  it("settles a call heard waiting for admission as answered once its attempt answers", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    const value = await executeWithRetry(
+      async (_attemptMs, remainingMs, previousError) => {
+        const { admission } = await breaker.waitForAdmission({
+          remainingMs: remainingMs ?? 0,
+          previousError,
+          jitterMs: 1,
+          retryPolicy: "outage-window",
+          announcer,
+        });
+        admission.settle("success");
+        return "ok";
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      { announcer },
+    );
+    expect(value).toBe("ok");
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("keeps one outage of a call, however many retries follow its wait, to one settlement", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    let calls = 0;
+    await executeWithRetry(
+      async (_attemptMs, remainingMs, previousError) => {
+        const { admission } = await breaker.waitForAdmission({
+          remainingMs: remainingMs ?? 0,
+          previousError,
+          jitterMs: 1,
+          retryPolicy: "outage-window",
+          announcer,
+        });
+        calls += 1;
+        if (calls === 1) {
+          const failure = new TransportError("refused");
+          admission.settle("failure", failure);
+          throw failure;
+        }
+        admission.settle("success");
+        return "ok";
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      { announcer },
+    );
+    expect(notices.map((notice) => notice.kind)).toEqual([
+      "admission-wait",
+      "scheduled",
+      "admission-wait",
+      "settled",
+    ]);
+    expect(notices.at(-1)).toEqual({ kind: "settled", outcome: "answered" });
+  });
+
+  it("settles a call heard waiting for admission as failed when its attempt then fails for good", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    await expect(
+      executeWithRetry(
+        async (_attemptMs, remainingMs, previousError) => {
+          const { admission } = await breaker.waitForAdmission({
+            remainingMs: remainingMs ?? 0,
+            previousError,
+            jitterMs: 1,
+            retryPolicy: "outage-window",
+            announcer,
+          });
+          const failure = new AuthenticationError("rejected");
+          admission.settle("non-provider-fault", failure);
+          throw failure;
+        },
+        { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+        clock,
+        undefined,
+        () => 0.5,
+        { announcer },
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+
+  it("leaves a call whose admission was refused at once unannounced and unsettled", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    await expect(
+      executeWithRetry(
+        async (_attemptMs, remainingMs, previousError) => {
+          await breaker.waitForAdmission({
+            remainingMs: Math.min(remainingMs ?? 0, 50),
+            previousError,
+            jitterMs: 1,
+            retryPolicy: "outage-window",
+            announcer,
+          });
+          return "unreachable";
+        },
+        { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+        clock,
+        undefined,
+        () => 0.5,
+        { announcer },
+      ),
+    ).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(notices).toEqual([]);
   });
 });

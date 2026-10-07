@@ -563,18 +563,26 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 Review of PR #3876 (F11/F21 of the live qualification, #3873): during a provider outage the coding
 sidecar gateway retries for its outage window (ADR-0003, default ten minutes), the turn waits
 silently, and the run status read "Waiting for the model" for the whole window — the same words as a
-slow generation.
+slow generation. A second thread of the same review found the same silence before a call's first
+attempt, where it is the circuit breaker or a provider cooldown, not a failed attempt, that holds
+the call.
 
 ### D9 — The sidecar route publishes two body-free gateway facts to the run's event replay
 
-- **Where they come from.** `GatewayCallRequest.retryObserver` (ADR-0003) hears the retry loop of a
-  call: a failure that says the provider is unavailable (a timeout, a refused connection, a
-  retryable 5xx, a rate limit) was met with a scheduled retry, or a call it heard retry settled. The
-  coding sidecar route hands every model call such an observer. The first retry of a call is
-  published as `model-gateway-retrying`, however many retries the outage takes; the answer that ends
-  it as `model-gateway-recovered`. A call that fails for good publishes no recovery: its turn-failure
-  frame (D3) follows. A steered repair or a schema correction answers the model's own output, so it
-  is never announced.
+- **Where they come from.** `GatewayCallRequest.retryObserver` (ADR-0003) hears a call's outage: a
+  failure that says the provider is unavailable (a timeout, a refused connection, a retryable 5xx, a
+  rate limit) was met with a scheduled retry, the call's admission began to wait for the circuit
+  breaker (open, or its half-open probe slot saturated) or for a cooldown the provider announced, or
+  a call it heard settled. The coding sidecar route hands every model call such an observer. The
+  first retry or wait of a call is published as `model-gateway-retrying`, however many retries and
+  waits the outage takes; the answer that ends it as `model-gateway-recovered`. The wait matters on
+  its own because a call's first attempt follows no failed attempt: a turn the runtime retries
+  after an earlier call outlasted the window, or a run whose first turn starts during an outage,
+  queues behind the open breaker or another run's probe with no retry to announce. A call that
+  fails for good (its window refused the wait, or the run cancelled it) publishes no recovery: its
+  turn-failure frame (D3) follows. A wait that cannot fit the call's window never begins and is not
+  announced; that refusal is the turn failure alone. A steered repair or a schema correction
+  answers the model's own output, so it is never announced as a retry.
 - **What they are.** Two SSE-only runtime event kinds of their own (`CodingWorkbenchGatewayEventKind`),
   not adapter events: the runtime never produces them. A frame carries no count, text, identifier,
   failure code, outcome or trust marker, and the contract validator refuses any of those on it. They
@@ -587,6 +595,9 @@ slow generation.
   status claiming an outage for good. A decision the run waits for still takes precedence.
 - **Evidence.** Each publication, refused or not, leaves one body-free
   `coding-sidecar.gateway.retry-surfaced` line under the run's correlation: the run revision and
-  state, the fact, the failed attempt and the retry policy of a `retrying` fact, and whether the
-  replay took it (`published`, `publicationReason`). A refused publication is a warning. The
-  gateway's own `gateway.retry.scheduled` lines remain the record of every individual retry.
+  state, the fact, what a `retrying` fact followed — the failed `attempt` of a retry, or the
+  `waitReason` that held the call's admission (`provider-cooldown`, `circuit-cooldown` or
+  `probe-saturated`, the reason of the `gateway.circuit.wait` line it joins on) — with the retry
+  policy the call ran under, and whether the replay took it (`published`, `publicationReason`). A
+  refused publication is a warning. The gateway's own `gateway.retry.scheduled` and
+  `gateway.circuit.wait` lines remain the record of every individual retry and wait.

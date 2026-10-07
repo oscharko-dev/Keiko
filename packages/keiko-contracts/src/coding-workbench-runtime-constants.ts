@@ -130,10 +130,11 @@ export type CodingWorkbenchRuntimeFailureCode =
 /**
  * Redacted facts about the model gateway under a coding turn (#3873 review). `model-gateway-retrying`:
  * the gateway met a failure that says the provider is unavailable — a timeout, a refused connection,
- * a retryable 5xx, a rate limit — with a retry, and keeps retrying for its outage window.
- * `model-gateway-recovered`: a call it had been retrying was answered. SSE-only, like the per-turn
- * causes below, and never adapter events: the runtime does not produce them, the sidecar gateway
- * route does. They carry no count, text, identifier or failure code.
+ * a retryable 5xx, a rate limit — with a retry, or holds a call at its admission behind the circuit
+ * breaker or a provider cooldown before its first attempt, and keeps going for its outage window.
+ * `model-gateway-recovered`: a call it had been retrying or holding was answered. SSE-only, like the
+ * per-turn causes below, and never adapter events: the runtime does not produce them, the sidecar
+ * gateway route does. They carry no count, text, identifier or failure code.
  */
 export type CodingWorkbenchGatewayEventKind = "model-gateway-retrying" | "model-gateway-recovered";
 

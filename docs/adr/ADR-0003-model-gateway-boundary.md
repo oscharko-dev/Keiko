@@ -133,16 +133,28 @@ and breaker lines `gateway.retry.scheduled`, `gateway.retry.exhausted` and `gate
 carry the applied policy as the closed field `retryPolicy` (`attempts` or `outage-window`), so the
 Activity Log tells a deliberate outage window from a retry loop that ignored its attempt count.
 
-A caller that surfaces an outage to its operator hears the retry loop through the explicit,
-local `GatewayCallRequest.retryObserver` (#3873 review; never serialized into a provider request;
-only the coding sidecar route sets it). The observer is told when a failure that says the provider
-is unavailable (`isNonProviderFault` is false) is met with a scheduled retry — the failed provider
-attempt and the applied `retryPolicy` — and when a call it heard retry settles, `answered` or
-`failed`. The retries of a steered repair or a schema correction answer the model's own output and
-are never announced, and a call that was never retried stays silent. The observer runs inside the
-retry loop and must not throw; it owns and logs its own failures. The route turns these notices
-into the two body-free gateway facts of ADR-0137 D9, which name the Workbench's run phase while a
-provider outage is ridden out.
+A caller that surfaces an outage to its operator hears the call through the explicit, local
+`GatewayCallRequest.retryObserver` (#3873 review; never serialized into a provider request; only the
+coding sidecar route sets it). The observer is told when a failure that says the provider is
+unavailable (`isNonProviderFault` is false) is met with a scheduled retry — the failed provider
+attempt and the applied `retryPolicy` — and when the call's admission begins to wait for an open
+circuit breaker, a saturated half-open probe slot or a cooldown the provider announced
+(`admission-wait`: the closed `reason` of the `gateway.circuit.wait` line it joins, and the
+`retryPolicy`). The wait is announced for the first attempt of a buffered call and of a streamed
+call as well as for every retry's. That first attempt follows no failed attempt of the call, so the
+retry loop alone could not tell the observer that the gateway holds it: a turn the runtime retried
+after an earlier call outlasted the window, or one that starts during an outage, queued behind the
+open breaker (or behind another run's probe) while the run status still read "Waiting for the model"
+(PR #3876 review). A wait that cannot fit what is left of the call's window never begins, so it is
+not announced; `gateway.circuit.wait outcome=budget-refused` records that refusal. A call that was
+announced, by a retry or by a wait, settles once when it ends (`settled`: `answered`, or `failed`
+when its window refused it, it failed for good, or it was cancelled), after however many retries
+and waits it held; a call that was never announced stays silent. The retries of a steered repair
+or a schema correction answer the model's own output and are never announced as retries, though an
+admission wait of such a retry is announced like any other. The observer runs inside the retry loop
+and the admission wait and must not throw; it owns and logs its own failures. The route turns these
+notices into the two body-free gateway facts of ADR-0137 D9, which name the Workbench's run phase
+while a provider outage is ridden out.
 
 ### D7 — Secret redaction at the boundary
 

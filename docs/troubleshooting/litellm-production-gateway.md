@@ -835,10 +835,16 @@ window ran out while it waited on an open breaker or a saturated probe slot, wit
 `gateway.circuit.wait outcome=budget-refused`.
 
 The status line's phase is rebuilt from the run's `coding-sidecar.gateway.retry-surfaced` lines:
-`fact=retrying` (with the failed `attempt` and the `retryPolicy`) is one per outage of a call, and
-`fact=recovered` follows the answer that ends it. `published=false` with a `publicationReason`
-means the run's event replay refused the fact, so the status kept naming the model while the
-`gateway.retry.scheduled` lines show the outage.
+`fact=retrying` is one per outage of a call, and `fact=recovered` follows the answer that ends it.
+A `retrying` fact that a retry began carries the failed `attempt` and the `retryPolicy`. One that a
+wait began carries the `waitReason` (`provider-cooldown`, `circuit-cooldown` or `probe-saturated`,
+the `reason` of the `gateway.circuit.wait` line it joins on) and the `retryPolicy`, and no
+`attempt`: the call's admission was held by the circuit breaker or a provider cooldown before any
+attempt of its own, as when a turn the runtime retried meets the breaker the earlier turn opened. A
+wait the call's window could not hold at all writes `gateway.circuit.wait outcome=budget-refused`
+and no `retrying` fact. `published=false` with a `publicationReason` means the run's event replay
+refused the fact, so the status kept naming the model while the `gateway.retry.scheduled` and
+`gateway.circuit.wait` lines show the outage.
 
 Each of these retry and wait lines names the policy it ran under in `retryPolicy`. `outage-window`
 is a coding turn riding out the outage, so retries beyond the provider's `maxRetries` are expected.
