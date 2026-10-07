@@ -10,8 +10,9 @@ import { UsageError, importBuilt, labRepositoryPath, parseCli, runMain } from ".
 const USAGE = [
   "usage: node verify-latency.mjs [--repo <path>] [--test-file src/ledger.test.ts] [--runs 2]",
   "",
-  "The repository is --repo, else KEIKO_LAB_REPO. Prints the detected test framework, the network",
-  "isolation probe and the duration of each enforced targeted-test verification.",
+  "The repository is --repo, else KEIKO_LAB_REPO; it must be a lab copy (its package.json names",
+  "ledger-lab). Prints the detected test framework, the network isolation probe and the duration of",
+  "each enforced targeted-test verification.",
 ].join("\n");
 
 function milliseconds(since) {

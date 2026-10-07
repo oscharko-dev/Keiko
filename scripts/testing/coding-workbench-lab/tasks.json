@@ -133,5 +133,14 @@
     "textStatus": "proposed",
     "text": "Two reports are wrong. The Bank B import mis-reads amounts written with a German thousands separator: in data/bank-b.csv the tax refund of 1.234,50 is booked as 1.23 instead of 1234.50. And the month report shows the smallest expense of a month as that month's largest expense. Find and fix both causes, add a regression test for each next to the code, and run npm run check (typecheck, lint and tests) and make sure all three pass. Follow AGENTS.md.",
     "expected": "Run survives the outage and completes"
+  },
+  {
+    "id": "T13",
+    "title": "Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)",
+    "mode": "Ask for approval",
+    "baseline": "head+md",
+    "textStatus": "proposed",
+    "text": "List the modules in src/ and summarize each in one sentence. Do not change any file.",
+    "expected": "Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block"
   }
 ]

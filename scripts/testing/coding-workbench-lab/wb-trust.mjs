@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Grants or revokes package-script trust for a repository root (ADR-0147 D3), so a run does not
-// pause for the operator's decision before it runs the project's own npm scripts.
+// pause for the operator's decision before it runs the project's own npm scripts. Trust is a
+// security decision: the action is always named, and only a lab repository is accepted.
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import {
   UsageError,
@@ -12,9 +13,10 @@ import {
 } from "./lab-common.mjs";
 
 const USAGE = [
-  "usage: node wb-trust.mjs [grant|revoke] [--repo <path>] [--base-url <origin>]",
+  "usage: node wb-trust.mjs grant|revoke (--repo <path> | KEIKO_LAB_REPO) [--base-url <origin>]",
   "",
-  "The repository is --repo, else KEIKO_LAB_REPO. Default action: grant.",
+  "The action has no default. The repository is --repo, else KEIKO_LAB_REPO; it must be a lab copy",
+  "(its package.json names ledger-lab).",
   "Environment: KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required), KEIKO_LAB_BASE_URL.",
 ].join("\n");
 
@@ -25,9 +27,11 @@ async function main() {
     positionals: true,
   });
   if (cli.help) return 0;
-  const action = cli.positionals[0] ?? "grant";
+  const action = cli.positionals[0];
   if (action !== "grant" && action !== "revoke") {
-    throw new UsageError(`unknown action "${action}"; use grant or revoke\n\n${USAGE}`);
+    throw new UsageError(
+      `pass the action, grant or revoke (got ${JSON.stringify(action ?? null)})\n\n${USAGE}`,
+    );
   }
   const repo = labRepositoryPath(cli.values.repo);
   const session = await openApiSession(labBaseUrl(cli.values["base-url"]));

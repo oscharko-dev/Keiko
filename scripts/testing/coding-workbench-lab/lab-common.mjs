@@ -1,6 +1,10 @@
-// Shared helpers for the Coding Workbench live-lab drivers (see README.md in this directory).
+// Shared helpers for the Coding Workbench live-lab drivers (command reference: README.md in this
+// directory; reproduction guide: docs/qa/coding-workbench-lab/README.md).
 // Lab tooling for a local operator: it records no prompts, model output or credentials, and the one
 // credential it needs, the dev server's launcher secret, is read from the environment only.
+// The drivers act as the local operator, so they fail closed: an approval policy and a lab
+// repository are always named explicitly, and no driver ever runs against whichever workspace the
+// dev server happens to have selected.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -8,6 +12,11 @@ import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parseArgs } from "node:util";
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** Where the reproduction guide and the command reference live, relative to the Keiko checkout. */
+export const LAB_GUIDE = "docs/qa/coding-workbench-lab/README.md";
+export const LAB_COMMANDS = "scripts/testing/coding-workbench-lab/README.md";
+/** The `package.json` name of tests/fixtures/coding-workbench-lab/ledger-lab and every copy of it. */
+export const LAB_REPOSITORY_NAME = "ledger-lab";
 export const DEFAULT_BASE_URL = "http://127.0.0.1:1983";
 export const CSRF_HEADERS = Object.freeze({
   "content-type": "application/json",
@@ -115,19 +124,107 @@ export function minutesToMs(value, flag = "--timeout-min") {
   return minutes * 60_000;
 }
 
+const APPROVAL_POLICIES = Object.freeze({
+  all: "the driver approves every permission ask once (wb-ui also applies the change reviews of Ask for approval and allows package scripts)",
+  none: "the driver denies every permission ask (wb-ui also rejects the change reviews)",
+  ask: "the driver answers nothing; a person decides",
+});
+
+/**
+ * The approval policy of a run driver. There is no default: a driver that answers the operator's
+ * decisions says so on the command line, so a run is never approved silently.
+ */
 export function parseApprove(value) {
-  if (value !== "all" && value !== "none" && value !== "ask") {
+  if (value === undefined) {
+    throw new UsageError(
+      "pass --approve all|none|ask: all approves every permission ask once (and, in wb-ui, allows package scripts), none denies them, ask leaves them to a person (use it with wb-ui --headed)",
+    );
+  }
+  if (!Object.hasOwn(APPROVAL_POLICIES, value)) {
     throw new UsageError(`--approve must be all, none or ask (got "${value}")`);
   }
   return value;
 }
 
-export function labRepositoryPath(explicit, env = process.env) {
+/** What an approval policy means, in words a ledger row can carry. */
+export function approvalPolicyText(approve) {
+  return APPROVAL_POLICIES[approve];
+}
+
+/** The body-free line a driver prints so a run record says who answered its human decisions. */
+export function approvalPolicyLine(driver, approve) {
+  return `driver ${driver}: approvals ${approve} (${approvalPolicyText(approve)})`;
+}
+
+function packageName(root, readText) {
+  try {
+    return { name: JSON.parse(readText(join(root, "package.json"), "utf8"))?.name };
+  } catch (error) {
+    return { failure: errorMessage(error) };
+  }
+}
+
+/**
+ * What a driver does about the two operator gates of a run that its snapshot shows, as its approval
+ * policy says: nothing for `ask` (a person decides); for `all` it allows the package-script trust
+ * pause and approves a pending permission once; for `none` it only denies a pending permission. A
+ * permission request is answered at most once: `decided` remembers the ones already answered. The
+ * change review of Ask for approval is not in the snapshot (the run stays `running` while an edit
+ * waits in the Workbench's panel), so only wb-ui decides it, with the same policy.
+ */
+export function gateActions(snapshot, approve, decided) {
+  if (approve === "ask") return [];
+  const actions = [];
+  if (snapshot.state === "paused" && approve === "all") {
+    actions.push({ kind: "allow-package-scripts" });
+  }
+  const pending = snapshot.pendingPermission;
+  if (snapshot.state === "awaiting-approval" && pending && !decided.has(pending.requestId)) {
+    decided.add(pending.requestId);
+    const decision = approve === "all" ? "approved" : "denied";
+    actions.push({ kind: "permission", requestId: pending.requestId, decision });
+  }
+  return actions;
+}
+
+/**
+ * Fails closed unless `root` is a lab repository: the drivers approve edits and run commands on
+ * the repository they are given, so they only accept a copy of the ledger-lab fixture.
+ */
+export function assertLabRepository(root, readText = readFileSync) {
+  const { name, failure } = packageName(root, readText);
+  if (name === LAB_REPOSITORY_NAME) return;
+  const reason = failure ?? `its package.json names ${JSON.stringify(name ?? null)}`;
+  throw new UsageError(
+    `${root} is not a lab repository (${reason}); the drivers only work on a copy of tests/fixtures/coding-workbench-lab/ledger-lab, whose package.json names "${LAB_REPOSITORY_NAME}" (see ${LAB_GUIDE})`,
+  );
+}
+
+/** The lab repository named by --repo or KEIKO_LAB_REPO; never a default, never an unmarked checkout. */
+export function labRepositoryPath(explicit, env = process.env, readText = readFileSync) {
   const raw = explicit ?? env.KEIKO_LAB_REPO;
   if (raw === undefined || raw === "") {
-    throw new UsageError("pass --repo <path> or set KEIKO_LAB_REPO to the lab repository checkout");
+    throw new UsageError(
+      `pass --repo <path> or set KEIKO_LAB_REPO to the lab repository, a copy of tests/fixtures/coding-workbench-lab/ledger-lab (see ${LAB_GUIDE})`,
+    );
   }
-  return resolve(raw);
+  const root = resolve(raw);
+  assertLabRepository(root, readText);
+  return root;
+}
+
+/** The body that makes the dev server work on the lab repository (POST /api/task-workspaces/local). */
+export function checkoutRequest(repo, branch) {
+  return { root: repo, branch, requestedBy: "studio-operator" };
+}
+
+/** A run never starts unless the dev server accepted the lab repository as its workspace. */
+export function assertCheckoutSelected(status) {
+  if (status < 200 || status >= 300) {
+    throw new Error(
+      `the dev server did not select the lab repository (HTTP ${String(status)}); not starting a run in whichever workspace it has open`,
+    );
+  }
 }
 
 /** Normalizes `run-123...` or a trailing part of the id; refuses suffixes that would match the whole log. */
@@ -167,7 +264,7 @@ export async function mintPairing(env = process.env) {
   const secret = env[envName];
   if (typeof secret !== "string" || secret.length < minChars) {
     throw new UsageError(
-      `${envName} must hold the launcher secret the dev server was started with (at least ${String(minChars)} characters); see README.md`,
+      `${envName} must hold the launcher secret the dev server was started with (at least ${String(minChars)} characters); see ${LAB_COMMANDS}, step 1`,
     );
   }
   const attestation = pairing.mintLauncherPairingAttestation({
@@ -239,10 +336,12 @@ export function loadTasks() {
 }
 
 export function formatTaskList() {
-  return loadTasks()
+  const tasks = loadTasks();
+  const baselineWidth = Math.max(...tasks.map((task) => task.baseline.length));
+  return tasks
     .map(
       (task) =>
-        `${task.id.padEnd(4)} ${task.mode.padEnd(21)} ${task.baseline.padEnd(8)} ${task.title}`,
+        `${task.id.padEnd(4)} ${task.mode.padEnd(21)} ${task.baseline.padEnd(baselineWidth)} ${task.title}`,
     )
     .join("\n");
 }

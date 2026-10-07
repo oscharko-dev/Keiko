@@ -15,12 +15,28 @@ secret from a file or from the repository, none prints one, and the run summarie
 - LiteLLM, the model server and Keiko's Gateway Setup, as described in the lab README.
 - The lab repository: a copy of `tests/fixtures/coding-workbench-lab/ledger-lab/` with a Git history on branch `main`.
 
+## Fail closed
+
+The run drivers act as the local operator, so they refuse to guess. These are errors (exit code 2),
+not defaults:
+
+- **No approval policy, no run.** `wb-ui.mjs`, `wb-run.mjs` and `chaos-suite.mjs` require
+  `--approve all|none|ask`. `all` approves every permission ask once (`wb-ui.mjs` also applies the
+  change reviews of Ask for approval and allows package scripts), `none` denies every ask
+  (`wb-ui.mjs` also rejects the change reviews), `ask` answers nothing and leaves all of it to a
+  person. Every run prints `driver <name>: approvals <policy>` before its last line.
+- **No repository, no run.** `--repo` or `KEIKO_LAB_REPO` is required; the drivers never run in
+  whichever workspace the dev server has open. The checkout must be a copy of the fixture (its
+  `package.json` names `ledger-lab`), and a run does not start unless the dev server accepted it
+  as its workspace. `wb-trust.mjs` and `verify-latency.mjs` apply the same rule.
+- **No implicit trust.** `wb-trust.mjs` takes `grant` or `revoke`; neither is a default.
+
 ## Environment
 
 | Variable                                   | Meaning                                                                                                                                         |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET` | Required by `pair` and every `wb-*` script: the secret the dev server was started with (at least 32 characters). Read from the environment only |
-| `KEIKO_LAB_REPO`                           | The lab repository checkout; the default of `--repo`                                                                                            |
+| `KEIKO_LAB_REPO`                           | The lab repository checkout; the default of `--repo`, and one of the two is required                                                            |
 | `KEIKO_LAB_BASE_URL`                       | The dev server origin; loopback `http` only, default `http://127.0.0.1:1983`                                                                    |
 | `KEIKO_LAB_LOG_DIR`                        | Activity Log directory for `run-summary`, `turn-profile` and `rawtl`; default `$KEIKO_STATE_DIR/logs`, else `./.keiko/dev/logs`                 |
 | `KEIKO_CONFIG_FILE`                        | The gateway configuration the dev server reads; set it when starting the server                                                                 |
@@ -57,24 +73,38 @@ mkdir -p "$KEIKO_LAB_REPO" && cp -R tests/fixtures/coding-workbench-lab/ledger-l
 ```
 
 **3. Run one task through the real UI.** The driver pairs a headless Chromium, selects the repository,
-the model and the Run authority, starts the task, then approves permissions, applies the change
-reviews of Ask for approval (`--approve none` rejects them) and allows the package-script trust
-pause until the run settles. The last line names the run (`----- run run-<digits> -----`).
+the model and the Run authority, starts the task, then, as `--approve` says, approves permissions,
+applies the change reviews of Ask for approval (`--approve none` rejects them) and allows the
+package-script trust pause until the run settles (`all` below: the driver approves; use
+`--approve ask --headed` to decide yourself). The last line names the run
+(`----- run run-<digits> -----`).
 
 ```bash
 node scripts/testing/coding-workbench-lab/wb-ui.mjs --list-tasks
 mkdir -p "$HOME/keiko-lab-runs"
-node scripts/testing/coding-workbench-lab/wb-ui.mjs --task-id T2 \
+node scripts/testing/coding-workbench-lab/wb-ui.mjs --task-id T2 --approve all \
   --shots "$HOME/keiko-lab-runs/t2" --text-out "$HOME/keiko-lab-runs/t2.txt"
 node scripts/testing/coding-workbench-lab/wb-stop.mjs run-<digits>     # stop a run that must not continue
 ```
 
 **4. Read the run.** These scripts read the Activity Log (`.keiko/dev/logs`, or `--log-dir`) and print
-counts, durations, states and closed reason codes only; times are UTC. `turn-profile.mjs` prints one row per
-model turn (dispatch offset, messages, provider-reported prompt tokens, time to the response headers,
-generation time, completion tokens and tokens per second, reasoning tokens and bytes when the log
-carries them, finish reason, the tools the turn produced and the gap to the next request) and then
-where the wall clock went (model, tools, sidecar and BFF gaps, operator pauses, other).
+counts, durations, states and closed reason codes only; times are UTC. `turn-profile.mjs` prints one
+row per model turn, buffered or streamed and failed turns included: dispatch offset, messages,
+prompt tokens of the end line, `hdr s` (the model's own fetch, found by following the attempt's
+`gateway.prompt.admission`, so the token-counter round trip is not mistaken for it), `ttft s` (the
+first data event: headers plus `firstDataMs` of the read line), `gen s` (decoding: the read's duration
+minus `firstDataMs`), completion tokens and tokens per second over `gen s`, reasoning tokens and
+bytes of the end line, the finish reason, the tools the turn produced, the operator wait and the gap
+to the next request. A model server that answers a tool call as one block (Ollama does) sends the
+headers after the whole generation: `hdr s` is then the model's whole time, `gen s` is close to zero
+and `tok/s` stays `-` (a rate needs a read that streamed). The breakdown that follows splits the wall
+clock, bounded at the run's settlement, into slices that never overlap: model time (accepted,
+failed and cancelled turns), operator pauses (a package-script trust wait, or an approval from
+`coding-runtime.approval.waiting` to its decision or expiry), tools, the gaps between turns and
+"other". A repository-instructions line (`AGENTS.md` state, bytes attached and the estimated tokens
+re-sent with every turn) precedes the table when the run logged one. The log names these tools read
+are checked against `docs/observability/op-catalog.generated.json` at start, so a renamed operation
+or field fails loudly instead of printing zeros.
 
 ```bash
 node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits>
@@ -88,39 +118,52 @@ step 3). A fault is one control call; `wb-run.mjs` runs the short read-only task
 ```bash
 node scripts/testing/coding-workbench-lab/chaos-proxy.mjs                  # terminal A: 127.0.0.1:11500 -> 127.0.0.1:11434
 curl -s -X POST http://127.0.0.1:11500/__chaos -d '{"mode":"status","status":503,"durationMs":120000}'
-node scripts/testing/coding-workbench-lab/wb-run.mjs --task-id C1
+node scripts/testing/coding-workbench-lab/wb-run.mjs --task-id C1 --approve none
 curl -s http://127.0.0.1:11500/__chaos                                     # state and counters
 curl -s -X POST http://127.0.0.1:11500/__chaos -d '{"mode":"pass"}'
-node scripts/testing/coding-workbench-lab/chaos-suite.mjs --scenarios S4,S5 --out-dir "$HOME/keiko-lab-runs/chaos"
+node scripts/testing/coding-workbench-lab/chaos-suite.mjs --approve none --scenarios S4,S5 --out-dir "$HOME/keiko-lab-runs/chaos"
 ```
+
+The proxy ends an abandoned call: when the client goes away (LiteLLM's timeout, a stopped run) it
+destroys the upstream request and clears the timers of the fault, so a held call is never forwarded
+late and never keeps a socket open.
 
 **6. Record a ledger row.** The script prints a draft row for the _Results_ table of
 `docs/qa/coding-workbench-gemma-litellm-lab.md`; edit its outcome and add operator-level evidence.
-Never paste a prompt, code or model output into the ledger.
+The row says who drove the run and answered its approvals: `--driver` is `wb-ui`, `wb-run` or
+`manual` (a person worked in the Workbench), and `wb-ui` and `wb-run` need the `--approve` policy the
+run used, so a driver-approved run never reads as human-in-the-loop evidence. Never paste a prompt,
+code or model output into the ledger.
 
 ```bash
 node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-row \
-  --task T2 --mode "Supervised workspace" --head "$(git rev-parse --short HEAD)"
+  --driver wb-ui --approve all --task T2 --mode "Supervised workspace" --head "$(git rev-parse --short HEAD)"
 ```
 
 ## Scripts
 
 | Script                    | What it does                                                                                                              |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `tasks.json`              | The task catalog: ids T1 to T12 and C1, their exact texts, modes and baselines                                            |
+| `tasks.json`              | The task catalog: ids T1 to T13 and C1, their exact texts, modes and baselines                                            |
 | `wb-ui.mjs`               | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task |
 | `wb-run.mjs`              | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)             |
 | `wb-stop.mjs`             | Stops a run                                                                                                               |
-| `wb-trust.mjs`            | Grants or revokes package-script trust for a repository                                                                   |
+| `wb-trust.mjs`            | Grants or revokes package-script trust for a lab repository (`grant` or `revoke`, no default)                             |
 | `pair.mjs`                | Prints a one-time pairing URL (or the attestation JSON); valid about 30 seconds, usable once                              |
-| `run-summary.mjs`         | Body-free run summary and, with `--ledger-row`, a draft ledger row                                                        |
-| `turn-profile.mjs`        | Body-free per-turn timing profile of a run (model, tools, gaps, pauses), bounded at the run's settlement                  |
+| `run-summary.mjs`         | Body-free run summary and, with `--ledger-row`, a draft ledger row that names the driver and the approval policy          |
+| `turn-profile.mjs`        | Body-free per-turn timing profile of a run (model, operator pauses, tools, gaps), bounded at the run's settlement         |
 | `rawtl.mjs`               | Body-free raw timeline of a run and its child requests, optionally filtered by operation                                  |
 | `chaos-proxy.mjs`         | Fault-injecting proxy between LiteLLM and the model server (503 bursts, outage, latency, drop, stall, hang)               |
 | `chaos-suite.mjs`         | Runs the scenarios S1 to S7 against task C1 and writes one summary line per scenario                                      |
 | `verify-latency.mjs`      | Times the server's enforced verification path on the lab repository (finding F14)                                         |
-| `lab-common.mjs`          | Shared helpers: option parsing, loopback-only base URL, pairing, task catalog (a library, not a command)                  |
+| `lab-common.mjs`          | Shared helpers: option parsing, approval policy, lab-repository check, loopback-only base URL, pairing, task catalog      |
 | `activity-log-events.mjs` | Reads the Activity Log through the file grammar in `keiko-contracts` (a library, not a command)                           |
+| `op-contract.mjs`         | Compares the operation and field names a tool reads with the generated op catalog (a library, not a command)              |
+| `intervals.mjs`           | Interval algebra behind the non-overlapping slices of the turn profile (a library, not a command)                         |
+
+The pure logic of these scripts (option parsing, the turn-profile pairing and slices, the proxy's
+fault handling, the catalog and fixture consistency) is covered by
+`scripts/__tests__/coding-workbench-lab-*.test.mjs`.
 
 Every command prints its usage with `--help`. Exit codes of the run drivers: 0 the run succeeded,
 1 it ended in another terminal state, 3 the timeout elapsed, 2 a usage error. The drivers talk to a

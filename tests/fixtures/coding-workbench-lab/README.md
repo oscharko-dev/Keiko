@@ -36,23 +36,55 @@ T3 from the earlier state with the patches below.
 
 ## What is here
 
-| Path                          | What                                                                                                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ledger-lab/`                 | The lab repository at its `main` head `0ee16fa`, byte for byte, without `.git/`, `node_modules/` and `package-lock.json`                                           |
-| `patches/initial-state.patch` | The inverse of the lab history `c3ee08f..0ee16fa`. Applied to `ledger-lab/` it reproduces the first lab commit `c3ee08f`, the state T1 to T3 ran on                |
-| `patches/replant-t2-t3.patch` | A small alternative: re-plants only the T2 and T3 defects on the head tree (`src/ledger.ts`, `src/csv.ts`) and removes the four regression tests their fixes added |
+| Path                          | What                                                                                                                                                                                                            |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ledger-lab/`                 | The lab repository at its `main` head `0ee16fa`, byte for byte, without `.git/`, `node_modules/` and `package-lock.json`                                                                                        |
+| `patches/initial-state.patch` | The inverse of the lab history `c3ee08f..0ee16fa`. Applied to `ledger-lab/` it reproduces the first lab commit `c3ee08f`, the state T1 to T3 ran on                                                             |
+| `patches/replant-t2-t3.patch` | A small alternative: re-plants only the T2 and T3 defects on the head tree (`src/ledger.ts`, `src/csv.ts`) and removes the four regression tests their fixes added                                              |
+| `patches/head-t7.patch`       | The reference T7 result on the head tree: the 13 lint findings fixed in six files, nothing else (see below). It is the baseline `head+t7` of T8, T9 and T12                                                     |
+| `patches/head-md.patch`       | Appends reference sections to `AGENTS.md` (the five rules on top stay verbatim) until the file is 30,621 bytes, above the 16 KiB cap of the repository-instructions loader. It is the baseline `head+md` of T13 |
 
-Both patches were generated from the lab history with `git diff` and verified with `git apply
---check` against this tree; `initial-state.patch` reproduces the `c3ee08f` tree exactly.
+`initial-state.patch` and `replant-t2-t3.patch` were generated from the lab history with `git diff`
+and verified with `git apply --check` against this tree; `initial-state.patch` reproduces the
+`c3ee08f` tree exactly.
 
-| Baseline  | How to get it                                    | Used by                                        |
-| --------- | ------------------------------------------------ | ---------------------------------------------- |
-| `initial` | `ledger-lab/` plus `patches/initial-state.patch` | T1, T2, T3 (as recorded in the ledger)         |
-| `head`    | `ledger-lab/` as it is                           | T4 to T7, T10, T11                             |
-| `head+t7` | `head` after the T7 lint fixes were committed    | T8, T9, T12 (they verify with `npm run check`) |
+`head-t7.patch` is different, because the lab history holds no commit with the T7 fixes: no model
+run has completed T7 yet (the runs of its text recorded so far, the ledger's T7a to T7c rows, all
+ended before the 13 findings were fixed). It is the reference T7 result, written by hand as the
+smallest change that clears the findings without a suppression, without touching `eslint.config.mjs`,
+`tsconfig.json` or `package.json`, and without touching the T8 defects, which stay in place. It
+was generated with `git diff` against this tree and applies cleanly. With it applied,
+`tsc --noEmit`, `eslint .` and `node --test` pass (17 of 17 tests; checked with TypeScript 6.0.3,
+ESLint 10.10.0 and typescript-eslint 8.70.0). One change per file, 13 findings in all:
+
+- `src/csv.ts` (4): `charAt(i)` instead of the indexed read in the CSV splitter, and `String(...)`
+  around the two numbers in the error message.
+- `src/importers/bank-b.ts` (2): `String(...)` around the two numbers in the error message.
+- `src/money.ts` (1): `String(...)` around the number in `formatAmount`.
+- `src/ledger.ts` (1): the month entries are sorted instead of looked up again with a `!`.
+- `src/ledger.test.ts` (1): a block body for the arrow function that only calls a void function.
+- `src/report.test.ts` (4): two optional chains dropped where the type already excludes `undefined`,
+  and a narrowing helper instead of two `as Entry` casts, which resolves the
+  `no-non-null-assertion` against `non-nullable-type-assertion-style` conflict without disabling
+  either rule.
+
+| Baseline  | How to get it                                    | Used by                                           |
+| --------- | ------------------------------------------------ | ------------------------------------------------- |
+| `initial` | `ledger-lab/` plus `patches/initial-state.patch` | T1, T2, T3 (as recorded in the ledger)            |
+| `head`    | `ledger-lab/` as it is                           | T4 to T7, T10, T11                                |
+| `head+t7` | `ledger-lab/` plus `patches/head-t7.patch`       | T8, T9, T12 (they verify with `npm run check`)    |
+| `head+md` | `ledger-lab/` plus `patches/head-md.patch`       | T13 (per-turn cost of an AGENTS.md above the cap) |
+
+Apply a patch to the copy before its first commit (`git apply` works outside a repository), and
+never on top of another baseline's patch: each one starts from `ledger-lab/` as it is.
 
 `replant-t2-t3.patch` is the lighter way to run T2 or T3 on the `head` tree. Its `AGENTS.md` asks
 for `npm run check`, so the 13 unrelated lint findings keep that check red until T7 has run.
+
+`head-md.patch` keeps the `head` tree and its defects and only grows `AGENTS.md`. The
+repository-instructions loader reads the file whole (it is under the 64 KiB read ceiling),
+cuts it at a line boundary to 16 KiB and re-sends that block with every model turn, so the file is
+the cost under test, not a task input: see T13 in the lab README.
 
 ## Use a copy
 
@@ -64,7 +96,10 @@ out and give it a Git history (the Workbench works on a Git repository on branch
 LAB=$HOME/keiko-lab-ledger
 mkdir -p "$LAB" && cp -R tests/fixtures/coding-workbench-lab/ledger-lab/. "$LAB"/
 cd "$LAB"
-# For T1 to T3 only: git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/initial-state.patch
+# Pick the baseline the task needs; at most one of these:
+# T1 to T3:      git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/initial-state.patch
+# T8, T9, T12:   git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-t7.patch
+# T13:           git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-md.patch
 git init -b main && git add -A
 git -c user.name="Keiko Lab" -c user.email=lab@keiko.invalid -c commit.gpgsign=false commit -m "Baseline"
 npm install

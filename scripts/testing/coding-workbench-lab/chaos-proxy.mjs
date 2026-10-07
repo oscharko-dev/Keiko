@@ -18,10 +18,14 @@
 // Responses are fixed: a client never receives an error object, an error message or a stack of this
 // process, only a fixed status line or a closed reason code. The diagnostic (error name and message,
 // no stack) goes to this process's own stderr.
+//
+// A client that goes away (LiteLLM's own timeout, a cancelled run) ends the call: the upstream
+// request is destroyed and every timer of an injected fault is cleared, so an abandoned call never
+// reaches the model server late and never leaves a socket or a timer behind.
 import { Buffer } from "node:buffer";
 import { randomInt } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
-import { setTimeout } from "node:timers";
+import { clearTimeout, setTimeout } from "node:timers";
 import { URL } from "node:url";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import { UsageError, parseCli, runMain } from "./lab-common.mjs";
@@ -130,39 +134,82 @@ export function createChaosState({ now = Date.now, random = cryptoRandom } = {})
   };
 }
 
-function relayResponse(upstreamResponse, res, upstream, fault, log) {
+/**
+ * One client call and everything that must stop when the client goes away: the upstream request
+ * and the timers of an injected fault (the latency hold, the stall). cancel() is idempotent.
+ */
+function createExchange(timers) {
+  const pending = new Set();
+  const exchange = {
+    closed: false,
+    upstream: undefined,
+    schedule(callback, delayMs) {
+      const timer = timers.set(() => {
+        pending.delete(timer);
+        callback();
+      }, delayMs);
+      pending.add(timer);
+    },
+    cancel() {
+      if (exchange.closed) return;
+      exchange.closed = true;
+      for (const timer of pending) timers.clear(timer);
+      pending.clear();
+      exchange.upstream?.destroy();
+    },
+  };
+  return exchange;
+}
+
+/**
+ * Sends the bytes before the cut, then ends the call: `drop` closes the connection once they are
+ * on the wire (an immediate close would discard them and reset the connection before the client
+ * saw a single byte), `stall` goes silent for `stallMs` and then closes it.
+ */
+function cutResponse(res, exchange, fault, { log }, head) {
+  const limit = fault.afterBytes ?? 0;
+  if (fault.mode === "drop") {
+    log(`drop after ${String(limit)} bytes`);
+    res.write(head, () => res.socket?.destroy());
+  } else {
+    const stallMs = fault.stallMs ?? DEFAULT_STALL_MS;
+    log(`stall after ${String(limit)} bytes for ${String(stallMs)} ms`);
+    res.write(head);
+    exchange.schedule(() => res.socket?.destroy(), stallMs);
+  }
+  exchange.upstream?.destroy();
+}
+
+function relayResponse(upstreamResponse, res, exchange, fault, context) {
   res.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+  const cutsBody = fault?.mode === "drop" || fault?.mode === "stall";
   const limit = fault?.afterBytes ?? 0;
   let sent = 0;
   let cut = false;
   upstreamResponse.on("data", (chunk) => {
     if (cut) return;
-    const cutting =
-      (fault?.mode === "drop" || fault?.mode === "stall") && sent + chunk.length > limit;
-    if (!cutting) {
+    if (!cutsBody || sent + chunk.length <= limit) {
       sent += chunk.length;
       res.write(chunk);
       return;
     }
-    res.write(chunk.subarray(0, Math.max(0, limit - sent)));
     cut = true;
-    if (fault.mode === "drop") {
-      log(`drop after ${String(limit)} bytes`);
-      res.socket?.destroy();
-    } else {
-      const stallMs = fault.stallMs ?? DEFAULT_STALL_MS;
-      log(`stall after ${String(limit)} bytes for ${String(stallMs)} ms`);
-      setTimeout(() => res.socket?.destroy(), stallMs);
-    }
-    upstream.destroy();
+    cutResponse(res, exchange, fault, context, chunk.subarray(0, Math.max(0, limit - sent)));
   });
   upstreamResponse.on("end", () => {
     if (!cut) res.end();
   });
+  // An upstream that dies mid-body ends the client's call the same way: a truncated response.
+  upstreamResponse.on("error", (error) => {
+    if (cut || exchange.closed) return;
+    context.logError(`upstream response error: ${error.name}: ${error.message}`);
+    res.destroy();
+  });
 }
 
-function forward(req, res, body, context, fault) {
-  const { upstream: target, log, logError, state } = context;
+function forward(req, res, body, context, exchange, fault) {
+  if (exchange.closed) return;
+  const { upstream: target, logError, state } = context;
   const upstream = httpRequest(
     {
       host: target.host,
@@ -171,9 +218,12 @@ function forward(req, res, body, context, fault) {
       path: req.url,
       headers: { ...req.headers, host: `${target.host}:${String(target.port)}` },
     },
-    (upstreamResponse) => relayResponse(upstreamResponse, res, upstream, fault, log),
+    (upstreamResponse) => relayResponse(upstreamResponse, res, exchange, fault, context),
   );
+  exchange.upstream = upstream;
   upstream.on("error", (error) => {
+    // Destroying the upstream request is this proxy's own teardown of an abandoned call.
+    if (exchange.closed) return;
     logError(`upstream error: ${error.name}: ${error.message}`);
     if (res.headersSent) {
       res.end();
@@ -221,7 +271,7 @@ function answerStatus(res, fault) {
   res.end(JSON.stringify({ error: { message: `chaos ${String(status)}`, type: "server_error" } }));
 }
 
-function injectFault(req, res, body, context, fault) {
+function injectFault(req, res, body, context, exchange, fault) {
   switch (fault.mode) {
     case "status":
       answerStatus(res, fault);
@@ -230,17 +280,17 @@ function injectFault(req, res, body, context, fault) {
       context.log("hang: holding the call open");
       break;
     case "latency":
-      setTimeout(
-        () => forward(req, res, body, context, undefined),
+      exchange.schedule(
+        () => forward(req, res, body, context, exchange, undefined),
         fault.delayMs ?? DEFAULT_DELAY_MS,
       );
       break;
     default:
-      forward(req, res, body, context, fault);
+      forward(req, res, body, context, exchange, fault);
   }
 }
 
-function handleRequest(req, res, body, context) {
+function handleRequest(req, res, body, context, exchange) {
   if (req.url === "/__chaos") {
     handleControl(req, res, body, context);
     return;
@@ -248,23 +298,45 @@ function handleRequest(req, res, body, context) {
   const isModelCall = req.method === "POST" && MODEL_CALL.test(req.url ?? "");
   const fault = isModelCall ? context.state.consume() : undefined;
   if (fault) context.log(`inject ${JSON.stringify(fault)}`);
-  if (fault === undefined) forward(req, res, body, context, undefined);
-  else injectFault(req, res, body, context, fault);
+  if (fault === undefined) forward(req, res, body, context, exchange, undefined);
+  else injectFault(req, res, body, context, exchange, fault);
 }
 
-/** An http.Server that forwards to `upstream` ({ host, port }) and injects the state's faults. */
+/** Reads one client call; a client that errors or closes early cancels everything the call started. */
+function serveCall(req, res, context) {
+  const exchange = createExchange(context.timers);
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("error", (error) => {
+    context.logError(`client request error: ${error.name}: ${error.message}`);
+    exchange.cancel();
+    res.destroy();
+  });
+  res.on("error", (error) => {
+    context.logError(`client response error: ${error.name}: ${error.message}`);
+    exchange.cancel();
+  });
+  res.on("close", () => {
+    if (!res.writableFinished)
+      context.log("client closed the connection before the response ended");
+    exchange.cancel();
+  });
+  req.on("end", () => handleRequest(req, res, Buffer.concat(chunks), context, exchange));
+}
+
+/**
+ * An http.Server that forwards to `upstream` ({ host, port }) and injects the state's faults.
+ * `timers` ({ set, clear }) is injectable so a test never waits for a real delay.
+ */
 export function createChaosProxy({
   upstream,
   state = createChaosState(),
   log = proxyLog,
   logError = proxyErrorLog,
+  timers = { set: setTimeout, clear: clearTimeout },
 }) {
-  const context = { upstream, state, log, logError };
-  return createServer((req, res) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => handleRequest(req, res, Buffer.concat(chunks), context));
-  });
+  const context = { upstream, state, log, logError, timers };
+  return createServer((req, res) => serveCall(req, res, context));
 }
 
 function parseUpstream(value) {

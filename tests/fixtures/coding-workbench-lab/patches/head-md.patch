@@ -1,0 +1,491 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 5060ef5..af00e0c 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -9,3 +9,486 @@
+ - Every bug fix ships a regression test next to the code (`src/<module>.test.ts`).
+ - Run `npm run check` (typecheck, lint, tests) before you finish; all three must pass. Fix lint
+   findings in the code; never disable a rule, add an eslint-disable comment, or loosen the config.
++
++The rest of this file is the long form of those rules: how the repository is organized, what each
++module guarantees, the conventions reviewers hold changes to, and the answers to questions that come
++up in almost every task. It is reference material. Read the section that matches the task and skip
++the rest; the five rules above always apply and win over anything below.
++
++## 1. How to use this file
++
++- The sections are numbered so that a review comment can cite one ("see AGENTS.md 7.3").
++- A rule that says "must" is checked by a tool (the typechecker, the linter or a test) or by a
++  reviewer reading the diff. A rule that says "prefer" is a default you may depart from with a
++  reason stated in the commit message.
++- When two rules appear to conflict, the shorter list at the top of the file wins, then the more
++  specific section, then the older text. Never resolve a conflict by disabling a check.
++- When the code and this file disagree, the code is the fact and this file is a defect: fix the
++  file in the same change that discovers the difference.
++- Keep every change small enough to review in one sitting. A change that mixes a bug fix with a
++  rename or a reformat is two changes.
++
++## 2. Repository map
++
++The repository is one TypeScript package with no build step. Sources live in `src/`, sample data in
++`data/`, documentation in `README.md` and `docs/`.
++
++| Path                      | Responsibility                                                                |
++| ------------------------- | ----------------------------------------------------------------------------- |
++| `src/money.ts`            | The `Cents` type, `parseAmount` and `formatAmount`                            |
++| `src/ledger.ts`           | The `Entry` shape and the `Ledger` class: add, balance, monthly totals        |
++| `src/csv.ts`              | `parseCsv`: the native ledger CSV export, one `Entry` per line                |
++| `src/importers/index.ts`  | The `Importer` interface, the registry and `importerFor`                      |
++| `src/importers/bank-b.ts` | The Bank B export: semicolons, `DD.MM.YYYY`, German amounts                   |
++| `src/report.ts`           | Pure reporting: tables, per-account, per-month and per-category summaries     |
++| `src/cli.ts`              | The command line: argument handling and printing, nothing else                |
++| `data/sample.csv`         | A small native export used by the README and by tests that read a real file   |
++| `data/bank-b.csv`         | A small Bank B export with metadata lines before the header                   |
++| `docs/FORMAT.md`          | The file formats; the source of truth for what a parser must accept           |
++
++Dependencies point one way: `cli` uses `importers` and `report`; `importers` use `csv` and
++`ledger`; `csv` uses `money` and `ledger`; `report` uses `ledger` and `money`; `money` and
++`ledger` use nothing but each other's types. A new import that points the other way (for example
++`money.ts` importing from `report.ts`) is a design error, not a lint finding: move the shared piece
++down to the module that owns it.
++
++### 2.1 What each module guarantees
++
++- `money.ts`: `parseAmount` accepts a decimal with a dot and at most two fractional digits, an
++  optional leading minus sign and an optional leading dollar sign, and returns integer cents. It
++  throws an `Error` that names the offending input. `formatAmount` is its inverse for every integer
++  and always prints two fractional digits.
++- `ledger.ts`: `Ledger.add` validates the date shape (`YYYY-MM-DD`) and a non-empty account and
++  throws otherwise; entries are kept in insertion order. `balance` sums all entries or one account.
++  `monthlyTotals` returns a map keyed `YYYY-MM` in chronological order.
++- `csv.ts`: `parseCsv` requires the exact header `date,account,description,amount`, follows RFC 4180
++  quoting for fields, trims the cells and reports the line number of a malformed row.
++- `importers`: every importer has an `id`, a human `describe` text and a pure `parse(text)` that
++  returns entries or throws. `importerFor` throws and lists the known ids for an unknown id.
++- `report.ts`: every function is pure and returns text or plain data; nothing reads a file, a clock
++  or an environment variable. Tables are fixed-width with a header and an underline.
++- `cli.ts`: `run(argv)` returns the output text instead of printing it, so tests call it directly;
++  the `import.meta.main` guard at the bottom is the only place that prints.
++
++## 3. Domain rules
++
++### 3.1 Money
++
++- Amounts are integer cents everywhere inside the program. Conversion from text happens once, in a
++  parser; conversion to text happens once, in `formatAmount`.
++- Never use `Number.parseFloat` on a value that is then summed. Parse the integer and fractional
++  parts separately, or multiply and round exactly once at the boundary.
++- Income is positive and expenses are negative. A report that shows an "expense" as a positive
++  number says so in its header ("Spent", not "Amount").
++- Rounding is half away from zero and happens only when a percentage is computed for display.
++
++### 3.2 Dates and months
++
++- A date is an ISO calendar date string (`YYYY-MM-DD`). It is never converted to a `Date` object to
++  find its month: time zones shift instants, and a calendar date has no zone. Slice the string.
++- A month key is `YYYY-MM`, one-based and zero-padded, so keys sort correctly as plain strings.
++- Anything keyed by month is returned in chronological order, regardless of the order in which the
++  entries were added.
++
++### 3.3 Categories
++
++- A category is chosen by the first rule whose keyword is a case-insensitive substring of the
++  description; otherwise it is `Other`. Rules are data (`DEFAULT_CATEGORY_RULES`), not code.
++- A new keyword goes at the end of the list unless it must win over an existing one; the order is
++  part of the behavior and is covered by a test.
++
++### 3.4 Recurring entries
++
++- An entry recurs when the same description (case-insensitive) and the same amount appear in at
++  least `minMonths` distinct months. Each recurring pair is reported once, at its first occurrence.
++
++### 3.5 Importers
++
++- An importer never guesses. A row that does not match the format throws with the line number; it is
++  not skipped and not repaired.
++- An importer converts amounts to integer cents before anything else touches them.
++- Metadata lines before a header (Bank B has them) are skipped only until the header is found;
++  a file without the header is an error that names the header.
++
++## 4. TypeScript conventions
++
++- Strictness is the baseline: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
++  `noImplicitOverride`, `verbatimModuleSyntax` and `erasableSyntaxOnly` are on. Do not weaken them.
++- Prefer `readonly` on interface properties and `readonly T[]` for parameters you do not mutate.
++- Model alternatives as discriminated unions or string-literal unions, not as booleans plus
++  optional fields. Narrow with checks; do not cast. A cast that "removes undefined" is a missing
++  check: write the check or restructure so the value cannot be missing.
++- Every function has an explicit return type. Exported functions and types carry a one-line doc
++  comment that says what they guarantee, not how they work.
++- Names: functions are verbs (`parseAmount`, `summarizeMonths`), types are nouns (`Entry`,
++  `MonthSummary`), constants are `UPPER_SNAKE_CASE` only when they are true module constants.
++- No default exports. One module, one concern; a file past about 300 lines is a hint to split.
++- Import order: Node built-ins, then relative imports; types use `import type`. Relative imports
++  keep the `.ts` extension because Node runs the sources directly.
++- No `any`. Use `unknown` at a boundary and narrow it. No non-null assertion (`!`): the linter
++  forbids it, and the rule `non-nullable-type-assertion-style` would ask for it in the same place,
++  so the way out is a real check, a helper that narrows, or a restructured loop.
++- Template literals take strings. Numbers go through `String(value)` first; the linter enforces it.
++- Classes use private fields (`#field`), not the `private` keyword, and have no parameter
++  properties (erasable syntax only).
++- Keep functions small: at most 50 lines and a cyclomatic complexity of 10. Extract a named helper
++  rather than nesting; a helper with a good name is documentation.
++
++## 5. Error handling
++
++- Parsers and validators throw `Error` with a message that names the input and the rule. Messages
++  start with a capital letter, have no trailing period and contain no stack or file path.
++- A message that refers to a position says "Line N" with N counted from one and counting the
++  header (so the first data row is line 2).
++- Do not catch an error to hide it. Catch only where you can add context or recover, and then
++  rethrow with the original as `cause` or handle it completely.
++- The CLI prints usage for a missing or unknown command and lets parser errors propagate with their
++  message; it never prints a stack for an expected failure.
++- Never swallow an error with an empty `catch`. If a failure is genuinely ignorable, say why in a
++  comment and make the ignored case explicit in the code, not implicit in the control flow.
++
++## 6. Testing conventions
++
++- Tests use `node:test` and `node:assert/strict`; there is no other test dependency.
++- A test file sits next to its module: `src/money.ts` is tested by `src/money.test.ts`.
++- Name a test after the behavior ("monthly totals are in chronological order and correctly
++  keyed"), not after the function. A failing test name should tell the reader what broke.
++- Every bug fix starts with a test that fails for the reason the bug exists, then the fix, then the
++  test passing. A regression test that passes without the fix proves nothing.
++- Cover the input space of the thing you changed: empty input, a single element, boundaries (the
++  first and last day of a month), malformed input, and the case that motivated the change.
++- Tests are deterministic and hermetic: no network, no clock, no randomness, no dependence on the
++  working directory except through paths relative to the test file.
++- Build fixtures in the test with small helpers; do not share mutable state between tests.
++- Assert on values, not on printed text, unless the text is the thing under test (the table
++  renderer and the CLI are). When you assert on text, assert on the whole string.
++- A test that needs a file reads one of the committed files in `data/`; it never writes to the
++  repository.
++- Run a single file with `node --test src/<module>.test.ts` while you work, and the whole suite
++  with `npm test` before you finish.
++
++## 7. The lint and typecheck bar
++
++`npm run check` runs `npm run typecheck`, `npm run lint` and `npm test` in that order. All three
++must pass; a task is not done while any of them is red.
++
++### 7.1 Typecheck
++
++- `tsc --noEmit` with the project's `tsconfig.json`. A type error is fixed in the code. A
++  `@ts-ignore` or `@ts-expect-error` is not a fix.
++
++### 7.2 Lint
++
++- ESLint runs the recommended rules plus `strictTypeChecked` and `stylisticTypeChecked` from
++  typescript-eslint, with these additions: explicit function return types, no `any`, no non-null
++  assertion, complexity at most 10, and at most 50 lines per function (tests are exempt from the
++  line limit). Floating promises are errors, except for the test runner's own `test()` calls.
++- Never disable a rule, add an `eslint-disable` comment, or loosen `eslint.config.mjs`,
++  `tsconfig.json` or `package.json` to make a finding go away. Fix the code.
++
++### 7.3 Common findings and how to fix them
++
++| Finding                                   | Fix                                                                     |
++| ----------------------------------------- | ----------------------------------------------------------------------- |
++| `restrict-template-expressions` on number | Wrap the number in `String(...)` inside the template                    |
++| `restrict-plus-operands` on `string \| undefined` | Use a call that returns a string (`charAt`) or check for `undefined` first |
++| `no-non-null-assertion`                   | Narrow with a check, use a helper that throws on a missing value, or iterate the entries instead of looking each key up again |
++| `non-nullable-type-assertion-style`       | Remove the `as` cast by narrowing; do not answer it with `!`            |
++| `no-unnecessary-condition`                | The type already excludes the case; delete the dead check or optional chain |
++| `no-confusing-void-expression`            | Give an arrow function a block body when it only calls a void function   |
++| `complexity`                              | Extract a named helper for each branch group; do not add a suppression   |
++| `max-lines-per-function`                  | Split the function at a natural seam; a seam has a name                  |
++
++## 8. The command line
++
++- Commands: `summary`, `accounts`, `months`, `categories` (each takes a CSV file) and
++  `import --format <id> <file>`. The usage text in `src/cli.ts` lists them; a new command is added
++  to the usage text, to `README.md` and to the tests in the same change.
++- `run(argv)` returns text and never exits the process or prints. The block guarded by
++  `import.meta.main` prints the returned text once.
++- A missing or unknown command, or a missing file argument, returns the usage text.
++- Unknown flags are not silently ignored: a new flag is parsed explicitly and rejects a malformed
++  value with a message that shows the accepted form.
++- Output is plain text with `\n` line endings and no trailing blank line. Tables use two spaces
++  between columns and a dash underline.
++- Exit codes are part of the interface once a command can fail on purpose; document them in the
++  README when they exist.
++
++## 9. Documentation
++
++- `README.md` shows how to run the program; `docs/FORMAT.md` documents the file formats. A change
++  to a parser or to the CLI updates the matching document in the same change.
++- Documentation says what is true now. Delete a sentence that stopped being true; do not leave a
++  history of how the feature used to work.
++- Examples are runnable: a command in the README works from the repository root.
++- Write in plain English, present tense, short sentences. Use the same word for the same thing
++  everywhere ("entry", not sometimes "row" and sometimes "transaction", except when describing a
++  file's own rows).
++- Code comments explain why, not what. A comment that restates the next line is deleted in review.
++
++## 10. Data files
++
++- `data/sample.csv` is the native export used in the README. It has a header line and a handful of
++  entries across three months, one of them with a quoted description that contains a comma.
++- `data/bank-b.csv` is a Bank B export: three metadata lines, a blank line, the header
++  `Datum;Konto;Verwendungszweck;Betrag` and one entry per line with German amounts.
++- Data files are small, synthetic and committed. Never put real account data in the repository.
++- When you add a file, add a test that reads it and a line in this section.
++
++## 11. Git, commits and review
++
++- Work on a branch named `type/short-slug` such as `fix/month-order` or `feat/month-filter`; do not
++  commit to `main`.
++- Commit subjects are imperative and conventional: `fix(ledger): key months from the ISO date`,
++  `feat(cli): add a --month filter`, `test(csv): cover escaped quotes`. English, no trailing period,
++  at most 72 characters.
++- The body explains why the change is needed and what you verified. Mention the command you ran.
++- Do not commit generated files, logs, `node_modules/` or editor settings.
++- A pull request describes the problem, the fix, the tests added and anything a reviewer should
++  look at twice. It links the issue it closes.
++- Reviewers check, in this order: does it solve the stated problem, does a test prove it, does it
++  keep the five rules at the top, is it the smallest reasonable change, is it documented.
++
++## 12. Review checklist
++
++Run through this list before you declare a task finished.
++
++1. The change does what the task asked and nothing else.
++2. A new or changed behavior has a test next to the code, and the test failed before the change.
++3. `npm run check` passes: typecheck, lint and tests, all three.
++4. No rule is disabled, no `eslint-disable` comment was added, no configuration file was touched.
++5. No new dependency was added; `package.json` is unchanged unless the task is about scripts.
++6. Money stays in integer cents; no floating-point amount is stored or summed.
++7. Dates are sliced as strings; no `Date` object decides a month.
++8. Months and other keyed results come out in chronological order.
++9. Error messages name the input and the rule, and line numbers count from one with the header.
++10. Public functions have explicit return types and a one-line doc comment.
++11. The README and `docs/FORMAT.md` still describe what the program does.
++12. The diff contains no commented-out code, leftover debugging output or unrelated formatting.
++13. The commit message is imperative, conventional and explains why.
++
++## 13. Frequently asked questions
++
++**May I add a small dependency for parsing?** No. The project has zero runtime dependencies and the
++only development dependencies are TypeScript, ESLint and their configs. If a task seems to need a
++package, write the small piece yourself or ask the person who gave you the task.
++
++**May I use `Date` to work out the month of an entry?** No. Slice the ISO string. A `Date` built
++from a calendar date is an instant, and a time zone can move it into the neighbouring month.
++
++**May I use floating-point for a percentage?** Only for display. `share` rounds to one decimal and
++is the single place a ratio is computed; money itself never becomes a float.
++
++**The linter wants a non-null assertion and also forbids it. What now?** Neither rule is
++disabled. Remove the situation that needs the assertion: narrow with a check, add a helper that
++throws on a missing value, or iterate over entries instead of looking each key up again.
++
++**A test needs a sorted map. Which order do I assert?** Assert the exact key order with
++`deepEqual` on `Array.from(map.keys())`; a map's iteration order is its insertion order, so the
++code under test must insert in chronological order.
++
++**Where do new report columns go?** In `report.ts`, as pure functions that return rows. The CLI only
++chooses which report to print. Add the report to the CLI usage text and the README.
++
++**How do I add an import format?** Create `src/importers/<id>.ts` exporting an `Importer`, register
++it in `IMPORTERS`, document the format in `docs/FORMAT.md`, add a small sample under `data/` and a
++test that parses it. The CLI needs no change: `import --format <id>` finds it by id.
++
++**How do I run one test?** `node --test src/ledger.test.ts`. Add `--test-name-pattern="monthly"` to
++select by name.
++
++**Why do imports end in `.ts`?** Node runs the TypeScript sources directly by stripping types, and
++it resolves the real file name. Without the extension the import fails at runtime.
++
++**What does erasable syntax mean?** Syntax that disappears when types are stripped. `enum`,
++`namespace` and constructor parameter properties generate code, so they are not allowed. Use
++string-literal unions, plain objects and explicit field assignments instead.
++
++**May I change `tsconfig.json` or `eslint.config.mjs`?** No. The bar is part of the project. If you
++believe a rule is wrong, say so in your report and leave the configuration as it is.
++
++**What if a pre-existing test fails?** Report it. Do not edit a test to make it pass unless the
++task is about that behavior and the old expectation is wrong; say which in the commit message.
++
++**How should I report what I did?** State the files changed, the tests added, the commands you ran
++and their results, and anything left undone. Keep it short and factual.
++
++## 14. Glossary
++
++- **Entry**: one dated line of the ledger with an account, a description and an amount in cents.
++- **Cents**: the integer unit of money; 12.50 is 1250.
++- **Month key**: `YYYY-MM`, one-based and zero-padded.
++- **Importer**: a pure parser from a bank export format to entries.
++- **Report**: a pure function from entries to text or plain data.
++- **Recurring entry**: the same description and amount in at least two distinct months.
++- **Regression test**: a test that failed because of a bug and passes after the fix.
++- **Check**: `npm run check`, which runs typecheck, lint and tests.
++
++## 15. Decision log
++
++Short notes on why the project is the way it is. Newest first.
++
++- 2026-09-18: Reports return text and never print, so tests can assert on the whole output.
++- 2026-09-02: Months are sliced from the ISO string. A time-zone bug moved entries around midnight
++  in the first version.
++- 2026-08-21: Importers throw on an unexpected row instead of skipping it; silent skipping hid a
++  wrong total for a week.
++- 2026-08-12: Amounts are integer cents. The first version summed floating-point values and printed
++  totals off by a cent.
++- 2026-08-05: No runtime dependencies. The CLI is small enough that a parser library costs more
++  than it saves.
++- 2026-07-29: Lint bar raised to the strict type-checked configuration with complexity and function
++  length limits; the findings are fixed in the code, never suppressed.
++
++## 16. Function reference
++
++Signatures as they stand today. The code is the fact; fix this list when it drifts.
++
++- `parseAmount(input: string): Cents` in `src/money.ts` trims the input, drops a leading `$`,
++  accepts an optional minus sign, digits and at most two fractional digits, and returns integer
++  cents. Anything else throws `Invalid amount: <input>`.
++- `formatAmount(cents: Cents): string` in `src/money.ts` prints two fractional digits and a leading
++  `-` for a negative value, with no thousands separator.
++- `Ledger` in `src/ledger.ts`: `add(entry)` validates and appends, `entries` is a read-only view,
++  `balance(account?)` sums everything or one account, and `monthlyTotals()` returns a
++  `Map<string, Cents>` keyed `YYYY-MM` in chronological order.
++- `parseCsv(text: string): Entry[]` in `src/csv.ts` checks the header, splits each row following
++  RFC 4180, requires four columns, trims the cells and converts the amount with `parseAmount`.
++- `Importer`, `IMPORTERS` and `importerFor(id)` in `src/importers/index.ts` form the registry. An
++  unknown id throws and lists the known ones. `ledgerCsvImporter` wraps `parseCsv`; the Bank B
++  importer lives in `src/importers/bank-b.ts`.
++- `renderTable(columns, rows, options?)` in `src/report.ts` pads every column to its widest cell (or
++  its `minWidth`), joins the columns with the gutter (two spaces by default) and underlines the
++  header with dashes.
++- `summarizeAccounts(entries)` returns, per account, the entry count, income, expenses and balance,
++  sorted by account name.
++- `summarizeMonths(entries)` returns, per month, the entry count, the total and the largest
++  expense of the month when it has one, in chronological order.
++- `share(part, whole)` is the percentage of `part` in `whole` with one decimal, and 0 when `whole`
++  is 0. It is the only place a ratio is computed.
++- `categorize(entry, rules?)` returns the category of the first matching rule, or `Other`.
++- `summarizeCategories(entries, rules?)` returns the expense total of each category and its share
++  of all expenses; income entries are excluded.
++- `renderAccountReport`, `renderMonthReport` and `renderCategoryReport` produce the text the CLI
++  prints for `accounts`, `months` and `categories`.
++- `runningBalance(entries)` returns the balance after each entry, in the order given.
++- `recurringEntries(entries, minMonths = 2)` is described in section 3.4.
++- `run(argv)` and `USAGE` in `src/cli.ts` are described in section 8.
++
++## 17. Worked examples
++
++### 17.1 Fixing a parser bug
++
++1. Reproduce it with the smallest input that fails, as a test next to the parser.
++2. Run the test and confirm that it fails for the reason you expect and not because of a typo.
++3. Fix the parser at the point where the wrong value is produced, not where it is noticed.
++4. Add the neighbouring cases: an empty field, a quoted field, a last line without a newline.
++5. Run `npm run check` and fix every lint finding in the code.
++6. Update `docs/FORMAT.md` when the accepted format changed.
++
++### 17.2 Adding a report
++
++1. Write the pure function in `src/report.ts` that returns plain data: a summary type with
++   `readonly` fields and no formatting.
++2. Write the renderer that turns that data into text with `renderTable`.
++3. Test the data function with a small fixed list of entries and the renderer against the whole
++   expected text.
++4. Register the command in `REPORTS` and add it to the usage text in `src/cli.ts`.
++5. Add a test that calls `run([...])` with a file from `data/`.
++6. Document the command in `README.md`.
++
++### 17.3 Adding a command-line option
++
++1. Decide the accepted form and the error message for a malformed value before writing code.
++2. Parse the option explicitly in `run`; nothing else reads `process.argv`.
++3. Apply it as a filter on the entries before a report is built, so every report benefits.
++4. Add tests for the option present, absent and malformed.
++5. Add the option to the usage text and to the README.
++
++### 17.4 A regression test, as a template
++
++```ts
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { Ledger } from "./ledger.ts";
++
++test("monthly totals are in chronological order and correctly keyed", () => {
++  const ledger = new Ledger();
++  ledger.add({ date: "2026-02-01", account: "a", description: "Feb", amount: 100 });
++  ledger.add({ date: "2026-01-01", account: "a", description: "Jan", amount: 200 });
++  assert.deepEqual(Array.from(ledger.monthlyTotals().keys()), ["2026-01", "2026-02"]);
++});
++```
++
++## 18. Troubleshooting
++
++**`npm run lint` reports a finding in a test file.** Tests are linted with the same rules as the
++sources, except the function-length limit. Fix the test; do not exclude it.
++
++**`node --test` finds no tests.** Run it from the repository root. Test files end in `.test.ts`
++and live next to their module under `src/`.
++
++**Node reports `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`.** The file uses syntax that type stripping
++cannot erase: an `enum`, a `namespace` or a constructor parameter property. Replace it with a
++string-literal union, a plain object or an explicit field assignment.
++
++**Node reports `Cannot find module './ledger'`.** A relative import is missing its `.ts` extension.
++Node resolves the real file name; write `./ledger.ts`.
++
++**A map comes out in the wrong order.** Maps iterate in insertion order. Sort the keys (they are
++`YYYY-MM` strings, so a plain string comparison is chronological) and build the result map from
++the sorted keys, never from the insertion order of the entries.
++
++**A total is off by one cent.** A floating-point value was summed somewhere. Find where the amount
++was parsed, make sure it becomes integer cents there, and add a test with an amount such as `0.10`
++added three times.
++
++**The typechecker says an array element may be `undefined`.** `noUncheckedIndexedAccess` is on, so
++an indexed read is `T | undefined`. Check it, destructure with a default, or iterate with `for...of`
++instead of indexing. Do not answer it with a cast or a non-null assertion.
++
++**A test passes on your machine and fails in review.** It depends on the time zone, the clock, the
++working directory or the order of a map. Make the dependency explicit in the test or remove it.
++
++## 19. More questions
++
++**Should a new helper be exported?** Only if another module or a test needs it. Everything else
++stays module-private; an exported name is a promise.
++
++**Where does shared formatting live?** Money formatting lives in `money.ts`, table formatting in
++`report.ts`. A third place for formatting is a sign that one of those two should grow instead.
++
++**May a report read the current date?** No. Reports are pure: they take entries and return text.
++A feature that needs "today" receives it as a parameter from the CLI.
++
++**Can I rename a public function?** Yes, in one change that updates every caller, the tests and the
++documentation. Leave no alias behind.
++
++**How long may a test be?** As long as it needs to be to state one behavior. If a test has two
++unrelated assertions, it is two tests.
++
++**What goes in the commit body?** Why the change was needed, what you verified and how. The diff
++already says what changed.
++
++**What if the task text and this file disagree?** The task text says what to do; this file says how
++the project works. If following the task would break one of the five rules at the top, stop and
++say so instead of breaking the rule.
++
++**Is a TODO comment acceptable?** Only with a reference to an open issue, and never to hide an
++unfinished branch. Prefer finishing the work or deleting the code path.
++
++## 20. Style notes
++
++- Formatting is consistent within a file: match the quotes, the trailing commas and the line width
++  of the code around your change. There is no formatter to run, so read the neighbouring lines.
++- Prefer early returns over nested conditionals, and small named helpers over long functions.
++- Prefer `for...of` over index loops unless you need the index; prefer `Map` and `Set` over plain
++  objects used as dictionaries.
++- Prefer returning a new value over mutating an argument. A function that must mutate says so in
++  its name or its doc comment.
++- Keep comments in English and keep them true. Delete a comment instead of updating it when the
++  code became obvious.
++- Choose the plainest construct that is correct. A reader should never need to wonder why a clever
++  expression was used instead of two simple statements.
++- When you are unsure how a module is meant to behave, read its test file first: the tests are the
++  most precise statement of the intended behavior in this repository.

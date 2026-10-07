@@ -2,7 +2,10 @@
 // Drives one Coding Workbench run through the real UI in headless Chromium, so the Workbench's own
 // editor bridge applies edits exactly as for a human operator. The driver pairs the browser with
 // the dev server, selects the lab repository, chooses the model and the Run authority, starts the
-// task, then polls the run and approves permissions and the package-script trust pause for you.
+// task, then polls the run and, as the --approve policy says, answers permissions, the change
+// review of Ask for approval and the package-script trust pause for you. The driver acts as the
+// operator, so it is fail-closed: the approval policy and the lab repository are always named, and
+// the repository must be a lab copy.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -11,10 +14,14 @@ import { isMainModule } from "../../lib/is-main-module.mjs";
 import {
   CSRF_HEADERS,
   TERMINAL_STATES,
+  approvalPolicyLine,
+  assertCheckoutSelected,
   browserBaseUrl,
+  checkoutRequest,
   describeSnapshot,
   exitCodeForState,
   formatTaskList,
+  gateActions,
   labBaseUrl,
   labRepositoryPath,
   log,
@@ -27,14 +34,18 @@ import {
 } from "./lab-common.mjs";
 
 const USAGE = [
-  "usage: node wb-ui.mjs (--task-id <id> | --task <text>) [--repo <path>] [--mode <label|id>]",
-  "                      [--model <id>] [--approve all|none|ask] [--timeout-min 40]",
-  "                      [--branch main] [--base-url <origin>] [--shots <dir>]",
+  "usage: node wb-ui.mjs (--task-id <id> | --task <text>) --approve all|none|ask",
+  "                      (--repo <path> | KEIKO_LAB_REPO) [--mode <label|id>] [--model <id>]",
+  "                      [--timeout-min 40] [--branch main] [--base-url <origin>] [--shots <dir>]",
   "                      [--text-out <file>] [--headed] [--list-tasks]",
   "",
+  "  --approve    required, no default: all approves every permission ask once, applies the change",
+  "               reviews of Ask for approval and allows package scripts; none denies the asks and",
+  "               rejects the change reviews; ask leaves all of it to a person (use it with --headed)",
+  "  --repo       required unless KEIKO_LAB_REPO is set: the lab repository, a copy of",
+  "               tests/fixtures/coding-workbench-lab/ledger-lab; a checkout whose package.json does",
+  "               not name ledger-lab is refused",
   "  --mode       Ask for approval | Supervised workspace | Full access; default: the task's mode",
-  "  --approve    all approves every permission once and allows package scripts, none denies,",
-  "               ask leaves both to the operator (use it with --headed)",
   "  --shots      directory for one screenshot per run state change",
   "  --text-out   file for the final Workbench text (the answer, so it stays outside the repo)",
   "",
@@ -50,7 +61,7 @@ const OPTIONS = {
   repo: { type: "string" },
   mode: { type: "string" },
   model: { type: "string", default: "gemma-4-31b-it" },
-  approve: { type: "string", default: "all" },
+  approve: { type: "string" },
   "timeout-min": { type: "string", default: "40" },
   branch: { type: "string", default: "main" },
   "base-url": { type: "string" },
@@ -94,9 +105,10 @@ async function waitForWorkbench(page) {
 async function selectCheckout(page, repo, branch) {
   const response = await page.request.post("/api/task-workspaces/local", {
     headers: CSRF_HEADERS,
-    data: { root: repo, branch, requestedBy: "studio-operator" },
+    data: checkoutRequest(repo, branch),
   });
   log("local checkout", response.status());
+  assertCheckoutSelected(response.status());
   await page.reload();
   return waitForWorkbench(page);
 }
@@ -139,10 +151,9 @@ async function clickIfVisible(locator, label) {
   return true;
 }
 
-async function decidePermission(page, runId, snapshot, approve) {
-  const name = approve === "all" ? /^(Approve|Allow|Apply)/u : /^(Deny|Reject)/u;
+async function decidePermission(page, runId, snapshot, decision) {
+  const name = decision === "approved" ? /^(Approve|Allow|Apply)/u : /^(Deny|Reject)/u;
   if (await clickIfVisible(page.getByRole("button", { name }).first(), "approval via UI:")) return;
-  const decision = approve === "all" ? "approved" : "denied";
   const response = await page.request.post(
     `/api/coding-workbench/runtime/runs/${runId}/approvals`,
     {
@@ -173,19 +184,21 @@ async function decideChangeReview(page, approve) {
   await button.click();
 }
 
-/** The operator gates of a run: the package-script trust pause, a permission, a change review. */
-async function answerGates(page, runId, snapshot, { approve, decided }) {
-  if (approve === "ask") return;
-  if (snapshot.state === "paused" && approve === "all") {
-    const allow = page.getByRole("button", { name: /^Allow package scripts/u }).first();
-    await clickIfVisible(allow, "script trust via UI:");
+/**
+ * The operator gates of a run, answered as the approval policy says (see gateActions): the
+ * package-script trust pause, a permission request and the change review of Ask for approval.
+ * `ask` touches none of them.
+ */
+export async function answerGates(page, runId, snapshot, { approve, decided }) {
+  for (const action of gateActions(snapshot, approve, decided)) {
+    if (action.kind === "allow-package-scripts") {
+      const allow = page.getByRole("button", { name: /^Allow package scripts/u }).first();
+      await clickIfVisible(allow, "script trust via UI:");
+    } else {
+      await decidePermission(page, runId, snapshot, action.decision);
+    }
   }
-  const pending = snapshot.pendingPermission;
-  if (snapshot.state === "awaiting-approval" && pending && !decided.has(pending.requestId)) {
-    decided.add(pending.requestId);
-    await decidePermission(page, runId, snapshot, approve);
-  }
-  if (snapshot.state === "running") await decideChangeReview(page, approve);
+  if (snapshot.state === "running" && approve !== "ask") await decideChangeReview(page, approve);
 }
 
 async function watchRun(page, runId, { approve, deadline, shots }) {
@@ -214,7 +227,7 @@ async function watchRun(page, runId, { approve, deadline, shots }) {
   return snapshot;
 }
 
-async function reportRun(page, workbench, runId, snapshot, { shots, textOut }) {
+async function reportRun(page, workbench, runId, snapshot, { shots, textOut, approve }) {
   await sleep(2500);
   const text = await workbench.innerText();
   if (textOut) writeFileSync(textOut, text, { mode: 0o600 });
@@ -228,6 +241,7 @@ async function reportRun(page, workbench, runId, snapshot, { shots, textOut }) {
   );
   const tail = text.split("\n").filter(Boolean).slice(-40).join("\n");
   console.log(`----- workbench tail -----\n${tail}`);
+  log(approvalPolicyLine("wb-ui", approve));
   console.log(`----- run ${runId} -----`);
   if (shots) await page.screenshot({ path: join(shots, "zz-final.png"), fullPage: true });
 }
@@ -241,6 +255,7 @@ async function driveRun(browser, options) {
   const { fragment } = await mintPairing();
   await page.goto(`/${fragment}`);
   await waitForWorkbench(page);
+  log(approvalPolicyLine("wb-ui", approve));
   const workbench = await selectCheckout(page, repo, branch);
   const runId = await startRun(page, workbench, task);
   const snapshot = await watchRun(page, runId, {
@@ -248,7 +263,7 @@ async function driveRun(browser, options) {
     deadline: Date.now() + timeoutMs,
     shots,
   });
-  await reportRun(page, workbench, runId, snapshot, { shots, textOut });
+  await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
   return exitCodeForState(snapshot.state);
 }
 
@@ -260,13 +275,14 @@ async function main() {
     return 0;
   }
   const { text, mode } = resolveTaskInput(cli.values);
+  const approve = parseApprove(cli.values.approve);
   const options = {
     repo: labRepositoryPath(cli.values.repo),
     base: browserBaseUrl(labBaseUrl(cli.values["base-url"])),
     branch: cli.values.branch,
     shots: cli.values.shots,
     textOut: cli.values["text-out"],
-    approve: parseApprove(cli.values.approve),
+    approve,
     timeoutMs: minutesToMs(cli.values["timeout-min"]),
     task: { text, mode, model: cli.values.model },
   };

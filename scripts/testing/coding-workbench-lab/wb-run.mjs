@@ -3,16 +3,22 @@
 // plus the final answer text (the lab repository is synthetic). Use it for read-only tasks and
 // the chaos scenarios: edits are applied by the live Workbench editor bridge in a browser, so an
 // API-started run refuses every edit with NO_ACTIVE_SESSION (finding F4). Use wb-ui.mjs for tasks
-// that edit files.
+// that edit files. The driver acts as the operator, so it is fail-closed: the approval policy and
+// the lab repository are always named, and it never runs in the dev server's current workspace.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainModule } from "../../lib/is-main-module.mjs";
 import {
   TERMINAL_STATES,
+  approvalPolicyLine,
+  assertCheckoutSelected,
+  checkoutRequest,
   describeSnapshot,
   exitCodeForState,
   formatTaskList,
+  gateActions,
   labBaseUrl,
+  labRepositoryPath,
   log,
   minutesToMs,
   openApiSession,
@@ -23,14 +29,17 @@ import {
 } from "./lab-common.mjs";
 
 const USAGE = [
-  "usage: node wb-run.mjs (--task-id <id> | --task <text>) [--mode <label|id>] [--model <id>]",
-  "                       [--approve all|none|ask] [--timeout-min 30] [--repo <path>]",
-  "                       [--branch main] [--base-url <origin>] [--list-tasks]",
+  "usage: node wb-run.mjs (--task-id <id> | --task <text>) --approve all|none|ask",
+  "                       (--repo <path> | KEIKO_LAB_REPO) [--mode <label|id>] [--model <id>]",
+  "                       [--timeout-min 30] [--branch main] [--base-url <origin>] [--list-tasks]",
   "",
+  "  --approve   required, no default: all approves every permission ask once, none denies every",
+  "              ask, ask leaves them to a person (answer them in a paired Workbench window)",
+  "  --repo      required unless KEIKO_LAB_REPO is set: the lab repository, a copy of",
+  "              tests/fixtures/coding-workbench-lab/ledger-lab; it is always selected first and a",
+  "              checkout whose package.json does not name ledger-lab is refused",
   "  --mode      Ask for approval | Supervised workspace | Full access (or governed-assist,",
   "              supervised-coding, autonomous-delivery); default: the task's mode, else Supervised",
-  "  --approve   all approves every permission once, none denies, ask leaves them to the operator",
-  "  --repo      lab repository to select first (default KEIKO_LAB_REPO; else the server's current one)",
   "",
   "Environment: KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required), KEIKO_LAB_BASE_URL,",
   "KEIKO_LAB_REPO. Exit code: 0 succeeded, 1 another terminal state, 3 timed out, 2 usage.",
@@ -41,7 +50,7 @@ const OPTIONS = {
   "task-id": { type: "string" },
   mode: { type: "string" },
   model: { type: "string", default: "gemma-4-31b-it" },
-  approve: { type: "string", default: "all" },
+  approve: { type: "string" },
   "timeout-min": { type: "string", default: "30" },
   repo: { type: "string" },
   branch: { type: "string", default: "main" },
@@ -49,14 +58,17 @@ const OPTIONS = {
   "list-tasks": { type: "boolean" },
 };
 const POLL_MS = 3000;
+// Key of the one notice a paused run gets; permission request ids never look like it.
+const PAUSED_NOTICE = "paused";
 
 async function selectCheckout(session, repo, branch) {
-  const response = await session.request("POST", "/api/task-workspaces/local", {
-    root: repo,
-    branch,
-    requestedBy: "studio-operator",
-  });
+  const response = await session.request(
+    "POST",
+    "/api/task-workspaces/local",
+    checkoutRequest(repo, branch),
+  );
   log("local checkout", response.status);
+  assertCheckoutSelected(response.status);
 }
 
 async function startRun(session, { text, mode, model }) {
@@ -79,8 +91,7 @@ async function startRun(session, { text, mode, model }) {
   return runId;
 }
 
-async function decidePermission(session, runId, snapshot, approve) {
-  const pending = snapshot.pendingPermission;
+async function logApprovalRequest(session, runId, snapshot) {
   const review = await session.request(
     "GET",
     `/api/coding-workbench/runtime/runs/${runId}/approval-review`,
@@ -90,13 +101,14 @@ async function decidePermission(session, runId, snapshot, approve) {
     describeSnapshot(snapshot),
     `review fields: ${Object.keys(review.json).join(",")}`,
   );
-  if (approve === "ask") return;
-  const decision = approve === "all" ? "approved" : "denied";
+}
+
+async function answerPermission(session, runId, snapshot, decision) {
   const answered = await session.request(
     "POST",
     `/api/coding-workbench/runtime/runs/${runId}/approvals`,
     {
-      requestId: pending.requestId,
+      requestId: snapshot.pendingPermission.requestId,
       expectedRevision: snapshot.revision,
       decision,
       grantScope: "once",
@@ -105,11 +117,35 @@ async function decidePermission(session, runId, snapshot, approve) {
   log("decision", decision, "->", answered.status);
 }
 
-async function watchRun(session, runId, { approve, deadline }) {
+/** The operator gates of a run, answered as the approval policy says (see gateActions). */
+async function answerGates(session, runId, snapshot, { approve, decided, announced }) {
+  const pending = snapshot.pendingPermission;
+  if (snapshot.state === "awaiting-approval" && pending && !announced.has(pending.requestId)) {
+    announced.add(pending.requestId);
+    await logApprovalRequest(session, runId, snapshot);
+  }
+  for (const action of gateActions(snapshot, approve, decided)) {
+    if (action.kind === "permission") {
+      await answerPermission(session, runId, snapshot, action.decision);
+    } else if (!announced.has(PAUSED_NOTICE)) {
+      announced.add(PAUSED_NOTICE);
+      log(
+        "paused for the package-script trust decision; wb-run.mjs cannot answer it (wb-trust.mjs grant, or wb-ui.mjs)",
+      );
+    }
+  }
+}
+
+/** Polls the run until it is terminal or the deadline passes; `wait` and `now` are injectable. */
+export async function watchRun(
+  session,
+  runId,
+  { approve, deadline, wait = sleep, now = Date.now },
+) {
   let last = "";
   let snapshot;
-  const decided = new Set();
-  while (Date.now() < deadline) {
+  const gates = { approve, decided: new Set(), announced: new Set() };
+  while (now() < deadline) {
     const response = await session.request("GET", `/api/coding-workbench/runtime/runs/${runId}`);
     snapshot = response.json.snapshot ?? response.json;
     const line = describeSnapshot(snapshot);
@@ -118,12 +154,8 @@ async function watchRun(session, runId, { approve, deadline }) {
       last = line;
     }
     if (TERMINAL_STATES.includes(snapshot.state)) break;
-    const pending = snapshot.pendingPermission;
-    if (snapshot.state === "awaiting-approval" && pending && !decided.has(pending.requestId)) {
-      decided.add(pending.requestId);
-      await decidePermission(session, runId, snapshot, approve);
-    }
-    await sleep(POLL_MS);
+    await answerGates(session, runId, snapshot, gates);
+    await wait(POLL_MS);
   }
   return snapshot;
 }
@@ -148,10 +180,11 @@ async function main() {
   }
   const { text, mode } = resolveTaskInput(cli.values);
   const approve = parseApprove(cli.values.approve);
+  const repo = labRepositoryPath(cli.values.repo);
   const timeoutMs = minutesToMs(cli.values["timeout-min"]);
   const session = await openApiSession(labBaseUrl(cli.values["base-url"]));
-  const repo = cli.values.repo ?? process.env.KEIKO_LAB_REPO;
-  if (repo) await selectCheckout(session, repo, cli.values.branch);
+  log(approvalPolicyLine("wb-run", approve));
+  await selectCheckout(session, repo, cli.values.branch);
   const runId = await startRun(session, { text, mode, model: cli.values.model });
   const snapshot = await watchRun(session, runId, { approve, deadline: Date.now() + timeoutMs });
   const summary = {
@@ -162,6 +195,7 @@ async function main() {
   };
   log("final", JSON.stringify(summary).slice(0, 600));
   await printAnswer(session);
+  log(approvalPolicyLine("wb-run", approve));
   console.log(`----- run ${runId} -----`);
   return exitCodeForState(snapshot?.state);
 }

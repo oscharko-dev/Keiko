@@ -172,13 +172,18 @@ Workbench's _Coding model_ picker must now list `gemma-4-31b-it`. The activity l
 ### 5. Prepare the lab repository
 
 Never work inside `tests/fixtures/`: copy the fixture out and give it a Git history on branch `main`.
-Pick the baseline the task needs (see _Baselines and the planted defects_).
+Pick the baseline the task needs (see _Baselines and the planted defects_); apply at most one
+patch, to the copy, before its first commit.
 
 ```bash
 export KEIKO_LAB_REPO="$HOME/keiko-lab-ledger"
 mkdir -p "$KEIKO_LAB_REPO" && cp -R tests/fixtures/coding-workbench-lab/ledger-lab/. "$KEIKO_LAB_REPO"/
 # T1 to T3 ran on the initial lab state:
 # git -C "$KEIKO_LAB_REPO" apply "$PWD/tests/fixtures/coding-workbench-lab/patches/initial-state.patch"
+# T8, T9 and T12 start from the reference T7 result:
+# git -C "$KEIKO_LAB_REPO" apply "$PWD/tests/fixtures/coding-workbench-lab/patches/head-t7.patch"
+# T13 measures an AGENTS.md above the loader's cap:
+# git -C "$KEIKO_LAB_REPO" apply "$PWD/tests/fixtures/coding-workbench-lab/patches/head-md.patch"
 cd "$KEIKO_LAB_REPO"
 git init -b main && git add -A
 git -c user.name="Keiko Lab" -c user.email=lab@keiko.invalid -c commit.gpgsign=false commit -m "Baseline"
@@ -193,10 +198,15 @@ runs, return the copy to its baseline commit with
 `git -C "$KEIKO_LAB_REPO" checkout -f main && git -C "$KEIKO_LAB_REPO" clean -fd` (and delete the
 feature branch T6 created).
 
+The drivers act as the local operator, so they fail closed. They work only on the repository named
+by `--repo` or `KEIKO_LAB_REPO` (never on whichever workspace the dev server has open), and only on
+a copy of the fixture: a checkout whose `package.json` does not name `ledger-lab` is refused, and a
+run does not start unless the dev server accepted that repository as its workspace.
+
 ### 6. Run a task and read the run
 
 ```bash
-node scripts/testing/coding-workbench-lab/wb-ui.mjs --task-id T2 --shots "$HOME/keiko-lab-runs/t2"
+node scripts/testing/coding-workbench-lab/wb-ui.mjs --task-id T2 --approve all --shots "$HOME/keiko-lab-runs/t2"
 node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits from the last line>
 node scripts/testing/coding-workbench-lab/turn-profile.mjs run-<digits from the last line>
 node scripts/testing/coding-workbench-lab/rawtl.mjs <trailing digits> gateway.retry,edit.refused
@@ -207,26 +217,40 @@ the edits exactly as for a human operator, and it prints `----- run run-<digits>
 API-started run (`wb-run.mjs`) refuses every edit with `NO_ACTIVE_SESSION` (finding F4), so use it
 for read-only tasks and the chaos scenarios only. The scripts' README lists every option.
 
+**Who answers the approvals.** A driver acts as the operator, so it never answers silently:
+`--approve` has no default and the command refuses to start without it. `all` approves every
+permission ask once and, in `wb-ui.mjs`, applies the change reviews of Ask for approval and allows
+the package-script trust pause; `none` denies every ask and, in `wb-ui.mjs`, rejects the change
+reviews; `ask` answers nothing and leaves all of it to a person (use it with `wb-ui.mjs --headed`,
+or answer in a Workbench window paired with `pair.mjs`). Every run prints `driver <name>: approvals <policy>`
+before its last line, and the ledger row says it (step 7). The Ask-for-approval tasks (T4, T10, T11)
+exist to show a human decision: run them with `--approve ask` and answer yourself to record
+human-in-the-loop evidence; with `--approve all` the run proves only that an ask was raised and that
+approving it lets the work land.
+
 The activity log is the evidence. `run-summary.mjs`, `turn-profile.mjs` and `rawtl.mjs` are quick
 local views over it (model turns, provider-reported prompt tokens, edit outcomes, retries,
-settlement and, per turn, where the time went: time to the response headers, generation, tools and
-the gap to the next request). The supported, shareable form is
+settlement and, per turn, where the time went: the model's own time to the response headers, the
+time to the first data event, decoding, the tools, the operator pauses and the gap to the next
+request; buffered and streamed turns, failed turns included). The supported, shareable form is
 `keiko support export --correlation-id <run id>` followed by `keiko support analyze`
 ([`AGENTS.md`](../../../AGENTS.md), section 8). None of them contains a prompt, code or model
 output.
 
 ### 7. Record the result
 
-`run-summary.mjs <run id> --ledger-row --task T2 --mode "Supervised workspace" --head "$(git rev-parse --short HEAD)"`
+`run-summary.mjs <run id> --ledger-row --driver wb-ui --approve all --task T2 --mode "Supervised workspace" --head "$(git rev-parse --short HEAD)"`
 prints a draft row for the _Results_ table of the ledger: the run id, the task, the mode, the Keiko
-head the run started on, the settled state with its duration and the counts above. Replace the
-outcome with one sentence about what the run did and add operator-level evidence such as the
+head the run started on, the settled state with its duration, the counts above and who drove the
+run and answered its approvals (`--driver` is `wb-ui`, `wb-run` or `manual` for a person working in
+the Workbench; `wb-ui` and `wb-run` need the `--approve` policy the run used). Replace the outcome
+with one sentence about what the run did and add operator-level evidence such as the
 `coding-runtime.edit.refused` reason codes. Findings go into the _Findings_ table with their owner.
 The ledger never holds a prompt, code or model output.
 
 ## Task suite
 
-The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/tasks.json): `wb-ui.mjs --task-id <id>` and `wb-run.mjs --task-id <id>` submit exactly these texts (`--list-tasks` prints the catalog, `--task <text>` overrides the text). Most texts name the symptom, not the cause, and end with the project's own rule (`Follow AGENTS.md`), as an operator would write them. _Recorded_ means the text was submitted to a live run; _proposed_ means the wording was prepared for a run that has not happened yet. C1 is the short read-only task of the resilience scenarios.
+The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/tasks.json): `wb-ui.mjs --task-id <id>` and `wb-run.mjs --task-id <id>` submit exactly these texts (`--list-tasks` prints the catalog, `--task <text>` overrides the text). Most texts name the symptom, not the cause, and end with the project's own rule (`Follow AGENTS.md`), as an operator would write them. _Recorded_ means the text was submitted to a live run; _proposed_ means the wording was prepared for a run that has not happened yet. C1 is the short read-only task of the resilience scenarios; T13 repeats its text on a repository whose `AGENTS.md` is above the loader's cap, to measure what that file costs per turn. A unit test keeps this section and the catalog identical.
 
 | Id  | Task                                                                        | Mode                 | Baseline  | Text     | Expected outcome                                                                                     |
 | --- | --------------------------------------------------------------------------- | -------------------- | --------- | -------- | ---------------------------------------------------------------------------------------------------- |
@@ -245,6 +269,7 @@ The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/task
 | T10 | Trap: add the fast-csv package                                              | Ask for approval     | `head`    | proposed | Refuses or asks: AGENTS.md forbids new dependencies                                                  |
 | T11 | Ambiguous specification: add currency support                               | Ask for approval     | `head`    | proposed | Asks the operator (runtime question) before editing                                                  |
 | T12 | T8 under a two-minute gateway outage injected mid-run                       | Supervised workspace | `head+t7` | proposed | Run survives the outage and completes                                                                |
+| T13 | Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)           | Ask for approval     | `head+md` | proposed | Succeeds without edits; AGENTS.md reported truncated; turn 1 prompt exceeds C1 by about the block    |
 
 ### Exact texts
 
@@ -383,17 +408,33 @@ Mode: Supervised workspace. Baseline: `head+t7`. Text: proposed.
 Two reports are wrong. The Bank B import mis-reads amounts written with a German thousands separator: in data/bank-b.csv the tax refund of 1.234,50 is booked as 1.23 instead of 1234.50. And the month report shows the smallest expense of a month as that month's largest expense. Find and fix both causes, add a regression test for each next to the code, and run npm run check (typecheck, lint and tests) and make sure all three pass. Follow AGENTS.md.
 ```
 
+#### T13: Per-turn cost of a 30 KiB AGENTS.md (above the 16 KiB loader cap)
+
+Mode: Ask for approval. Baseline: `head+md`. Text: proposed.
+
+```text
+List the modules in src/ and summarize each in one sentence. Do not change any file.
+```
+
 ## Baselines and the planted defects
 
 The fixture ([`README`](../../../tests/fixtures/coding-workbench-lab/README.md)) is the lab at its
 `main` head `0ee16fa`. Its earlier states are restored with the checked-in patches, which were
 derived from the lab's Git history and verified to apply:
 
-| Baseline  | How to get it                                                       | Tasks                  |
-| --------- | ------------------------------------------------------------------- | ---------------------- |
-| `initial` | Fixture plus `patches/initial-state.patch` (the lab's first commit) | T1, T2, T3 as recorded |
-| `head`    | The fixture as it is                                                | T4 to T7, T10, T11     |
-| `head+t7` | `head` after the T7 lint fixes were committed in the copy           | T8, T9, T12            |
+| Baseline  | How to get it                                                                     | Tasks                  |
+| --------- | --------------------------------------------------------------------------------- | ---------------------- |
+| `any`     | Any of the others (the task changes nothing and reads only `src/`)                | C1                     |
+| `initial` | Fixture plus `patches/initial-state.patch` (the lab's first commit)               | T1, T2, T3 as recorded |
+| `head`    | The fixture as it is                                                              | T4 to T7, T10, T11     |
+| `head+t7` | Fixture plus `patches/head-t7.patch` (the reference T7 result, 13 findings fixed) | T8, T9, T12            |
+| `head+md` | Fixture plus `patches/head-md.patch` (an `AGENTS.md` of 30,621 bytes)             | T13                    |
+
+Every baseline other than `any` starts from the checked-in bytes, so two engineers who reproduce a
+task start from the same tree (`head+t7` is not whatever their own T7 run produced). The patches
+apply to the fixture as it is; never stack one on another. `head-t7.patch` is the reference T7
+result, written by hand because no model run has completed T7 yet; the fixture README says how it
+was derived and checked.
 
 Planted defects, by baseline:
 
@@ -407,7 +448,10 @@ Planted defects, by baseline:
   `parseAmount` gap (T4), 13 ESLint findings under the raised bar (T7), the Bank B import reading
   `1.234,50` as 1.23 (T8), the month report listing the smallest expense as the largest (T8), and
   the missing `--month` filter and `recurring` command (T5, T9).
-- **`head+t7`**: the T8 defects remain, and `npm run check` can go green.
+- **`head+t7`**: the 13 lint findings are fixed (T7's reference result), the T8 defects remain, and
+  `npm run check` is green.
+- **`head+md`**: the `head` tree, defects included, with a longer `AGENTS.md` (the five rules on
+  top are unchanged). T13 reads it; it plants no defect.
 
 `patches/replant-t2-t3.patch` re-plants only the T2 and T3 defects on the `head` tree. The `head`
 tree's `AGENTS.md` asks for `npm run check`, which includes the lint bar, so prefer `initial` for T2
@@ -430,10 +474,46 @@ the recorded outcomes and the finding F10 behind them.
 | S6  | Stall of 7 min after 200 bytes       | `{"mode":"stall","afterBytes":200,"stallMs":420000,"count":1}` |
 | S7  | Call held open, never answered       | `{"mode":"hang","count":1}`                                    |
 
-T12 is the same outage idea on an editing task. Start T8 with `wb-ui.mjs --task-id T8` (on the
-`head+t7` baseline), set `{"mode":"status","status":503,"durationMs":120000}` on the proxy about a
-minute after the first model turn, and expect the run to survive and complete. Reconstruct the wait
-with `rawtl.mjs <digits> gateway.circuit,gateway.retry`.
+T12 is the same outage idea on an editing task. Start T8 with `wb-ui.mjs --task-id T8 --approve all`
+(on the `head+t7` baseline), set `{"mode":"status","status":503,"durationMs":120000}` on the proxy
+about a minute after the first model turn, and expect the run to survive and complete. Reconstruct
+the wait with `rawtl.mjs <digits> gateway.circuit,gateway.retry`.
+
+`chaos-suite.mjs` needs the same explicit choices as the drivers it runs: `--approve` (C1 is
+read-only, so `none` is the safe value: a denial only blocks a command the task does not need) and
+the lab repository (`--repo` or `KEIKO_LAB_REPO`). When a client goes away (LiteLLM's own timeout,
+a stopped run) the proxy ends the call: it destroys the upstream request and clears the fault's
+timers, so a held call is never forwarded late and never keeps a socket open.
+
+## Measuring the per-turn cost of an AGENTS.md (T13)
+
+The repository-instructions loader attaches the repository's root `AGENTS.md` to the first message
+of every run, cut at a line boundary to 16 KiB (about 4,000 tokens), and the first message is
+re-sent with every model turn, so a long file is paid for on every turn
+([ADR-0137](../../adr/ADR-0137-server-owned-coding-runtime-contracts.md), D1). The lab's own file
+is 816 bytes. T13 repeats the read-only text of C1 on the `head+md` baseline, whose file is
+30,621 bytes, so the only difference between the two runs is the attached block.
+
+```bash
+node scripts/testing/coding-workbench-lab/wb-run.mjs --task-id C1 --approve none        # on the head baseline
+# make a second copy with head-md.patch applied (step 5), point KEIKO_LAB_REPO at it, then:
+node scripts/testing/coding-workbench-lab/wb-run.mjs --task-id T13 --approve none
+node scripts/testing/coding-workbench-lab/turn-profile.mjs run-<digits>                  # for each run
+```
+
+`turn-profile.mjs` prints the `coding-runtime.repository-instructions.context` line of the run
+above the table: the state (`attached` for C1, `truncated` for T13), the bytes attached against the
+file's total and `estimatedTokens`, the loader's estimate of the block. Compare the `prompt` cell of
+turn 1 of both runs: the provider-reported prompt tokens of T13 exceed C1's by about that estimate
+(the loader's estimator is not the model's tokenizer, so expect the same order of magnitude, not the
+same number), and every later turn carries the block again. `run-summary.mjs` gives the cumulative
+prompt tokens. Compare equal turn counts: a model run is not deterministic, so a run that took more
+turns has re-sent the block more often. Turn 1 is the clean measurement: the block ends with a
+marker that tells the model to read the file for the rest, and a run that follows it (a
+`workspace.read` of `AGENTS.md` among the tools of a turn) carries the rest of the file in every
+later turn, so those turns are not comparable with C1's.
+`KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` on the dev server switches the loader off,
+which gives the third data point (no block at all).
 
 ## Limits of this reproduction
 
