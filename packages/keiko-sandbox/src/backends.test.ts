@@ -186,6 +186,44 @@ describe("buildWrappedCommand", () => {
     expect(wrapped.args.slice(2)).toEqual(["node", "-e", "process.exit(0)"]);
   });
 
+  it("supports execution-root Seatbelt without granting the host home or loopback network", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("seatbelt", {
+        ...plan,
+        filesystem: "execution-root",
+        cwd: '/work/root"quoted',
+      }),
+    );
+    const profile = wrapped.args[1];
+    expect(profile).toContain(
+      "(deny file-read* file-write* network* mach-lookup appleevent-send lsopen)",
+    );
+    expect(profile).toContain('(subpath "/work/root\\"quoted")');
+    expect(profile).not.toContain("localhost");
+    expect(profile).not.toContain("/Users");
+  });
+
+  it("admits a resolved npm package without granting its installation parent's other files", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("seatbelt", {
+        ...plan,
+        filesystem: "execution-root",
+        command: "/trusted/node/lib/node_modules/npm/bin/npx-cli.js",
+      }),
+    );
+    expect(wrapped.args[1]).toContain('(subpath "/trusted/node/lib/node_modules/npm")');
+    expect(wrapped.args[1]).not.toContain('(subpath "/trusted/node")');
+  });
+
+  it.each(["relative/root", "/work/root\nother", "/work/root\0other"])(
+    "refuses an unsafe execution root before building the profile: %j",
+    (cwd) => {
+      expect(() =>
+        buildWrappedCommand("seatbelt", { ...plan, filesystem: "execution-root", cwd }),
+      ).toThrow("seatbelt-execution-root-invalid");
+    },
+  );
+
   it("the seatbelt profile denies remote egress but keeps loopback and unix sockets", () => {
     expect(SEATBELT_DENY_EGRESS_PROFILE).toContain("(deny network-outbound)");
     expect(SEATBELT_DENY_EGRESS_PROFILE).toContain("(allow network-outbound (remote unix-socket))");

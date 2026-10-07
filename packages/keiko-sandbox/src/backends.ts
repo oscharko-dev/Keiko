@@ -5,6 +5,7 @@
 import { basename, dirname, isAbsolute } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { linuxGatewayLauncherPath } from "./runtime.js";
+import { executionRootSeatbeltProfile } from "./seatbelt-execution-root.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -162,7 +163,14 @@ function buildUnshareCommand(plan: IsolatedRunPlan): WrappedCommand {
 }
 
 function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
-  return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
+  const profile =
+    plan.filesystem === "execution-root"
+      ? executionRootSeatbeltProfile(plan, [
+          ...EXECUTION_ROOT_READONLY_BINDS,
+          dirname(process.execPath),
+        ])
+      : SEATBELT_DENY_EGRESS_PROFILE;
+  return ["-p", profile, plan.command, ...plan.args];
 }
 
 function gatewayProcessExecPolicy(command: string, childExecutable: string): string {
@@ -236,9 +244,7 @@ function unsupportedBackend(backend: never): never {
 function assertCompatibleFilesystem(backend: SandboxBackend, plan: IsolatedRunPlan): void {
   if (
     plan.filesystem === "execution-root" &&
-    (backend === "unshare" ||
-      backend === "seatbelt" ||
-      copyNetworkGatewayPolicy(plan.network) !== undefined)
+    (backend === "unshare" || copyNetworkGatewayPolicy(plan.network) !== undefined)
   ) {
     throw new TypeError("sandbox-filesystem-policy-unsupported");
   }

@@ -11,6 +11,7 @@ function selectExecutionRootBackend(
   if (platform === "linux" && availability.bubblewrap) {
     return "bubblewrap";
   }
+  if (platform === "darwin" && availability.seatbelt) return "seatbelt";
   if (availability.docker) {
     return "container-docker";
   }

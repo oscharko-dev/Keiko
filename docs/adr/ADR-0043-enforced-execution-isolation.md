@@ -176,7 +176,16 @@ Both assured pre-filter execution and in-place repository verification request
 including ordinary package scripts and targeted tests, but repository code may write only inside
 that root and sandbox temporary storage. The governed command runner uses the same existing policy.
 Strict bubblewrap or the Docker/Podman fallback must enforce the requested filesystem boundary;
-network-only `unshare` and Seatbelt wrappers do not qualify. If no compatible backend is available,
+network-only `unshare` and Seatbelt wrappers do not qualify. The macOS execution-root Seatbelt
+profile now denies reads and writes outside the accepted root, except readonly system/toolchain
+paths and ancestor directory metadata. Writes and the ephemeral HOME/TMPDIR stay within that root;
+symlink escapes, descendant escapes, loopback connections and service-mediated escapes remain
+denied. Only dyld's boot directory itself is enumerable, not unrelated Preboot children. Native
+selection avoids feeding macOS-installed native dependencies to a Linux test container, preserves
+the user's installed tree, and removes container startup from ordinary targeted tests. The existing
+command attestation records both filesystem and network enforcement. Containers remain the fallback;
+network-dependent tests still require an isolated network backend rather than a host-loopback grant.
+If no compatible backend is available,
 execution fails closed before spawning. A network compatibility setting never removes a requested
 filesystem boundary. Sandbox attestations report network and filesystem enforcement separately.
 

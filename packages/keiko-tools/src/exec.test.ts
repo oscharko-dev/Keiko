@@ -100,6 +100,118 @@ function controller(): AbortController {
   return new AbortController();
 }
 
+describe.runIf(process.platform === "darwin")("native execution-root verification", () => {
+  function confinedDeps(): RunCommandDeps {
+    return {
+      ...realDeps({ PATH: process.env.PATH ?? "" }),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      sandboxAvailability: {
+        seatbelt: true,
+        bubblewrap: false,
+        unshare: false,
+        docker: false,
+        podman: false,
+      },
+    };
+  }
+
+  it("confines files, symlinks and descendants while keeping an owned temporary directory", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-confined-canary-"));
+    const denied = join(outside, "canary.txt");
+    writeFileSync(denied, "qualification-canary");
+    symlinkSync(denied, join(root, "escape.txt"));
+    const code = `
+      const fs = require("node:fs"), cp = require("node:child_process"), os = require("node:os");
+      const deny = (f) => { try { f(); return false; } catch(e) { return e.code === "EPERM"; } };
+      fs.writeFileSync("inside.txt", "inside");
+      const temp = os.tmpdir(); fs.writeFileSync(temp + "/probe", "temp");
+      const child = cp.spawnSync(process.execPath, ["-e", 'try{require("node:fs").readFileSync(process.argv[1]);process.exit(7)}catch{process.exit(0)}', process.argv[1]]);
+      process.stdout.write(JSON.stringify({inside:fs.readFileSync("inside.txt", "utf8") === "inside",
+        readDenied:deny(()=>fs.readFileSync(process.argv[1])), writeDenied:deny(()=>fs.writeFileSync(process.argv[1],"changed")),
+        symlinkDenied:deny(()=>fs.readFileSync("escape.txt")), childDenied:child.status === 0,
+        temp, home:process.env.HOME}));
+    `;
+    try {
+      const result = await runCommand(
+        { command: "node", args: ["-e", code, denied], signal: controller().signal },
+        confinedDeps(),
+      );
+      const facts: unknown = JSON.parse(result.stdout);
+      expect(result.exitCode).toBe(0);
+      expect(facts).toMatchObject({
+        inside: true,
+        readDenied: true,
+        writeDenied: true,
+        symlinkDenied: true,
+        childDenied: true,
+      });
+      expectConfinedTemporaryDirectory(facts);
+      expect(result.attestation).toMatchObject({
+        backend: "seatbelt",
+        filesystemEnforced: true,
+        networkEnforced: true,
+      });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  function expectConfinedTemporaryDirectory(facts: unknown): void {
+    if (
+      typeof facts !== "object" ||
+      facts === null ||
+      !("temp" in facts) ||
+      typeof facts.temp !== "string"
+    ) {
+      throw new TypeError("Temporary-directory proof unavailable.");
+    }
+    expect(facts.temp.startsWith(join(realpathSync(root), ".keiko-home-"))).toBe(true);
+    expect(facts).toHaveProperty("home", facts.temp);
+    expect(existsSync(facts.temp)).toBe(false);
+  }
+
+  it("refuses outbound connections to a host-loopback listener", async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve) => {
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const address = listener.address();
+    if (address === null || typeof address === "string")
+      throw new TypeError("Loopback fixture unavailable.");
+    try {
+      const code =
+        'const s=require("node:net").connect(Number(process.argv[1]),"127.0.0.1");s.once("connect",()=>{s.end();process.exitCode=7});s.once("error",e=>{process.stdout.write(e.code);s.destroy()})';
+      const result = await runCommand(
+        { command: "node", args: ["-e", code, String(address.port)], signal: controller().signal },
+        confinedDeps(),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("EPERM");
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
+  it("refuses a caller home pointing at the repository without deleting it", async () => {
+    const cleanup = vi.fn();
+    await expect(
+      runCommand(
+        { command: "node", args: ["-e", "process.exit(0)"], signal: controller().signal },
+        {
+          ...confinedDeps(),
+          home: { make: (): string => root, cleanup },
+        },
+      ),
+    ).rejects.toThrow(CommandDeniedError);
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(existsSync(root)).toBe(true);
+  });
+});
+
 interface HomeRecorder {
   readonly provider: HomeProvider;
   readonly made: () => readonly string[];

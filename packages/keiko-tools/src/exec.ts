@@ -1445,8 +1445,12 @@ function applyHomeIsolation(
   env: Record<string, string>,
   deps: RunCommandDeps,
   reservation: WindowsTerminationReservation | undefined,
+  target: SpawnTarget,
+  cwd: string,
 ): RunState {
-  if (deps.policy.homeIsolation === "inherit") {
+  const confined =
+    target.attestation?.backend === "seatbelt" && target.attestation.filesystemEnforced;
+  if (deps.policy.homeIsolation === "inherit" && !confined) {
     const inherited = inheritedHome(env);
     if (inherited !== undefined) {
       env.HOME = inherited;
@@ -1454,11 +1458,26 @@ function applyHomeIsolation(
       return createRunState(undefined, undefined, reservation);
     }
   }
-  const home = deps.home ?? nodeHomeProvider;
+  const home = deps.home ?? executionHome(cwd, confined);
   const homeDir = home.make();
+  if (confined) prepareConfinedHome(env, cwd, homeDir);
   env.HOME = homeDir;
   env.USERPROFILE = homeDir;
   return createRunState(home, homeDir, reservation);
+}
+
+function executionHome(cwd: string, confined: boolean): HomeProvider {
+  return confined
+    ? { ...nodeHomeProvider, make: (): string => mkdtempSync(join(cwd, ".keiko-home-")) }
+    : nodeHomeProvider;
+}
+
+function prepareConfinedHome(env: Record<string, string>, cwd: string, homeDir: string): void {
+  const canonicalHome = realpathSync(homeDir);
+  if (!isWithinWorkspace(cwd, canonicalHome) || canonicalHome === cwd) {
+    throw new CommandDeniedError("sandbox temporary directory escaped the execution root", "node");
+  }
+  env.TMPDIR = canonicalHome;
 }
 
 function reserveWindowsTermination(
@@ -1550,7 +1569,7 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const reservation = reserveWindowsTermination(input, deps);
     let state: RunState;
     try {
-      state = applyHomeIsolation(env, deps, reservation);
+      state = applyHomeIsolation(env, deps, reservation, target, cwd);
     } catch (error) {
       reservation?.release();
       throw error;

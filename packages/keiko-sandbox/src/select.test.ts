@@ -61,12 +61,12 @@ describe("selectEnforcingBackend", () => {
     expect(selectEnforcingBackend("darwin", NONE)).toBe("none");
   });
 
-  it("requires strict bubblewrap or a container for execution-root isolation", () => {
+  it("requires a native filesystem boundary or a container for execution-root isolation", () => {
     expect(selectEnforcingBackend("linux", { ...NONE, unshare: true }, "execution-root")).toBe(
       "none",
     );
     expect(selectEnforcingBackend("darwin", { ...NONE, seatbelt: true }, "execution-root")).toBe(
-      "none",
+      "seatbelt",
     );
     expect(selectEnforcingBackend("linux", { ...NONE, bubblewrap: true }, "execution-root")).toBe(
       "bubblewrap",
@@ -74,5 +74,11 @@ describe("selectEnforcingBackend", () => {
     expect(selectEnforcingBackend("darwin", { ...NONE, docker: true }, "execution-root")).toBe(
       "container-docker",
     );
+  });
+
+  it("prefers native filesystem confinement on macOS over container platform translation", () => {
+    expect(
+      selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, docker: true }, "execution-root"),
+    ).toBe("seatbelt");
   });
 });
