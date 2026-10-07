@@ -2613,6 +2613,34 @@ describe("coding runtime manager", () => {
     expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toBeDefined();
   });
 
+  it("starts no process when OpenCode preparation returns after cancellation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const controller = new AbortController();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      openCodeLifecycleAdapter: {
+        prepare: async () => {
+          await settle();
+          controller.abort();
+          return { ok: true, env: {} };
+        },
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+
+    const result = await manager.start({
+      ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({ ok: false, failureCode: "start-aborted", retryable: true });
+    expect(harness.captures).toEqual([]);
+    expect(harness.children).toEqual([]);
+    expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
   // #3347 owner P1: the run surface proves workspace access once, before backend construction, and
   // OpenCode/Codex preparation then awaits. Without a proof at the spawn itself, a worktree archived
   // during that await still received a long-lived runtime tree rooted in the stale path.

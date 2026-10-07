@@ -417,6 +417,14 @@ then terminate the complete tree. A run reaches a terminal/reusable slot only af
 proves tree exit. If complete exit cannot be proven, state becomes `recovery-required`; the active-run
 slot remains occupied and no replacement run may start until reconciliation proves reap.
 
+The `starting` state admits the same `stopping` path as an established run. Its server-owned
+startup cancellation signal covers asynchronous preparation, handshake and initial context loading;
+stop, takeover and shutdown abort it. Immediately before spawning, the manager checks cancellation
+again, so late preparation cannot create a tree after a successful stop. A delayed start result
+waits for the interruption's teardown result and never dispatches the initial task or replaces its
+terminal state. An unproven teardown or a late live host remains `recovery-required`; cancellation
+does not substitute for process-tree exit proof (F25, #3873).
+
 Supported platform names are not sufficient evidence that confinement exists. Runtime availability
 uses this release-qualified matrix:
 

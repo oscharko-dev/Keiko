@@ -140,8 +140,14 @@ function contextUsageProjection(
 }
 
 function snapshotDetail(snapshot: CodingRuntimeSnapshot): Partial<PublicSnapshot> {
+  // A later containment failure can reopen a settled row. Its retained prior process receipt
+  // belongs to history; the public contract permits a result only while the row is terminal.
+  const result =
+    snapshot.terminalAt === undefined || snapshot.state === "recovery-required"
+      ? undefined
+      : snapshot.result;
   return {
-    ...(snapshot.result === undefined ? {} : { result: snapshot.result }),
+    ...(result === undefined ? {} : { result }),
     ...(snapshot.issueBinding === undefined ? {} : { issueBinding: snapshot.issueBinding }),
     ...(snapshot.draftDelivery === undefined ? {} : { draftDelivery: snapshot.draftDelivery }),
     ...(snapshot.ciReadiness === undefined ? {} : { ciReadiness: snapshot.ciReadiness }),

@@ -196,6 +196,22 @@ function firstTaskDispatchRequest(
   return request;
 }
 
+function deferredRuntimeStart(f: ReturnType<typeof fixture>) {
+  type Result = Awaited<ReturnType<CodingRuntimeManager["start"]>>;
+  let resolve: (value: Result) => void = () => {
+    throw new Error("start resolver unavailable");
+  };
+  let reject: (error: Error) => void = () => {
+    throw new Error("start rejector unavailable");
+  };
+  const pending = new Promise<Result>((success, failure) => {
+    resolve = success;
+    reject = failure;
+  });
+  f.manager.start.mockImplementationOnce(() => pending);
+  return { resolve, reject };
+}
+
 function expectProjectMemoryLog(
   records: readonly ServerLogEvent[],
   expected: Record<string, unknown>,
@@ -1287,6 +1303,125 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(loadForRun).toHaveBeenCalledTimes(1);
     const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
     expect(dispatchRequest).not.toHaveProperty("initialContext");
+  });
+
+  it.each(["ready", "aborted", "rejected"] as const)(
+    "cancels a starting run at shutdown without dispatching its late %s outcome",
+    async (outcome) => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+      const pending = deferredRuntimeStart(f);
+      const started = f.orchestrator.start(start);
+      await vi.waitFor(() => {
+        expect(f.manager.start).toHaveBeenCalledTimes(1);
+      });
+      const request = f.manager.start.mock.calls[0]?.[0];
+
+      const ended = await f.orchestrator.shutdown();
+      if (outcome === "rejected") pending.reject(new Error("private delayed start failure"));
+      else
+        pending.resolve(
+          outcome === "ready"
+            ? { ok: true, status: "ready", runId: "run-1" }
+            : { ok: false, failureCode: "start-aborted", retryable: true },
+        );
+      const late = await started;
+
+      expect(successfulSnapshot(ended).state).toBe("cancelled");
+      expect(successfulSnapshot(late).state).toBe("cancelled");
+      expect(request?.signal?.aborted).toBe(true);
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+      expect(
+        captured.records.find((event) => event.op === "coding-runtime.run.shutdown"),
+      ).toMatchObject({ extra: { stateBefore: "starting", outcome: "ended" } });
+      expect(JSON.stringify(captured.records)).not.toContain("private delayed start failure");
+    },
+  );
+
+  it("retains unproven startup containment after a late ready result", async () => {
+    const f = fixture();
+    const pending = deferredRuntimeStart(f);
+    f.manager.stop.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    const started = f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.manager.start).toHaveBeenCalledTimes(1);
+    });
+    const ended = await f.orchestrator.shutdown();
+    pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+    const late = await started;
+
+    expect(successfulSnapshot(ended).state).toBe("recovery-required");
+    expect(successfulSnapshot(late).state).toBe("recovery-required");
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(f.orchestrator.hasLiveRun()).toBe(true);
+  });
+
+  it.each(["stop", "takeover"] as const)(
+    "aborts preparation on operator %s and never dispatches a late ready result",
+    async (kind) => {
+      const f = fixture();
+      const pending = deferredRuntimeStart(f);
+      const started = f.orchestrator.start(start);
+      await vi.waitFor(() => {
+        expect(f.manager.start).toHaveBeenCalledTimes(1);
+      });
+
+      const ended = await f.orchestrator[kind]("run-1", { requestId: "run-1" });
+      pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+      const late = await started;
+
+      const expected = kind === "stop" ? "cancelled" : "taken-over";
+      expect(successfulSnapshot(ended).state).toBe(expected);
+      expect(successfulSnapshot(late).state).toBe(expected);
+      expect(f.manager.start.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(f.orchestrator.hasLiveRun()).toBe(false);
+    },
+  );
+
+  it("refuses a late startup success when reconciliation cannot prove the host stopped", async () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createCodingRuntimeSnapshotStore(db),
+    );
+    const pending = deferredRuntimeStart(f);
+    const started = f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.manager.start).toHaveBeenCalledTimes(1);
+    });
+    await f.orchestrator.shutdown();
+    f.manager.health.mockReturnValue({ status: "ready", activeRunId: "run-1" });
+    f.manager.reconcile.mockResolvedValueOnce({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    pending.resolve({ ok: true, status: "ready", runId: "run-1" });
+
+    const late = await started;
+
+    expect(successfulSnapshot(late).state).toBe("recovery-required");
+    expect(f.manager.reconcile).toHaveBeenCalledWith("run-1");
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(f.orchestrator.hasLiveRun()).toBe(true);
+    expect(f.orchestrator.snapshot()).toMatchObject({ state: "recovery-required", runId: "run-1" });
+    expect(f.orchestrator.snapshot().result).toBeUndefined();
+    db.close();
   });
 
   // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator

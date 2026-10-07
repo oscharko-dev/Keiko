@@ -1084,6 +1084,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     args: readonly string[],
     lifecycleAdapter?: OpenCodeLifecycleAdapter,
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
+    const cancelled = cancellationFailure(request, this.deps);
+    if (cancelled !== undefined) return this.recordLaunchFailure(request, cancelled);
     const portableAvailability = portableAvailabilityFailure(portable);
     if (portableAvailability !== undefined) {
       return this.recordLaunchFailure(request, portableAvailability);

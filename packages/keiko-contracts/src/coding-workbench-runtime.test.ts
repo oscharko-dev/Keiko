@@ -147,6 +147,7 @@ describe("Coding Workbench runtime contracts", () => {
     expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toHaveLength(12);
     expect(CODING_WORKBENCH_RUNTIME_STATE_NAMES).toContain("paused");
     expect(isLegalCodingWorkbenchRuntimeTransition("idle", "starting")).toBe(true);
+    expect(isLegalCodingWorkbenchRuntimeTransition("starting", "stopping")).toBe(true);
     expect(isLegalCodingWorkbenchRuntimeTransition("running", "idle")).toBe(false);
     expect(isLegalCodingWorkbenchRuntimeTransition("taken-over", "idle")).toBe(true);
   });

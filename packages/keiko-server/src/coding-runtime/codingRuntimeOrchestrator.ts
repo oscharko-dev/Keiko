@@ -1812,6 +1812,13 @@ function runtimeDeliveryErrorFields(error: unknown): RuntimeDeliveryErrorFields 
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
+  private startup:
+    | {
+        readonly runId: string;
+        readonly controller: AbortController;
+        interruption?: Promise<CodingRuntimeOrchestratorResult>;
+      }
+    | undefined;
   /**
    * The most recently settled run, kept as the public status until the next run is admitted. A
    * poller or a reloaded window that arrives after settlement still sees the run, its terminal
@@ -3420,9 +3427,33 @@ export class CodingRuntimeOrchestrator {
     this.projection.publish(snapshot);
     if (!this.beginHistory(request, active, runId))
       return this.transitionActive("failed", "runtime-failed");
-    const started = await this.startManagedRuntime(request, active, runId, launch);
-    if (started !== undefined) return started;
-    return this.runInitialTurn(request, active, runId, issue.attachment);
+    return this.startWithCancellation(request, active, runId, launch, issue.attachment);
+  }
+
+  private async startWithCancellation(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
+    attachment: CodingRuntimeIssueAttachment | undefined,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const startup = { runId, controller: new AbortController() };
+    this.startup = startup;
+    try {
+      const started = await this.startManagedRuntime(
+        request,
+        active,
+        runId,
+        launch,
+        startup.controller.signal,
+      );
+      return (
+        started ??
+        (await this.runInitialTurn(request, active, runId, startup.controller.signal, attachment))
+      );
+    } finally {
+      if (this.startup === startup) this.startup = undefined;
+    }
   }
 
   private activateStartedRun(
@@ -3608,8 +3639,10 @@ export class CodingRuntimeOrchestrator {
     request: CodingWorkbenchRuntimeStartRequest,
     active: ActiveWorkspaceView,
     runId: string,
+    signal: AbortSignal,
     attachment?: CodingRuntimeIssueAttachment,
   ): Promise<CodingRuntimeOrchestratorResult> {
+    if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     const ready = this.transitionActive("ready");
     if (!ready.ok) return ready;
     // #3390: this orchestrator-local snapshot is a separate object from runtimeAuthorityService's
@@ -3634,6 +3667,7 @@ export class CodingRuntimeOrchestrator {
       return this.transitionActive("recovery-required", "recovery-required");
     }
     const initialContext = await this.initialContextFor(request, active, runId, attachment);
+    if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     const initialTurn = await this.operations.startInitialTurn({
       runId,
       requestId: request.requestId,
@@ -3641,6 +3675,7 @@ export class CodingRuntimeOrchestrator {
       taskIntent: request.taskIntent,
       ...(initialContext === undefined ? {} : { initialContext }),
     });
+    if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
     // revision in the SAME call that commits its production-guard reservation
     // (codingRuntimeOperationCoordinator.ts's submitFollowUp/applyAnswer via advanceRevision) --
@@ -3819,6 +3854,7 @@ export class CodingRuntimeOrchestrator {
     active: ActiveWorkspaceView,
     runId: string,
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
+    signal: AbortSignal,
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     let result: Awaited<ReturnType<CodingRuntimeManager["start"]>>;
     try {
@@ -3827,13 +3863,17 @@ export class CodingRuntimeOrchestrator {
         runId,
         workspaceRoot: active.binding.activeRoot,
         requestedMode: request.requestedMode,
+        signal,
       });
     } catch (error) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "manager-exception", error);
+      if (signal.aborted) return this.interruptedStartResult(runId);
       // Recovery-required remains the only safe projection when host containment cannot be proven.
       await this.reconcileQuietly(runId);
       return this.transitionActive("recovery-required", "recovery-required");
     }
+    if (signal.aborted)
+      return this.interruptedStartResult(runId, result.ok ? result.runId : undefined);
     if (result.ok && result.runId !== runId) {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "run-mismatch");
       // A mismatched host success cannot be trusted; recovery remains fail-closed.
@@ -3845,6 +3885,45 @@ export class CodingRuntimeOrchestrator {
       return this.transitionActive("failed", "runtime-failed");
     }
     return undefined;
+  }
+
+  private async interruptedStartResult(
+    runId: string,
+    reportedRunId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    // Stop may still be reaping the tree when preparation or handshake settles. Its own result
+    // decides the projection; a late start must neither dispatch nor overwrite that settlement.
+    await this.startup?.interruption;
+    if (
+      (reportedRunId !== undefined && reportedRunId !== runId) ||
+      this.deps.manager.health().status !== "stopped"
+    )
+      await this.reconcileQuietly(reportedRunId ?? runId);
+    const row = this.deps.snapshots.get(runId);
+    if (row === undefined) return this.fail("runtime-failed");
+    if (row.state !== "recovery-required" && this.deps.manager.health().status !== "stopped") {
+      const recovered = this.transition(row, "recovery-required", "recovery-required");
+      this.restoreUnsettledRecoverySlot(runId);
+      return recovered;
+    }
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(row) };
+  }
+
+  private startupInterrupted(signal: AbortSignal): boolean {
+    return signal.aborted;
+  }
+
+  private interruptStartup(
+    runId: string,
+  ): ((result: CodingRuntimeOrchestratorResult) => void) | undefined {
+    const startup = this.startup;
+    if (startup?.runId !== runId || startup.interruption !== undefined) return undefined;
+    let settle: ((result: CodingRuntimeOrchestratorResult) => void) | undefined;
+    startup.interruption = new Promise<CodingRuntimeOrchestratorResult>((resolve) => {
+      settle = resolve;
+    });
+    startup.controller.abort();
+    return settle;
   }
 
   private async reconcileQuietly(runId: string): Promise<void> {
@@ -3883,8 +3962,11 @@ export class CodingRuntimeOrchestrator {
     this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
+    const settleInterruptedStart = this.interruptStartup(runId);
     const result = await this.executeEndRequest(kind, current.runId);
-    return this.completeEndRequest(kind, runId, result);
+    const completed = this.completeEndRequest(kind, runId, result);
+    settleInterruptedStart?.(completed);
+    return completed;
   }
 
   private stopSettledRun(
