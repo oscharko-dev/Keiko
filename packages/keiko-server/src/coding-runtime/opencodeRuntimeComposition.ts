@@ -132,6 +132,7 @@ const PINNED_RAW_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;
+const HISTORY_SYNC_MIN_INTERVAL_MS = 100;
 
 interface VerifiedPortableInput {
   readonly verification: PortableSidecarRuntimeVerification;
@@ -999,6 +1000,7 @@ function readinessV2Ports(
         (merged) => {
           mergedEvents += merged;
         },
+        HISTORY_SYNC_MIN_INTERVAL_MS,
       );
     },
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
@@ -1085,11 +1087,15 @@ function enqueueSyncHint(pending: OpenCodeSyncHint[], hint: OpenCodeSyncHint): n
  * `onMerged` receives, each time events were absorbed, how many (#3873 review, PR #3876): the
  * evidence that a read stood for more than one event, which the history projection's line carries
  * as `mergedEventCount`. It sees the count only, never an event.
+ * Production also spaces plain reads by 100 ms: a fast history response must not turn every
+ * streamed delta into another full read. Control hints, source failure and end flush immediately;
+ * live text still observes every source event before the hint is coalesced.
  */
 export async function* coalescedSyncHints(
   events: AsyncIterable<Readonly<Record<string, unknown>>>,
   toHint: (event: Readonly<Record<string, unknown>>) => OpenCodeSyncHint,
   onMerged?: (mergedEvents: number) => void,
+  minimumIntervalMs = 0,
 ): AsyncGenerator<OpenCodeSyncHint> {
   const pump: SyncHintPump = {
     source: events[Symbol.asyncIterator](),
@@ -1098,6 +1104,9 @@ export async function* coalescedSyncHints(
     pending: [],
     ended: false,
     stopped: false,
+    minimumIntervalMs,
+    nextPlainReadAtMs: 0,
+    wake: undefined,
   };
   pullSyncHint(pump);
   try {
@@ -1120,14 +1129,32 @@ function queuedSyncHints(pump: SyncHintPump): AsyncIterable<OpenCodeSyncHint> {
 // before it, or its end; otherwise the next wake, after which the pull starts over. A wake follows
 // every hint the pump queues and the end of its source, so a pull waits once, not repeatedly.
 async function nextQueuedSyncHint(pump: SyncHintPump): Promise<IteratorResult<OpenCodeSyncHint>> {
-  const hint = pump.pending.shift();
-  if (hint !== undefined) return { done: false, value: hint };
+  const hint = pump.pending[0];
+  const delayMs =
+    plainSyncHint(hint) && !pump.ended
+      ? Math.max(0, pump.nextPlainReadAtMs - performance.now())
+      : 0;
+  if (hint !== undefined && delayMs === 0) {
+    pump.pending.shift();
+    pump.nextPlainReadAtMs = performance.now() + pump.minimumIntervalMs;
+    return { done: false, value: hint };
+  }
   if (pump.failure !== undefined) throw pump.failure.error;
-  if (pump.ended) return { done: true, value: undefined };
-  await new Promise<void>((resolve) => {
-    pump.wake = resolve;
-  });
+  if (pump.ended && hint === undefined) return { done: true, value: undefined };
+  await waitForSyncHint(pump, delayMs);
   return nextQueuedSyncHint(pump);
+}
+
+async function waitForSyncHint(pump: SyncHintPump, delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    pump.wake = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      pump.wake = undefined;
+      resolve();
+    };
+    if (delayMs > 0) timer = setTimeout(() => pump.wake?.(), delayMs);
+  });
 }
 
 interface SyncHintPump {
@@ -1135,10 +1162,12 @@ interface SyncHintPump {
   readonly toHint: (event: Readonly<Record<string, unknown>>) => OpenCodeSyncHint;
   readonly onMerged: ((mergedEvents: number) => void) | undefined;
   readonly pending: OpenCodeSyncHint[];
+  readonly minimumIntervalMs: number;
+  nextPlainReadAtMs: number;
   ended: boolean;
   stopped: boolean;
   failure?: { readonly error: unknown };
-  wake?: () => void;
+  wake: (() => void) | undefined;
 }
 
 // Reads the next event without waiting for the consumer. A failure is kept for the consumer, who
@@ -1159,9 +1188,10 @@ function pullSyncHint(pump: SyncHintPump): void {
       void pump.source.return?.(undefined).then(undefined, settle);
       return;
     }
-    const absorbed = enqueueSyncHint(pump.pending, pump.toHint(next.value));
+    const hint = pump.toHint(next.value);
+    const absorbed = enqueueSyncHint(pump.pending, hint);
     if (absorbed > 0) pump.onMerged?.(absorbed);
-    pump.wake?.();
+    if (absorbed === 0 || !plainSyncHint(hint)) pump.wake?.();
     pullSyncHint(pump);
   };
   void pump.source.next().then(onNext).then(undefined, settle);

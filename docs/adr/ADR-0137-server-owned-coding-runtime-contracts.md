@@ -554,7 +554,10 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
 - **Reads are coalesced, and the log says by how much.** A live turn can emit an event for every
   streamed token, and each sync hint costs one history read, so the pump folds the plain hints that
   pile up while a read runs into one, and a control hint's read covers the plain hints queued before
-  it (control hints are never dropped and keep their order). Every event is therefore a hint
+  it (control hints are never dropped and keep their order). Production spaces ordinary history
+  reads by at least 100 ms using a monotonic clock, so a fast response cannot force another full
+  read for each streamed delta. Control hints, source failure and source end flush immediately;
+  every live delta is still observed before coalescing. Every event is therefore a hint
   delivered or an event merged, apart from the hints still queued when the run stops;
   `mergedEventCount` on `coding-runtime.history-projection` is the number merged since the previous
   line, so a timeline that lags or skips an update is explained by how many events one read stood
