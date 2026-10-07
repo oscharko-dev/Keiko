@@ -12,12 +12,13 @@ import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   decodeSecureWorkspaceReadRequest,
   encodeSecureWorkspaceReadResponse,
   type SecureWorkspaceReadClosedStatus,
 } from "./secureWorkspaceTextReadProtocol.js";
 
-const MAX_TEXT_BYTES = 65_536;
+const MAX_TEXT_BYTES = SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
 const artifact: SecureWorkspaceTextReadArtifact = {
   target: "darwin-arm64",
   installRelativePath: "runtime/native/keiko-secure-workspace-read",
@@ -78,6 +79,15 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 }
 
 describe("SecureWorkspaceTextReadPort", () => {
+  it("reads a repository instruction file above the former 64 KiB ceiling", async () => {
+    const text = "Repository convention.\n".repeat(4_000);
+    const { port } = createPort(() => Promise.resolve(response(0, Buffer.from(text))));
+    await expect(port.readText({ relativePath: "AGENTS.md" })).resolves.toEqual({
+      ok: true,
+      text,
+    });
+  });
+
   it("fails closed when no live workspace is bound without verification or spawn", async () => {
     const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
     const resolveWorkspaceRoot = vi.fn(() => undefined);
@@ -156,7 +166,7 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(unknown.create).not.toHaveBeenCalled();
   });
 
-  it("returns exactly 65,536 safe bytes and maps helper oversize status to a content-free denial", async () => {
+  it("returns exactly the pinned maximum safe bytes and maps helper oversize status to a content-free denial", async () => {
     const exact = Buffer.alloc(MAX_TEXT_BYTES, 0x61);
     const exactPort = createPort(() => Promise.resolve(response(0, exact)));
     const oversizedPort = createPort(() => Promise.resolve(response(6)));

@@ -36,6 +36,8 @@ import type {
   SecureWorkspaceTextReadPort,
   SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
+import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { WORKSPACE_PATH_ABSENCE_VERDICTS } from "./secureWorkspaceTextReadAbsence.js";
 
 const DIGEST = "a".repeat(64);
@@ -128,7 +130,7 @@ async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): 
     }
     return Promise.resolve({
       ok: true,
-      text: kind === "oversize" ? "x".repeat(65_537) : "safe\n",
+      text: kind === "oversize" ? "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1) : "safe\n",
     });
   });
   const ports = createCodingToolReadEditPorts({
@@ -729,6 +731,77 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     });
   });
 
+  it("reads a small window from a large file and retains its whole-file precondition", async () => {
+    const text = "Repository convention.\n".repeat(4_000);
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text }) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const result = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-large",
+        idempotencyKey: "read-large",
+        relativePath: "AGENTS.md",
+        startLine: 3_001,
+        maxLines: 2,
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    expect(result).toEqual({
+      status: "completed",
+      read: {
+        text: "Repository convention.\n".repeat(2),
+        byteCount: 46,
+        digest: secureWorkspaceTextDigest(text),
+        totalLines: 4_000,
+        nextStartLine: 3_003,
+      },
+    });
+    const event = events.find((candidate) => candidate.op === "coding-runtime.workspace-read");
+    expect(event?.extra).toMatchObject({ state: "completed", startLine: 3_001, maxLines: 2 });
+  });
+
+  it("refuses an oversized model window without returning source text", async () => {
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: () =>
+          Promise.resolve({ ok: true, text: "Repository convention.\n".repeat(4_000) }),
+      },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    await expect(
+      ports.repositoryRead.execute(
+        {
+          action: "read",
+          actionId: "read-large",
+          idempotencyKey: "read-large",
+          relativePath: "AGENTS.md",
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "workspace-read-too-large" });
+    const event = events.find((candidate) => candidate.op === "coding-runtime.workspace-read");
+    expect(event?.extra).toMatchObject({ state: "failed", reason: "too-large" });
+    expect(events.some((candidate) => candidate.extra?.state === "completed")).toBe(false);
+  });
+
   it("returns content-free read failures and cancellation without calling a writer", async () => {
     const readText = vi.fn(() =>
       Promise.resolve({ ok: false as const, reason: "cancelled" as const }),
@@ -802,7 +875,8 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     const editorAction = vi.fn();
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: {
-        readText: () => Promise.resolve({ ok: true, text: "x".repeat(65_537) }),
+        readText: () =>
+          Promise.resolve({ ok: true, text: "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1) }),
       },
       editorAgentClient: { action: editorAction },
       resolveEditorActionContext: () => ({

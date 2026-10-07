@@ -1,4 +1,5 @@
 import { isAbsolute, win32 } from "node:path";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 
 export interface SecureWorkspaceReadPlatform {
   readonly os: string;
@@ -82,8 +83,6 @@ export class SecureWorkspaceReadProcessError extends Error {
   }
 }
 
-const MAX_STDOUT_BYTES = 65_548;
-
 // eslint-disable-next-line max-lines-per-function
 function runOneShot(
   deps: SecureWorkspaceReadProcessPortDeps,
@@ -137,7 +136,7 @@ function runOneShot(
         return;
       }
       stdoutBytes += chunk.byteLength;
-      if (stdoutBytes > MAX_STDOUT_BYTES) {
+      if (stdoutBytes > SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES) {
         chunk.fill(0);
         child.kill();
         void finish(

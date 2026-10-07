@@ -26,6 +26,8 @@ import {
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "../../packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadProtocol.ts";
+
 const source = fileURLToPath(new URL("./secure_workspace_read.c", import.meta.url));
 const SAFE_TEXT = "safe text\n";
 const HELPER_DEADLINE_MS = 2_000;
@@ -91,7 +93,11 @@ const WINDOWS_RESERVED_PREFIX_ALLOWED = [
 ];
 const isWindows = process.platform === "win32";
 
-function request(root, path, { cap = 65_536, trailing = Buffer.alloc(0) } = {}) {
+function request(
+  root,
+  path,
+  { cap = SECURE_WORKSPACE_TEXT_READ_MAX_BYTES, trailing = Buffer.alloc(0) } = {},
+) {
   const rootBytes = Buffer.from(root, "utf8");
   const pathBytes = Buffer.from(path, "utf8");
   const frame = Buffer.alloc(20 + rootBytes.length + pathBytes.length);
@@ -116,7 +122,7 @@ function request(root, path, { cap = 65_536, trailing = Buffer.alloc(0) } = {}) 
 const MALFORMED_DEFAULTS = {
   root: "",
   pathBytes: Buffer.alloc(0),
-  cap: 65_536,
+  cap: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   version: 1,
   reserved: 0,
   trailing: Buffer.alloc(0),
@@ -1782,8 +1788,8 @@ async function setupFixture(fixture, outside) {
   await writeFile(join(fixture, "invalid-utf8.txt"), Buffer.from([0xc3, 0x28]));
   await writeFile(join(fixture, "c0.txt"), Buffer.from([0x61, 1, 0x62]));
   await writeFile(join(fixture, "c1.txt"), Buffer.from([0xc2, 0x80]));
-  await writeFile(join(fixture, "exact.txt"), "x".repeat(65_536));
-  await writeFile(join(fixture, "large.txt"), "x".repeat(65_537));
+  await writeFile(join(fixture, "exact.txt"), "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES));
+  await writeFile(join(fixture, "large.txt"), "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1));
   await writeFile(join(fixture, "hard-source.txt"), "linked content");
   for (const name of WINDOWS_RESERVED_PREFIX_ALLOWED)
     await writeFile(join(fixture, name), SAFE_TEXT);
@@ -1845,7 +1851,10 @@ async function assertProtocolCases(binary, fixture, outside) {
   for (const name of ["binary.txt", "invalid-utf8.txt", "c0.txt", "c1.txt"]) {
     assert.equal(response(await run(binary, request(fixture, name))).status, 7);
   }
-  assert.equal(response(await run(binary, request(fixture, "exact.txt"))).content.length, 65_536);
+  assert.equal(
+    response(await run(binary, request(fixture, "exact.txt"))).content.length,
+    SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  );
   assert.equal(response(await run(binary, request(fixture, "large.txt"))).status, 6);
   assert.equal(
     response(await run(binary, request(fixture, "nested/good.txt", { trailing: Buffer.of(1) })))
@@ -2175,7 +2184,10 @@ async function assertAdversarialRaces(binary, fixture) {
   await resetRaceFile(fixture);
   assertRaceResult(await race(() => writeFile(target, "evil text\n")), "in-place rewrite");
   await resetRaceFile(fixture);
-  assertRaceResult(await race(() => writeFile(target, "x".repeat(65_537))), "size growth");
+  assertRaceResult(
+    await race(() => writeFile(target, "x".repeat(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1))),
+    "size growth",
+  );
   await resetRaceFile(fixture);
   await raceReplacement(race, fixture, target);
   await resetRaceFile(fixture);

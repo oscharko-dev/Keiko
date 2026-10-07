@@ -30,9 +30,9 @@ import {
  * after the text exists and checked against it, so the file can never close its own frame early;
  * every other part of the first message has the frame's tag neutralized
  * (`withoutRepositoryInstructionsTags`), so no issue body or memory can forge one (#3873 review). The helper delivers whole files up to its own
- * pinned 64 KiB content ceiling (`SECURE_WORKSPACE_TEXT_READ_MAX_BYTES`, fixed in its wire
- * protocol and the digest-pinned native binary), so a larger file is refused as `too-large` until
- * that protocol gains a window; this loader cannot widen it. The text reaches the model as context,
+ * pinned 1 MiB content ceiling (`SECURE_WORKSPACE_TEXT_READ_MAX_BYTES`, fixed in its wire
+ * protocol and the digest-pinned native binary). Larger files are refused as `too-large`; this
+ * loader cannot widen it. Its attached excerpt remains bounded to 16 KiB and 800 lines. The text reaches the model as context,
  * not as authority: it cannot change the governed tool rules, the Authority Envelope or the
  * autonomy mode, and it never enters durable state or the log.
  */
@@ -59,7 +59,7 @@ const REPOSITORY_INSTRUCTIONS_TAG_LOOKALIKE = /<\s*(?:(\/)\s*)?repository-instru
 const REPOSITORY_INSTRUCTIONS_NONCE_BYTES = 6;
 /** The `\n\n` `composeCodingRuntimeInitialContext` puts between two parts of one initial turn. */
 const INITIAL_CONTEXT_PART_SEPARATOR_BYTES = 2;
-/** More lines than a file under the helper's 64 KiB content ceiling can have. */
+/** More lines than a file under the helper's 1 MiB content ceiling can have. */
 const LINE_COUNT_DIGIT_CEILING = 999_999_999;
 
 const REPOSITORY_INSTRUCTIONS_STATES = [

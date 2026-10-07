@@ -89,9 +89,15 @@ line counts, the file's total counts when cut, and the whole-file SHA-256 the re
 the same file; only a genuine read failure is `refused`, recorded at `warn` with its closed reason,
 and it never fails the run. The helper reports a missing root file and a denied one alike, so both
 are `absent` with the helper's own reason retained. The helper delivers whole files up to its
-content ceiling of 65,536 bytes, pinned in its wire protocol and its digest-pinned native binary, so
-a larger `AGENTS.md` is refused as `too-large` until that protocol gains a bounded window; lifting
-the ceiling is a helper-protocol decision, not a loader change.
+content ceiling of 1 MiB, pinned in its wire protocol and its digest-pinned native binary. This
+bounded whole-file read admits ordinary large repository instructions and retains the whole-file
+digest for edit preconditions. The native helper allocates only the observed file size plus one
+growth-detection byte; it still checks final file and directory identity and rejects concurrent
+changes. Model-facing read windows remain capped at 64 KiB, and initial repository instructions
+remain capped at 16 KiB and 800 lines. An oversized requested model window returns the existing
+`workspace-read-too-large` refusal and a body-free failed-read event so the model can request a
+smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
+override the pinned helper ceiling.
 
 ### D2 — One server aggregate owns runtime authority
 

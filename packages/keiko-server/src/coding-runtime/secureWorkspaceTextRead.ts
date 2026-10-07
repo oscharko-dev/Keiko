@@ -8,6 +8,7 @@ import {
   type WorkspacePathLstat,
 } from "./secureWorkspaceTextReadAbsence.js";
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES,
   decodeSecureWorkspaceReadResponse,
@@ -170,7 +171,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     const frame = encodeSecureWorkspaceReadRequest({
       root: workspaceRoot,
       relativePath: request.relativePath,
-      byteCap: 65_536,
+      byteCap: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
     });
     try {
       const signal = readSignal(request.signal);

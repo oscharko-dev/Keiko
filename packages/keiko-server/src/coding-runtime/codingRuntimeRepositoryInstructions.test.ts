@@ -314,7 +314,7 @@ describe("coding runtime repository instructions loader", () => {
     expect(persisted.contentSha256).not.toBe(sha256(expected));
   });
 
-  // A file above the secure read helper's 64 KiB content ceiling (70 KB, 1,200 lines) is bounded
+  // A file above the former 64 KiB ceiling (70 KB, 1,200 lines) is bounded
   // to the first-lines window with the marker, never refused by this loader: the first 800 lines
   // are cut further to the byte bound at a line boundary, the totals and the whole-file digest
   // describe the file. Lines are 60 bytes each, so 273 of them fit under 16,384 bytes.
@@ -322,7 +322,10 @@ describe("coding runtime repository instructions loader", () => {
     const captured = captureActivityLog();
     const line = "instruction line ".padEnd(59, "x");
     const text = `${Array.from({ length: 1_200 }, () => line).join("\n")}\n`;
-    expect(Buffer.byteLength(text, "utf8")).toBeGreaterThan(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
+    expect(Buffer.byteLength(text, "utf8")).toBeGreaterThan(65_536);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+      SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+    );
     const { source } = sourceAnswering({ ok: true, text });
     const port = createCodingRuntimeRepositoryInstructionsPort({
       enabled: true,
@@ -350,9 +353,9 @@ describe("coding runtime repository instructions loader", () => {
   });
 
   // What the one sanctioned read path can deliver today: the helper's wire protocol pins the
-  // request cap to its content ceiling, so the loader cannot ask for more than 65,536 bytes and a
-  // larger file comes back `too-large`. That is a helper-protocol boundary, not a loader choice;
-  // relocate this pin, never relax it, when the protocol gains a bounded window.
+  // request cap to its 1 MiB content ceiling; a larger file comes back `too-large`. This pin
+  // prevents a caller from overriding the server-owned resource bound. The loader separately
+  // bounds its initial context to 16 KiB and 800 lines.
   it("pins the helper content ceiling the loader reads under: a wider request is not encodable", () => {
     expect(REPOSITORY_INSTRUCTIONS_MAX_BYTES).toBeLessThan(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES);
     expect(() =>

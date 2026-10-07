@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   decodeSecureWorkspaceReadRequest,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
@@ -8,7 +9,7 @@ import {
   encodeSecureWorkspaceReadResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 
-const MAX_TEXT_BYTES = 65_536;
+const MAX_TEXT_BYTES = SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
 const MAX_ROOT_BYTES = 32_768;
 const MAX_PATH_BYTES = 4_096;
 
@@ -65,7 +66,7 @@ describe("secure workspace text-read binary protocol", () => {
   });
 
   it.each([0, MAX_TEXT_BYTES - 1, MAX_TEXT_BYTES + 1, 0x1_0000_0000])(
-    "rejects a request cap other than the fixed 65,536 bytes (%d)",
+    "rejects a request cap other than the fixed resource ceiling (%d)",
     (byteCap) => {
       expect(() =>
         encodeSecureWorkspaceReadRequest({ root: "r", relativePath: "a.ts", byteCap }),
@@ -136,7 +137,7 @@ describe("secure workspace text-read binary protocol", () => {
     });
   });
 
-  it("denies text one byte above the exact 65,536-byte boundary", () => {
+  it("denies text one byte above the exact helper resource boundary", () => {
     expect(decodeSecureWorkspaceText(Buffer.alloc(MAX_TEXT_BYTES + 1, 0x61))).toEqual({
       ok: false,
       reason: "not-text",

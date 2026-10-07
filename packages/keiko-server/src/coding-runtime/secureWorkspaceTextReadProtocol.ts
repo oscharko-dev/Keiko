@@ -2,7 +2,7 @@
  * Private wire format for the one-shot secure workspace helper.  This is deliberately
  * binary and closed: neither side accepts JSON, optional fields, or trailing bytes.
  */
-export const SECURE_WORKSPACE_TEXT_READ_MAX_BYTES = 65_536;
+export const SECURE_WORKSPACE_TEXT_READ_MAX_BYTES = 1_048_576;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES = 32_768;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES = 4_096;
 export const SECURE_WORKSPACE_TEXT_READ_MAX_FRAME_BYTES =
@@ -12,6 +12,8 @@ const REQUEST_MAGIC = Buffer.from("KSR1", "ascii");
 const RESPONSE_MAGIC = Buffer.from("KSS1", "ascii");
 const REQUEST_HEADER_BYTES = 20;
 const RESPONSE_HEADER_BYTES = 12;
+export const SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES =
+  RESPONSE_HEADER_BYTES + SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
 const VERSION = 1;
 
 export type SecureWorkspaceReadClosedStatus =
@@ -150,7 +152,7 @@ export function decodeSecureWorkspaceReadResponse(
   const bytes = bufferView(frame);
   if (
     bytes.byteLength < RESPONSE_HEADER_BYTES ||
-    bytes.byteLength > RESPONSE_HEADER_BYTES + SECURE_WORKSPACE_TEXT_READ_MAX_BYTES
+    bytes.byteLength > SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES
   ) {
     throw new Error("secure-workspace-read-malformed-response");
   }

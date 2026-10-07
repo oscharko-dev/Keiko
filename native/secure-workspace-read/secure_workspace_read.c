@@ -8,7 +8,7 @@
 #define KSR_VERSION 1u
 #define KSR_MAX_ROOT 32768u
 #define KSR_MAX_PATH 4096u
-#define KSR_CAP 65536u
+#define KSR_CAP 1048576u
 #define KSR_MAX_COMPONENTS 64u
 #define KSR_SUPERSCRIPT_ONE_UTF8 "\xC2\xB9"
 #define KSR_SUPERSCRIPT_TWO_UTF8 "\xC2\xB2"
@@ -159,7 +159,7 @@ static void pause_after_final_open(void) {
 #endif
 
 static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length) {
-  int fds[KSR_MAX_COMPONENTS + 1], fd = -1, count = 0; char *copy = NULL, *part, *next; struct stat root_st, dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; ssize_t chunk; size_t got = 0; int changed = 0;
+  int fds[KSR_MAX_COMPONENTS + 1], fd = -1, count = 0; char *copy = NULL, *part, *next; struct stat root_st, dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; ssize_t chunk; size_t got = 0, capacity = 0; int changed = 0;
   *content = NULL; *length = 0;
   fd = open(request->root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0) return KSR_ACCESS_DENIED;
@@ -184,20 +184,21 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 #if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
   pause_after_final_open();
 #endif
-  buffer = calloc((size_t)request->cap + 1, 1); if (buffer == NULL) { close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
-  while (got < (size_t)request->cap + 1) {
-    chunk = read(fd, buffer + got, (size_t)request->cap + 1 - got);
+  capacity = (size_t)before.st_size + 1;
+  buffer = calloc(capacity, 1); if (buffer == NULL) { close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
+  while (got < capacity) {
+    chunk = read(fd, buffer + got, capacity - got);
     if (chunk < 0 && errno == EINTR) continue;
-    if (chunk < 0) { memset(buffer, 0, request->cap + 1); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
+    if (chunk < 0) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
     if (chunk == 0) break;
     got += (size_t)chunk;
   }
-  if (got > request->cap) { memset(buffer, 0, request->cap + 1); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CONTENT_TOO_LARGE; }
+  if (got > request->cap) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CONTENT_TOO_LARGE; }
   if (fstat(fd, &after) != 0 || !same_identity(&before, &after) || got != (size_t)before.st_size) changed = 1;
   for (int i = 0; i < count; ++i) { struct stat now; if (fstat(fds[i], &now) != 0 || !same_identity(&dirs[i], &now)) changed = 1; }
-  if (changed) { memset(buffer, 0, request->cap + 1); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CHANGED_DURING_READ; }
+  if (changed) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CHANGED_DURING_READ; }
   close(fd); while (count) close(fds[--count]);
-  if (!valid_utf8(buffer, got)) { memset(buffer, 0, request->cap + 1); free(buffer); return KSR_CONTENT_NOT_TEXT; }
+  if (!valid_utf8(buffer, got)) { memset(buffer, 0, capacity); free(buffer); return KSR_CONTENT_NOT_TEXT; }
   *content = buffer; *length = (uint32_t)got; return KSR_OK;
 }
 #elif defined(_WIN32)
@@ -286,7 +287,7 @@ static void close_handles(HANDLE *handles, int count) {
 }
 
 static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length) {
-  wchar_t *root = NULL, *path = NULL, *cursor, *slash; HANDLE handles[KSR_MAX_COMPONENTS + 1], file = INVALID_HANDLE_VALUE; int count = 0; DWORD chunk = 0, read = 0; struct file_identity dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; nt_create_file_fn nt_create; HMODULE ntdll;
+  wchar_t *root = NULL, *path = NULL, *cursor, *slash; HANDLE handles[KSR_MAX_COMPONENTS + 1], file = INVALID_HANDLE_VALUE; int count = 0; DWORD chunk = 0, read = 0, capacity = 0; struct file_identity dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; nt_create_file_fn nt_create; HMODULE ntdll;
   *content = NULL; *length = 0;
   root = calloc(KSR_MAX_ROOT + 1, sizeof(*root)); path = calloc(KSR_MAX_PATH + 1, sizeof(*path));
   if (root == NULL || path == NULL || MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, request->root, -1, root, KSR_MAX_ROOT) == 0 || MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, request->path, -1, path, KSR_MAX_PATH) == 0) { free(root); free(path); return KSR_IO_FAILURE; }
@@ -316,18 +317,19 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 #if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
   pause_after_final_open();
 #endif
-  buffer = calloc((size_t)request->cap + 1, 1); if (buffer == NULL) { free(path); CloseHandle(file); close_handles(handles, count); return KSR_IO_FAILURE; }
-  while (read < request->cap + 1) {
-    if (!ReadFile(file, buffer + read, request->cap + 1 - read, &chunk, NULL)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_IO_FAILURE; }
+  capacity = (DWORD)before.standard.EndOfFile.QuadPart + 1;
+  buffer = calloc(capacity, 1); if (buffer == NULL) { free(path); CloseHandle(file); close_handles(handles, count); return KSR_IO_FAILURE; }
+  while (read < capacity) {
+    if (!ReadFile(file, buffer + read, capacity - read, &chunk, NULL)) { memset(buffer, 0, capacity); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_IO_FAILURE; }
     if (chunk == 0) break;
     read += chunk;
   }
-  if (read > request->cap) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CONTENT_TOO_LARGE; }
-  if (!identity(file, &after) || !same_identity(&before, &after) || read != (DWORD)before.standard.EndOfFile.QuadPart) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CHANGED_DURING_READ; }
-  if (!canonical_path_matches(handles[0], file, path)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_ACCESS_DENIED; }
-  for (int i = 0; i < count; ++i) { struct file_identity now; if (!identity(handles[i], &now) || now.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || !same_identity(&dirs[i], &now)) { memset(buffer, 0, request->cap + 1); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CHANGED_DURING_READ; } }
+  if (read > request->cap) { memset(buffer, 0, capacity); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CONTENT_TOO_LARGE; }
+  if (!identity(file, &after) || !same_identity(&before, &after) || read != (DWORD)before.standard.EndOfFile.QuadPart) { memset(buffer, 0, capacity); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CHANGED_DURING_READ; }
+  if (!canonical_path_matches(handles[0], file, path)) { memset(buffer, 0, capacity); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_ACCESS_DENIED; }
+  for (int i = 0; i < count; ++i) { struct file_identity now; if (!identity(handles[i], &now) || now.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || !same_identity(&dirs[i], &now)) { memset(buffer, 0, capacity); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CHANGED_DURING_READ; } }
   free(path); CloseHandle(file); close_handles(handles, count);
-  if (!valid_utf8(buffer, read)) { memset(buffer, 0, request->cap + 1); free(buffer); return KSR_CONTENT_NOT_TEXT; }
+  if (!valid_utf8(buffer, read)) { memset(buffer, 0, capacity); free(buffer); return KSR_CONTENT_NOT_TEXT; }
   *content = buffer; *length = read; return KSR_OK;
 }
 #else
@@ -344,7 +346,7 @@ int main(void) {
   struct request request; unsigned char *content = NULL; uint32_t length = 0; enum ksr_status status = parse_request(&request);
   if (status == KSR_OK) status = secure_read(&request, &content, &length);
   reply(status, content, length);
-  if (content != NULL) { memset(content, 0, (size_t)KSR_CAP + 1); free(content); }
+  if (content != NULL) { memset(content, 0, (size_t)length + 1); free(content); }
   clear_request(&request);
   return 0;
 }

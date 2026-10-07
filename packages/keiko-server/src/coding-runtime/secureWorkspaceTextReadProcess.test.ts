@@ -7,6 +7,8 @@ import {
   type SecureWorkspaceTextReadProcess,
 } from "./secureWorkspaceTextReadProcess.js";
 
+import { SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES } from "./secureWorkspaceTextReadProtocol.js";
+
 type Listener = (code?: number | null) => void;
 type DataListener = (chunk: Uint8Array) => void;
 
@@ -219,7 +221,7 @@ describe("secure workspace text-read supervised process", () => {
       stdin: Buffer.from("request"),
       signal: new AbortController().signal,
     });
-    const overflowChunk = Buffer.alloc(65_549, 0x41);
+    const overflowChunk = Buffer.alloc(SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES + 1, 0x41);
     overflowFake.emitStdout(overflowChunk);
     await expect(overflowRun).rejects.toThrow("secure-workspace-read-aborted");
     expect(overflowChunk).toEqual(Buffer.alloc(overflowChunk.byteLength));

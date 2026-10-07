@@ -412,7 +412,7 @@ async function attemptGovernedRead(
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
     return { ok: false, reason: "postflight-refused", binding };
   }
-  if (Buffer.byteLength(result.text, "utf8") > MAX_READ_BYTES) {
+  if (Buffer.byteLength(result.text, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) {
     return { ok: false, reason: "response-too-large", binding };
   }
   return { ok: true, text: result.text, binding };
@@ -776,14 +776,26 @@ function completedRead(
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
   text: string,
-): { readonly status: "completed"; readonly read: CodingToolReadResult } {
+):
+  | { readonly status: "completed"; readonly read: CodingToolReadResult }
+  | { readonly status: "failed"; readonly reasonCode?: string } {
   const window = readWindow(text, request.startLine, request.maxLines);
+  const byteCount = Buffer.byteLength(window.text, "utf8");
+  if (byteCount > MAX_READ_BYTES) {
+    recordReadFailure(
+      deps,
+      { ok: false, reason: "too-large", binding },
+      request.relativePath,
+      "tool-result",
+    );
+    return readRefusal("too-large");
+  }
   recordCompletedRead(deps, binding, request);
   return {
     status: "completed",
     read: {
       text: window.text,
-      byteCount: Buffer.byteLength(window.text, "utf8"),
+      byteCount,
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
       digest: wholeFileDigest(text),
