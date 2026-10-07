@@ -82,6 +82,32 @@ reconstruct it. Bodies (prompts, code, model output) are never recorded here.
 | `run-235692448730537741545763318702914042936` | T4p  | Ask for approval                              | `cf36ebe8b`                | Plan only (T4p, recorded in `tasks.json`; the catalog's T4 edit-approval run is listed with the final-head runs below). Succeeded in 4.0 min: three files read in one turn, one command approval (`npm test`) requested and granted through the UI, two discovery calls and one repository search, then a correct plan (regex and `parseAmount` change in `src/money.ts`, five new test cases, `src/csv.ts` and `formatAmount` unchanged, current suite passing); no edit attempted, as instructed. LaTeX `$\rightarrow$` in the answer rendered verbatim (F3) | 6 model turns, 39,399 cumulative prompt tokens, `coding-runtime.approval.waiting` and `approval.decided` x1, `coding-runtime.verification-summarized verificationStatus=passed`, `coding-runtime.repository-instructions.context state=attached`, envelope minted with `maxPromptTokens=2000000 maxRuntimeMs=7200000` (cf36ebe8b defaults), `coding-runtime.run.settled state=succeeded`                                                                           |
 | `run-74202984158312182524609898190850427735`  | T5   | Full access                                   | `a24b3981c` (streaming on) | Stopped by the operator after 21 min without an edit: turns 1 to 4 streamed correctly (reasoning shown live in the Workbench, 70 to 86 % of each turn's completion tokens), then turns 5 to 11 each ended after reasoning without a tool call (`empty-answer`, 80 to 330 s each) and were retried identically; the failed turns' reasoning stayed in the resent history (F23)                                                                                                                                                                                  | `gateway.stream.completed reasoningDisposition=forwarded reasoningTokens=143..804` x4, `chat.response.streamed outcome=failed reasoningEvents=4552 maxGapMs=75890 outputExhausted=False` then `coding-sidecar.gateway.turn-failed failureCode=empty-answer runtimeRetry=allowed` x7, `coding-sidecar.gateway.request-validated` estimated prompt 14,154 then 20,380 tokens after the first failure, `coding-runtime.run.settled state=cancelled`                   |
 
+## Coverage and what this ledger does not claim
+
+What ran, on which head, against the task suite above (the run rows in "Results" carry the run ids
+and the log operations that reconstruct each one):
+
+| Task       | Ask for approval                                                                                     | Supervised workspace                                          | Full access                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------ |
+| T1         | `b6bbe5a95` (baseline, read-only)                                                                    | —                                                             | —                                                      |
+| T2         | —                                                                                                    | `b6bbe5a95` (baseline), `63a91e65b`, `43bbe7c11`, `0cdfc3668` | —                                                      |
+| T3         | —                                                                                                    | `0cdfc3668`                                                   | —                                                      |
+| T4         | `cf36ebe8b` as T4p (plan only); the catalog's edit-approval run is recorded with the final-head runs | —                                                             | —                                                      |
+| T5         | —                                                                                                    | —                                                             | `a24b3981c` (stopped by F23; re-run on the final head) |
+| T7/T8      | —                                                                                                    | `0cdfc3668` (T8a), `a2322863f` (T8b), `0e5f793c1` (T8c)       | —                                                      |
+| T6, T9–T12 | not run                                                                                              | not run                                                       | not run                                                |
+
+Chaos scenarios S1–S7 ran on the outage-window heads recorded in their section.
+
+This pull request delivers the reproducible lab (fixture, task catalog, drivers, LiteLLM template,
+chaos proxy), the fixes its runs found (F1, F2, F5, F7, F9–F17, F19–F21 and F23 in part or whole, as
+each finding row says), and the evidence above, each run on the head it names. It does not claim the
+complete task × mode matrix on one final head, and it does not claim parity with the customer's
+model server (the lab runs Ollama with a quantized build; see the deployment shape). The complete
+matrix on the merged head, the "before fixes" baseline per task and mode (which only `b6bbe5a95` can
+produce now), and the remaining findings with an owning issue stay open under #3875 and their
+issues.
+
 ## Resilience under gateway load (chaos)
 
 A fault-injecting proxy between LiteLLM and the model server reproduces peak-load behavior through
