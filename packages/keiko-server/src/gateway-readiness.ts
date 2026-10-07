@@ -2026,6 +2026,13 @@ export function codingWorkbenchProbesSettledForTests(): Promise<void> {
 function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
   const eligibility = codingWorkbenchModelEligibility(capability);
   if (eligibility === "ineligible") return [];
+  return [
+    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
+    ...workbenchContextProbes(capability),
+  ];
+}
+
+function workbenchContextProbes(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
   const minimum = CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
   const canProveMinimum =
     Math.min(
@@ -2033,10 +2040,45 @@ function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayRea
       capability.maxInputTokens ?? Number.POSITIVE_INFINITY,
     ) >= minimum;
   const shortWindow = canProveMinimum && capability.contextWindow < minimum;
-  return [
-    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
-    ...(shortWindow ? (["long_context"] as const) : []),
-  ];
+  return shortWindow ? ["long_context"] : [];
+}
+
+/** Fresh LiteLLM models need a live tool proof before they can appear in the Coding picker. */
+export async function initializeLiteLlmCodingReadiness(
+  deps: UiHandlerDeps,
+  correlationId: string,
+): Promise<void> {
+  const config = deps.gatewayConfig?.current();
+  if (config === undefined) return;
+  const targets = listConfiguredCapabilities(config).flatMap((model): WorkbenchProbeTarget[] => {
+    const provider = config.providers.find((candidate) => candidate.modelId === model.id);
+    if (
+      model.kind !== "chat" ||
+      provider?.tokenCounter !== "litellm" ||
+      model.toolCallingVerification?.status === "unsupported"
+    )
+      return [];
+    const known = workbenchProbesNeeded(model);
+    const probes =
+      codingWorkbenchModelEligibility(model) === "ineligible"
+        ? ["tool_calling" as const, ...workbenchContextProbes(model)]
+        : known;
+    return probes.length === 0 ? [] : [{ modelId: model.id, probes }];
+  });
+  await Promise.all(
+    targets.map((target) => enqueueWorkbenchProbe(deps, config, target, correlationId)),
+  );
+}
+
+export function isLiteLlmCodingReadinessPending(deps: UiHandlerDeps): boolean {
+  const config = deps.gatewayConfig?.current();
+  return (
+    config?.providers.some(
+      (provider) =>
+        provider.tokenCounter === "litellm" &&
+        isCodingWorkbenchProbePending(config, provider.modelId),
+    ) ?? false
+  );
 }
 
 interface WorkbenchProbeTarget {
@@ -2311,7 +2353,10 @@ function enqueueConversationProbe(
   });
 }
 
-function cancellableConversationProbeDeps(deps: UiHandlerDeps, signal: AbortSignal): UiHandlerDeps {
+export function cancellableConversationProbeDeps(
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+): UiHandlerDeps {
   const fetch = deps.gatewayReadinessFetch ?? globalThis.fetch;
   return {
     ...deps,
@@ -2403,7 +2448,6 @@ function scheduleConversationRecovery(
     currentConversationReady(deps, modelId)
   )
     return;
-  if (queue.retryable.get(modelId) === false) return;
   clearTimeout(queue.retries.get(modelId));
   const retry = setTimeout(
     () => {
@@ -2416,10 +2460,12 @@ function scheduleConversationRecovery(
         attempt + 1,
       );
     },
-    Math.min(
-      NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1),
-      MAX_CONVERSATION_RECOVERY_DELAY_MS,
-    ) + 1,
+    (queue.retryable.get(modelId) === false
+      ? MAX_CONVERSATION_RECOVERY_DELAY_MS
+      : Math.min(
+          NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1),
+          MAX_CONVERSATION_RECOVERY_DELAY_MS,
+        )) + 1,
   );
   retry.unref();
   queue.retries.set(modelId, retry);

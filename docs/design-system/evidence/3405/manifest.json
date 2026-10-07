@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-10-07T09:56:23.288Z",
+  "generatedAt": "2026-10-07T11:37:08.219Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [
@@ -35,7 +35,7 @@
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
     "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
-    "packages/keiko-ui/src/lib/api.ts": "86df7a4e5e650b93127c500f620b50bda9f2fd12b45483d82541e5d47a00f27e",
+    "packages/keiko-ui/src/lib/api.ts": "06d17397434dbfa59ef8fbd8fd7c1084363cc3993fcdf97336af661c9357f483",
     "packages/keiko-ui/src/lib/i18n-messages.de.ts": "806003e03b45538d3049c51ed26c43e0d378fcca03b3d13bf82a14eee668e88a",
     "packages/keiko-ui/src/lib/i18n-messages.en.ts": "c377284b941d072a5a7aca2dc17045de07d4197a6c2044d6984e37d90f6fca2a"
   },

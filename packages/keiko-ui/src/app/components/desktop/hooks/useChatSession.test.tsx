@@ -385,6 +385,39 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.selectedModel).toBe("chat-alt");
   });
 
+  it("adopts startup readiness in the background without Settings or losing selection", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [
+        model({ id: "chat-live", conversationReady: true }),
+        model({ id: "chat-waking", conversationReady: false }),
+      ],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(result.current.models).toHaveLength(1);
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [
+        model({ id: "chat-live", conversationReady: true }),
+        model({ id: "chat-waking", conversationReady: true }),
+      ],
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current.models).toHaveLength(2);
+    expect(result.current.selectedModel).toBe("chat-live");
+    unmount();
+    const calls = vi.mocked(fetchModels).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchModels).toHaveBeenCalledTimes(calls);
+    vi.useRealTimers();
+  });
+
   it("honors a child window binding immediately after bootstrap", async () => {
     const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
     const boundChat = chat({ id: "chat-bound", updatedAt: 10 });

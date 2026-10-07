@@ -1715,6 +1715,31 @@ type GatewayModelRefreshResult =
   | { readonly kind: "failure"; readonly message: string };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
+let gatewayModelRefreshTimer: ReturnType<typeof setInterval> | undefined;
+
+// Readiness is completed by the BFF after browser bootstrap. This reads only the local projection;
+// it never starts a provider probe or clears a usable model selection while checking for updates.
+function refreshGatewayModelsInBackground(): void {
+  const generation = gatewayModelRefreshGeneration;
+  void fetchModels().then(
+    ({ models }): void => {
+      if (generation !== gatewayModelRefreshGeneration) return;
+      invalidateSharedBootstrap();
+      publishGatewayModelRefresh({ kind: "success", models });
+    },
+    (error: unknown): void => {
+      reportClientDiagnostic(
+        `Background model catalog refresh failed (${clientErrorSummary(error)}).`,
+        {
+          correlationId: correlationIdOf(error),
+          kind: "boundary",
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        },
+      );
+    },
+  );
+}
 
 function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
   for (const subscriber of gatewayModelRefreshSubscribers) subscriber(result);
@@ -1750,11 +1775,16 @@ function subscribeGatewayModelRefresh(
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
+    window.addEventListener("focus", refreshGatewayModelsInBackground);
+    gatewayModelRefreshTimer = setInterval(refreshGatewayModelsInBackground, 5_000);
   }
   gatewayModelRefreshSubscribers.add(subscriber);
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
+      clearInterval(gatewayModelRefreshTimer);
+      gatewayModelRefreshTimer = undefined;
+      window.removeEventListener("focus", refreshGatewayModelsInBackground);
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
       window.removeEventListener(
         GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,

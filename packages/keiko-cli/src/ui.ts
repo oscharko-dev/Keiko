@@ -59,6 +59,7 @@ import {
 } from "./process-activity-log.js";
 import type { CliIo } from "./runner.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
+import { createBrowserHandoffPoll } from "./ui-browser-handoff.js";
 import {
   defaultUiDataDir,
   isKeikoUiLaunchId,
@@ -769,6 +770,7 @@ const SHUTDOWN_REQUEST_POLL_MS = 250;
 function watchShutdownRequest(
   peek: () => boolean,
   beginDrain: () => void,
+  pollBrowserRequest?: () => void,
 ): ReturnType<typeof setInterval> | null {
   if (peek()) {
     beginDrain();
@@ -776,6 +778,7 @@ function watchShutdownRequest(
   }
   const pollTimer = setInterval(() => {
     if (peek()) beginDrain();
+    else pollBrowserRequest?.();
   }, SHUTDOWN_REQUEST_POLL_MS);
   pollTimer.unref();
   return pollTimer;
@@ -819,9 +822,13 @@ class ShutdownSession {
   }
 
   public watchRequest(peek: () => boolean): void {
-    this.pollTimer = watchShutdownRequest(peek, () => {
-      this.beginDrain("shutdown-request");
-    });
+    this.pollTimer = watchShutdownRequest(
+      peek,
+      () => {
+        this.beginDrain("shutdown-request");
+      },
+      this.activity.pollBrowserRequest,
+    );
   }
 
   public beginDrain(reason: ProcessExitReason): void {
@@ -910,6 +917,7 @@ export interface WaitForShutdownActivity {
   // this pid; this peek is how the child observes that request. Optional so injected-server
   // tests of `waitForShutdown` keep the signal-only contract.
   readonly peekShutdownRequest?: (() => boolean) | undefined;
+  readonly pollBrowserRequest?: (() => void) | undefined;
   // Shared with the durable server-error listener and the process `exit` fallback so the process
   // writes exactly one `process.exiting` line, whichever branch runs first.
   readonly exitLatch?: ProcessExitLatch | undefined;
@@ -1558,6 +1566,21 @@ async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promi
     closeActivityLog,
     peekShutdownRequest: () =>
       peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
+    pollBrowserRequest: createBrowserHandoffPoll({
+      stateDir,
+      pid: process.pid,
+      env: options.runtimeEnv,
+      baseUrl: `http://${UI_HOST}:${String(parsed.port)}`,
+      io,
+      sink:
+        activityLog === undefined
+          ? undefined
+          : {
+              write: (event): void => {
+                activityLog.write(event);
+              },
+            },
+    }),
     exitLatch: input.exitLatch,
     beforeExitEvidence: input.hooks.beforeExitEvidence,
   };

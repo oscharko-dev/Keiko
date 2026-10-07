@@ -66,11 +66,13 @@ const ATLASSIAN_CREDENTIAL_ARTIFACT_SET: ReadonlySet<string> = new Set(
 // channel — issue #3351); `launcher-state.json` from `launcher-state.ts`; portable
 // install attestation from `portable.ts`.
 export const UI_SHUTDOWN_REQUEST_FILE = "ui.shutdown";
+export const UI_BROWSER_OPEN_REQUEST_FILE = "ui.browser-open";
 
 export const KEIKO_STATE_FILES = [
   "ui.pid",
   "ui.log",
   UI_SHUTDOWN_REQUEST_FILE,
+  UI_BROWSER_OPEN_REQUEST_FILE,
   "launcher-state.json",
   "portable-install-state.json",
 ] as const;
@@ -247,6 +249,19 @@ export function writeShutdownRequest(stateDir: string, pid: number, launchId?: s
   writeExclusivePidFile(shutdownRequestPath(stateDir), pid, launchId);
 }
 
+/** The running launcher opens the browser itself; this request never contains a secret. */
+export function writeBrowserOpenRequest(stateDir: string, pid: number, launchId: string): void {
+  writeExclusivePidFile(join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE), pid, launchId);
+}
+
+export function takeBrowserOpenRequest(stateDir: string, pid: number, launchId: string): boolean {
+  const path = join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE);
+  const record = readPidRecord(path, true);
+  if (record?.pid !== pid || record.launchId !== launchId) return false;
+  rmSync(path, { force: true });
+  return true;
+}
+
 export function peekShutdownRequest(stateDir: string, pid: number, launchId?: string): boolean {
   const record = readPidRecord(shutdownRequestPath(stateDir));
   if (record === undefined) return false;
@@ -308,7 +323,7 @@ function parsePidRecord(raw: string): PidRecord | undefined {
   return { pid: Number(pidLine) };
 }
 
-export function readPidRecord(path: string): PidRecord | undefined {
+export function readPidRecord(path: string, ownerOnly = false): PidRecord | undefined {
   let fd: number;
   try {
     fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
@@ -317,6 +332,7 @@ export function readPidRecord(path: string): PidRecord | undefined {
   }
   try {
     assertRegularSingleLinkFile(fd, path);
+    if (ownerOnly && !isOwnerPrivateDescriptor(fd)) return undefined;
     const buffer = Buffer.alloc(MAX_PID_FILE_BYTES);
     const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
     if (bytesRead === 0 || bytesRead === MAX_PID_FILE_BYTES) return undefined;
@@ -326,6 +342,13 @@ export function readPidRecord(path: string): PidRecord | undefined {
   } finally {
     closeSync(fd);
   }
+}
+
+function isOwnerPrivateDescriptor(fd: number): boolean {
+  const stats = fstatSync(fd);
+  return (
+    process.getuid === undefined || (stats.uid === process.getuid() && (stats.mode & 0o077) === 0)
+  );
 }
 
 // Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined when the

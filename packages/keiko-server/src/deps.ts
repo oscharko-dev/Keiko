@@ -3,10 +3,8 @@ import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
-import {
-  initializeConfiguredConversationReadiness,
-  stopConfiguredConversationReadiness,
-} from "./gateway-readiness.js";
+import { stopConfiguredConversationReadiness } from "./gateway-readiness.js";
+import { createGatewayStartupChecks } from "./gateway-startup.js";
 import {
   adoptReportedContextWindow,
   stopAssumedContextWindowDiscovery,
@@ -4628,7 +4626,8 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 }
 
 function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
-  initializeConfiguredConversationReadiness(deps);
+  const startup = createGatewayStartupChecks(deps);
+  startup.start(deps.gatewayConfig?.initializationCorrelationId);
   // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
   // answer and in the window probe a conversation starts (customer report on 1.1.13).
   deps.gatewayConfig?.bindContextWindowReporter?.((report) => {
@@ -4638,13 +4637,14 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
     // Setup stamps its successful credential checks synchronously after replacement. Reuse
     // those observations before deciding which models still need startup verification.
     queueMicrotask(() => {
-      initializeConfiguredConversationReadiness(deps, correlationId ?? newCorrelationId());
+      startup.start(correlationId ?? newCorrelationId());
     });
   });
   return {
     ...deps,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
+      await startup.stop();
       await stopConfiguredConversationReadiness(deps);
       await stopAssumedContextWindowDiscovery(deps);
       await deps.dispose?.();

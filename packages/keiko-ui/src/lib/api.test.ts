@@ -2187,6 +2187,21 @@ describe("fetchModels", () => {
     );
   });
 
+  it("reads background readiness changes without visiting Settings", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ models: [{ id: "chat-model", conversationReady: false }] }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ models: [{ id: "chat-model", conversationReady: true }] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchModels()).resolves.toMatchObject({ models: [{ conversationReady: false }] });
+    await expect(fetchModels()).resolves.toMatchObject({ models: [{ conversationReady: true }] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("clears the model registry cache after a failed request", async () => {
     const fetchMock = vi
       .fn()

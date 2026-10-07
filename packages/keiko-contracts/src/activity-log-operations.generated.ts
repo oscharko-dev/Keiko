@@ -2060,6 +2060,55 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "cli.lifecycle.browser-handoff",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "lifecycle-browser-activity.emitBrowserHandoff",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["requested", "delegated", "headless", "failed"],
+      },
+      attestationProvided: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "process-lifecycle",
+    failureClasses: ["browser-handoff"],
+    proofIds: ["cli.lifecycle.browser-handoff.outcome"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["failed"],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "cli.lifecycle.stop-escalated",
     category: "diagnostic",
     owner: "keiko-cli",

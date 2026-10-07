@@ -253,8 +253,8 @@ bearer-protection properties, and the BFF is the only receiver on every covered 
 
 ### F3 — Launcher-to-browser attestation delivery (D2 finalization)
 
-The trusted launcher (`keiko start --open`, and `npm run dev:start` by default for the dev lane;
-`--no-open` is the explicit headless opt-out)
+The trusted launcher (`keiko start`, `keiko restart`, and `npm run dev:start` by default;
+`--no-open` is the explicit headless opt-out, and `--open` remains compatible)
 generates the process-scoped secret, provisions it to the BFF exclusively through the child's
 inherited environment, and hands the browser exactly one single-use, freshness-bounded attestation
 in the boot URL **fragment** (`#keiko-app-session=…`). The fragment never travels over HTTP; the
@@ -273,8 +273,18 @@ par with the browser's cookie store; the asymmetry (a read secret mints unlimite
 sessions, whereas a stolen attestation is one visible, time-bounded redemption) is why the
 assumption is load-bearing and why the native shell's direct injection remains the target
 posture. The Keiko Native shell replaces this hop with direct cookie injection and retires the
-residual risk; an already-running BFF cannot re-attest (its secret is private to its own
-launch), so another start against it reports that a restart is required to pair a fresh window.
+residual risk. Another start against a running BFF writes an owner-private, single-use
+`ui.browser-open` request bound to its PID and launch identity. The running trusted launcher
+consumes that request and opens a fresh fragment attestation itself using its process-private
+secret. The requesting process receives no secret or attestation, and no HTTP caller gains a
+session-minting path. Unsafe or mismatched requests fail closed. Older launches without this
+channel require a restart.
+
+The default also covers existing `keiko init` project scripts, whose plain `start` invocation must
+perform the authenticated browser hand-off without a script migration. The launcher preserves the
+project working directory, state directory, and gateway configuration environment during this hand-off.
+`cli.lifecycle.browser-handoff` records the headless/requested/delegated/failed outcome and whether the hand-off
+carried an attestation, without recording the URL, fragment, cookies, or secret.
 
 ### F4 — Contract promotion (the scheduled D12 batching)
 

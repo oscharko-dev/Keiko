@@ -194,6 +194,24 @@ function chatModelReady(deps: UiHandlerDeps): boolean | undefined {
   return deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady;
 }
 
+it("recovers an answered startup rejection in the background without a Settings or chat request", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const gateway = { status: 404 };
+  const fetch = startingGateway(gateway);
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-rejection");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalled();
+  });
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  expect(chatModelReady(deps)).toBe(false);
+  gateway.status = 200;
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+  expect(chatModelReady(deps)).toBe(true);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
 it("re-probes a conclusively failed model on the first conversation request after the cooldown", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));

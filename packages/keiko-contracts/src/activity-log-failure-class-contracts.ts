@@ -6,6 +6,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "browser-handoff",
+    requiredProductSurfaces: ["keiko-cli"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["cli.lifecycle.browser-handoff"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["cli.lifecycle.browser-handoff"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["cli.lifecycle.browser-handoff"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["cli.lifecycle.browser-handoff"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "chat-context-management",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

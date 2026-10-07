@@ -45,6 +45,7 @@ async function runLifecycle(
       ? {}
       : { verifyLaunchIdentity: (): boolean => true };
   return runLifecycleCli(args[0], args[1], args[2], args[3], {
+    openExternal: vi.fn(),
     ...syntheticIdentity,
     ...deps,
   });
@@ -852,7 +853,7 @@ describe("runLifecycleCli", () => {
     expect(spawnedEnvs[0]?.[CODING_APP_SESSION_LAUNCHER_SECRET_ENV]).toBe(provided);
   });
 
-  it("opens an unpaired URL for an already-running UI and says how to re-pair", async () => {
+  it("delegates browser pairing to the running launcher without exposing its secret", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
@@ -877,8 +878,10 @@ describe("runLifecycleCli", () => {
     );
 
     expect(code).toBe(0);
-    expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:1983");
-    expect(c.out()).toContain("keiko restart --open");
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(readFileSync(join(root, ".keiko", "ui.browser-open"), "utf8")).toBe(
+      `12345\n${TEST_LAUNCH_ID}\n`,
+    );
   });
 
   it("keeps an already-running UI when the health version matches the installed package", async () => {
@@ -936,7 +939,8 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(0);
     expect(spawnFn).not.toHaveBeenCalled();
-    expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:1983");
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(existsSync(join(root, ".keiko", "ui.browser-open"))).toBe(true);
     expect(c.out()).toContain("already running");
   });
 
@@ -1373,7 +1377,7 @@ describe("runLifecycleCli", () => {
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
-        ...(openExternal === undefined ? {} : { openExternal }),
+        openExternal,
         securityLogSinkFactory: () => ({
           write: (event): void => {
             events.push(event);
@@ -1384,9 +1388,13 @@ describe("runLifecycleCli", () => {
 
       expect(code).toBe(0);
       expect(c.err()).toContain("failed to open http://127.0.0.1:1983");
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ category, op, errorKind, extra: { failureKind } });
-      expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      const windowsFailures = events.filter((event) => event.op === op);
+      expect(windowsFailures).toHaveLength(1);
+      expect(windowsFailures[0]).toMatchObject({ category, op, errorKind, extra: { failureKind } });
+      expect(windowsFailures[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(events.find((event) => event.op === "cli.lifecycle.browser-handoff")).toMatchObject({
+        extra: { outcome: "failed", attestationProvided: true },
+      });
       expect(JSON.stringify(events)).not.toContain("attacker");
     },
   );

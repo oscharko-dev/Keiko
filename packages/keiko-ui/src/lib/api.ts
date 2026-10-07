@@ -550,12 +550,14 @@ export function resetModelRequestCache(): void {
 }
 
 export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
-  modelsRequest ??= fetchJson<{ models: ModelCapability[] }>("/api/models").catch(
-    (error: unknown) => {
-      modelsRequest = undefined;
-      throw error;
-    },
-  );
+  if (modelsRequest === undefined) {
+    const pending = fetchJson<{ models: ModelCapability[] }>("/api/models", {
+      cache: "no-store",
+    }).finally(() => {
+      if (modelsRequest === pending) modelsRequest = undefined;
+    });
+    modelsRequest = pending;
+  }
   return modelsRequest;
 }
 

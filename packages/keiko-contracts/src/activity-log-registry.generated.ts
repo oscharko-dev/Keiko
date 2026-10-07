@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4ecbe6444bfa06c2227de1d2b474d15e135ed964d73589e0c49a4880387fd7b7" as const;
+  "3ebf82c7e02a7217f3783f116860a746ba4d53efe1cc7611dd3a602c0f755559" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 339,
-  completeClassCount: 339,
+  supportedClassCount: 340,
+  completeClassCount: 340,
   completeness: "complete",
   classes: [
     {
@@ -1572,6 +1572,68 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["atlassian.credential.rejected.reason"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "browser-handoff",
+      requirementContract: "browser-handoff",
+      productSurfaces: ["keiko-cli"],
+      lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["cli.lifecycle.browser-handoff"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "cli.lifecycle.browser-handoff",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["cli.lifecycle.browser-handoff"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "cli.lifecycle.browser-handoff",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "process-lifecycle",
+          safeContextFields: [
+            {
+              name: "attestationProvided",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.lifecycle.browser-handoff.outcome"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -39808,6 +39870,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.audit.failed": "runtime-packages",
     "cli.audit.started": "runtime-packages",
     "cli.install-layout.normalized": "runtime-packages",
+    "cli.lifecycle.browser-handoff": "ui",
     "cli.lifecycle.stop-escalated": "ui",
     "cli.lifecycle.stop-escalation-failed": "ui",
     "cli.lifecycle.stop-request-failed": "ui",

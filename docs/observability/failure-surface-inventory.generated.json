@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4ecbe6444bfa06c2227de1d2b474d15e135ed964d73589e0c49a4880387fd7b7"
+    "catalogDigest": "3ebf82c7e02a7217f3783f116860a746ba4d53efe1cc7611dd3a602c0f755559"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 527,
-    "proofCount": 534,
-    "resolvedProofCount": 534,
-    "failureClassCount": 339,
+    "operationCount": 528,
+    "proofCount": 535,
+    "resolvedProofCount": 535,
+    "failureClassCount": 340,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -68,6 +68,7 @@
       "owners": ["keiko-cli", "keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "cli.lifecycle.browser-handoff",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
         "cli.lifecycle.stop-request-failed",
@@ -701,6 +702,7 @@
     }
   ],
   "failureClassScenarios": {
+    "browser-handoff": ["ui.dependency-failure"],
     "chat-context-management": ["bff.dependency-failure"],
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
     "gateway-setup-metadata": ["model-gateway.dependency-failure"],
@@ -1125,6 +1127,9 @@
     "cli.audit.started.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.install-layout.normalized.before-support-snapshot": [
       "packages/keiko-cli/src/install-layout.activity-log-proof.test.ts"
+    ],
+    "cli.lifecycle.browser-handoff.outcome": [
+      "packages/keiko-cli/src/lifecycle-browser-default.test.ts"
     ],
     "cli.lifecycle.stop-escalated.disposition": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"

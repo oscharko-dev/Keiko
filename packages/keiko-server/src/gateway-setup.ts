@@ -2161,6 +2161,131 @@ async function defaultGatewayModelDiscovery(
   }
 }
 
+/** Refresh the active LiteLLM catalog using the same bounded, egress-checked discovery as setup. */
+export function liteLlmDiscoveryConnections(config: GatewayConfig): readonly ModelProviderConfig[] {
+  return config.providers.filter(
+    (provider, index, providers) =>
+      provider.tokenCounter === "litellm" &&
+      !providers
+        .slice(0, index)
+        .some(
+          (previous) =>
+            previous.tokenCounter === "litellm" &&
+            sharesStoredGatewayConnection(provider, previous),
+        ),
+  );
+}
+
+export async function refreshLiteLlmGatewayCatalog(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  signal: AbortSignal,
+  correlationId: string,
+): Promise<boolean> {
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (config === undefined || holder === undefined) return false;
+  const generation = holder.generation();
+  const trace = createSetupDiscoveryTrace();
+  const startedAt = Date.now();
+  try {
+    const result = await discoverConfiguredGatewayCatalog(
+      deps,
+      provider,
+      config.egress,
+      signal,
+      trace,
+      correlationId,
+    );
+    signal.throwIfAborted();
+    if (holder.generation() !== generation) return false;
+    const updated = refreshedLiteLlmCatalog(config, provider, normalizeDiscoveryResult(result));
+    if (updated.providers.length === config.providers.length)
+      holder.refine?.(updated, correlationId);
+    else holder.set(updated, true, correlationId);
+    logSetupMetadataOutcome({ outcome: "available" }, trace, startedAt, correlationId);
+    return true;
+  } catch (cause) {
+    const outcome = metadataFailureOutcome(cause, signal);
+    logSetupMetadataOutcome(
+      { outcome, failure: discoveryFailureDetail(cause, outcome === "cancelled") },
+      trace,
+      startedAt,
+      correlationId,
+    );
+    return false;
+  }
+}
+
+function discoverConfiguredGatewayCatalog(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  egress: GatewayEgressConfig | undefined,
+  signal: AbortSignal,
+  trace: SetupDiscoveryTrace,
+  correlationId: string,
+): Promise<GatewayModelDiscoveryOutput> {
+  if (deps.gatewayModelDiscovery === undefined)
+    return defaultGatewayModelDiscovery(
+      provider.baseUrl,
+      provider.apiKey,
+      provider.apiKeyHeaderName,
+      egress,
+      correlationId,
+      trace,
+      signal,
+    );
+  return awaitSetupOperation(
+    deps.gatewayModelDiscovery(
+      provider.baseUrl,
+      provider.apiKey,
+      provider.apiKeyHeaderName,
+      egress,
+      correlationId,
+    ),
+    signal,
+  );
+}
+
+function refreshedLiteLlmCatalog(
+  config: GatewayConfig,
+  connection: ModelProviderConfig,
+  discovery: SetupCandidateModels,
+): GatewayConfig {
+  const providers = [...config.providers];
+  const capabilities = listConfiguredCapabilities(config).map((model) => {
+    const provider = providers.find((candidate) => candidate.modelId === model.id);
+    const metadata = discovery.modelMetadata[model.id];
+    if (
+      provider === undefined ||
+      !sharesStoredGatewayConnection(provider, connection) ||
+      metadata === undefined
+    )
+      return model;
+    const retained = refreshedSetupCapability(model, metadata) ?? model;
+    return withContextWindowProvenance(model, metadata, {
+      ...retained,
+      ...discoveredCapabilityFields(metadata),
+    });
+  });
+  for (const modelId of discovery.chatModelIds) {
+    if (
+      providers.length >= MAX_DISCOVERED_MODELS ||
+      providers.some((provider) => provider.modelId === modelId)
+    )
+      continue;
+    providers.push({ ...connection, modelId });
+    const metadata = discovery.modelMetadata[modelId];
+    capabilities.push(
+      withContextWindowProvenance(undefined, metadata, {
+        ...createDefaultChatCapability(modelId),
+        ...discoveredCapabilityFields(metadata),
+      }),
+    );
+  }
+  return { ...config, providers, capabilities };
+}
+
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
   if (typeof value === "string") {
     return value.split(/[\n,]/u);

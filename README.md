@@ -79,7 +79,7 @@ npm install -g @oscharko-dev/keiko
 keiko start
 ```
 
-Connected folders do not need Git metadata or a `package.json`. Run `keiko init` only if you want to add optional commands to an existing Node.js project. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
+Connected folders do not need Git metadata or a `package.json`. Run `keiko init` only if you want to add optional commands to an existing Node.js project. `keiko start` and `keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `keiko stop` shuts it down, and `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
 
 ## Honest limits
 

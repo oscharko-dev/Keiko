@@ -51,14 +51,23 @@ readiness was never observed. Failed initialization remains
 visible. Inconclusive transport or provider failures recover through configuration-owned background
 probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
 provider recovers or the configuration changes. A conclusive rejection (for example a 4xx the gateway
-gives while it is still starting) ends the background retries, but not the recovery: the first
+gives while it is still starting) is retried in the background every five minutes. The first
 conversation request that needs the model after the 30-second not-ready cooldown starts one fresh
 probe, dated by the probe that last settled rather than by a preserved feature-observation
 timestamp. Concurrent requests join that probe, a failed one refreshes the cooldown, and a
 malformed observation timestamp never triggers it, so a dead gateway costs at most one bounded probe
 per model per cooldown. This restores the 1.1.11 behavior that 1.1.13 removed together with the
 per-question checks: without it one conclusive answer at startup left the model not-ready until a
-restart or a Settings change. Disposal aborts active requests, clears retries, and unsubscribes
+restart or a Settings change. The browser refreshes the local catalog every five seconds while
+model consumers are mounted, without clearing a usable selection during background reads. Only
+in-flight requests are cached; settled model responses cannot conceal subsequent readiness results.
+Recognized LiteLLM connections also reuse setup discovery at startup to refresh declared context
+limits and add newly discovered chat models with conservative capabilities. Existing connections,
+policy, and configured models are retained. A bounded serial queue verifies missing or expired
+tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
+existing context proof. Inconclusive discovery and tool checks retry after their one-minute
+cooldown. Disabled Coding and subscription sources never initiate these tool checks.
+Disposal aborts active requests, clears retries, and unsubscribes
 the configuration listener.
 At most two probes run concurrently per configuration holder, including across replacements;
 queued probes of superseded generations are discarded. Ready models are never rechecked per
