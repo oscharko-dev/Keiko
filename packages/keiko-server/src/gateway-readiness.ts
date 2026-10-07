@@ -2050,7 +2050,14 @@ export async function initializeLiteLlmCodingReadiness(
 ): Promise<void> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return;
-  const targets = listConfiguredCapabilities(config).flatMap((model): WorkbenchProbeTarget[] => {
+  const targets = liteLlmWorkbenchProbeTargets(config);
+  await Promise.all(
+    targets.map((target) => enqueueWorkbenchProbe(deps, config, target, correlationId)),
+  );
+}
+
+function liteLlmWorkbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
+  return listConfiguredCapabilities(config).flatMap((model): WorkbenchProbeTarget[] => {
     const provider = config.providers.find((candidate) => candidate.modelId === model.id);
     if (
       model.kind !== "chat" ||
@@ -2065,9 +2072,6 @@ export async function initializeLiteLlmCodingReadiness(
         : known;
     return probes.length === 0 ? [] : [{ modelId: model.id, probes }];
   });
-  await Promise.all(
-    targets.map((target) => enqueueWorkbenchProbe(deps, config, target, correlationId)),
-  );
 }
 
 export function isLiteLlmCodingReadinessPending(deps: UiHandlerDeps): boolean {
@@ -2154,7 +2158,9 @@ async function runWorkbenchProbe(
     const config = deps.gatewayConfig?.current();
     const stillNeeded =
       config !== undefined &&
-      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
+      [...workbenchProbeTargets(config), ...liteLlmWorkbenchProbeTargets(config)].some(
+        (pending) => pending.modelId === target.modelId,
+      );
     // Proven, yet not stored: the configuration changed under the run and the conclusion was
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
@@ -2382,7 +2388,7 @@ export async function stopConfiguredConversationReadiness(deps: UiHandlerDeps): 
   await Promise.allSettled([...readinessProbesFor(holder).values()].map((probe) => probe.promise));
 }
 
-function initializationDeps(
+export function withReadinessParentCorrelation(
   deps: UiHandlerDeps,
   parentCorrelationId: string | undefined,
 ): UiHandlerDeps {
@@ -2409,7 +2415,7 @@ function monitorConversationInitialization(
   if (holder?.generation() !== generation || conversationQueue(holder).disposed) return;
   const causalParent = parentCorrelationId ?? holder.initializationCorrelationId;
   const probeCorrelationId = newCorrelationId();
-  const observedDeps = initializationDeps(deps, causalParent);
+  const observedDeps = withReadinessParentCorrelation(deps, causalParent);
   void ensureOnDemandConversationReadiness(observedDeps, modelId, probeCorrelationId, attempt)
     .catch((error: unknown) => {
       emitServerDiagnostic(

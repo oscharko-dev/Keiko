@@ -7,6 +7,7 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   isLiteLlmCodingReadinessPending,
+  initializeLiteLlmCodingReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
@@ -263,4 +264,56 @@ it("keeps a window refinement made while startup discovery is in flight", async 
   await pending.promise;
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(startupModels(deps)[0]?.contextWindow).toBe(32_768);
+});
+
+it("reproves an unready LiteLLM model when its successful proof became stale", async () => {
+  const blocked = deferredValue<boolean>();
+  let toolCalls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: unknown, init: RequestInit) => {
+      const tools = typeof init.body === "string" && init.body.includes("report_readiness");
+      if (tools && ++toolCalls === 1) await blocked.promise;
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content: "OK",
+              ...(tools
+                ? {
+                    tool_calls: [
+                      { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                    ],
+                  }
+                : {}),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    }),
+  );
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()));
+  const config = startupConfig();
+  deps.gatewayConfig?.set(config, true);
+  await vi.waitFor(() => {
+    expect(toolCalls).toBe(1);
+  });
+  const current = deps.gatewayConfig?.current();
+  if (current === undefined) throw new TypeError("Expected gateway configuration.");
+  deps.gatewayConfig?.set(
+    {
+      ...current,
+      capabilities: (current.capabilities ?? []).map((model) => ({
+        ...model,
+        contextWindow: model.contextWindow + 1,
+      })),
+    },
+    true,
+  );
+  blocked.resolve(true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await initializeLiteLlmCodingReadiness(deps, "corr-stale-proof-recovery");
+  expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
+  expect(toolCalls).toBe(2);
 });
