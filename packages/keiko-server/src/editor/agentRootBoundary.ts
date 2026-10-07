@@ -25,7 +25,10 @@ import type { UiStore, WorkspaceManifestRecordRow } from "../store/index.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { WorkspaceRootAccessOutcome } from "../task-workspace/workspace-root-access.js";
+import type {
+  WorkspaceRootAccess,
+  WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
 
 export type EditorAgentRootBoundaryReason = Extract<
   EditorAgentActionDenyReason,
@@ -199,6 +202,7 @@ function storedWorkspaceRoot(
 function storedSessionRoot(
   snapshot: EditorAgentSessionSnapshot,
   store: UiStore,
+  runtimeOwned = false,
 ): EditorAgentRootResolution {
   const row = manifestRow(store, snapshot.workspaceRoot);
   if (row === undefined) return { ok: false, reason: "root-binding-invalid" };
@@ -209,7 +213,7 @@ function storedSessionRoot(
     return { ok: false, reason: "root-binding-invalid" };
   }
   const binding = canonicalBinding(manifest, descriptor);
-  if (manifest.roots.length > 1 && snapshot.rootBinding === undefined) {
+  if (sessionNeedsExplicitBinding(snapshot, manifest, runtimeOwned)) {
     return { ok: false, reason: "root-binding-required" };
   }
   if (snapshot.rootBinding !== undefined) {
@@ -221,15 +225,26 @@ function storedSessionRoot(
     root: {
       workspaceRoot: storedWorkspaceRoot(snapshot, manifest, descriptor),
       rootRef: descriptor.rootRef,
-      ...(snapshot.rootBinding === undefined
-        ? {}
-        : {
-            binding,
-          }),
+      ...(retainResolvedBinding(snapshot, runtimeOwned) ? { binding } : {}),
       manifest,
       explicitBindingRequired: manifest.roots.length > 1,
     },
   };
+}
+
+function sessionNeedsExplicitBinding(
+  snapshot: EditorAgentSessionSnapshot,
+  manifest: WorkspaceManifest,
+  runtimeOwned: boolean,
+): boolean {
+  return manifest.roots.length > 1 && snapshot.rootBinding === undefined && !runtimeOwned;
+}
+
+function retainResolvedBinding(
+  snapshot: EditorAgentSessionSnapshot,
+  runtimeOwned: boolean,
+): boolean {
+  return snapshot.rootBinding !== undefined || runtimeOwned;
 }
 
 export function resolveEditorAgentSessionRoot(
@@ -237,6 +252,52 @@ export function resolveEditorAgentSessionRoot(
   store?: UiStore,
 ): EditorAgentRootResolution {
   return store === undefined ? legacySessionRoot(snapshot) : storedSessionRoot(snapshot, store);
+}
+
+/** Historical location for overlap checks only; this never grants a filesystem capability. */
+export function editorAgentSnapshotLocation(
+  snapshot: EditorAgentSessionSnapshot,
+  store?: UiStore,
+): string {
+  const row = snapshotManifestRow(snapshot, store);
+  const manifest = row === undefined ? null : parsedManifest(row);
+  const rootRef =
+    snapshot.rootBinding?.rootRef ??
+    row?.rootProjects.find((entry): boolean => entry.projectPath === snapshot.workspaceRoot)
+      ?.rootRef;
+  const recorded = manifest?.roots.find((entry): boolean => entry.rootRef === rootRef);
+  if (recorded !== undefined) return recorded.canonicalRoot;
+  try {
+    return realpathSync(snapshot.workspaceRoot);
+  } catch {
+    return resolve(snapshot.workspaceRoot);
+  }
+}
+
+function snapshotManifestRow(
+  snapshot: EditorAgentSessionSnapshot,
+  store?: UiStore,
+): WorkspaceManifestRecordRow | undefined {
+  if (store === undefined) return undefined;
+  return snapshot.rootBinding === undefined
+    ? manifestRow(store, snapshot.workspaceRoot)
+    : store.findWorkspaceManifestRecordByRoot(snapshot.rootBinding.rootRef);
+}
+
+/** The run selected this exact root; a current granted capability is required, never UI focus. */
+export function resolveEditorAgentRuntimeRoot(
+  snapshot: EditorAgentSessionSnapshot,
+  access: WorkspaceRootAccess,
+  store?: UiStore,
+): EditorAgentRootResolution {
+  if (access.canonicalRoot !== snapshot.workspaceRoot) {
+    return { ok: false, reason: "root-binding-invalid" };
+  }
+  // Managed task roots are registered and identity-proved by their lifecycle authority, not as
+  // ordinary projects in the Editor manifest store. The granted owned-root fs remains mandatory.
+  return access.kind === "managed-task" || store === undefined
+    ? legacySessionRoot(snapshot)
+    : storedSessionRoot(snapshot, store, true);
 }
 
 export function resolveEditorAgentActionRoot(

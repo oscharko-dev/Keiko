@@ -202,6 +202,7 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
+  readonly serverRuntimeChangeset?: ProductionManagedWorktreeToolInput["serverRuntimeChangeset"];
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
   readonly commandRunner?: ProductionManagedWorktreeToolInput["commandRunner"] | undefined;
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
@@ -1398,10 +1399,13 @@ function mutationPortOptions({
   leases,
 }: Pick<ManagedToolFacadeInput, "input" | "leases">): Pick<
   ProductionManagedWorktreeToolInput,
-  "mutationLeaseCoordinator" | "materializedPatches"
+  "mutationLeaseCoordinator" | "materializedPatches" | "serverRuntimeChangeset"
 > {
   return {
     mutationLeaseCoordinator: leases,
+    ...(input.serverRuntimeChangeset === undefined
+      ? {}
+      : { serverRuntimeChangeset: input.serverRuntimeChangeset }),
     ...(input.materializedPatches === undefined
       ? {}
       : { materializedPatches: input.materializedPatches }),

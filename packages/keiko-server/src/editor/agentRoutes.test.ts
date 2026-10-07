@@ -5760,6 +5760,51 @@ describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
 });
 
 describe("ordinary Editor passive safety route", () => {
+  it("canonicalizes a selected alias while preserving its owner refresh and dirty publication", async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-buffer-alias-")));
+    const root = join(base, "original");
+    const other = join(base, "other");
+    const alias = join(base, "selected-folder");
+    mkdirSync(root);
+    mkdirSync(other);
+    symlinkSync(root, alias, "dir");
+    const owner = "A".repeat(43);
+    const request = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      bufferSnapshotCapability: owner,
+      snapshot: { ...safetySnapshot(["file.ts"]), workspaceRoot: alias },
+    };
+    try {
+      expect((await handleEditorAgentSnapshot(safetyRequest(request))).status).toBe(200);
+      expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.workspaceRoot).toBe(root);
+      const refreshed = {
+        ...request,
+        snapshot: { ...request.snapshot, dirtyFiles: ["second.ts"], updatedAt: 2 },
+      };
+      expect((await handleEditorAgentSnapshot(safetyRequest(refreshed))).status).toBe(200);
+      expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.dirtyFiles).toEqual([
+        "second.ts",
+      ]);
+      expect(editorAgentRegistry.snapshotFor("session-safety")).toBeUndefined();
+      expect(request.snapshot.workspaceRoot).toBe(alias);
+      rmSync(alias);
+      symlinkSync(other, alias, "dir");
+      expect(
+        (
+          await handleEditorAgentSnapshot(
+            safetyRequest({ ...refreshed, snapshot: { ...refreshed.snapshot, updatedAt: 3 } }),
+          )
+        ).status,
+      ).toBe(409);
+      expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.workspaceRoot).toBe(root);
+      expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.dirtyFiles).toEqual([
+        "second.ts",
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
   function safetySnapshot(dirtyFiles: readonly string[] = []): EditorAgentSessionSnapshot {
     return {
       schemaVersion: "1",

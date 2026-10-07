@@ -53,10 +53,12 @@ import {
   resolveEditorAgentActionRoot,
   resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
+  resolveEditorAgentRuntimeRoot,
 } from "./agentRootBoundary.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   grantedWorkspaceRootAccess,
+  createOrdinaryWorkspaceRootAccess,
   type WorkspaceRootAccessOutcome,
 } from "../task-workspace/workspace-root-access.js";
 import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -339,6 +341,65 @@ afterEach(() => {
 });
 
 describe("editor agent root boundary", () => {
+  it("binds an authorized runtime to its selected ordinary root without using UI focus", () => {
+    const selected = snapshot(rootB, undefined, "runtime-selected-b");
+    expect(resolveEditorAgentSessionRoot(selected, store)).toEqual({
+      ok: false,
+      reason: "root-binding-required",
+    });
+    expect(
+      resolveEditorAgentRuntimeRoot(selected, createOrdinaryWorkspaceRootAccess(rootB), store),
+    ).toMatchObject({ ok: true, root: { workspaceRoot: rootB, binding: binding(1) } });
+  });
+
+  it("refuses an ordinary runtime when the granted root does not match the selected root", () => {
+    expect(
+      resolveEditorAgentRuntimeRoot(
+        snapshot(rootA, undefined, "runtime-mismatch"),
+        createOrdinaryWorkspaceRootAccess(rootB),
+        store,
+      ),
+    ).toEqual({ ok: false, reason: "root-binding-invalid" });
+  });
+
+  it("keeps ordinary runtime root binding fail-closed when the stored identity changed", () => {
+    const guardedStore: UiStore = {
+      ...store,
+      findWorkspaceManifestRecordByProject: (path) => {
+        const row = store.findWorkspaceManifestRecordByProject(path);
+        return row === undefined
+          ? undefined
+          : {
+              ...row,
+              rootProjects: row.rootProjects.map((entry) => ({
+                ...entry,
+                objectIdentityDigest: "f".repeat(64),
+              })),
+            };
+      },
+    };
+    expect(
+      resolveEditorAgentRuntimeRoot(
+        snapshot(rootA, undefined, "runtime-replaced"),
+        createOrdinaryWorkspaceRootAccess(rootA),
+        guardedStore,
+      ),
+    ).toEqual({ ok: false, reason: "root-binding-invalid" });
+  });
+
+  it("refuses an ordinary runtime without a registered manifest rather than using a focus fallback", () => {
+    const noManifestStore: UiStore = {
+      ...store,
+      findWorkspaceManifestRecordByProject: () => undefined,
+    };
+    expect(
+      resolveEditorAgentRuntimeRoot(
+        snapshot(rootA, undefined, "runtime-unregistered"),
+        createOrdinaryWorkspaceRootAccess(rootA),
+        noManifestStore,
+      ),
+    ).toEqual({ ok: false, reason: "root-binding-invalid" });
+  });
   it("executes a trusted action and attributes its evidence to root A", async () => {
     const sessionA = snapshot(rootA, binding(0), "session-a");
     await registerLive(sessionA);

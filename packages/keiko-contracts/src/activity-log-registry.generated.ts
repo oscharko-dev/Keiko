@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "17b018850bd436804968a353a76ea071218107beccf7c3e04bcaecac36da78a4" as const;
+  "d2abf7187094e2bd7d2d487a75a340c49e510c7bb912bd217a4fd8644401933f" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -5436,6 +5436,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "executionPath",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "prepareCause",
               type: "string",
               dataClass: "closed-enum",
@@ -5497,6 +5503,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "editForm",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "executionPath",
               type: "string",
               dataClass: "closed-enum",
               required: false,

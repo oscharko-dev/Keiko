@@ -722,6 +722,71 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  it.each(["supervised-coding", "autonomous-delivery"] as const)(
+    "forwards the internal allowed changeset port in %s",
+    async (effectiveMode) => {
+      const browserAction = vi.fn();
+      const register = vi.fn((): true => true);
+      const apply = vi.fn<
+        NonNullable<ProductionManagedWorktreeToolInput["serverRuntimeChangeset"]>
+      >((input) =>
+        Promise.resolve({
+          schemaVersion: "1",
+          actionId: input.action.actionId,
+          sessionId: input.action.sessionId,
+          status: "succeeded",
+        }),
+      );
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(),
+          }),
+        },
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode,
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => FACTS,
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: true as const, text: EDITED_TEXT }),
+        },
+        editorAgentClient: { action: browserAction },
+        serverRuntimeChangeset: apply,
+        mutationLeaseCoordinator: {
+          register,
+          discard: vi.fn(),
+          waitForMutation: () => Promise.resolve("succeeded"),
+        },
+        activityLog: { write: vi.fn() },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        verificationRunner: { runToReport: vi.fn() },
+        onRuntimeEvent: vi.fn(),
+      });
+      expect(
+        await facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "edit",
+            actionId: "direct-edit",
+            idempotencyKey: "direct-key",
+            changeset: replacementChangeset(),
+          }),
+        }),
+      ).toMatchObject({ status: "completed" });
+      expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview: false }));
+      expect(apply).toHaveBeenCalledOnce();
+      expect(browserAction).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns bounded actionable diagnostics for a failed verifier without exposing its workspace root", async () => {
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const facade = verificationFacade({

@@ -1169,6 +1169,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           completeness: "complete",
           loss: "none",
           editForm: "unified-diff",
+          executionPath: "browser",
         },
       }),
     ]);
@@ -1545,6 +1546,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
             completeness: "complete",
             loss: "none",
             editForm: "unified-diff",
+            executionPath: "browser",
           },
         }),
       ]);

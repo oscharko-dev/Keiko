@@ -6247,6 +6247,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["unified-diff", "replacements"],
       },
+      executionPath: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["server", "browser"],
+      },
       deletionCount: {
         type: "integer",
         dataClass: "count",
@@ -6300,6 +6306,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["unified-diff", "replacements"],
+      },
+      executionPath: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["server", "browser"],
       },
       deletionCount: {
         type: "integer",

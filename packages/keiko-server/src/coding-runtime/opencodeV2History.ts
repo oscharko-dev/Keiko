@@ -486,7 +486,8 @@ function assistantPartCandidates(
 }
 
 const NATIVE_COMPACTION_COMMON_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
-// Exact pinned V2 variants. Summary/error bodies are checked only for shape, never projected.
+// Admitted pinned V2 lifecycle variants. Optional provider/usage payloads are not decoded.
+// Summary/error bodies are checked only for shape, never projected.
 const NATIVE_COMPACTION_FIELDS: Readonly<Record<string, readonly string[]>> = {
   running: [...NATIVE_COMPACTION_COMMON_FIELDS, "summary", "recent"],
   completed: [

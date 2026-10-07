@@ -138,12 +138,13 @@ identifiers are hashed; summary text, retained-tail content, model/provider stat
 never enter that operational projection. V2's `recent` is serialized content, not a message ID:
 only its presence determines the retained-tail boolean, and its unavailable start-ID digest is
 omitted. Lifecycle metadata, rather than streaming summary text, drives deduplication. V2 does not
-report the V1 overflow boolean: its absence means unavailable and must
-never be recorded as `false`. Unknown or partial native compaction shapes fail closed. Compaction
-failure remains an observation; native execution settlement owns task completion, so an answer or
-summary cannot bypass pending tools or verification repair. Automatic compaction configuration and
-execution ordering remain native-runtime concerns; the historical post-answer delay remains open
-until a reproducible native qualification identifies the cause.
+report the V1 overflow boolean: its absence means unavailable and must never be recorded as `false`.
+Unknown lifecycle variants, unexpected top-level fields, and missing or malformed required lifecycle
+fields fail closed. Optional provider and usage payloads are not decoded or projected by this
+observation lane. Compaction failure remains an observation; native execution settlement owns task
+completion, so an answer or summary cannot bypass pending tools or verification repair. Automatic
+compaction configuration and execution ordering remain native-runtime concerns; the historical
+post-answer delay remains open until a reproducible native qualification identifies the cause.
 
 The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
 only where an operator configures one. It therefore counts every prompt the provider processed for

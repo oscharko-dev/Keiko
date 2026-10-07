@@ -24,6 +24,7 @@ import {
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
+  serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
 import {
@@ -72,6 +73,10 @@ import {
   type WorkspacePathAbsence,
 } from "./secureWorkspaceTextReadAbsence.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type {
+  RuntimeChangesetApplyInput,
+  RuntimeChangesetApplyPort,
+} from "../editor/agentRoutes.js";
 
 const MAX_READ_BYTES = 65_536;
 const RAW_SINGLE_FILE_PATCH =
@@ -133,6 +138,8 @@ export interface CodingToolReadEditPorts {
 export interface CodingToolReadEditPortDeps {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly editorAgentClient: EditorAgentActionClient;
+  /** Server-owned allowed changesets reuse the Editor transaction without a browser decision. */
+  readonly serverRuntimeChangeset?: RuntimeChangesetApplyPort | undefined;
   readonly resolveEditorActionContext: () => EditorActionContext;
   readonly resolveRepositoryReadContext?: (() => RuntimeProducerBinding) | undefined;
   readonly resolveWorkspaceRoot?: (() => string | undefined) | undefined;
@@ -695,6 +702,7 @@ const EDIT_FORMS = ["unified-diff", "replacements"] as const;
 type EditForm = (typeof EDIT_FORMS)[number];
 
 interface EditFormEvidence {
+  readonly executionPath?: "server" | "browser";
   readonly editForm: EditForm;
   readonly deletionCount?: number;
   readonly renameCount?: number;
@@ -730,6 +738,12 @@ const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperat
       values: ["edit"],
     },
     editForm: EDIT_FORM_FIELD,
+    executionPath: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "browser"],
+    },
     deletionCount: EDIT_DELETION_COUNT_FIELD,
     renameCount: EDIT_RENAME_COUNT_FIELD,
   },
@@ -816,6 +830,12 @@ const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
     readReason: CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD,
     replacementRefusal: EDIT_REPLACEMENT_REFUSAL_FIELD,
     editForm: EDIT_FORM_FIELD,
+    executionPath: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["server", "browser"],
+    },
     deletionCount: EDIT_DELETION_COUNT_FIELD,
     renameCount: EDIT_RENAME_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -1130,6 +1150,7 @@ function readPostflight(
 }
 
 interface PreparedEdit {
+  readonly requiresReview: boolean;
   readonly action: EditorAgentAction;
   readonly leaseRequest: CodingRuntimeEditorMutationLeaseRequest | undefined;
   readonly signal: AbortSignal;
@@ -1311,27 +1332,90 @@ async function executeMaterializedEdit(
   }
   const correlationId = editCorrelationId(prepared.action);
   try {
-    const bound = await bindPreparedEdit(deps, prepared, correlationId, evidence);
-    if ("refused" in bound) return bound.refused;
-    // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
-    const completion =
-      prepared.leaseRequest === undefined
-        ? undefined
-        : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
-    const result = await deps.editorAgentClient.action(bound.action, prepared.signal);
-    if (result.ok && editorStatusCompleted(result.value.result.status)) {
-      return await completedEdit(deps, correlationId, completion, evidence);
+    const serverInput = serverPreparedEditInput(prepared);
+    if (deps.serverRuntimeChangeset !== undefined && serverInput !== undefined) {
+      return await executeServerPreparedEdit(
+        deps,
+        deps.serverRuntimeChangeset,
+        serverInput,
+        correlationId,
+        { ...evidence, executionPath: "server" },
+      );
     }
-    discardMutationLease(deps, prepared.leaseRequest);
-    return editRefused(deps, correlationId, editFailureReasonCode(result), {
-      ...editFailureDetail(result),
+    return await executeBrowserPreparedEdit(deps, prepared, correlationId, {
       ...evidence,
+      executionPath: "browser",
     });
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
     emitEditFailureDiagnostic(deps.diagnostics, correlationId, error);
     return { status: "failed", reasonCode: "EDIT_TRANSPORT_ERROR" };
   }
+}
+
+function serverPreparedEditInput(prepared: PreparedEdit): RuntimeChangesetApplyInput | undefined {
+  if (
+    prepared.requiresReview ||
+    prepared.leaseRequest === undefined ||
+    prepared.workspaceRoot === undefined
+  )
+    return undefined;
+  return {
+    action: prepared.action,
+    leaseRequest: prepared.leaseRequest,
+    workspaceRoot: prepared.workspaceRoot,
+    signal: prepared.signal,
+  };
+}
+
+async function executeBrowserPreparedEdit(
+  deps: CodingToolReadEditPortDeps,
+  prepared: PreparedEdit,
+  correlationId: string,
+  evidence: EditFormEvidence,
+): Promise<EditOutcome> {
+  const bound = await bindPreparedEdit(deps, prepared, correlationId, evidence);
+  if ("refused" in bound) return bound.refused;
+  // Capture before dispatch: an automatic editor apply may settle before its HTTP response.
+  const completion =
+    prepared.leaseRequest === undefined
+      ? undefined
+      : deps.mutationLeaseCoordinator?.waitForMutation(prepared.leaseRequest, prepared.signal);
+  const result = await deps.editorAgentClient.action(bound.action, prepared.signal);
+  if (result.ok && editorStatusCompleted(result.value.result.status))
+    return completedEdit(deps, correlationId, completion, evidence);
+  discardMutationLease(deps, prepared.leaseRequest);
+  return editRefused(deps, correlationId, editFailureReasonCode(result), {
+    ...editFailureDetail(result),
+    ...evidence,
+  });
+}
+
+async function executeServerPreparedEdit(
+  deps: CodingToolReadEditPortDeps,
+  apply: RuntimeChangesetApplyPort,
+  input: RuntimeChangesetApplyInput,
+  correlationId: string,
+  evidence: EditFormEvidence,
+): Promise<EditOutcome> {
+  const completion = deps.mutationLeaseCoordinator?.waitForMutation(
+    input.leaseRequest,
+    input.signal,
+  );
+  const result = await apply(input);
+  if (result.status === "succeeded")
+    return completedEdit(deps, correlationId, completion, evidence);
+  discardMutationLease(deps, input.leaseRequest);
+  if (input.signal.aborted) return editRefused(deps, correlationId, "CANCELLED", evidence);
+  return editRefused(
+    deps,
+    correlationId,
+    result.conflict?.code ?? result.failure?.code ?? "EDIT_MUTATION_FAILED",
+    {
+      ...(result.message === undefined ? {} : { message: result.message }),
+      ...evidence,
+    },
+  );
 }
 
 // A change applied or rejected in its review is the human's decision, logged as such; a cancelled
@@ -1408,11 +1492,13 @@ function refusalCauseFields({
 }
 
 function editFormFields({
+  executionPath,
   editForm,
   deletionCount,
   renameCount,
 }: Partial<EditFormEvidence>): Partial<EditFormEvidence> {
   return {
+    ...(executionPath === undefined ? {} : { executionPath }),
     ...(editForm === undefined ? {} : { editForm }),
     ...(deletionCount === undefined ? {} : { deletionCount }),
     ...(renameCount === undefined ? {} : { renameCount }),
@@ -1482,14 +1568,16 @@ function emitEditFailureDiagnostic(
   correlationId: string,
   error: unknown,
 ): void {
-  emitServerDiagnostic(diagnostics, {
-    correlationId,
-    timestamp: new Date().toISOString(),
-    operation: "coding-runtime.editor-changeset",
-    source: "coding-tool-read-edit-ports.edit",
-    errorClass: contentFreeErrorClass(error),
-    message: "edit-transport-failed",
-  });
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation: "coding-runtime.editor-changeset",
+      source: "coding-tool-read-edit-ports.edit",
+      error,
+      redact: (): string => "edit-transport-failed",
+    }),
+  );
 }
 
 // A governed edit the editor route refused (a policy denial, a conflict, a failed apply) is a
@@ -1585,9 +1673,18 @@ function prepareEdit(
   if (context === undefined || !editorContextMatches(context, binding))
     return { refused: "editor-context-unavailable" };
   const action = changesetAction(request, changeset, context);
-  const leaseRequest = registerMutationLease(deps, action, context, binding, mutationGuard);
+  const requiresReview = resolveReviewRequirement(deps);
+  const leaseRequest = registerMutationLease(
+    deps,
+    action,
+    context,
+    binding,
+    mutationGuard,
+    requiresReview,
+  );
   if (binding !== undefined && leaseRequest === undefined) return { refused: "lease-unavailable" };
   return {
+    requiresReview,
     action,
     leaseRequest,
     signal: signal ?? new AbortController().signal,
@@ -1658,6 +1755,7 @@ function registerMutationLease(
   context: EditorActionContext,
   binding: RuntimeProducerBinding | undefined,
   mutationGuard: CodingToolMutationGuard,
+  requiresReview: boolean,
 ): CodingRuntimeEditorMutationLeaseRequest | undefined {
   if (binding === undefined) return undefined;
   const coordinator = deps.mutationLeaseCoordinator;
@@ -1669,7 +1767,7 @@ function registerMutationLease(
     workspaceRootDigest: binding.workspaceRootDigest,
     actionId: action.actionId,
     idempotencyKey: action.idempotencyKey,
-    requiresReview: resolveReviewRequirement(deps),
+    requiresReview,
     mutationGuard: (): boolean => checkGuard(mutationGuard),
   });
   return registered ? request : undefined;

@@ -1,4 +1,5 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
+import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
   type OwnAssessmentPolicy,
@@ -5930,6 +5931,15 @@ function qualifiedRuntimeResolver(
       input.envelopeBounds,
     ),
     ...input.ports,
+    serverRuntimeChangeset: createRuntimeChangesetApplyPort({
+      runtimeMutationLease: input.runtimeMutationLeaseBroker,
+      materializedPatches: input.materializedPatches,
+      workspaceRootAccessResolver: resolveWorkspaceRootAccess,
+      workspaceLifecycle: input.workspaceLifecycle,
+      workspaceScriptTrust: args.bundle.workspaceScriptTrust,
+      autonomousDeliveryDeploymentCeiling: input.deploymentCeiling,
+      store: args.bundle.uiStore,
+    }),
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
     // ADR-0147 D3, autonomous-delivery amendment: the same server-owned trust service the runners

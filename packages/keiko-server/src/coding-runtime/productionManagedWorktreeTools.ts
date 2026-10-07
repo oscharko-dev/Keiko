@@ -552,6 +552,7 @@ export interface ProductionManagedWorktreeToolInput {
   readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
+  readonly serverRuntimeChangeset?: CodingToolReadEditPortDeps["serverRuntimeChangeset"];
   readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
   /** The server-wide record of the diff text the edit port renders itself (PR #3876 review). */
   readonly materializedPatches?: CodingToolReadEditPortDeps["materializedPatches"];
@@ -818,6 +819,9 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     activityLog: input.activityLog,
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     editorAgentClient: input.editorAgentClient,
+    ...(input.serverRuntimeChangeset === undefined
+      ? {}
+      : { serverRuntimeChangeset: input.serverRuntimeChangeset }),
     resolveEditorActionContext: () => ({
       sessionId: `runtime-${input.authorityRef.runId}`,
       authorityRef: input.authorityRef,
