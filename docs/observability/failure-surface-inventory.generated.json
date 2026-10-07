@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8fd51852be86d9ea4dd6f18cb3f173d34c4d24f9f6a73c77e79f92743655d6d9"
+    "catalogDigest": "3f7619a4cac3d9851df953f4702023a6d0b83ab39168a1268587f413088c9e75"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 530,
-    "proofCount": 537,
-    "resolvedProofCount": 537,
-    "failureClassCount": 340,
+    "operationCount": 531,
+    "proofCount": 538,
+    "resolvedProofCount": 538,
+    "failureClassCount": 341,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -349,6 +349,7 @@
         "coding-runtime.tool-result-rendered",
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
+        "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
         "coding-sidecar.gateway.readiness-insufficient",
@@ -795,6 +796,7 @@
     "coding-tool-authority": ["tools-workflows.rejection"],
     "coding-workbench-issue-preview": ["tools-workflows.dependency-failure"],
     "coding-workbench-issue-resolution": ["tools-workflows.dependency-failure"],
+    "coding-workspace-discovery": ["tools-workflows.dependency-failure"],
     "coding-workspace-read": ["tools-workflows.dependency-failure"],
     "command-termination": ["tools-workflows.crash"],
     "compaction-fact-classification": ["bff.dependency-failure"],
@@ -1453,6 +1455,9 @@
     ],
     "coding-runtime.verification-summarized.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.workspace-discovery.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts"
     ],
     "coding-runtime.workspace-read.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolFileCreation.test.ts",

@@ -849,6 +849,7 @@ export function CodingWorkbenchWindow({
   const { state: runtimeState, actions } = useCodingWorkbenchRuntime({
     workspace: activeWorkspace,
   });
+  const [taskIntent, setTaskIntent] = useState("");
   const history = useCodingTaskSession({
     snapshot: runtimeState.run.value,
     active: activeRunState(runtimeState.run.value?.state),
@@ -857,6 +858,7 @@ export function CodingWorkbenchWindow({
     location: initialHistoryLocation(activeWorkspace, selectedRoot, selectedLocation),
     selection: historySelection,
     onSelectionHandled: onHistorySelectionHandled,
+    onDraftReset: (): void => setTaskIntent(""),
   });
   const state = historyRuntimeState(runtimeState, history);
 
@@ -878,7 +880,6 @@ export function CodingWorkbenchWindow({
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
   const runWorkspace = useRunWorkspaceBinding(state, activeWorkspace);
-  const [taskIntent, setTaskIntent] = useState("");
   useClearTaskIntentOnMutationSuccess(state.mutation, taskIntent, setTaskIntent);
   const focusRef = useRef<HTMLHeadingElement>(null);
   const approvalAction = useRef(false);
@@ -1402,15 +1403,17 @@ function WorkbenchColumns({
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
-  const startTask = (): void =>
-    void issueIntake.submit(taskIntent.trim(), async (issue): Promise<void> => {
+  const startTask = (draft = taskIntent): void => {
+    const submittedDraft = draft.trim();
+    void issueIntake.submit(submittedDraft, async (issue): Promise<void> => {
       runWorkspace.captureSubmission();
-      await actions.start(taskIntent.trim(), {
+      await actions.start(submittedDraft, {
         projectMemoryEnabled,
         conversationId: history.conversationId,
         issue,
       });
     });
+  };
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
@@ -1422,7 +1425,7 @@ function WorkbenchColumns({
         onResume: () => {
           if (resumeMode !== null) void actions.resume(resumeMode);
         },
-        onSend: () => void actions.submitFollowUp(taskIntent.trim()),
+        onSend: (draft): void => void actions.submitFollowUp(draft.trim()),
       }}
       canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}
@@ -1615,7 +1618,7 @@ function WorkbenchColumns({
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}
-          onRetry={startTask}
+          onRetry={(): void => startTask()}
           repositoryPath={repositoryRoot ?? ""}
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />

@@ -137,6 +137,29 @@ describe("writeToBrowserConsole", () => {
 // `POST /api/diagnostics/client`, fanned out alongside the console so neither call site regresses
 // when the other is added.
 describe("fanOutClientDiagnostic", () => {
+  it("forwards body-free Coding submission facts through the existing composer transport (#3877)", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const composerSubmission = {
+      kind: "start" as const,
+      outcome: "attempted" as const,
+      normalization: "trim" as const,
+      displayedDigest: "a".repeat(64),
+      submittedDigest: "b".repeat(64),
+      draftMatchesInput: false,
+      inputCharacterCount: 42,
+      submittedCharacterCount: 40,
+    };
+    fanOutClientDiagnostic("[keiko] coding task submission attempted", {
+      composerActivity: "coding-task-submission",
+      composerSubmission,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      composerActivity: "coding-task-submission",
+      composerSubmission,
+    });
+  });
   it("keeps healthy Composer, workspace and voice lifecycle evidence out of console warnings", () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);

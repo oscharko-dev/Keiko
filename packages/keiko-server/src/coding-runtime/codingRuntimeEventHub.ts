@@ -44,6 +44,10 @@ export type CodingRuntimeEventHubInput =
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
       >["auxiliaryOutcome"];
+      readonly verificationSummary?: Extract<
+        CodingWorkbenchRuntimeSseEvent,
+        { kind: "runtime-event" }
+      >["verificationSummary"];
       readonly contentTrust?: Extract<
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
@@ -163,12 +167,13 @@ export class CodingRuntimeEventHub {
       return { ok: false, reason: "sequence-exhausted" };
 
     const sequence = run.nextSequence;
-    const event = {
+    const event = Object.freeze({
       ...input,
+      ...ownedVerificationSummary(input),
       cursor: `${input.runId}:${String(sequence)}`,
       sequence,
       occurredAt: this.now().toISOString(),
-    } as CodingWorkbenchRuntimeSseEvent;
+    }) as CodingWorkbenchRuntimeSseEvent;
     if (!validateCodingWorkbenchRuntimeSseEvent(event).ok)
       return { ok: false, reason: "invalid-event" };
     const retained: RetainedEvent = {
@@ -452,6 +457,15 @@ function isContainment(event: CodingWorkbenchRuntimeSseEvent): boolean {
   return isTerminal(event) || event.state === "recovery-required";
 }
 
+// Own nested verifier facts before validation and publication. Caller or subscriber mutation
+// must not change a retained frame, its validated body-free shape, or its byte reservation.
+function ownedVerificationSummary(
+  input: CodingRuntimeEventHubInput,
+): Pick<Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>, "verificationSummary"> {
+  if (input.kind !== "runtime-event" || input.verificationSummary === undefined) return {};
+  return { verificationSummary: Object.freeze({ ...input.verificationSummary }) };
+}
+
 function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -465,6 +479,7 @@ function isExactInput(value: unknown): value is CodingRuntimeEventHubInput {
       ? [
           "auxiliaryOutcome",
           "contentTrust",
+          "verificationSummary",
           "eventKind",
           "failureCode",
           "kind",

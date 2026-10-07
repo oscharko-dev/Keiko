@@ -1055,6 +1055,33 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell hat diesen Schritt ohne Text und ohne Werkzeugaufruf beendet. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
   "codingWorkbench.event.turnFailure.invalid-tool-call":
     "Das Modell hat bei jedem Versuch ein Werkzeug mit Argumenten aufgerufen, die nicht zum Werkzeug passen. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
+  "codingWorkbench.event.turnCause.provider-failed":
+    "Das Modell-Gateway hat diesen Schritt nicht abgeschlossen.",
+  "codingWorkbench.event.turnCause.stream-incomplete":
+    "Der Antwortstream des Modells endete, bevor dieser Schritt abgeschlossen war.",
+  "codingWorkbench.event.turnCause.turn-rejected":
+    "Das Modell oder eine Workbench-Sicherheitsprüfung hat diesen Schritt nicht angenommen.",
+  "codingWorkbench.event.turnCause.output-exhausted":
+    "Das Modell hat sein Ausgabebudget verbraucht, bevor dieser Schritt abgeschlossen war.",
+  "codingWorkbench.event.turnCause.empty-answer":
+    "Das Modell hat diesen Schritt ohne Antwort oder Tool-Aufruf beendet.",
+  "codingWorkbench.event.turnCause.invalid-tool-call":
+    "Das Modell hat für diesen Schritt keinen gültigen Tool-Aufruf erzeugt.",
+  "codingWorkbench.event.turnProgress.active": "Die Aufgabe läuft weiter.",
+  "codingWorkbench.event.turnProgress.gateway-retrying":
+    "Keiko versucht den Aufruf des Modell-Gateways automatisch erneut.",
+  "codingWorkbench.verification.result": "{verifier}: {status}",
+  "codingWorkbench.verification.verifier.test": "Tests",
+  "codingWorkbench.verification.verifier.targeted-test": "Gezielte Tests",
+  "codingWorkbench.verification.verifier.typecheck": "Typprüfung",
+  "codingWorkbench.verification.verifier.lint": "Lint",
+  "codingWorkbench.verification.verifier.build": "Build",
+  "codingWorkbench.verification.status.passed": "Bestanden",
+  "codingWorkbench.verification.status.failed": "Fehlgeschlagen",
+  "codingWorkbench.verification.status.partial": "Teilweise",
+  "codingWorkbench.verification.checks":
+    "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
+  "codingWorkbench.verification.duration": "Dauer: {duration} ms",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

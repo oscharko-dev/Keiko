@@ -4,6 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -991,6 +992,24 @@ function expectedRefusalCode(failure: CodingWorkbenchIssueBindingFailure): strin
 }
 
 describe("CodingRuntimeOrchestrator", () => {
+  it("records the exact accepted operator task digest independently of hidden launch context (#3877)", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    const taskIntent = "  PRIVATE_ACCEPTED_TASK_CANARY\n";
+    await f.orchestrator.start({ ...start, taskIntent });
+    const event = requireLoggedEvent(
+      captured.records.find((entry) => entry.op === "coding-runtime.run.started"),
+      "Missing started evidence",
+    );
+    expect(event.extra?.taskIntentDigest).toBe(sha256Hex(taskIntent));
+    expect(event.extra?.taskIntentDigest).not.toBe(sha256Hex(taskIntent.trim()));
+    expect(event.extra?.taskIntentDigest).not.toBe(f.orchestrator.current()?.taskDigest);
+    expectActivityLogProof(
+      "coding-runtime.run.started.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_ACCEPTED_TASK_CANARY");
+  });
   it("records body-free activity log lines for run start and settlement", async () => {
     const captured = captureActivityLog();
     const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
@@ -2761,6 +2780,14 @@ describe("CodingRuntimeOrchestrator", () => {
         kind: "verification-summarized",
         verificationKind: "targeted-test",
         verificationStatus,
+        verificationSummary: {
+          verifierId: "targeted-test",
+          status: verificationStatus,
+          passedCount,
+          failedCount,
+          skippedCount: 0,
+          durationMs: 1240.5,
+        },
         passedCount,
         failedCount,
         skippedCount: 0,
@@ -2768,6 +2795,20 @@ describe("CodingRuntimeOrchestrator", () => {
         failureLocationsTruncated: verificationStatus === "failed",
         verificationTargetDigest,
       });
+      expect(f.eventHub.publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          kind: "runtime-event",
+          eventKind: "verification-summarized",
+          verificationSummary: {
+            verifierId: "targeted-test",
+            status: verificationStatus,
+            passedCount,
+            failedCount,
+            skippedCount: 0,
+            durationMs: 1240.5,
+          },
+        }),
+      );
     }
 
     const verificationLines = captured.records.filter(
@@ -2785,6 +2826,8 @@ describe("CodingRuntimeOrchestrator", () => {
           runId,
           verificationEventId: "verification-1",
           verificationKind: "targeted-test",
+          verifierId: "targeted-test",
+          durationMs: 1240.5,
           verificationStatus: "failed",
           passedCount: 0,
           failedCount: 1,
@@ -2804,6 +2847,8 @@ describe("CodingRuntimeOrchestrator", () => {
           runId,
           verificationEventId: "verification-2",
           verificationKind: "targeted-test",
+          verifierId: "targeted-test",
+          durationMs: 1240.5,
           verificationStatus: "passed",
           passedCount: 4,
           failedCount: 0,

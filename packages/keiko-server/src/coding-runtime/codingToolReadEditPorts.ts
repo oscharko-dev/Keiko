@@ -14,8 +14,10 @@ import {
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import {
   detectWorkspaceAt,
-  discoverWithStats,
+  discoverWithStatsAsync,
   isDenied,
+  type DiscoveryResult,
+  type DiscoveryStats,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 
@@ -200,7 +202,7 @@ export function createCodingToolReadEditPorts(
   };
 }
 
-function executeDiscover(
+async function executeDiscover(
   deps: CodingToolReadEditPortDeps,
   request: RepositoryDiscoverRequest,
   signal: AbortSignal | undefined,
@@ -209,46 +211,153 @@ function executeDiscover(
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
   | { readonly status: "failed" }
 > {
-  return Promise.resolve(executeDiscoverSync(deps, request, signal, mutationGuard));
-}
-
-function executeDiscoverSync(
-  deps: CodingToolReadEditPortDeps,
-  request: RepositoryDiscoverRequest,
-  signal: AbortSignal | undefined,
-  mutationGuard: CodingToolMutationGuard,
-):
-  | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" } {
   const preflight = discoveryPreflight(deps, signal, mutationGuard);
   if (!preflight.ok) return { status: "failed" };
   const binding = preflight.binding;
+  const startedAtMs = Date.now();
+  let reason: DiscoverySettlementReason = "authority-denied";
+  let stats: DiscoveryStats | undefined;
+  let failure: unknown;
   try {
     const resolved = discoveryWorkspace(deps);
     if (resolved === undefined) return { status: "failed" };
-    const workspace = detectWorkspaceAt(resolved.root, resolved.fs);
-    const discovered = discoverWithStats(
-      workspace,
-      {
-        maxDepth: 40,
-        maxFiles: 20_000,
-        applyGitignore: true,
-      },
-      resolved.fs,
-    );
-    const text = discoveredPathText(
-      discovered.files.map(({ relativePath }): string => relativePath),
-      request.query,
-      request.maxResults,
-    );
+    const discovered = await discoverPaths(resolved, signal);
+    stats = discovered.stats;
+    const text = discoveredPathText(discovered.files, request.query, request.maxResults);
     if (!discoveryPostflight(deps, resolved.root, binding, signal, mutationGuard)) {
+      reason = isAborted(signal) ? "cancelled" : "authority-denied";
       return { status: "failed" };
     }
+    reason = "none";
     return { status: "completed", read: discoveryReadResult(text) };
   } catch (error) {
+    failure = error;
+    reason = isAborted(signal) ? "cancelled" : "inventory-failed";
     emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, error);
     return { status: "failed" };
+  } finally {
+    recordDiscoverySettlement(deps, binding, reason, startedAtMs, stats, failure);
   }
+}
+
+function discoverPaths(
+  resolved: DiscoveryWorkspace,
+  signal: AbortSignal | undefined,
+): Promise<DiscoveryResult> {
+  const workspace = detectWorkspaceAt(resolved.root, resolved.fs, {
+    scanSourceFilesForLanguages: false,
+  });
+  return discoverWithStatsAsync(
+    workspace,
+    { maxDepth: 40, maxFiles: 20_000, applyGitignore: true },
+    resolved.fs,
+    { nowMs: Date.now, deadlineAtMs: Infinity, ...(signal === undefined ? {} : { signal }) },
+    { failOnReadError: true },
+  );
+}
+
+type DiscoverySettlementReason = "none" | "cancelled" | "authority-denied" | "inventory-failed";
+
+const CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.workspace-discovery",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.recordDiscoverySettlement",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "cancelled", "authority-denied", "inventory-failed"],
+    },
+    cooperative: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceLanguageScan: { type: "boolean", dataClass: "closed-enum", required: true },
+    directorySortStrategy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["once-per-directory"],
+    },
+    discovered: { type: "integer", dataClass: "count", required: false },
+    denied: { type: "integer", dataClass: "count", required: false },
+    ignored: { type: "integer", dataClass: "count", required: false },
+    depthPruned: { type: "integer", dataClass: "count", required: false },
+    maxFilesPruned: { type: "integer", dataClass: "count", required: false },
+    unrepresentablePaths: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  diagnosticWhen: [{ field: "reason", values: ["inventory-failed"] }],
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-workspace-discovery"],
+  proofIds: ["coding-runtime.workspace-discovery.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function recordDiscoverySettlement(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  reason: DiscoverySettlementReason,
+  startedAtMs: number,
+  stats: DiscoveryStats | undefined,
+  failure: unknown,
+): void {
+  const errorKind: ActivityLogErrorKind | undefined =
+    reason === "none" ? undefined : reason === "inventory-failed" ? "internal" : reason;
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(binding?.runId),
+        durationMs: Math.max(0, Date.now() - startedAtMs),
+        ...(errorKind === undefined ? {} : { level: "warn", errorKind }),
+      },
+      {
+        state: reason === "none" ? "completed" : "failed",
+        reason,
+        cooperative: true,
+        sourceLanguageScan: false,
+        directorySortStrategy: "once-per-directory",
+        ...(stats === undefined
+          ? {}
+          : {
+              discovered: stats.discovered,
+              denied: stats.denied,
+              ignored: stats.ignored,
+              depthPruned: stats.depthPruned,
+              maxFilesPruned: stats.maxFilesPruned,
+              ...(stats.unrepresentablePaths === undefined
+                ? {}
+                : { unrepresentablePaths: stats.unrepresentablePaths }),
+            }),
+        ...(failure === undefined
+          ? {}
+          : { frames: keikoStackFrames(failure), causeChain: causeChain(failure) }),
+      },
+    ),
+  );
 }
 
 interface DiscoveryWorkspace {
@@ -286,11 +395,15 @@ function emitDiscoveryFailureDiagnostic(
   });
 }
 
-function discoveredPathText(paths: readonly string[], query: string, maxResults: number): string {
+function discoveredPathText(
+  files: DiscoveryResult["files"],
+  query: string,
+  maxResults: number,
+): string {
   const terms = discoveryTerms(query);
   const selected: string[] = [];
   let bytes = 0;
-  for (const path of paths) {
+  for (const { relativePath: path } of files) {
     if (selected.length >= maxResults) break;
     if (isDenied(path) || !matchesDiscoveryTerms(path, terms)) continue;
     const lineBytes = Buffer.byteLength(`${path}\n`, "utf8");

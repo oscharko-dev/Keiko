@@ -650,3 +650,80 @@ describe("CodingRuntimeEventHub", () => {
     ]);
   });
 });
+
+describe("CodingRuntimeEventHub safe verifier facts", () => {
+  it("retains measured verifier checks in bounded replay and rejects content-bearing metadata", () => {
+    const hub = new CodingRuntimeEventHub();
+    const verificationSummary = {
+      verifierId: "targeted-test" as const,
+      status: "failed" as const,
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 1240.5,
+    };
+    const input: CodingRuntimeEventHubInput = {
+      ...status("run-verifier", 1),
+      kind: "runtime-event",
+      eventKind: "verification-summarized",
+      verificationSummary,
+    };
+    expect(hub.publish(input)).toMatchObject({ ok: true, event: { verificationSummary } });
+    expect(hub.replay("run-verifier")).toMatchObject({
+      ok: true,
+      events: [{ verificationSummary }],
+    });
+    const contentBearing = {
+      ...input,
+      verificationSummary: { ...verificationSummary, stdout: "private verifier output" },
+    };
+    expect(hub.publish(contentBearing)).toMatchObject({ ok: false });
+  });
+});
+
+describe("CodingRuntimeEventHub verifier metadata ownership", () => {
+  it("owns a validated snapshot instead of retaining mutable input or replay metadata", () => {
+    const hub = new CodingRuntimeEventHub();
+    const verificationSummary = {
+      verifierId: "targeted-test" as const,
+      status: "failed" as const,
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 1240.5,
+    };
+    const published = hub.publish({
+      ...status("run-1986", 1),
+      kind: "runtime-event",
+      eventKind: "verification-summarized",
+      verificationSummary,
+    });
+    if (!published.ok || published.event.kind !== "runtime-event") {
+      throw new Error("expected a published verifier event");
+    }
+    const encoded = JSON.stringify(published.event);
+    const encodedBytes = Buffer.byteLength(encoded, "utf8");
+    verificationSummary.failedCount = 99;
+    verificationSummary.durationMs = Number.NaN;
+    Object.assign(verificationSummary, { stdout: "UNVALIDATED_PRIVATE_CANARY" });
+    expect(published.event.verificationSummary).toEqual({
+      verifierId: "targeted-test",
+      status: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 1240.5,
+    });
+    expect(hub.replay("run-1986")).toMatchObject({
+      ok: true,
+      events: [{ verificationSummary: { failedCount: 1, durationMs: 1240.5 } }],
+    });
+    expect(JSON.stringify(published.event)).toBe(encoded);
+    expect(Buffer.byteLength(JSON.stringify(published.event), "utf8")).toBe(encodedBytes);
+    expect(JSON.stringify(hub.replay("run-1986"))).not.toContain("UNVALIDATED_PRIVATE_CANARY");
+    const ownedSummary = published.event.verificationSummary;
+    if (ownedSummary === undefined) throw new Error("expected verifier metadata");
+    expect(Reflect.set(ownedSummary, "stdout", "UNVALIDATED_PRIVATE_CANARY")).toBe(false);
+    expect(Reflect.set(published.event, "revision", 99)).toBe(false);
+  });
+});

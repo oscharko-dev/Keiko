@@ -132,6 +132,51 @@ describe("POST /api/diagnostics/client", () => {
     resetClientDiagnosticsIngestStateForTests();
   });
 
+  it("persists captured Coding input and actual normalized payload digests without task bodies (#3877)", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_TASK_CANARY",
+          clientTs: CLIENT_TS,
+          composerActivity: "coding-task-submission",
+          correlationId: "task-submission-correlation",
+          composerSubmission: {
+            kind: "start",
+            outcome: "attempted",
+            normalization: "trim",
+            displayedDigest: "a".repeat(64),
+            submittedDigest: "b".repeat(64),
+            draftMatchesInput: false,
+            inputCharacterCount: 42,
+            submittedCharacterCount: 40,
+          },
+        }),
+      ),
+    );
+    const event = sink.events.find((entry) => entry.op === "client.composer.activity");
+    expect(event).toMatchObject({
+      correlationId: "task-submission-correlation",
+      extra: {
+        activity: "coding-task-submission",
+        submissionKind: "start",
+        submissionOutcome: "attempted",
+        normalization: "trim",
+        displayedDigest: "a".repeat(64),
+        submittedDigest: "b".repeat(64),
+        draftMatchesInput: false,
+        inputCharacterCount: 42,
+        submittedCharacterCount: 40,
+      },
+    });
+    expectActivityLogProof(
+      "client.composer.activity.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_TASK_CANARY");
+  });
+
   it.each([
     "scope-refusal-restored",
     "scope-refusal-skipped-owner",

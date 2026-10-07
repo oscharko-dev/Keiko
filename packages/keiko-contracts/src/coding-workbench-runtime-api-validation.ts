@@ -3,6 +3,7 @@ import {
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   type CodingWorkbenchValidationResult,
+  type CodingWorkbenchVerificationSummary,
 } from "./coding-workbench.js";
 import {
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
@@ -11,6 +12,7 @@ import {
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
   type CodingWorkbenchTurnFailureCode,
 } from "./coding-workbench-runtime-constants.js";
+import { isVerificationKind } from "./editor-verification.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -93,7 +95,7 @@ export function sseEventKeys(kind: unknown): readonly string[] {
     "failureCode",
   ];
   return kind === "runtime-event"
-    ? [...common, "eventKind", "auxiliaryOutcome", "contentTrust"]
+    ? [...common, "eventKind", "auxiliaryOutcome", "contentTrust", "verificationSummary"]
     : common;
 }
 
@@ -115,6 +117,37 @@ export function validateSseEventFields(
   validateNonNegativeSafeInteger(value.revision, "revision", errors);
   validateSseEventKind(value, errors);
   validateSseOptionalEnums(value, errors);
+  validateSseVerificationSummary(value, errors);
+}
+
+export function isCodingWorkbenchVerificationSummary(
+  value: unknown,
+): value is CodingWorkbenchVerificationSummary {
+  if (!isRecord(value)) return false;
+  const keys = ["verifierId", "status", "passedCount", "failedCount", "skippedCount", "durationMs"];
+  return (
+    exactKeys(value, keys, "verificationSummary").length === 0 &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    isVerificationKind(value.verifierId) &&
+    isOneOf(value.status, ["passed", "failed", "partial"]) &&
+    [value.passedCount, value.failedCount, value.skippedCount].every(
+      (count) => Number.isSafeInteger(count) && Number(count) >= 0,
+    ) &&
+    typeof value.durationMs === "number" &&
+    Number.isFinite(value.durationMs) &&
+    value.durationMs >= 0
+  );
+}
+
+function validateSseVerificationSummary(value: Record<string, unknown>, errors: string[]): void {
+  if (value.verificationSummary === undefined) return;
+  if (
+    value.kind !== "runtime-event" ||
+    value.eventKind !== "verification-summarized" ||
+    !isCodingWorkbenchVerificationSummary(value.verificationSummary)
+  ) {
+    errors.push("verificationSummary is invalid or outside verification-summarized");
+  }
 }
 
 // The `eventKind` of a runtime-event frame: an adapter event kind, or one of the SSE-only gateway

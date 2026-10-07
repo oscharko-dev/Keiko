@@ -294,6 +294,7 @@ function clientMessagePostBody(
     filesScopeDecision: meta.filesScopeDecision,
     codingRunRestore: meta.codingRunRestore,
     composerActivity: meta.composerActivity,
+    composerSubmission: meta.composerSubmission,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
     codingHistoryScope: meta.codingHistoryScope,

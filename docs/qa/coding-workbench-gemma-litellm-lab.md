@@ -88,6 +88,56 @@ including literal-code controls and a genuine native tool call. Scoped TypeScrip
 Prettier and the generated Activity Log catalog check passed (97 catalog tests; zero registry
 violations). Full closeout gates remain deferred while engineering continues.
 
+### Incremental discovery and draft hardening
+
+The Workbench discovery port now reuses the workspace package's cooperative async walker. It
+disables the unrelated language-detection scan, sorts directory entries once, and observes
+cancellation during traversal. Strict IO handling is enabled only for this caller: an unreadable
+root or nested directory fails the inventory rather than proving an empty or complete result.
+Ordinary denied/gitignored exclusions and the 40-level / 20,000-file / 64-KiB response bounds remain
+unchanged. The registered `coding-runtime.workspace-discovery` settlement reports the strategy,
+counts, duration and closed failure evidence without file names or contents.
+
+A 96-source production-port fixture returned the identical output digest before and after the
+change. Root enumerations fell from two to one and source stat calls from 192 to 96. A queued
+event-loop callback now runs before completion; a queued cancellation refuses the partial result
+after 31 source stats. Timing samples do not establish a p95 improvement and are not a gate.
+Failure-first root/nested IO, cancellation and duplicate-scan regressions plus strict/tolerant,
+authority and ignore controls passed in 185 focused server/workspace tests. Two stale gateway
+refresh regressions also failed before the guard moved ahead of the global refresh broadcast;
+38 focused hook/effect tests passed afterward.
+
+F6 / [#3877](https://github.com/oscharko-dev/Keiko/issues/3877) reproduced in the previously served
+UI with zero task submissions: a 325-character multiline draft was scrolled, and New task retained
+that draft, so typing its replacement produced 341 characters. The new-task handler now clears the
+separate draft synchronously before workspace provisioning. Submission captures the native
+textarea value once and carries that immutable argument through asynchronous issue intake; trim
+normalization applies to that snapshot. Existing `client.composer.activity` records attempt-only
+input/payload digests, counts and draft equality; `coding-runtime.run.started` separately hashes
+the exact accepted operator intent. These facts do not claim pixel visibility or acceptance before
+the server start. Focused draft/capture/transport and diagnostic tests pass; refreshed-bundle
+browser qualification is still pending.
+
+An earlier multiline browser-driver attempt mistakenly triggered Enter submission. Its exact run,
+`run-104462463423725241230891811817002568653`, was cancelled at 17:36:20 UTC after 135 seconds,
+three model turns, one verification and zero edits. It is driver-failure evidence, not a
+no-submission proof or an accepted task qualification.
+
+F19 now carries the actual verifier kind, result, step counts and measured duration through the
+validated runtime event and retained SSE frame into the expanded timeline. Counts describe
+verifier steps, not individual test assertions; unsuccessful includes failed, denied, timed-out,
+cancelled and resource-exceeded steps. Retained nested summaries are copied and frozen so later
+caller or subscriber mutation cannot alter validated replay data or its byte reservation. Targeted
+checks passed: 216 contract tests, 116 production verification tests, 34 event-hub tests, one
+orchestrator forwarding proof, and 104 timeline/i18n tests. UI and scoped server/contract TypeScript,
+changed-file lint/format, and 97 generated-catalog checks passed. File paths, discovery/read counts
+and pre-run refusal detail remain open under F19; this increment does not close that finding.
+
+F21 active turn failures now describe the observed cause without premature operator repair advice.
+The timeline claims an automatic retry only when the existing gateway retry fact confirms it;
+terminal failures retain the repair advice. Recovered and unrelated historical runs are controls.
+The complete live retry presentation and attempt-counter qualification remain pending.
+
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations
 is a separate case: Keiko then starts from the setup placeholder until its long-context probe

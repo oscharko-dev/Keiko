@@ -2054,3 +2054,45 @@ describe("coding workbench sidecar gateway readiness — context window floor", 
     expect(unavailable.reason).toBe("model-context-window-insufficient");
   });
 });
+
+describe("canonical Workbench verifier summary agreement", () => {
+  const event = {
+    schemaVersion: "1",
+    eventId: "evt-123",
+    runId: "run-1986",
+    occurredAt: "2026-07-07T12:00:00Z",
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    verificationStatus: "failed",
+    passedCount: 0,
+    failedCount: 1,
+    skippedCount: 0,
+    verificationSummary: {
+      verifierId: "targeted-test",
+      status: "failed",
+      passedCount: 0,
+      failedCount: 1,
+      skippedCount: 0,
+      durationMs: 12.5,
+    },
+  };
+
+  it("accepts only summary facts matching the existing canonical counts and status", () => {
+    expect(validateCodingWorkbenchRuntimeEvent(event)).toEqual({ ok: true, value: event });
+  });
+
+  it.each([
+    { status: "passed" },
+    { passedCount: 1 },
+    { failedCount: 0 },
+    { skippedCount: 1 },
+    { stdout: "private command output" },
+  ])("rejects conflicting or content-bearing verifier summaries %j", (invalid) => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...event,
+        verificationSummary: { ...event.verificationSummary, ...invalid },
+      }).ok,
+    ).toBe(false);
+  });
+});

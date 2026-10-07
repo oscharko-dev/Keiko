@@ -1279,3 +1279,82 @@ describe("durable issue-bound draft delivery on the runtime snapshot", () => {
     },
   );
 });
+
+describe("body-free Workbench verifier metadata", () => {
+  const verificationSummary = {
+    verifierId: "targeted-test",
+    status: "failed",
+    passedCount: 0,
+    failedCount: 1,
+    skippedCount: 0,
+    durationMs: 1240.5,
+  };
+  const event = {
+    schemaVersion: "1",
+    cursor: "run-1:2",
+    sequence: 2,
+    occurredAt: AT,
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 3,
+    eventKind: "verification-summarized",
+  };
+
+  it("accepts measured verifier metadata and preserves old frames without invented values", () => {
+    expect(validateCodingWorkbenchRuntimeSseEvent(event)).toEqual({ ok: true, value: event });
+    const enriched = { ...event, verificationSummary };
+    expect(validateCodingWorkbenchRuntimeSseEvent(enriched)).toEqual({ ok: true, value: enriched });
+  });
+
+  it.each([
+    { stdout: "private verifier output" },
+    { path: "/private/workspace/test.ts" },
+    { verifierId: "unimplemented" },
+    { status: "unknown" },
+    { passedCount: -1 },
+    { failedCount: 0.5 },
+    { skippedCount: Number.MAX_SAFE_INTEGER + 1 },
+    { durationMs: -1 },
+    { durationMs: Number.POSITIVE_INFINITY },
+    { durationMs: Number.NaN },
+    { durationMs: "100" },
+    { passedCount: undefined },
+  ])("rejects noncanonical verifier metadata %j", (invalid) => {
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        ...event,
+        verificationSummary: { ...verificationSummary, ...invalid },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it.each(["task-submitted", "model-gateway-retrying"])(
+    "does not attach verifier metadata to %s",
+    (eventKind) => {
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind, verificationSummary }).ok,
+      ).toBe(false);
+    },
+  );
+
+  it("keeps verifier metadata off status frames", () => {
+    const status = {
+      schemaVersion: event.schemaVersion,
+      cursor: event.cursor,
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      kind: "status",
+      runId: event.runId,
+      state: event.state,
+      revision: event.revision,
+    };
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({
+        ...status,
+        kind: "status",
+        verificationSummary,
+      }).ok,
+    ).toBe(false);
+  });
+});

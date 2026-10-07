@@ -464,9 +464,7 @@ function descend(walk: Walk, absoluteDir: string, relativeDir: string, depth: nu
     return;
   }
   walk.directories.push(relativeDir);
-  const entries = [...readDirSafe(walk, absoluteDir, relativeDir)].sort((a, b) =>
-    a.name < b.name ? -1 : 1,
-  );
+  const entries = readDirSafe(walk, absoluteDir, relativeDir);
   for (const [index, entry] of entries.entries()) {
     if (
       entryBudgetExhausted(walk) ||
@@ -540,9 +538,7 @@ async function descendAsync(
     return;
   }
   walk.directories.push(relativeDir);
-  const entries = [...readDirSafe(walk, absoluteDir, relativeDir)].sort((a, b) =>
-    a.name < b.name ? -1 : 1,
-  );
+  const entries = readDirSafe(walk, absoluteDir, relativeDir);
   for (const [index, entry] of entries.entries()) {
     if (
       entryBudgetExhausted(walk) ||
@@ -894,12 +890,17 @@ function candidateDiscoveryResult(walk: Walk): CandidateDiscoveryResult {
 
 // Uses the same WorkspaceFs port and filtering rules as discoverWithStats, but yields after bounded
 // entry batches so the BFF can serve unrelated requests while a large workspace is being scanned.
+// Strict consumers refuse an unreadable inventory; tolerant callers retain their existing behavior.
 export async function discoverWithStatsAsync(
   workspace: WorkspaceInfo,
   opts: DiscoveryOptions,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  executionControl?: StructuralExecutionControl,
+  options: { readonly failOnReadError?: boolean } = {},
 ): Promise<DiscoveryResult> {
-  return discoveryResult(await runWalkAsync(workspace, opts, fs));
+  return discoveryResult(
+    await runWalkAsync(workspace, opts, fs, options.failOnReadError === true, executionControl),
+  );
 }
 
 function describe(error: unknown): string {

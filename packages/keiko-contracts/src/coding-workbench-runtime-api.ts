@@ -14,6 +14,7 @@ import {
   type CodingWorkbenchRuntimeEventKind,
   type CodingWorkbenchRuntimeSource,
   type CodingWorkbenchValidationResult,
+  type CodingWorkbenchVerificationSummary,
 } from "./coding-workbench.js";
 import { validateCodingWorkbenchPermissionRequest } from "./coding-workbench-validation.js";
 import {
@@ -379,6 +380,8 @@ export type CodingWorkbenchRuntimeSseEvent =
        * other frame.
        */
       readonly contentTrust?: CodingWorkbenchContentTrust | undefined;
+      /** Optional measured check metadata on verification-summarized events only. */
+      readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
     };
 
 function validateTaskIntent(value: unknown, errors: string[]): void {

@@ -764,6 +764,14 @@ describe("production managed worktree tools", () => {
         failureLocationCount: 1,
         failureLocationsTruncated: true,
         verificationTargetDigest: codingVerificationTargetDigest("test"),
+        verificationSummary: {
+          verifierId: "test",
+          status: "failed",
+          passedCount: 0,
+          failedCount: 1,
+          skippedCount: 0,
+          durationMs: failedVerificationReport().durationMs,
+        },
       }),
     );
   });

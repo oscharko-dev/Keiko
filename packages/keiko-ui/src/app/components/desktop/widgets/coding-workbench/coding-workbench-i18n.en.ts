@@ -1021,6 +1021,33 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model finished this turn without any text or tool call. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
   "codingWorkbench.event.turnFailure.invalid-tool-call":
     "The model called a tool with arguments that do not match the tool, on every attempt. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
+  "codingWorkbench.event.turnCause.provider-failed":
+    "The model gateway did not complete this step.",
+  "codingWorkbench.event.turnCause.stream-incomplete":
+    "The model response stream ended before this step completed.",
+  "codingWorkbench.event.turnCause.turn-rejected":
+    "The model or a Workbench guard did not accept this step.",
+  "codingWorkbench.event.turnCause.output-exhausted":
+    "The model used its output budget before completing this step.",
+  "codingWorkbench.event.turnCause.empty-answer":
+    "The model ended this step without an answer or tool call.",
+  "codingWorkbench.event.turnCause.invalid-tool-call":
+    "The model did not produce a valid tool call for this step.",
+  "codingWorkbench.event.turnProgress.active": "The run is still active.",
+  "codingWorkbench.event.turnProgress.gateway-retrying":
+    "Keiko is retrying the model gateway automatically.",
+  "codingWorkbench.verification.result": "{verifier}: {status}",
+  "codingWorkbench.verification.verifier.test": "Tests",
+  "codingWorkbench.verification.verifier.targeted-test": "Targeted tests",
+  "codingWorkbench.verification.verifier.typecheck": "Type check",
+  "codingWorkbench.verification.verifier.lint": "Lint",
+  "codingWorkbench.verification.verifier.build": "Build",
+  "codingWorkbench.verification.status.passed": "Passed",
+  "codingWorkbench.verification.status.failed": "Failed",
+  "codingWorkbench.verification.status.partial": "Partial",
+  "codingWorkbench.verification.checks":
+    "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
+  "codingWorkbench.verification.duration": "Duration: {duration} ms",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

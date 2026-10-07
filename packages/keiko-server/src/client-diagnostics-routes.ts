@@ -151,6 +151,24 @@ const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
       required: false,
       values: ["keyboard"],
     },
+    submissionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["start", "follow-up"],
+    },
+    submissionOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["attempted"],
+    },
+    normalization: { type: "string", dataClass: "closed-enum", required: false, values: ["trim"] },
+    displayedDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    submittedDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    draftMatchesInput: { type: "boolean", dataClass: "closed-enum", required: false },
+    inputCharacterCount: { type: "integer", dataClass: "count", required: false },
+    submittedCharacterCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -2130,12 +2148,30 @@ function logClientComposerActivity(
         ...(request.composerFocusIndicator === undefined
           ? {}
           : { focusIndicator: request.composerFocusIndicator }),
+        ...composerSubmissionFields(request),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
   return true;
+}
+
+function composerSubmissionFields(
+  request: ClientDiagnosticIngestRequest,
+): Partial<ActivityLogFields<typeof CLIENT_COMPOSER_ACTIVITY>> {
+  const submission = request.composerSubmission;
+  if (submission === undefined) return {};
+  return {
+    submissionKind: submission.kind,
+    submissionOutcome: submission.outcome,
+    normalization: submission.normalization,
+    displayedDigest: submission.displayedDigest,
+    submittedDigest: submission.submittedDigest,
+    draftMatchesInput: submission.draftMatchesInput,
+    inputCharacterCount: submission.inputCharacterCount,
+    submittedCharacterCount: submission.submittedCharacterCount,
+  };
 }
 
 function logClientStageStarted(

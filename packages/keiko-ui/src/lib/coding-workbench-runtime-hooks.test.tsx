@@ -246,6 +246,47 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
     }
   });
 
+  it.each(["unmounted", "superseded"] as const)(
+    "does not refresh the global catalog when a %s source read finally lands",
+    async (obsolete) => {
+      const available = { status: "available" } as CodingWorkbenchSidecarGatewayResult;
+      let release: (profile: CodingWorkbenchSidecarGatewayResult) => void = () => undefined;
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
+        .mockReset()
+        .mockImplementationOnce(() => new Promise((resolve) => void (release = resolve)))
+        .mockResolvedValue(available);
+      const { resources, dispatch, unmount } = renderResources(runtimeState());
+      const catalogRefresh = vi.fn();
+      window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+      try {
+        let stale: Promise<void> = Promise.resolve();
+        act(() => {
+          stale = resources.refreshSource();
+        });
+        if (obsolete === "unmounted") unmount();
+        else {
+          await act(() => resources.refreshSource());
+          expect(catalogRefresh).toHaveBeenCalledTimes(1);
+          expect(dispatch).toHaveBeenLastCalledWith({
+            kind: "source-set",
+            source: expect.objectContaining({ available: true }),
+          });
+        }
+        catalogRefresh.mockClear();
+        dispatch.mockClear();
+        await act(async () => {
+          release(available);
+          await stale;
+        });
+
+        expect(catalogRefresh).not.toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+      }
+    },
+  );
+
   // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway
   // it answers `model-verification-pending`; the Workbench reads again after the pause instead
   // of leaving a refusal that the next read would have lifted.

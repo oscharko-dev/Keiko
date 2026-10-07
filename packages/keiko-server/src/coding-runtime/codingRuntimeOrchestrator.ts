@@ -258,6 +258,7 @@ const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
   emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeRunStarted",
   fields: {
     ...CODING_RUNTIME_RUN_FIELDS,
+    taskIntentDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     effectiveMode: {
       type: "string",
       dataClass: "closed-enum",
@@ -597,6 +598,13 @@ const CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION = defineActivityLogOperat
     passedCount: { type: "integer", dataClass: "count", required: true },
     failedCount: { type: "integer", dataClass: "count", required: true },
     skippedCount: { type: "integer", dataClass: "count", required: true },
+    verifierId: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+    durationMs: { type: "number", dataClass: "duration", required: false },
     failureLocationCount: { type: "integer", dataClass: "count", required: false },
     failureLocationsTruncated: {
       type: "boolean",
@@ -1204,6 +1212,7 @@ function recordRuntimeRunStarted(
   snapshot: CodingRuntimeSnapshot,
   effectiveMode: CodingWorkbenchMode,
   predecessorSelectionReason: PredecessorSelectionReason,
+  taskIntent: string,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1219,6 +1228,7 @@ function recordRuntimeRunStarted(
         modelSource: snapshot.modelSource,
         hasPredecessor: snapshot.predecessorRunId !== undefined,
         predecessorSelectionReason,
+        taskIntentDigest: DIGEST(taskIntent),
         ...(snapshot.predecessorRunId === undefined
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
@@ -1474,6 +1484,12 @@ function recordRuntimeVerificationSummary(
         passedCount: event.passedCount,
         failedCount: event.failedCount,
         skippedCount: event.skippedCount,
+        ...(event.verificationSummary === undefined
+          ? {}
+          : {
+              verifierId: event.verificationSummary.verifierId,
+              durationMs: event.verificationSummary.durationMs,
+            }),
         ...(event.failureLocationCount === undefined
           ? {}
           : { failureLocationCount: event.failureLocationCount }),
@@ -3428,7 +3444,7 @@ export class CodingRuntimeOrchestrator {
     const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
-    this.activateStartedRun(runId, launch, selection);
+    this.activateStartedRun(runId, launch, selection, request.taskIntent);
     this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
@@ -3467,6 +3483,7 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
     selection: PredecessorSelection,
+    taskIntent: string,
   ): void {
     this.activeRunId = runId;
     this.settledRunId = undefined;
@@ -3477,6 +3494,7 @@ export class CodingRuntimeOrchestrator {
       selection.snapshot,
       launch.effectiveMode,
       selection.reason,
+      taskIntent,
     );
   }
 

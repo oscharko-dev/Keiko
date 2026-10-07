@@ -32,6 +32,7 @@
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
+import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "./coding-workbench-runtime.js";
 import {
   ACTIVITY_LOG_COMPLETENESS_STATES,
   ACTIVITY_LOG_LOSS_STATES,
@@ -415,6 +416,8 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "stale-draft-echo-ignored",
   "non-text-paste-ignored",
   "text-copied",
+  "coding-task-submission",
+  "coding-task-reset",
 ] as const;
 export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
 export const CLIENT_COMPOSER_CODE_STAGES = [
@@ -431,12 +434,75 @@ export type ClientComposerCodeStage = (typeof CLIENT_COMPOSER_CODE_STAGES)[numbe
 const COMPOSER_ACTIVITIES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_ACTIVITIES);
 const COMPOSER_CODE_STAGES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_CODE_STAGES);
 
+/** Captured native input and the immutable payload, never their text or a visibility claim. */
+export interface ClientComposerSubmission {
+  readonly kind: "start" | "follow-up";
+  readonly outcome: "attempted";
+  readonly normalization: "trim";
+  readonly displayedDigest: string;
+  readonly submittedDigest: string;
+  readonly draftMatchesInput: boolean;
+  readonly inputCharacterCount: number;
+  readonly submittedCharacterCount: number;
+}
+
+const COMPOSER_SUBMISSION_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "outcome",
+  "normalization",
+  "displayedDigest",
+  "submittedDigest",
+  "draftMatchesInput",
+  "inputCharacterCount",
+  "submittedCharacterCount",
+]);
+
+function isTaskCharacterCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CODING_WORKBENCH_TASK_INTENT_MAX_CHARS
+  );
+}
+
+function isClientComposerSubmission(value: unknown): value is ClientComposerSubmission {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !COMPOSER_SUBMISSION_KEYS.has(key))) return false;
+  return (
+    (value.kind === "start" || value.kind === "follow-up") &&
+    value.outcome === "attempted" &&
+    value.normalization === "trim" &&
+    isReportDigest(value.displayedDigest) &&
+    isReportDigest(value.submittedDigest) &&
+    typeof value.draftMatchesInput === "boolean" &&
+    hasValidTaskCharacterCounts(value)
+  );
+}
+
+function hasValidTaskCharacterCounts(value: Record<string, unknown>): boolean {
+  return (
+    isTaskCharacterCount(value.inputCharacterCount) &&
+    isTaskCharacterCount(value.submittedCharacterCount) &&
+    value.submittedCharacterCount <= value.inputCharacterCount
+  );
+}
+
+function hasValidComposerSubmission(value: Record<string, unknown>): boolean {
+  if (value.composerActivity !== "coding-task-submission")
+    return value.composerSubmission === undefined;
+  return isClientComposerSubmission(value.composerSubmission);
+}
+
+function hasValidComposerFocus(value: Record<string, unknown>): boolean {
+  return (
+    value.composerFocusIndicator === undefined ||
+    (value.composerFocusIndicator === "keyboard" && value.composerActivity === "initialized")
+  );
+}
+
 function hasValidComposerContext(value: Record<string, unknown>): boolean {
-  if (
-    value.composerFocusIndicator !== undefined &&
-    (value.composerFocusIndicator !== "keyboard" || value.composerActivity !== "initialized")
-  )
-    return false;
+  if (!hasValidComposerSubmission(value) || !hasValidComposerFocus(value)) return false;
   if (!isOptional(value.composerCodeStage, (stage) => COMPOSER_CODE_STAGES.has(stage)))
     return false;
   if (value.composerActivity === undefined) return true;
@@ -499,6 +565,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;

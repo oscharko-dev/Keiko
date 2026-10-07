@@ -1,4 +1,5 @@
 import { deepFreeze } from "./deep-freeze.js";
+import type { VerificationKind } from "./verification.js";
 import type { GatewayVerificationState } from "./gateway-verification.js";
 import type { ModelReasoningEffort } from "./gateway.js";
 
@@ -637,6 +638,18 @@ export interface CodingWorkbenchPermissionRequest {
   readonly expiresAt: string;
 }
 
+/** Body-free verifier step outcomes, never test or assertion counts. */
+export interface CodingWorkbenchVerificationSummary {
+  readonly verifierId: VerificationKind;
+  readonly status: "passed" | "failed" | "partial";
+  readonly passedCount: number;
+  /** Canonical non-passing steps: failed, denied, timed out, cancelled, or resource-exceeded. */
+  readonly failedCount: number;
+  readonly skippedCount: number;
+  /** Actual VerificationReport duration, in milliseconds. */
+  readonly durationMs: number;
+}
+
 export interface CodingWorkbenchRuntimeEvent {
   readonly schemaVersion: typeof CODING_WORKBENCH_SCHEMA_VERSION;
   readonly eventId: string;
@@ -665,6 +678,8 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly failureLocationCount?: number | undefined;
   readonly failureLocationsTruncated?: boolean | undefined;
   readonly verificationTargetDigest?: string | undefined;
+  /** Absent on older events; never infer counts or timing from tool text. */
+  readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
   readonly artifactKind?: string | undefined;
   readonly artifactLabel?: string | undefined;
   readonly artifactDigest?: string | undefined;

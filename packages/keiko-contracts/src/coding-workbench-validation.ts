@@ -1,6 +1,9 @@
 import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
-import { validateStrictUtcInstant } from "./coding-workbench-runtime-api-validation.js";
+import {
+  isCodingWorkbenchVerificationSummary,
+  validateStrictUtcInstant,
+} from "./coding-workbench-runtime-api-validation.js";
 import { isVerificationKind } from "./editor-verification.js";
 import { MODEL_REASONING_EFFORTS } from "./gateway.js";
 import {
@@ -676,6 +679,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "failureLocationCount",
     "failureLocationsTruncated",
     "verificationTargetDigest",
+    "verificationSummary",
   ),
   "artifact-produced": runtimeEventAllowedKeys(
     "artifactKind",
@@ -1137,6 +1141,27 @@ function validateVerificationSummarizedEventFields(
   validateRequiredSafeIntegerField(value, "passedCount", "event", errors);
   validateRequiredSafeIntegerField(value, "failedCount", "event", errors);
   validateRequiredSafeIntegerField(value, "skippedCount", "event", errors);
+  validateVerificationSummaryAgreement(value, errors);
+}
+
+function validateVerificationSummaryAgreement(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  const summary = value.verificationSummary;
+  if (summary === undefined) return;
+  if (!isCodingWorkbenchVerificationSummary(summary)) {
+    errors.push("event.verificationSummary is invalid");
+    return;
+  }
+  if (
+    summary.status !== value.verificationStatus ||
+    summary.passedCount !== value.passedCount ||
+    summary.failedCount !== value.failedCount ||
+    summary.skippedCount !== value.skippedCount
+  ) {
+    errors.push("event.verificationSummary disagrees with the canonical check counts or status");
+  }
 }
 
 function validateArtifactProducedEventFields(

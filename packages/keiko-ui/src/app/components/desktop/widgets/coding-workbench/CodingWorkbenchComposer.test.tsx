@@ -7,6 +7,12 @@ import type {
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import { I18N_STORAGE_KEY, resetLoadedMessageCatalogs } from "@/lib/i18n";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
+import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -113,6 +119,7 @@ describe("Coding Workbench composer", () => {
     cleanup();
     window.localStorage.removeItem(I18N_STORAGE_KEY);
     resetLoadedMessageCatalogs();
+    resetClientDiagnosticWriter();
   });
 
   it("uses the dedicated governed-coding glyph for the run-authority mode label (#2694)", () => {
@@ -139,6 +146,63 @@ describe("Coding Workbench composer", () => {
     expect(screen.queryByRole("button", { name: "Pause run" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(actions.onStart).toHaveBeenCalledOnce();
+  });
+
+  it.each(["idle", "paused"] as const)(
+    "submits the captured native input instead of stale React draft state while %s (#3877)",
+    async (state) => {
+      const user = userEvent.setup();
+      const actions = composerActions();
+      renderComposer(state, actions, "Old unsent task");
+      const textarea = screen.getByRole("textbox", { name: "Task instructions" });
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      if (setter === undefined) throw new Error("Missing native textarea setter");
+      setter.call(textarea, "Visible replacement task");
+      await user.click(
+        screen.getByRole("button", {
+          name: state === "idle" ? "Start coding run" : "Send follow-up",
+        }),
+      );
+      expect(state === "idle" ? actions.onStart : actions.onSend).toHaveBeenCalledExactlyOnceWith(
+        "Visible replacement task",
+      );
+    },
+  );
+
+  it("does not submit a native input cleared before React state catches up (#3877)", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    renderComposer("idle", actions, "Old unsent task");
+    const textarea = screen.getByRole("textbox", { name: "Task instructions" });
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    if (setter === undefined) throw new Error("Missing native textarea setter");
+    setter.call(textarea, "");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(actions.onStart).not.toHaveBeenCalled();
+  });
+
+  it("records captured input and normalized payload digests without claiming acceptance (#3877)", async () => {
+    const evidence: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta): void => {
+      if (meta?.composerSubmission !== undefined) evidence.push(meta);
+    });
+    const user = userEvent.setup();
+    const actions = composerActions();
+    renderComposer("idle", actions, "  PRIVATE_TASK_CANARY\n ");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(actions.onStart).toHaveBeenCalledExactlyOnceWith("  PRIVATE_TASK_CANARY\n ");
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]?.composerSubmission).toEqual({
+      kind: "start",
+      outcome: "attempted",
+      normalization: "trim",
+      displayedDigest: sha256Hex("  PRIVATE_TASK_CANARY\n "),
+      submittedDigest: sha256Hex("PRIVATE_TASK_CANARY"),
+      draftMatchesInput: true,
+      inputCharacterCount: 23,
+      submittedCharacterCount: 19,
+    });
+    expect(JSON.stringify(evidence)).not.toContain("PRIVATE_TASK_CANARY");
   });
 
   it("offers pause and stop in the composer while the run is active", async () => {

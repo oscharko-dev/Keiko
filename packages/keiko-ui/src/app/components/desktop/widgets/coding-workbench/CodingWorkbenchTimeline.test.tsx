@@ -20,7 +20,9 @@ import styles from "./CodingWorkbenchWindow.module.css";
 
 const AT = "2026-07-19T12:00:00.000Z";
 
-function event(sequence: number): CodingWorkbenchRuntimeSseEvent {
+function event(
+  sequence: number,
+): Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }> {
   return {
     schemaVersion: "1",
     cursor: `cursor-${String(sequence)}`,
@@ -1186,5 +1188,239 @@ describe("CodingWorkbenchTimeline finished answers", () => {
   it("settles every answer once the run is no longer active", () => {
     const container = renderTimeline(feedWithCodeAnswer(), { active: false });
     expect(copyButton(container)).not.toBeNull();
+  });
+});
+
+describe("verification detail and active turn failures", () => {
+  const summary = {
+    verifierId: "targeted-test" as const,
+    status: "failed" as const,
+    passedCount: 0,
+    failedCount: 1,
+    skippedCount: 0,
+    durationMs: 1240,
+  };
+
+  it("shows actual verifier check counts and measured duration without claiming test counts", () => {
+    const verified = {
+      ...event(1),
+      eventKind: "verification-summarized" as const,
+      verificationSummary: summary,
+    };
+    const { container } = render(
+      <Timeline
+        events={[verified]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+    expect(container).toHaveTextContent("Targeted tests: Failed");
+    expect(container).toHaveTextContent("Checks: 0 passed, 1 unsuccessful, 0 skipped");
+    expect(container).toHaveTextContent("Duration: 1,240 ms");
+    expect(container).not.toHaveTextContent("1 test failed");
+  });
+
+  it("keeps a failed verification visible while routine details are collapsed", () => {
+    const verified = {
+      ...event(1),
+      eventKind: "verification-summarized" as const,
+      verificationSummary: summary,
+    };
+    render(
+      <Timeline
+        events={[verified]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.getByText("Targeted tests: Failed")).toBeVisible();
+  });
+
+  it("does not advise restarting or changing output settings while a turn is still active", () => {
+    const failed = {
+      ...event(1),
+      eventKind: "failure-redacted" as const,
+      failureCode: "output-exhausted" as const,
+    };
+    const { container } = render(
+      <Timeline
+        active
+        events={[failed]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent(
+      "The model used its output budget before completing this step.",
+    );
+    expect(container).toHaveTextContent("The run is still active.");
+    expect(container).not.toHaveTextContent("max_output_tokens");
+    expect(container).not.toHaveTextContent(/then retry|choose a model/iu);
+    expect(container).not.toHaveTextContent("retrying automatically");
+  });
+
+  it("names an observed automatic gateway retry without retaining terminal advice", () => {
+    const failed = {
+      ...event(1),
+      eventKind: "failure-redacted" as const,
+      failureCode: "provider-failed" as const,
+    };
+    const retrying = { ...event(2), eventKind: "model-gateway-retrying" as const };
+    const { container } = render(
+      <Timeline
+        active
+        events={[failed, retrying]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent("Keiko is retrying the model gateway automatically.");
+    expect(container).not.toHaveTextContent("then retry");
+  });
+
+  it("retains terminal repair advice after the run stops", () => {
+    const failed = {
+      ...event(1),
+      eventKind: "failure-redacted" as const,
+      failureCode: "output-exhausted" as const,
+    };
+    const settled: CodingWorkbenchRuntimeSseEvent = {
+      ...event(2),
+      kind: "status",
+      state: "failed",
+      failureCode: "output-exhausted-repeated",
+    };
+    const { container } = render(
+      <Timeline
+        events={[failed, settled]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent("max_output_tokens");
+  });
+});
+
+describe("timeline facts remain scoped to their run", () => {
+  const failed = {
+    ...event(1),
+    eventKind: "failure-redacted" as const,
+    failureCode: "output-exhausted" as const,
+  };
+
+  it("does not claim automatic retry after the gateway has recovered", () => {
+    const recovered = { ...event(2), eventKind: "model-gateway-recovered" as const };
+    const { container } = render(
+      <Timeline
+        active
+        events={[failed, recovered]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent("The run is still active.");
+    expect(container).not.toHaveTextContent("Keiko is retrying the model gateway automatically.");
+    expect(container).not.toHaveTextContent("max_output_tokens");
+  });
+
+  it("does not carry terminal repair advice into a run that later succeeded", () => {
+    const succeeded: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "cursor-2",
+      sequence: 2,
+      occurredAt: AT,
+      kind: "status",
+      runId: "run-1",
+      state: "succeeded",
+      revision: 2,
+    };
+    const { container } = render(
+      <Timeline
+        events={[failed, succeeded]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent(
+      "The model used its output budget before completing this step.",
+    );
+    expect(container).not.toHaveTextContent(/max_output_tokens|The run is still active/iu);
+  });
+
+  it("does not attach a different run's retry to a historical failure", () => {
+    const retrying = { ...event(2), runId: "run-2", eventKind: "model-gateway-retrying" as const };
+    const feed = { ...bareFeed(), runId: "run-2" };
+    const { container } = render(
+      <Timeline
+        active
+        events={[failed, retrying]}
+        activity={activityLike(feed)}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).not.toHaveTextContent(
+      /Keiko is retrying the model gateway automatically|The run is still active| max_output_tokens/iu,
+    );
+  });
+
+  it("uses settled run facts even if the active prop has not refreshed yet", () => {
+    const settled: CodingWorkbenchRuntimeSseEvent = {
+      ...event(2),
+      kind: "status",
+      state: "failed",
+      failureCode: "output-exhausted-repeated",
+    };
+    const { container } = render(
+      <Timeline
+        active
+        events={[failed, settled]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).toHaveTextContent("max_output_tokens");
+    expect(container).not.toHaveTextContent("The run is still active.");
+  });
+
+  it("keeps old verifier events generic when measured metadata is unavailable", () => {
+    const verified = { ...event(1), eventKind: "verification-summarized" as const };
+    const { container } = render(
+      <Timeline
+        events={[verified]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+    expect(container).toHaveTextContent("Verification summarized");
+    expect(container).not.toHaveTextContent(/Checks:|Duration:|0 passed|0 failed/iu);
+  });
+
+  it("keeps passed verification behind routine run details with its actual checks", () => {
+    const verified = {
+      ...event(1),
+      eventKind: "verification-summarized" as const,
+      verificationSummary: {
+        verifierId: "typecheck" as const,
+        status: "passed" as const,
+        passedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        durationMs: 2.5,
+      },
+    };
+    const { container } = render(
+      <Timeline
+        events={[verified]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).not.toHaveTextContent("Type check: Passed");
+    fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+    expect(container).toHaveTextContent("Type check: Passed");
+    expect(container).toHaveTextContent("Checks: 1 passed, 0 unsuccessful, 0 skipped");
+    expect(container.querySelector('[data-event-tone="success"]')).not.toBeNull();
   });
 });

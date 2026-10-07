@@ -2142,3 +2142,63 @@ it.each([MAX_RECURSIVE_TEXT_FILE_BYTES, MAX_RECURSIVE_TEXT_FILE_BYTES + 1])(
     ).toBe(sourceTextBytesRead === MAX_RECURSIVE_TEXT_FILE_BYTES);
   },
 );
+
+describe("coding task composer submission evidence (#3877)", () => {
+  const submission = {
+    kind: "start",
+    outcome: "attempted",
+    normalization: "trim",
+    displayedDigest: "a".repeat(64),
+    submittedDigest: "b".repeat(64),
+    draftMatchesInput: false,
+    inputCharacterCount: 42,
+    submittedCharacterCount: 40,
+  };
+  const report = {
+    message: "Closed submission attempt",
+    clientTs: "2026-10-07T00:00:00.000Z",
+    composerActivity: "coding-task-submission",
+    composerSubmission: submission,
+  };
+  it("accepts captured input disagreement and explicit trim without a visibility or acceptance claim", () => {
+    expect(isClientDiagnosticIngestRequest(report)).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerSubmission: {
+          ...submission,
+          kind: "follow-up",
+          draftMatchesInput: true,
+        },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { kind: "delete" },
+    { outcome: "accepted" },
+    { normalization: "rewrite" },
+    { displayedDigest: "PRIVATE_TASK_BODY" },
+    { submittedDigest: "a".repeat(63) },
+    { draftMatchesInput: "true" },
+    { inputCharacterCount: -1 },
+    { submittedCharacterCount: 65_537 },
+    { inputCharacterCount: 1.5 },
+    { privateBody: "PRIVATE_TASK_CANARY" },
+  ])("rejects unbounded or content-bearing context %j", (invalid) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...report,
+        composerSubmission: { ...submission, ...invalid },
+      }),
+    ).toBe(false);
+  });
+  it("requires submission facts on that activity and refuses facts on a different activity", () => {
+    expect(isClientDiagnosticIngestRequest({ ...report, composerSubmission: undefined })).toBe(
+      false,
+    );
+    expect(
+      isClientDiagnosticIngestRequest({ ...report, composerActivity: "coding-task-reset" }),
+    ).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...report, composerActivity: undefined })).toBe(false);
+  });
+});

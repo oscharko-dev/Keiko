@@ -40,6 +40,7 @@ interface SessionInput {
   readonly location?: WorkbenchExecutionLocation;
   readonly selection: string | undefined;
   readonly onSelectionHandled?: (() => void) | undefined;
+  readonly onDraftReset?: (() => void) | undefined;
 }
 
 function reportFailure(error: unknown): void {
@@ -302,6 +303,13 @@ function useNewTask(
   const newTask = useCallback(async (): Promise<void> => {
     const current = latest.current;
     if (current.active) return;
+    if (current.onDraftReset !== undefined) {
+      current.onDraftReset();
+      reportClientDiagnostic("[keiko] coding task draft reset", {
+        correlationId: newClientCorrelationId(),
+        composerActivity: "coding-task-reset",
+      });
+    }
     ignoredRun.current = current.snapshot?.runId;
     sequence.current += 1;
     setDetail(null);

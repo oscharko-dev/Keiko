@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8fd51852be86d9ea4dd6f18cb3f173d34c4d24f9f6a73c77e79f92743655d6d9" as const;
+  "3f7619a4cac3d9851df953f4702023a6d0b83ab39168a1268587f413088c9e75" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 340,
-  completeClassCount: 340,
+  supportedClassCount: 341,
+  completeClassCount: 341,
   completeness: "complete",
   classes: [
     {
@@ -3772,13 +3772,61 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "displayedDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "draftMatchesInput",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "focusIndicator",
               type: "string",
               dataClass: "closed-enum",
               required: false,
             },
+            {
+              name: "inputCharacterCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "normalization",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "submissionKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "submissionOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "submittedCharacterCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "submittedDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -9100,11 +9148,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "taskIntentDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "loss-state",
             "opaque-id",
           ],
@@ -9886,6 +9941,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "durationMs",
+              type: "number",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "failedCount",
               type: "integer",
               dataClass: "count",
@@ -9945,12 +10006,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "digest",
               required: false,
             },
+            {
+              name: "verifierId",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
             "count",
             "digest",
+            "duration",
             "loss-state",
             "opaque-id",
           ],
@@ -11277,6 +11345,135 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-workbench.issue.resolved.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-workspace-discovery",
+      requirementContract: "coding-workspace-discovery",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.workspace-discovery"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.workspace-discovery",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.workspace-discovery"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.workspace-discovery",
+          owner: "keiko-server",
+          category: "search",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "process-lifecycle",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "cooperative",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "denied",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "depthPruned",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "directorySortStrategy",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "discovered",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "ignored",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "maxFilesPruned",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sourceLanguageScan",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "unrepresentablePaths",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.workspace-discovery.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -40155,6 +40352,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.tool-result-rendered": "tools-workflows",
     "coding-runtime.verification": "tools-workflows",
     "coding-runtime.verification-summarized": "tools-workflows",
+    "coding-runtime.workspace-discovery": "tools-workflows",
     "coding-runtime.workspace-read": "tools-workflows",
     "coding-sidecar.gateway.outcome": "tools-workflows",
     "coding-sidecar.gateway.readiness-insufficient": "tools-workflows",

@@ -50,6 +50,7 @@ import {
   type CodingWorkbenchGitTarget,
 } from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
+import * as codingHistoryApi from "@/lib/coding-history-api";
 import { restoreConversation } from "./codingWorkbenchRestoredRun";
 import {
   resetClientDiagnosticWriter,
@@ -1054,6 +1055,56 @@ describe("CodingWorkbenchWindow", () => {
     await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
+      projectMemoryEnabled: true,
+    });
+  });
+
+  it("starts a new task with only the replacement typed draft (#3877)", async () => {
+    const user = userEvent.setup();
+    const actual =
+      await vi.importActual<typeof import("./useCodingTaskSession")>("./useCodingTaskSession");
+    vi.spyOn(codingHistoryApi, "fetchCodingTask").mockResolvedValue({
+      task: {
+        id: "chat-one",
+        title: "Previous task",
+        projectPath: "/repo",
+        modelId: "coding",
+        branch: "dev",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        latestRunId: "run-one",
+      },
+      messages: [],
+      truncated: false,
+    });
+    taskSessionHookMock.mockImplementation(actual.useCodingTaskSession);
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: {
+          status: "ready",
+          value: snapshot({
+            state: "succeeded",
+            runId: "run-one",
+            conversationId: "chat-one",
+          }),
+          error: null,
+        },
+      }),
+      actions: liveActions,
+    });
+    render(<CodingWorkbenchWindow selectedRoot="/repo" selectedLocation="local" />);
+    const taskInput = screen.getByRole("textbox", { name: "Task instructions" });
+    await screen.findByRole("button", { name: "New task" });
+    await user.type(taskInput, "Old unsent instruction{Shift>}{Enter}{/Shift}Old second line");
+    await user.click(screen.getByRole("button", { name: "New task" }));
+    expect(taskInput).toHaveValue("");
+    await user.type(taskInput, "Create one focused test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(liveActions.start).toHaveBeenCalledWith("Create one focused test", {
       projectMemoryEnabled: true,
     });
   });

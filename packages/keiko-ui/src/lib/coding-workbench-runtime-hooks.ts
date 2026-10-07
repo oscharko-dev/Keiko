@@ -137,11 +137,11 @@ async function refreshManagedGatewaySource(
 ): Promise<void> {
   dispatch({ kind: "profile-empty" });
   const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
+  if (sequenceRef.current !== sequence) return;
   // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
   // unproven context window) and stores it, so the model catalog the picker filters may have
   // changed underneath: a catalog fetched before the read would show an empty picker.
   if (!catalogAlreadyCurrent) requestGatewayModelCatalogRefresh();
-  if (sequenceRef.current !== sequence) return;
   dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
   if (sourceVerificationPending(profile)) scheduleReread(sequence);
 }

@@ -1693,7 +1693,10 @@ function buildVerificationRunner(
         return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
       }
       verificationSequence += 1;
-      publishVerification(input, verificationSequence, attempt.report, request);
+      publishVerification(input, verificationSequence, attempt.report, {
+        ...request,
+        verifierId: kind,
+      });
       return verificationOutcome(input, attempt, guard, signal);
     },
   };
@@ -2383,7 +2386,7 @@ function publishVerification(
   request: Extract<
     import("./codingToolIpc.js").CodingToolActionRequest,
     { readonly action: "verification" }
-  >,
+  > & { readonly verifierId: VerificationKind },
 ): void {
   const failure = modelVerificationFailure(report);
   const event: CodingWorkbenchRuntimeEvent = {
@@ -2394,6 +2397,14 @@ function publishVerification(
     kind: "verification-summarized",
     verificationKind: "verification-command",
     verificationStatus: verificationStatus(report.overallStatus),
+    verificationSummary: {
+      verifierId: request.verifierId,
+      status: verificationStatus(report.overallStatus),
+      passedCount: report.counts.passed,
+      failedCount: failedCount(report),
+      skippedCount: report.counts.skipped,
+      durationMs: report.durationMs,
+    },
     passedCount: report.counts.passed,
     failedCount: failedCount(report),
     skippedCount: report.counts.skipped,

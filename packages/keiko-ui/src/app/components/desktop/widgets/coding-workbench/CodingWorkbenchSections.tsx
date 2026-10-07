@@ -15,6 +15,8 @@ import type {
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -68,10 +70,10 @@ export function WorkbenchWelcome(): ReactNode {
 }
 
 export interface TaskComposerActions {
-  readonly onStart: () => void;
+  readonly onStart: (draft: string) => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
-  readonly onSend: () => void;
+  readonly onSend: (draft: string) => void;
   readonly onStop: () => void;
 }
 
@@ -163,10 +165,15 @@ function unavailableSubmitReason(
   return input.startBlockedReason ?? t("codingWorkbench.composer.blocked.notReady");
 }
 
-function submitTask(input: TaskStartSectionProps): void {
-  if (input.runState === "running") input.actions.onPause();
-  else if (input.runState === "paused") input.actions.onSend();
-  else input.actions.onStart();
+function submitTask(input: TaskStartSectionProps, displayedDraft: string): void {
+  if (input.runState === "running") {
+    input.actions.onPause();
+    return;
+  }
+  const kind = input.runState === "paused" ? "follow-up" : "start";
+  reportTaskSubmission(displayedDraft, input.taskIntent, kind);
+  if (kind === "follow-up") input.actions.onSend(displayedDraft);
+  else input.actions.onStart(displayedDraft);
 }
 
 function useTaskComposerController(
@@ -193,12 +200,14 @@ function useTaskComposerController(
   const blockedReason = submitBlockedReason(input, t);
   const submitBlocked = blockedReason !== null;
   const submit = (): void => {
-    if (submitBlocked) {
+    const displayedDraft = textareaRef.current?.value ?? taskIntent;
+    if (displayedDraft !== taskIntent) onTaskIntentChange(displayedDraft);
+    if (submitBlockedReason({ ...input, taskIntent: displayedDraft }, t) !== null) {
       setBlockedSubmitAttempted(true);
       return;
     }
     setBlockedSubmitAttempted(false);
-    submitTask(input);
+    submitTask(input, displayedDraft);
   };
   useEffect(() => {
     if (!submitBlocked) setBlockedSubmitAttempted(false);
@@ -279,7 +288,7 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         value={input.taskIntent}
         placeholder={t("codingWorkbench.task.placeholder")}
         textareaRef={controller.textareaRef}
-        maxLength={65_536}
+        maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
         disabled={input.mutationPending}
         onChange={(event): void => input.onTaskIntentChange(event.target.value)}
         onKeyDown={(event): void => {

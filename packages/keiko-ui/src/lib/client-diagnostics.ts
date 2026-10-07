@@ -67,6 +67,7 @@ import {
   type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
   type ClientComposerActivity,
+  type ClientComposerSubmission,
   type ClientComposerCodeStage,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
@@ -141,6 +142,7 @@ export interface ClientDiagnosticMeta {
   // UI-only provenance: emitted solely by the browser's uncaught-error listeners.
   readonly globalFailure?: boolean | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly correlationId?: string | undefined;
