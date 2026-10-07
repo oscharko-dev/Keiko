@@ -82,7 +82,7 @@ Work in small read/edit/verify cycles, keep patches minimal, and never describe 
 
 export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
   "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
-  "1. Plan: keep a short plan in your responses so the operator can follow your progress.",
+  "1. Plan briefly, then act: when the accepted task requires workspace reads, edits or verification, include the next governed tool call in the same response as any short progress plan and continue the workflow. A plan alone does not complete that task. Return only a plan when the accepted task asks solely for planning; read-only questions may finish once you have enough evidence to answer them. Reserve the final answer for completed work or an accurately explained blocker.",
 );
 export type OpenCodeLaunchProfileResult =
   | {

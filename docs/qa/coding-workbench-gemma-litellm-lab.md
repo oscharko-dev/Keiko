@@ -69,6 +69,19 @@ and exercise a bounded native-call correction before answer delivery. A rejectio
 delivery ends the turn without OpenCode's identical unbounded retry. Live qualification of this
 repair and the combined streaming/tool-call readiness improvement remain pending.
 
+Additional findings owned by [#3873](https://github.com/oscharko-dev/Keiko/issues/3873):
+
+| Finding                            | Evidence and disposition                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F28: assistant-text tool transport | The current-helper run above serialized a tool invocation without executing it. `5cdd49bdf` rejects the demonstrated transport failure and bounds its correction; final live transport qualification remains open.                                                                                                                                                                                                                                                                             |
+| F29: plan-only task completion     | On `33cc2d001`, `run-83711015371502412831271361913788255644` returned a plan and settled succeeded with zero tools, edits and verifications. This is another failed qualification, not a repaired task. OpenCode's terminal turn is not proof that the requested work occurred. The V2 build guidance now directs implementation/verification work to continue with the next actual tool in the same response, preserving plan-only and read-only requests; live requalification remains open. |
+
+The F29 run used the approved development helper with its 1-MiB whole-file bound. It started at
+17:27:30 UTC and settled at 17:28:29: one accepted model turn, 8,879 prompt tokens and 369 completion
+tokens. The seeded Toggle test remained defective. Two earlier driver attempts accepted no task
+because the local model server behind LiteLLM was unavailable (HTTP 500); the isolated model server
+was restored before this run. No Settings visit or manual capability override enabled the model.
+
 Targeted verification of the transport repair: four failing adapter/gateway regressions and two
 failing sidecar regressions before the fix; 482 tests across five affected suites after the fix,
 including literal-code controls and a genuine native tool call. Scoped TypeScript build, ESLint,

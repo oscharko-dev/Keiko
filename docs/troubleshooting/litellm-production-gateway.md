@@ -110,6 +110,24 @@ changing LiteLLM credentials or model settings cannot repair it. In a developmen
 existing trusted `npm run dev:start` path, which stages and verifies current native sources before
 launch. Final package qualification must use the runtime packages built from the same source.
 
+## Coding Workbench displays a tool invocation as ordinary text
+
+**Symptom:** the assistant displays serialized tool markers, but the requested file read, edit or
+verification never executes. A successful small tool-calling readiness probe does not prove every
+later model response uses native calls.
+
+**Root cause:** an OpenAI-compatible model route returned its internal tool syntax in assistant
+`content` instead of the advertised native `tool_calls` field. Text is not execution authority.
+Keiko never executes such text as a tool. It rejects a recognized invocation of an offered tool,
+records `gateway.tool-catalog.rejected transport=assistant-text`, and permits one native-call
+correction before answer delivery. An already delivered answer is not replayed: that failure ends
+with `invalid-tool-call` and `runtimeRetry=refused`.
+
+**Diagnostic steps:** join the rejection, gateway retry and `coding-sidecar.gateway.turn-failed`
+events by correlation. Inspect the model server's native function-call parser and its LiteLLM
+adapter configuration. Do not change workspace permissions or copy model text into a command.
+Literal examples inside Markdown code and ordinary explanations remain valid responses.
+
 ## Coding Workbench turn has no assistant reply
 
 For a Workbench run that accepted a message but has no assistant reply, note the run id and export a

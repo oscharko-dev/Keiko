@@ -187,6 +187,15 @@ The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, 
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
 
+The V2 build prompt treats a short plan as progress toward implementation or verification, followed
+by the next actual governed tool in the same response. A text-only native terminal turn is not
+semantic proof that requested work happened (live qualification F29, #3873). Planning-only tasks
+and read-only answers remain valid without invented edits or verification. This prompt guidance
+does not introduce a keyword classifier or execute model prose. The existing post-edit and
+per-target verification continuation remains the deterministic completion safeguard where the
+run has observed required verification; final qualification must independently prove the requested
+read/edit/test journey. The admitted launch configuration digest identifies the prompt used.
+
 **A run whose edits keep being refused settles instead of looping** (F5 of the live Gemma
 qualification, #3873). A run whose workspace had no connected Workbench logged eleven
 `coding-runtime.edit.refused` lines with `NO_ACTIVE_SESSION` until the operator stopped it: nothing
