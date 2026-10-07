@@ -159,6 +159,8 @@ approval. The existing local LiteLLM and Gemma route above are used.
 
 | `run-263503811496577230608382399242796631424` | Full access; `wb-ui`, approvals `all` | `4013c892f` | Cancelled by the lab operator after the first targeted test failed and native reads repeatedly returned `protocol-invalid`. No edits; this is a failed qualification, not a passed task. The launcher had resolved the released 1.1.3 helper while the server requested the new wire cap. | Initial instructions refused at 15:47:33 UTC; 15 failed workspace reads, 24 model turns; shutdown and settlement cancelled at 15:54:09. The following increment retains the approved legacy helper with its original cap and records the chosen helper digest/cap. Current larger-file runtime qualification uses freshly built and verified native artifacts. |
 
+| `run-235742527409731082934141654280488123669` | Full access; `wb-ui`, approvals `all` | `f0446ec78` | Succeeded in 115 seconds using the actual installed npm runtime 1.1.3 with its correctly selected legacy helper cap. Seven model turns, three governed reads, one callback edit; keyboard-focus and false → true → false assertions preserved. | Same-target verification failed at 16:13:34 UTC; mutation succeeded at 16:14:26; the same target passed at 16:14:34 with zero failures/skips; settlement succeeded at 16:14:42. The activation event identifies the approved legacy helper and 65,536-byte cap. |
+
 The initial verifier defect mounted host-installed macOS native dependencies into a Linux test
 container, which failed to initialize a native binding. The repaired runner uses the existing
 macOS Seatbelt backend with filesystem and network confinement, private repository-local temporary

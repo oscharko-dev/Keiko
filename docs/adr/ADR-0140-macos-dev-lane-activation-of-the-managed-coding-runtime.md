@@ -51,7 +51,10 @@ token to the BFF, evaluates production discovery after the package build, stages
 review-approved payload and secure-read helper only when discovery reports a repairable staged
 artifact failure, and then evaluates production discovery again. The launcher fails instead of
 reporting a usable development server when runtime readiness remains unavailable. Direct BFF
-startup outside this launcher still requires the explicit environment token.
+startup outside this launcher still requires the explicit environment token. After packaged-runtime
+resolution, an explicitly enabled development lane takes precedence over an optional npm runtime
+package in the checkout's dependency tree. Its refusal is authoritative as well: the launcher must
+not claim to test current native sources while silently executing an older installed helper.
 
 ### D2 — Structural confinement to repository checkouts
 
@@ -88,8 +91,8 @@ anchor: the approved executable-tree, license and SBOM digests and the digest of
 Keiko built are compiled into the server, pinned by test to `portable-runtime-approvals.json` and
 to `native/secure-workspace-read`, so a runtime package can never vouch for itself and a planted
 package of the same name verifies or is refused. No environment token is asked: the runtime is
-part of what the operator installs, and `--omit=optional` remains their way to decline it. An installed package that fails verification decides the outcome
-with its own D4 reason and never falls through to another lane. The lane reports the same honest
+part of what the operator installs, and `--omit=optional` remains their way to decline it. Without an explicit checkout-lane selection, an installed package that fails verification decides
+the outcome with its own D4 reason and never falls through to another lane. The lane reports the same honest
 posture as the dev lane (`functional-not-platform-qualified`) and the same forgone guarantees, and
 both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Linux stay on their
 packaged lanes: Windows needs the native supervisor and Linux the sandbox isolation, neither of

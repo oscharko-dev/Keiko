@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "914107c5da5ce9c792bde305c13fabba783711ac1be0af9ed076046a20457a78",
+    "catalogDigest": "62c9419246081e8f325902e4740f1699390b514faf35cf6911cbfece78932eec",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6327,7 +6327,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:50",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:318"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:321"
         ]
       },
       {
@@ -6379,7 +6379,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:97",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:337"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:340"
         ]
       },
       {

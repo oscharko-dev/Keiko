@@ -72,6 +72,33 @@ afterEach(() => {
 });
 
 describe("production OpenCode activation", () => {
+  it("honors the explicitly selected verified dev lane when an npm runtime is also installed", () => {
+    const staged = devLaneFixture();
+    const npmRoot = join(
+      staged.root,
+      "node_modules",
+      "@oscharko-dev",
+      "keiko-coding-runtime-darwin-arm64",
+    );
+    mkdirSync(npmRoot, { recursive: true });
+    writeFileSync(
+      join(npmRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko-coding-runtime-darwin-arm64" }),
+    );
+    const activity: ServerLogEvent[] = [];
+    const result = resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { activity }),
+    );
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
+    expect(activity[0]?.extra?.lane).toBe("dev-checkout");
+    const normal = resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_CODING_RUNTIME_DEV_LANE: "0", KEIKO_UI_PORT: "1983" }),
+    );
+    expect(normal.unavailableReason).toBe("payload-missing");
+    expect(normal.ports).toBeUndefined();
+  });
+
   it("derives the model gateway and tool facade from one production loopback origin", () => {
     const endpoints = productionOpenCodeLoopbackEndpoints({ KEIKO_UI_PORT: "1983" });
     expect(endpoints).toEqual({

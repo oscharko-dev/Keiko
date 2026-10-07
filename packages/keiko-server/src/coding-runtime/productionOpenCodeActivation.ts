@@ -294,16 +294,19 @@ function resolveRuntime(
   const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
   const activityLog = input.activityLog ?? processServerLogSink();
-  // An installed npm runtime package decides the npm installation's outcome, refusal included: a
-  // package that fails verification must surface its reason, not fall through to a dev lane that
-  // an npm installation can never satisfy and that would report `platform-unqualified` instead.
+  // The trusted dev launcher explicitly selected current checkout artifacts. Honor that selection
+  // (including its refusal) before an optional npm dependency left from a released installation.
+  const discovery = discoverDevLaneOpenCode(host);
+  if (discovery.outcome !== "inactive") {
+    recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
+    return devLaneRuntime(discovery);
+  }
+  // Normal npm installs keep their installed package's outcome, refusal included.
   const npmLane = discoverNpmLaneOpenCode(host);
   if (npmLane.outcome !== "inactive") {
     recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
     return devLaneRuntime(npmLane);
   }
-  const discovery = discoverDevLaneOpenCode(host);
-  recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
   return devLaneRuntime(discovery);
 }
 

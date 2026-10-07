@@ -30,7 +30,10 @@ activation, not a platform qualification:
 - **Trusted-launcher opt-in only.** `npm run dev:start` is the operator's explicit selection of
   development mode and supplies `KEIKO_CODING_RUNTIME_DEV_LANE=1` to the BFF on supported
   checkouts. Direct BFF startup does nothing unless the environment value is explicitly enabled
-  (`1`, `true`, `on`, `yes`, `enabled`).
+  (`1`, `true`, `on`, `yes`, `enabled`). Once selected, this verified checkout lane is used
+  before an optional npm runtime package left from an older release. A failed verification of the
+  selected lane remains a refusal; it never silently substitutes the installed npm runtime.
+  Normal npm installations, without the explicit dev token, continue to use their verified package.
 
 ## Prerequisites
 
