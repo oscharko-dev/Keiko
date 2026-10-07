@@ -2923,6 +2923,67 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "client.coding-run.restored",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientCodingRunRestore",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      timelineCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      transcriptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      cutCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      turnCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      feedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      transcriptChars: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      historyTruncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-coding-run-restore"],
+    proofIds: ["client.coding-run.restored.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "client.composer.activity",
     category: "diagnostic",
     owner: "keiko-server",

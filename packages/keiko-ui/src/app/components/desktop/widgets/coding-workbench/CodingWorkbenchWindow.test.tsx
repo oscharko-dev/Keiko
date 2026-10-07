@@ -2,10 +2,24 @@ import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTest
 import { CODING_MODEL_STORAGE_KEY } from "./codingModelPreference";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { journeyFixture } from "./_journeyOutcomeTestSupport";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  conversationLabel,
+  endShown,
+  labelledText,
+  largestHolding,
+  startsShown,
+} from "./_restoredConversationTestSupport";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+  CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
@@ -36,7 +50,12 @@ import {
   type CodingWorkbenchGitTarget,
 } from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import { restoreConversation } from "./codingWorkbenchRestoredRun";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
 import {
@@ -555,7 +574,14 @@ describe("CodingWorkbenchWindow", () => {
       };
     }
 
-    function restoredSession(): CodingTaskSession {
+    // The earlier run's two messages come first, then the shown run's own conversation.
+    function restoredSession(
+      runMessages: readonly HistoryMessage[] = [
+        historyMessage("m-3", "run-7", "user", "Repair the parser"),
+        historyMessage("m-4", "run-7", "assistant", "I read the parser and ran the tests."),
+      ],
+      storedHistoryCut = false,
+    ): CodingTaskSession {
       return {
         ...defaultTaskSession(),
         conversationId: "task-7",
@@ -576,10 +602,9 @@ describe("CodingWorkbenchWindow", () => {
           messages: [
             historyMessage("m-1", "run-6", "user", "Earlier request"),
             historyMessage("m-2", "run-6", "assistant", "Earlier answer"),
-            historyMessage("m-3", "run-7", "user", "Repair the parser"),
-            historyMessage("m-4", "run-7", "assistant", "I read the parser and ran the tests."),
+            ...runMessages,
           ],
-          truncated: false,
+          truncated: storedHistoryCut,
         },
       };
     }
@@ -639,6 +664,12 @@ describe("CodingWorkbenchWindow", () => {
       expect(timeline).toHaveTextContent("Review the repository");
       expect(timeline).not.toHaveTextContent("I read the parser and ran the tests.");
       expect(settledRows()).toHaveLength(1);
+      // The feed the server holds carries the run's whole conversation, so the transcript keeps
+      // hiding the run's own history messages — their ids are not the feed's — and shows the rest.
+      const transcript = screen.getByRole("region", { name: "Previous conversation" });
+      expect(transcript).toHaveTextContent("Earlier request");
+      expect(transcript).not.toHaveTextContent("Repair the parser");
+      expect(transcript).not.toHaveTextContent("I read the parser and ran the tests.");
     });
 
     it("adds no second settlement to a run whose settlement was streamed", () => {
@@ -661,6 +692,232 @@ describe("CodingWorkbenchWindow", () => {
       );
 
       expect(settledRows()).toHaveLength(1);
+    });
+
+    // #3876 review (PRRT_kwDOSqilAM6px-aO): the restored feed keeps to the safe-activity contract's
+    // bounds, and the Window used to hide every message of a run whose feed was available from the
+    // transcript — so a message the bounds dropped was shown in neither place and the operator's own
+    // first prompt could vanish after a reload. Each test below judges where every message of the
+    // run is shown. Sizes are derived from the contract's constants, never restated.
+    describe("a restored conversation measured against the feed's bounds", () => {
+      // Three answers of this size overflow one turn; the whole conversation still fits the feed.
+      const ANSWER_CHARS = Math.floor(CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES / 3);
+      const PROMPT_CHARS = 60;
+
+      // Alternating operator prompts and agent answers of the shown run, oldest first.
+      function runConversation(answers: number): HistoryMessage[] {
+        return Array.from({ length: answers * 2 }, (_, index) => {
+          const prompt = index % 2 === 0;
+          return historyMessage(
+            `m-${String(index + 3)}`,
+            "run-7",
+            prompt ? "user" : "assistant",
+            labelledText(conversationLabel(index), prompt ? PROMPT_CHARS : ANSWER_CHARS),
+          );
+        });
+      }
+
+      function renderRestored(messages: readonly HistoryMessage[], storedHistoryCut = false): void {
+        taskSessionHookMock.mockReturnValue(restoredSession(messages, storedHistoryCut));
+        activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+        renderWorkbench(restoredRun());
+      }
+
+      const labelsOf = (messages: readonly HistoryMessage[]): string[] =>
+        messages.map((_, index) => conversationLabel(index));
+      const timelineText = (): string | null =>
+        screen.getByRole("list", { name: "Coding run event timeline" }).textContent;
+      const transcriptText = (): string | null | undefined =>
+        screen.queryByRole("region", { name: "Previous conversation" })?.textContent;
+      const inTimeline = (label: string): number => startsShown(timelineText(), label);
+      const inTranscript = (label: string): number => startsShown(transcriptText(), label);
+      const shownText = (): string => `${transcriptText() ?? ""}${timelineText() ?? ""}`;
+      // Where each message is shown: the transcript above the timeline, then the timeline.
+      const placements = (labels: readonly string[]): ("transcript" | "timeline")[] =>
+        labels.map((label) => (inTranscript(label) > 0 ? "transcript" : "timeline"));
+
+      it("shows every message of the run exactly once, the operator's first prompt included", () => {
+        const messages = runConversation(3);
+        renderRestored(messages);
+
+        for (const label of labelsOf(messages)) {
+          expect(inTimeline(label) + inTranscript(label), label).toBe(1);
+        }
+        expect(screen.getByRole("region", { name: "Previous conversation" })).toHaveTextContent(
+          "Earlier request",
+        );
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      it("carries a conversation that overflows one turn but fits the feed in the timeline", () => {
+        const messages = runConversation(3);
+        renderRestored(messages);
+
+        for (const label of labelsOf(messages)) {
+          expect(inTimeline(label), label).toBe(1);
+          expect(endShown(timelineText(), label), label).toBe(true);
+          expect(inTranscript(label), label).toBe(0);
+        }
+      });
+
+      it("moves the oldest messages the whole feed cannot carry to the transcript, and loses none", () => {
+        const answers = Math.ceil(CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES / ANSWER_CHARS) + 1;
+        const messages = runConversation(answers);
+        renderRestored(messages);
+
+        const labels = labelsOf(messages);
+        for (const label of labels) {
+          expect(inTimeline(label) + inTranscript(label), label).toBe(1);
+          expect(endShown(shownText(), label), label).toBe(true);
+        }
+        // The transcript holds an unbroken run of the oldest messages, the timeline the rest.
+        const shown = placements(labels);
+        const firstInTimeline = shown.indexOf("timeline");
+        expect(firstInTimeline).toBeGreaterThan(0);
+        expect(shown.slice(firstInTimeline).every((place) => place === "timeline")).toBe(true);
+        expect(inTranscript("P1")).toBe(1);
+        expect(inTimeline(labels.at(-1) ?? "")).toBe(1);
+        // Everything the timeline lacks is shown above it: nothing was lost, so nothing is marked.
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      it("shows a message above the per-message bound cut and marked, once, and says so", () => {
+        const oversized = CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES * 3;
+        renderRestored([
+          historyMessage("m-3", "run-7", "user", labelledText("P1", PROMPT_CHARS)),
+          historyMessage("m-4", "run-7", "assistant", labelledText("A1", oversized)),
+        ]);
+
+        expect(inTimeline("P1") + inTranscript("P1")).toBe(1);
+        expect(inTimeline("A1") + inTranscript("A1")).toBe(1);
+        // What the bound cut is shown nowhere, and the page says so on the message and the activity.
+        expect(endShown(shownText(), "A1")).toBe(false);
+        expect(screen.getAllByText(/Output truncated/u)).toHaveLength(1);
+        expect(screen.getByText("Activity truncated.")).toBeInTheDocument();
+      });
+
+      it("says the activity is truncated when Coding History itself cut the task's messages", () => {
+        renderRestored(runConversation(1), true);
+
+        expect(screen.getByText("Activity truncated.")).toBeInTheDocument();
+        expect(inTimeline("P1") + inTranscript("P1")).toBe(1);
+        expect(inTimeline("A1") + inTranscript("A1")).toBe(1);
+      });
+
+      it("restores nothing for a run without a conversation and leaves the transcript whole", () => {
+        renderRestored([]);
+
+        expect(screen.getByRole("region", { name: "Previous conversation" })).toHaveTextContent(
+          "Earlier request",
+        );
+        expect(settledRows()).toHaveLength(1);
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      it("shows each message once at the feed's exact boundary and one byte beyond it", () => {
+        // The projection draws the line and the page is judged on both sides of it. The fillers and
+        // the oldest message, the operator's first prompt, each fit one segment, so the prompt
+        // grows by exactly one byte per character.
+        const fillerChars = 1_000;
+        const minimumPrompt = 16;
+        const conversation = (fillers: number, promptChars: number): HistoryMessage[] => [
+          historyMessage("m-3", "run-7", "user", labelledText("P1", promptChars)),
+          ...Array.from({ length: fillers }, (_, index) =>
+            historyMessage(
+              `m-${String(index + 4)}`,
+              "run-7",
+              "assistant",
+              labelledText(`F${String(index + 1)}`, fillerChars),
+            ),
+          ),
+        ];
+        const overflowOf = (messages: readonly HistoryMessage[]): number =>
+          restoreConversation(restoredRun().run.value, restoredSession(messages).detail)
+            ?.overflowMessageIds.size ?? 0;
+        const fillers = largestHolding(
+          1,
+          400,
+          (count) => overflowOf(conversation(count, minimumPrompt)) === 0,
+        );
+        const prompt = largestHolding(
+          minimumPrompt,
+          CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+          (chars) => overflowOf(conversation(fillers, chars)) === 0,
+        );
+        expect(prompt).toBeLessThan(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
+        // The line is the feed's, not one turn's: it falls beyond what one turn holds.
+        expect(fillers).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN);
+        const labels = [
+          "P1",
+          ...Array.from({ length: fillers }, (_, index) => `F${String(index + 1)}`),
+        ];
+
+        renderRestored(conversation(fillers, prompt));
+        for (const label of labels) {
+          expect(inTimeline(label), label).toBe(1);
+          expect(inTranscript(label), label).toBe(0);
+        }
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+        cleanup();
+
+        renderRestored(conversation(fillers, prompt + 1));
+        expect(inTranscript("P1")).toBe(1);
+        expect(inTimeline("P1")).toBe(0);
+        for (const label of labels.slice(1)) {
+          expect(inTimeline(label), label).toBe(1);
+          expect(inTranscript(label), label).toBe(0);
+        }
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      describe("reported as counts", () => {
+        const reports: ClientDiagnosticMeta[] = [];
+        beforeEach(() => {
+          setClientDiagnosticWriter((_message, meta) => {
+            if (meta?.codingRunRestore !== undefined) reports.push(meta);
+          });
+        });
+        afterEach(() => {
+          reports.length = 0;
+          resetClientDiagnosticWriter();
+        });
+
+        it("tells where the messages went, joined to the run, and carries no text", () => {
+          const answers = Math.ceil(CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES / ANSWER_CHARS) + 1;
+          const messages = runConversation(answers);
+          renderRestored(messages);
+
+          const labels = labelsOf(messages);
+          const inTheTimeline = labels.filter((label) => inTimeline(label) === 1).length;
+          const inTheTranscript = labels.filter((label) => inTranscript(label) === 1).length;
+          expect(inTheTimeline).toBeGreaterThan(0);
+          expect(inTheTranscript).toBeGreaterThan(0);
+          expect(reports).toHaveLength(1);
+          expect(reports[0]?.correlationId).toBe("run-7");
+          expect(reports[0]?.codingRunRestore).toMatchObject({
+            timelineCount: inTheTimeline,
+            transcriptCount: inTheTranscript,
+            cutCount: 0,
+            historyTruncated: false,
+          });
+          expect(JSON.stringify(reports[0])).not.toContain("-begin");
+        });
+
+        it("reports a run restored whole and stays silent about a run it restores nothing for", () => {
+          renderRestored(runConversation(1));
+          expect(reports).toHaveLength(1);
+          expect(reports[0]?.codingRunRestore).toMatchObject({
+            timelineCount: 2,
+            transcriptCount: 0,
+            transcriptChars: 0,
+          });
+          cleanup();
+          reports.length = 0;
+
+          renderRestored([]);
+          expect(reports).toHaveLength(0);
+        });
+      });
     });
   });
 

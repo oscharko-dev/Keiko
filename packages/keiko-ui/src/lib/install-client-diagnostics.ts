@@ -292,6 +292,7 @@ function clientMessagePostBody(
     supportReportDelivery: meta.supportReportDelivery,
     supportReportPreparation: meta.supportReportPreparation,
     filesScopeDecision: meta.filesScopeDecision,
+    codingRunRestore: meta.codingRunRestore,
     composerActivity: meta.composerActivity,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
@@ -377,6 +378,7 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.supportReportDelivery !== undefined ||
     meta.supportReportPreparation !== undefined ||
     meta.filesScopeDecision !== undefined ||
+    meta.codingRunRestore !== undefined ||
     meta.citationActivation !== undefined
   );
 }

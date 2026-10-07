@@ -602,6 +602,18 @@ is not a successfully opened file. `rootCount` and `matchCount` explain the choi
 recording the fingerprint, file path, source label or citation text. The registered server
 projection retains these closed fields on the existing Activity Log timeline.
 
+`client.coding-run.restored` records, once per distinct restoration, how the Workbench rebuilt a
+settled coding run's conversation from Coding History after a reload, under the run's own id (the
+correlation its `coding-runtime.history` lines carry). The timeline carries the newest messages the
+safe-activity contract's bounds admit (`timelineCount`, `turnCount`, `feedBytes`); every older
+message the feed cannot carry stays in the transcript, whole (`transcriptCount`,
+`transcriptChars`), so no message of the run is shown in neither place. The restoration reads the
+run's messages from the newest end and only as far as the feed can still hold them; everything
+older is named for the transcript by position and never examined. `cutCount` counts timeline
+messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
+task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
+truncated.". Counts only — never a message, path or run name.
+
 The `grounded-pack-validation` diagnostic carries closed `validationReasons`, `violationCount`,
 `validatorThrew`, sanitized `originalCode`, optional `sourceIndex`, and `diagnosticOutcome`.
 `source-skipped` is a warning preserving independent healthy sources; `request-failed` retains the

@@ -497,6 +497,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -695,6 +696,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "supportReportDelivery",
   "supportReportPreparation",
   "filesScopeDecision",
+  "codingRunRestore",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "message",
@@ -739,6 +741,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     hasValidCitationActivationContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
     isOptional(value.supportReportPreparation, isClientSupportReportPreparation) &&
+    isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
     hasValidFilesScopeDecisionContext(value)
   );
 }
@@ -1662,6 +1665,118 @@ export function isClientDiagnosticAnswerSpeech(
     isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
     isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
   );
+}
+
+// ─── Restored coding run (#3876 review) ──────────────────────────────────────────
+//
+// After a reload the Coding Workbench rebuilds a settled run's conversation from Coding History and
+// shows the newest part of it in the timeline, within the safe-activity contract's own bounds. What
+// the feed cannot carry stays in the transcript above it, so the only text shown nowhere is a
+// message cut to the per-message bound and what Coding History itself never listed — and those two
+// alone make the page say the activity is truncated. Counts only — never a message, a path or a
+// run name — so the log tells where every message of the run went and whether the page said so.
+
+/** Bounds the message and turn counts: Coding History lists at most 200 messages per task. */
+export const CLIENT_CODING_RUN_RESTORE_COUNT_MAX = 100_000;
+/**
+ * Bounds the sizes: the feed's bytes, and the transcript's characters — 200 messages of 65,536
+ * characters each, counted by length without reading the text.
+ */
+export const CLIENT_CODING_RUN_RESTORE_SIZE_MAX = 67_108_864;
+
+export interface ClientDiagnosticCodingRunRestore {
+  /** Messages of the run the timeline carries, cut ones included. */
+  readonly timelineCount: number;
+  /** Messages older than the timeline's first: the transcript carries them instead, whole. */
+  readonly transcriptCount: number;
+  /** Timeline messages whose text was cut to the per-message bound: the rest is shown nowhere. */
+  readonly cutCount: number;
+  /** Turns of the restored feed. */
+  readonly turnCount: number;
+  /** UTF-8 bytes of the restored feed, measured the way the contract measures its budgets. */
+  readonly feedBytes: number;
+  /** Characters (UTF-16 code units) of the messages the transcript carries instead. */
+  readonly transcriptChars: number;
+  /** Coding History cut the task's stored messages: older ones are shown nowhere. */
+  readonly historyTruncated: boolean;
+}
+
+const CODING_RUN_RESTORE_KEYS: ReadonlySet<string> = new Set([
+  "timelineCount",
+  "transcriptCount",
+  "cutCount",
+  "turnCount",
+  "feedBytes",
+  "transcriptChars",
+  "historyTruncated",
+]);
+
+function isCodingRunRestoreCount(value: unknown): value is number {
+  return isBoundedNonNegativeInteger(value, CLIENT_CODING_RUN_RESTORE_COUNT_MAX);
+}
+
+function isCodingRunRestoreSize(value: unknown): value is number {
+  return isBoundedNonNegativeInteger(value, CLIENT_CODING_RUN_RESTORE_SIZE_MAX);
+}
+
+// The counts must describe one restoration: a turn holds a message, a cut message is a carried
+// one, and the transcript holds characters exactly when it holds messages.
+function coherentCodingRunRestore(value: ClientDiagnosticCodingRunRestore): boolean {
+  return (
+    value.cutCount <= value.timelineCount &&
+    value.turnCount <= value.timelineCount &&
+    (value.turnCount === 0) === (value.timelineCount === 0) &&
+    (value.transcriptCount === 0) === (value.transcriptChars === 0) &&
+    value.transcriptChars >= value.transcriptCount &&
+    value.feedBytes > 0
+  );
+}
+
+function codingRunRestoreOf(
+  value: Record<string, unknown>,
+): ClientDiagnosticCodingRunRestore | undefined {
+  const { timelineCount, transcriptCount, cutCount, turnCount } = value;
+  const { feedBytes, transcriptChars, historyTruncated } = value;
+  if (
+    !isCodingRunRestoreCount(timelineCount) ||
+    !isCodingRunRestoreCount(transcriptCount) ||
+    !isCodingRunRestoreCount(cutCount) ||
+    !isCodingRunRestoreCount(turnCount)
+  ) {
+    return undefined;
+  }
+  if (
+    !isCodingRunRestoreSize(feedBytes) ||
+    !isCodingRunRestoreSize(transcriptChars) ||
+    typeof historyTruncated !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    timelineCount,
+    transcriptCount,
+    cutCount,
+    turnCount,
+    feedBytes,
+    transcriptChars,
+    historyTruncated,
+  };
+}
+
+/** True for exactly the four bounded counts, the two bounded sizes and the history flag. */
+function isClientDiagnosticCodingRunRestore(
+  value: unknown,
+): value is ClientDiagnosticCodingRunRestore {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== CODING_RUN_RESTORE_KEYS.size ||
+    keys.some((key) => !CODING_RUN_RESTORE_KEYS.has(key))
+  ) {
+    return false;
+  }
+  const restore = codingRunRestoreOf(value);
+  return restore !== undefined && coherentCodingRunRestore(restore);
 }
 
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────

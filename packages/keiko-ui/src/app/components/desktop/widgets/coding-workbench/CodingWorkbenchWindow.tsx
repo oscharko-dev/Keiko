@@ -1520,14 +1520,7 @@ function WorkbenchColumns({
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
           tabIndex={0}
         >
-          <CodingTaskTranscript
-            session={history}
-            liveRunId={
-              timeline.activity.feed?.availability === "available"
-                ? state.run.value?.runId
-                : undefined
-            }
-          />
+          <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
           <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
           <CodingWorkbenchDraftDelivery

@@ -369,6 +369,15 @@ History routes authenticate the paired app session and scope access to the opera
 results, hidden context, reasoning and authority credentials are not captured. Reads and model
 context restoration remain bounded and report truncation explicitly. The existing body-free History
 operation records capture source, counts and persistence failures; it never contains conversation text.
+After a reload the Workbench rebuilds a settled run's timeline from this History (#3876 review): it
+carries the newest messages that the safe-activity contract's bounds admit — per message, per turn,
+per turn count and for the whole feed, each measured as the contract measures it — packed into as
+many turns as they need, and the transcript above it shows every older message of the run whole, so
+no message is shown in neither place. The rebuild reads the run's messages from the newest end and
+only as far as the feed can still hold them: nothing older is stripped, dated or measured, it is
+named for the transcript by position. Only a message cut to its own bound and the older messages
+Coding History itself cut make the activity read as truncated. The body-free
+`client.coding-run.restored` line records the counts of this split (ADR-0173).
 
 Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
 push and pull-request create/update each require their own action-bound, one-use human approval in

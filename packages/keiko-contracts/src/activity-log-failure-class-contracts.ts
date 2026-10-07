@@ -930,6 +930,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-coding-run-restore",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["client.coding-run.restored"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.coding-run.restored"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.coding-run.restored"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.coding-run.restored"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-select",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

@@ -1287,6 +1287,102 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // #3876 review: a settled run restored after a reload shows the newest part of its conversation in
+  // the timeline and the rest in the transcript. One counted line, at info, joined to the server's own
+  // lines of the run by its id: where the messages went, how many were cut, the sizes, and whether
+  // stored history was cut — the facts that decide the page's "Activity truncated." notice.
+  it("persists a restored coding run's counts as client.coding-run.restored", async () => {
+    const sink = captureServerLog();
+    const codingRunRestore = {
+      timelineCount: 4,
+      transcriptCount: 2,
+      cutCount: 1,
+      turnCount: 2,
+      feedBytes: 50_000,
+      transcriptChars: 24_000,
+      historyTruncated: true,
+    };
+    const body = JSON.stringify({
+      message: "Keiko Coding Workbench restored a settled run's conversation.",
+      clientTs: CLIENT_TS,
+      correlationId: "run-340282366920938463463374607431768211455",
+      codingRunRestore,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find((candidate) => candidate.op === "client.coding-run.restored");
+    expect(event?.level).toBe("info");
+    expect(event?.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.coding-run.restored.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "run-340282366920938463463374607431768211455",
+      ...codingRunRestore,
+      completeness: "complete",
+      loss: "none",
+    });
+    // Counts only: the free-text note is never kept.
+    expect(JSON.stringify(record)).not.toContain("conversation");
+  });
+
+  it("keeps the failure budget available after a burst of restored coding run reports", async () => {
+    const sink = captureServerLog();
+    const restored = JSON.stringify({
+      message: "Keiko Coding Workbench restored a settled run's conversation.",
+      clientTs: CLIENT_TS,
+      correlationId: "run-340282366920938463463374607431768211455",
+      codingRunRestore: {
+        timelineCount: 1,
+        transcriptCount: 0,
+        cutCount: 0,
+        turnCount: 1,
+        feedBytes: 600,
+        transcriptChars: 0,
+        historyTruncated: false,
+      },
+    });
+    // One more than a budget admits in a window: the burst spends the routine budget alone.
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(restored));
+    }
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice.
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
+  it("refuses a restored coding run's report whose counts cannot describe one restoration", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "Keiko Coding Workbench restored a settled run's conversation.",
+      clientTs: CLIENT_TS,
+      codingRunRestore: {
+        timelineCount: 0,
+        transcriptCount: 0,
+        cutCount: 3,
+        turnCount: 0,
+        feedBytes: 1,
+        transcriptChars: 0,
+        historyTruncated: false,
+      },
+    });
+
+    const outcome = await handleClientDiagnosticIngest(context(body));
+    expect(outcome.status).toBe(400);
+    expect(
+      sink.events.find((candidate) => candidate.op === "client.coding-run.restored"),
+    ).toBeUndefined();
+  });
+
   // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
   // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
   it("persists a chat answer copy and its failure as client.answer.copied", async () => {

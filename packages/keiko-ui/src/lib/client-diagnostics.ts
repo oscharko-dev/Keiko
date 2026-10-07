@@ -44,6 +44,7 @@ import {
   type ClientDiagnosticAnswerCopy,
   type ClientDiagnosticAnswerSpeech,
   type ClientDiagnosticCitationActivation,
+  type ClientDiagnosticCodingRunRestore,
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
@@ -177,6 +178,10 @@ export interface ClientDiagnosticMeta {
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
+  // A settled coding run's conversation restored after a reload (#3876 review): counts of where its
+  // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
+  // and how many were cut, never a message, path or run name.
+  readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

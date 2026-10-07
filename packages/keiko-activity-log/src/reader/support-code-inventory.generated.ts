@@ -2115,6 +2115,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-ui/app/components/desktop/widgets/coding-workbench/_draftDeliveryTestSupport",
   "keiko-ui/app/components/desktop/widgets/coding-workbench/_journeyOutcomeTestSupport",
   "keiko-ui/app/components/desktop/widgets/coding-workbench/_journeyPresentation",
+  "keiko-ui/app/components/desktop/widgets/coding-workbench/_restoredConversationTestSupport",
   "keiko-ui/app/components/desktop/widgets/coding-workbench/_useJourneyActions",
   "keiko-ui/app/components/desktop/widgets/coding-workbench/_useJourneyClock",
   "keiko-ui/app/components/desktop/widgets/coding-workbench/_workbenchDescriptionStatusTestSupport",

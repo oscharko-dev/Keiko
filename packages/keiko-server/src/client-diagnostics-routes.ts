@@ -1154,6 +1154,38 @@ const CLIENT_CITATION_ACTIVATED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #3876 review: after a reload the Workbench restores a settled run's conversation from Coding
+// History into the timeline, within the safe-activity contract's bounds, and shows what the feed
+// cannot carry in the transcript. One line per distinct restoration: where the run's messages went,
+// how many were cut, the sizes and whether stored history was cut — which decide the page's
+// "Activity truncated." notice (a cut message or a cut history; never the transcript's overflow).
+// Counts only, joined to the server's own `coding-runtime.history` lines by the run's id.
+const CLIENT_CODING_RUN_RESTORED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.coding-run.restored",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientCodingRunRestore",
+  fields: {
+    timelineCount: { type: "integer", dataClass: "count", required: true },
+    transcriptCount: { type: "integer", dataClass: "count", required: true },
+    cutCount: { type: "integer", dataClass: "count", required: true },
+    turnCount: { type: "integer", dataClass: "count", required: true },
+    feedBytes: { type: "integer", dataClass: "count", required: true },
+    transcriptChars: { type: "integer", dataClass: "count", required: true },
+    historyTruncated: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-coding-run-restore"],
+  proofIds: ["client.coding-run.restored.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1997,6 +2029,22 @@ function logClientCitationActivation(
   return true;
 }
 
+function logClientCodingRunRestore(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const restore = request.codingRunRestore;
+  if (restore === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_CODING_RUN_RESTORED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...restore, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
 // The closed report shapes, each of which owns its own registered line.
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -2010,7 +2058,8 @@ function logClosedClientReport(
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
-    logClientCitationActivation(request, correlationId)
+    logClientCitationActivation(request, correlationId) ||
+    logClientCodingRunRestore(request, correlationId)
   );
 }
 
@@ -2533,6 +2582,17 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
   );
 }
 
+// The closed support, scope, citation and restored-run reports: routine evidence, never a failure.
+function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
+  return (
+    report.supportReportDelivery !== undefined ||
+    report.supportReportPreparation !== undefined ||
+    report.filesScopeDecision !== undefined ||
+    report.codingRunRestore !== undefined ||
+    report.citationActivation !== undefined
+  );
+}
+
 // The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
 // spends the failure budget only when it failed.
 function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
@@ -2540,10 +2600,7 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
     report.answerSpeech !== undefined ||
-    report.supportReportDelivery !== undefined ||
-    report.supportReportPreparation !== undefined ||
-    report.filesScopeDecision !== undefined ||
-    report.citationActivation !== undefined
+    isRoutineScopedReport(report)
   ) {
     return "routine";
   }
