@@ -188,7 +188,11 @@ the call's budget could not hold a repair. None of these lines carries the model
   LiteLLM model info (`max_output_tokens`) so discovery carries it; the coding turn then reserves it.
 - Check the time arithmetic before raising allowances further: a whole-body (non-streaming) attempt is
   bounded by the ten-minute buffered floor, so at 20 tokens per second about 12k tokens fit one
-  attempt; a streamed read is bounded by the call budget instead.
+  attempt; a streamed read is bounded by the call budget instead. That is why a coding turn that
+  does not stream (`codingStreaming: "off"`, or a capability without streaming) keeps the shared
+  8k reserve rather than the 16k coding reserve: a runaway answer then ends as an exhausted answer
+  that gets the steered repair, not as a timeout the breaker counts. Declare `max_output_tokens`
+  only as high as one buffered attempt can produce.
 
 ---
 
@@ -789,7 +793,11 @@ A coding turn now keeps retrying a transiently unavailable provider for the outa
 minutes by default) with capped, jittered backoff and any announced `Retry-After`, and waits
 through an open breaker's cooldown instead of being refused. The coding sidecar route asks for this
 with an explicit outage policy on each of its model calls, buffered and streamed alike, so a turn
-behaves the same whether or not the model streams. The breaker still admits only its half-open
+behaves the same whether or not the model streams. On a streamed turn the window covers every
+failure before the first answer text, also after the model's reasoning was already shown: the
+retried attempt's reasoning is not shown a second time. Once answer text reached the Workbench, a
+retry inside the gateway would duplicate it, so the turn ends with an error and the coding runtime
+decides whether to retry it (`coding-sidecar.gateway.turn-failed runtimeRetry=allowed`). The breaker still admits only its half-open
 probes, so waiting runs do not add load while the gateway recovers. Only an unavailable provider is
 waited for: a model that keeps answering with an invalid tool-call shape gets the configured
 attempt count and its schema-repair corrections, then the turn fails with the invalid-shape
@@ -866,7 +874,9 @@ the reasoning stays inside the answer text or is not produced), when the LiteLLM
 back into the answer (`merge_reasoning_content_in_choices: true`) or drops the request parameter
 that switches it on (`drop_params` removing `reasoning_effort` on a model that needs it), or when
 the configuration sets `codingReasoningDisplay: "off"`. The answer arrives in one piece when the
-configuration sets `codingStreaming: "off"` or the model's capability does not stream.
+configuration sets `codingStreaming: "off"`, when the model's capability does not stream, when the
+coding runtime sent its request without `stream: true`, or when a proxy between Keiko and the model
+ignores `stream` and answers with one JSON body.
 
 **Diagnostic Steps**
 
@@ -878,11 +888,16 @@ configuration sets `codingStreaming: "off"` or the model's capability does not s
   `reasoningDisposition: discarded`: the reasoning arrived and the display switch discarded it.
 - `coding-sidecar.gateway.usage-settled` records the turn's share as counts: `contentBytes`,
   `reasoningBytes`, the provider's own `reasoningTokens` when it reports them, beside `outputBytes`;
-  `coding-sidecar.gateway.outcome` `reasoningFrames` counts the frames that carried reasoning to
-  the coding runtime, and `coding-runtime.history-projection` `reasoningSignalCount` the pieces that
-  reached the timeline.
-- A coding turn read with `gateway.stream.started` streams live; `gateway.chat.started` means the
-  turn was buffered (`codingStreaming: "off"`, or a capability without streaming).
+  `coding-sidecar.gateway.outcome` `reasoningFrames` and `forwardedReasoningBytes` count the frames
+  and bytes that carried reasoning to the coding runtime (`reasoningWithheld: true` on a buffered
+  answer whose oversized reasoning was withheld), and `coding-runtime.history-projection`
+  `reasoningSignalCount` the reasoning pieces a history read prepared for the timeline, before the
+  timeline accepts them.
+- A coding turn read with `gateway.stream.started` streams live, unless its
+  `chat.response.streamed` line says `outcome: whole-body` (a proxy that ignored `stream` and
+  answered with one JSON body). `gateway.chat.started` means the turn was buffered:
+  `codingStreaming: "off"`, a capability without streaming, or a runtime request without
+  `stream: true`.
 
 **Resolution**
 

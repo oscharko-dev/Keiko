@@ -673,17 +673,14 @@ describe("Gateway.chatStream", () => {
   // failing — it must not count toward opening the breaker either.
   // #3610: an HTTP 200 answer with neither content nor a tool call is the same kind of fault — the
   // provider answered — so it must not count toward opening the breaker either.
-  // #3873 (F17): an exhausted answer gets ONE steered repair before it surfaces, so the model is
-  // asked twice; an empty answer that carried no reasoning (this fixture's) is still never retried.
-  // An empty answer that carried reasoning gets the same one repair (F23, pinned with its breaker
-  // behaviour in gateway.output-repair.test.ts). Neither answer counts for the breaker, however many
-  // of them a call sees.
+  // #3873 review: the steered repair (F17, F23) runs only on a call that asks for it, so a call
+  // without `answerRepair` keeps this pin's original count of exactly one adapter call.
   it.each([
-    ["ProviderOutputExhaustedError", ProviderOutputExhaustedError, 2],
-    ["ProviderEmptyAnswerError", ProviderEmptyAnswerError, 1],
+    ["ProviderOutputExhaustedError", ProviderOutputExhaustedError],
+    ["ProviderEmptyAnswerError", ProviderEmptyAnswerError],
   ] as const)(
     "does not count a %s as a breaker fault — consecutiveFailures stays 0 and state stays closed",
-    async (_label, faultClass, expectedCalls) => {
+    async (_label, faultClass) => {
       let calls = 0;
       const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
         adapter: fakeAdapter(() => {
@@ -693,6 +690,33 @@ describe("Gateway.chatStream", () => {
         clock: createScriptedGatewayClock(),
       });
       await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(faultClass);
+      // Not retryable, so exactly one adapter call regardless of the configured maxRetries.
+      expect(calls).toBe(1);
+      expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+      expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
+    },
+  );
+
+  // #3873 (F17): on a call that asks for the steered repair, an exhausted answer is asked once more
+  // with a fixed correction; an empty answer that carried no reasoning (this fixture's) is still
+  // never retried. Neither answer counts for the breaker, however many of them a call sees.
+  it.each([
+    ["ProviderOutputExhaustedError", ProviderOutputExhaustedError, 2],
+    ["ProviderEmptyAnswerError", ProviderEmptyAnswerError, 1],
+  ] as const)(
+    "does not count a %s as a breaker fault on a call that asks for the steered repair",
+    async (_label, faultClass, expectedCalls) => {
+      let calls = 0;
+      const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
+        adapter: fakeAdapter(() => {
+          calls += 1;
+          return Promise.reject(new faultClass("example-chat-model"));
+        }),
+        clock: createScriptedGatewayClock(),
+      });
+      await expect(gateway.chat({ ...REQUEST, answerRepair: "steered" })).rejects.toBeInstanceOf(
+        faultClass,
+      );
       // Not retryable as is, so the configured maxRetries never adds an attempt: the only second
       // call is the exhausted answer's one steered repair.
       expect(calls).toBe(expectedCalls);

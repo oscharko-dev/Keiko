@@ -258,18 +258,24 @@ const CODING_OUTPUT_RESERVE_WINDOW_FRACTION = 4;
  * derives the `maxOutputTokens` it sends (`admittedOutputTokens`) and OpenCode its context
  * geometry. Where the provider declared its output limit (discovery's `max_output_tokens`, kept on
  * `capability.maxOutputTokens`), that limit is the allowance; where it declared none, the coding
- * reserve above, never below the shared chat profile's own reserve. Either is bounded to a quarter
- * of the model's window so a prompt keeps three quarters of it, and the sidecar's admission
- * arithmetic (`admissiblePromptTokens`, `admittedOutputTokens`) shrinks it further per request.
+ * reserve above, never below the shared chat profile's own reserve — for a turn that streams. A
+ * buffered coding turn (a route that does not stream, or `codingStreaming: "off"`) keeps the shared
+ * reserve (#3873 review): its attempt is one whole-body read under the buffered attempt bound, and
+ * at self-hosted throughput (about 20 tokens/s) the larger reserve would outlive that bound, so a
+ * runaway turn would end as a provider timeout — counted by the breaker, retried unchanged and
+ * never repaired — instead of an exhausted answer the gateway steers a repair for. Either is bounded
+ * to a quarter of the model's window so a prompt keeps three quarters of it, and the sidecar's
+ * admission arithmetic (`admissiblePromptTokens`, `admittedOutputTokens`) shrinks it further.
  */
 export function codingOutputReserveTokens(
   capability: Pick<ModelCapability, "maxOutputTokens">,
   profile: Pick<ContextProfile, "maxInputTokens" | "reservedOutputTokens">,
+  streams = true,
 ): number {
-  const preferred =
-    capability.maxOutputTokens > 0
-      ? capability.maxOutputTokens
-      : Math.max(profile.reservedOutputTokens, CODING_OUTPUT_RESERVE_TOKENS);
+  const undeclaredReserve = streams
+    ? Math.max(profile.reservedOutputTokens, CODING_OUTPUT_RESERVE_TOKENS)
+    : profile.reservedOutputTokens;
+  const preferred = capability.maxOutputTokens > 0 ? capability.maxOutputTokens : undeclaredReserve;
   const windowBound = Math.floor(profile.maxInputTokens / CODING_OUTPUT_RESERVE_WINDOW_FRACTION);
   return Math.max(1, Math.min(preferred, windowBound));
 }
@@ -292,7 +298,7 @@ function codingSidecarProjection(
       ...(contextProfile.inputTokenLimit === undefined
         ? {}
         : { inputTokenLimit: contextProfile.inputTokenLimit }),
-      maxOutputTokens: codingOutputReserveTokens(capability, contextProfile),
+      maxOutputTokens: codingOutputReserveTokens(capability, contextProfile, supportsStreaming),
       // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
       // remains the hard memory bound, while 512 permits native compaction to run before ordinary
       // multi-turn coding sessions hit an unrelated record-count rejection.

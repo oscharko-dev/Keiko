@@ -9518,6 +9518,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      forwardedReasoningBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      limit: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["answer", "reasoning"],
+      },
+      reasoningWithheld: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       deadlineMs: {
         type: "integer",
         dataClass: "duration",
@@ -10053,6 +10069,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       reasoningTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discardedAttemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discardedPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discardedCompletionTokens: {
         type: "integer",
         dataClass: "count",
         required: false,

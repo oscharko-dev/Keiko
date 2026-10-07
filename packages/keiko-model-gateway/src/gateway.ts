@@ -169,6 +169,15 @@ export interface GatewayCallRequest extends GatewayRequest {
    * reasoning, which the gateway still parses and counts.
    */
   readonly reasoningDelivery?: "forward" | undefined;
+  /**
+   * The explicit answer repair of an autonomous coding turn (#3873, F17, F23); local, never
+   * serialized into a provider request body. `steered` gives an answer the model could not use (it
+   * exhausted its output budget without a tool call or a final answer, or ended after reasoning
+   * without either) ONE further attempt with a fixed correction before the failure surfaces. Only
+   * the coding sidecar route sets it; every other call, the commit draft included, surfaces such an
+   * answer at once and never makes a hidden second generation.
+   */
+  readonly answerRepair?: "steered" | undefined;
 }
 
 // The two ids a single gateway call carries.
@@ -630,13 +639,20 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
 // loop starts with the call — and waits through an open breaker; every other call keeps the
 // provider's attempt count (`codingWorkbenchRetryConfig` with a window of 0). Never below one
 // millisecond, so a window spent on admission still ends, and reports, as an outage-window call.
+// The steered answer repair (#3873, F17, F23) joins the policy only for a call that asked for it
+// (`answerRepair: "steered"`).
 function callRetryConfig(
   provider: ModelProviderConfig,
   outageWindowMs: number,
   elapsedMs = 0,
+  answerRepair?: GatewayCallRequest["answerRepair"],
 ): RetryConfig {
   const windowMs = outageWindowMs > 0 ? Math.max(1, outageWindowMs - elapsedMs) : 0;
-  return { ...codingWorkbenchRetryConfig(provider, windowMs), jitterProviderCooldown: true };
+  return {
+    ...codingWorkbenchRetryConfig(provider, windowMs),
+    jitterProviderCooldown: true,
+    ...(answerRepair === "steered" ? { repair: steeredAnswerRepair } : {}),
+  };
 }
 
 // The admission owns exactly one outcome; cancellations and local refusal release only its own
@@ -671,6 +687,108 @@ interface PreparedStream {
   // that keeps the provider's attempt count.
   readonly outageWindowMs: number;
   readonly outputRepair: OutputRepairState;
+  readonly attempts: StreamAttemptState;
+}
+
+// What a streamed call carries from one attempt to the next, across every loop it resumes
+// (#3873 review): how many attempts it made, the request the next provider retry resends, the
+// schema correction the current attempt carries, and the usage of the attempts it discarded.
+interface StreamAttemptState {
+  count: number;
+  request: GatewayCallRequest;
+  schemaRepair?: GatewayToolCatalogError["repair"] | undefined;
+  // Whether a forwarded reasoning chunk already reached the caller in this call.
+  reasoningDelivered: boolean;
+  readonly discarded: DiscardedUsageTally;
+}
+
+// The request an attempt sends without asking for reasoning delivery: its reasoning is parsed,
+// counted and discarded like on any surface that does not display it.
+function withoutReasoningDelivery(request: GatewayCallRequest): GatewayCallRequest {
+  const { reasoningDelivery: _undelivered, ...rest } = request;
+  return rest;
+}
+
+// The provider-reported usage of the attempts a call discarded (#3873 review): a steered repair's
+// first answer, a tool call the catalog rejected, a stream that failed after its usage arrived.
+interface DiscardedUsageTally {
+  attemptCount: number;
+  promptTokens: number;
+  completionTokens: number;
+}
+
+function emptyDiscardedUsage(): DiscardedUsageTally {
+  return { attemptCount: 0, promptTokens: 0, completionTokens: 0 };
+}
+
+// Counts one discarded attempt whose provider reported usage; an attempt that failed before any
+// usage arrived (a refused connection, a silent attempt) adds nothing. Counts only, never content.
+function tallyDiscardedAttempt(tally: DiscardedUsageTally, failure: Error | undefined): void {
+  if (!(failure instanceof GatewayError) || failure.partialUsage === undefined) return;
+  const { promptTokens, completionTokens } = failure.partialUsage;
+  if (!isTokenCount(promptTokens) || !isTokenCount(completionTokens)) return;
+  if (promptTokens === 0 && completionTokens === 0) return;
+  tally.attemptCount += 1;
+  tally.promptTokens += promptTokens;
+  tally.completionTokens += completionTokens;
+}
+
+function isTokenCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+// The answer a call settled with, carrying what its discarded attempts consumed, so the caller's
+// own budget can count every attempt the provider processed (ADR-0137 D2).
+function withDiscardedUsage(
+  response: NormalizedResponse,
+  tally: DiscardedUsageTally,
+): NormalizedResponse {
+  return tally.attemptCount === 0 ? response : { ...response, discardedAttemptUsage: { ...tally } };
+}
+
+// A catalog rejection is retried only WITH its schema correction (`requestAfterToolSchemaRejection`):
+// one that carries no repair would replay the identical request.
+function unrepairableCatalogRejection(error: Error): boolean {
+  return error instanceof GatewayToolCatalogError && error.repair === undefined;
+}
+
+// A failure the call's retry loop can still act on after its stream delivered nothing but
+// reasoning (#3873 review): the steered repair the call asked for and has not used yet, a catalog
+// rejection that carries its schema correction, or a retryable provider failure — the loop then
+// applies the call's own policy (attempt count, outage window, budget). Anything else surfaces at
+// once, as it did.
+// A non-streaming adapter's fallback is one whole-body read, so its attempt keeps the buffered floor.
+function streamAttemptBudgetMs(
+  adapter: ProviderAdapter,
+  route: RoutedCall,
+  bounds: StreamReadBounds,
+): number {
+  return adapter.callStream === undefined
+    ? Math.min(bounds.budgetMs, effectiveBufferedAttemptMs(route.provider))
+    : bounds.budgetMs;
+}
+
+// The loop a stream resumes after a failed attempt, on the call's own attempt count and repair.
+function streamResume(state: PreparedStream, failedAttempt?: Error): RetryResume | undefined {
+  if (failedAttempt === undefined) return undefined;
+  return {
+    failedAttempt,
+    attempts: state.attempts.count,
+    repairs: state.outputRepair.steered === undefined ? 0 : 1,
+  };
+}
+
+function noteDelivered(state: PreparedStream, chunk: GatewayStreamChunk): void {
+  if (chunk.type === "reasoning") state.attempts.reasoningDelivered = true;
+}
+
+function resumableAfterReasoning(state: PreparedStream, error: unknown): error is GatewayError {
+  if (!(error instanceof GatewayError)) return false;
+  const repairable =
+    state.prepared.answerRepair === "steered" &&
+    state.outputRepair.steered === undefined &&
+    steeredAnswerRepair(error) !== undefined;
+  return repairable || (error.retryable && !unrepairableCatalogRejection(error));
 }
 
 // How long a streamed call has already run (its first admission included) and what is left of its
@@ -693,13 +811,18 @@ function streamStartupRetryConfig(
   admission: () => CircuitBreakerAdmission,
   budget: { readonly remainingMs: number; readonly elapsedMs: number },
 ): RetryConfig {
-  const config = callRetryConfig(state.route.provider, state.outageWindowMs, budget.elapsedMs);
+  const config = callRetryConfig(
+    state.route.provider,
+    state.outageWindowMs,
+    budget.elapsedMs,
+    state.prepared.answerRepair,
+  );
   const probeEndsCall = config.retryWindowMs === undefined;
   return {
     ...config,
     maxRetries: probeEndsCall && state.admission.halfOpen ? 0 : state.route.provider.maxRetries,
     shouldRetry: (error): boolean =>
-      !(probeEndsCall && admission().halfOpen) && !(error instanceof GatewayToolCatalogError),
+      !(probeEndsCall && admission().halfOpen) && !unrepairableCatalogRejection(error),
     timeoutMs: budget.remainingMs,
   };
 }
@@ -727,6 +850,7 @@ interface BufferedChatAttempt {
     request: GatewayCallRequest;
     attemptNumber: number;
     repair?: GatewayToolCatalogError["repair"];
+    readonly discarded: DiscardedUsageTally;
   };
 }
 
@@ -767,9 +891,13 @@ function steeredRepairRequest(
 }
 
 // The repair the retry loop granted for the failure an attempt follows, as that attempt starts.
-// Undefined for every other attempt: an ordinary provider retry keeps whatever steer is already set.
-function grantedRepair(previousError: Error | undefined): SteeredRepair | undefined {
-  if (previousError === undefined) return undefined;
+// Undefined for every other attempt: an ordinary provider retry keeps whatever steer is already set,
+// and a call that did not ask for the repair (`answerRepair`) is never granted one.
+function grantedRepair(
+  request: GatewayCallRequest,
+  previousError: Error | undefined,
+): SteeredRepair | undefined {
+  if (request.answerRepair !== "steered" || previousError === undefined) return undefined;
   const reason = steeredAnswerRepair(previousError);
   return reason === undefined ? undefined : { reason, failure: previousError };
 }
@@ -813,20 +941,6 @@ interface OpenedStream {
 // answer. An empty delta does not, and neither does a forwarded reasoning chunk (`streamFrom`).
 function commitsStream(chunk: GatewayStreamChunk): boolean {
   return chunk.type === "done" || (chunk.type === "delta" && chunk.token.length > 0);
-}
-
-// The request of a streamed attempt: the prepared request, or — from the attempt that follows an
-// exhausted or empty answer on — its steered repair. The retry loop grants that attempt exactly once
-// (`steeredAnswerRepair`, resilience.ts); a later provider retry keeps the steer.
-function steeredStreamRequest(
-  state: PreparedStream,
-  previousError: Error | undefined,
-): GatewayCallRequest {
-  state.outputRepair.steered = grantedRepair(previousError) ?? state.outputRepair.steered;
-  const { steered } = state.outputRepair;
-  return steered === undefined
-    ? state.prepared
-    : steeredRepairRequest(state.prepared, steered.reason);
 }
 
 function admissionBudget(
@@ -1187,14 +1301,14 @@ export class Gateway {
       originalRequest: request,
       promptAdmission: this.promptAdmission(route, ids),
       correlationId: ids.correlationId,
-      state: { request, attemptNumber: 0 },
+      state: { request, attemptNumber: 0, discarded: emptyDiscardedUsage() },
     };
     this.logCallStarted(ids, route, false, request, readsOverStream(route, adapter));
     let result;
     try {
       result = await executeWithRetry(
         this.invokeBufferedAttempt.bind(this, attempt),
-        callRetryConfig(route.provider, this.outageWindowMs(request)),
+        callRetryConfig(route.provider, this.outageWindowMs(request), 0, request.answerRepair),
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -1207,9 +1321,12 @@ export class Gateway {
     }
     const forwardsReasoning = this.forwardsReasoning(request);
     this.logCallCompleted(ids, route, result, elapsed(), forwardsReasoning);
-    return recoveredResponse(
-      this.enrich(withReasoningPolicy(result, forwardsReasoning), requestId, start, route),
-      attempt.state,
+    return withDiscardedUsage(
+      recoveredResponse(
+        this.enrich(withReasoningPolicy(result, forwardsReasoning), requestId, start, route),
+        attempt.state,
+      ),
+      attempt.state.discarded,
     );
   }
 
@@ -1221,39 +1338,80 @@ export class Gateway {
     admissionBudgetMs?: number,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
-    const granted = grantedRepair(previousError);
-    if (granted !== undefined) {
-      // The attempt the retry loop granted as the one steered repair (#3873, F17, F23): the original
-      // request plus the fixed correction, in place of any pending schema correction.
-      attempt.state.repair = undefined;
-      attempt.state.request = steeredRepairRequest(attempt.originalRequest, granted.reason);
-      attempt.state.steered = granted;
-    }
+    tallyDiscardedAttempt(attempt.state.discarded, previousError);
+    this.prepareBufferedAttempt(attempt, previousError);
     const provider = {
       ...attempt.route.provider,
       ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
     };
-    try {
-      return await this.invoke(
-        attempt,
-        provider,
-        streamedReadBounds(attempt, remainingBudgetMs),
-        remainingBudgetMs,
-        previousError,
-        admissionBudgetMs,
-      );
-    } catch (error) {
-      if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
-        attempt.state.repair = error instanceof GatewayToolCatalogError ? error.repair : undefined;
-        attempt.state.request = this.requestAfterToolSchemaRejection(
-          attempt.originalRequest,
-          attempt.state.request,
-          attempt.route.capability,
-          error,
-        );
-      }
-      throw error;
+    return this.invoke(
+      attempt,
+      provider,
+      streamedReadBounds(attempt, remainingBudgetMs),
+      remainingBudgetMs,
+      previousError,
+      admissionBudgetMs,
+    );
+  }
+
+  // The request of the attempt the retry loop just scheduled, decided from the failure it follows
+  // (#3873 review): the one steered repair the loop granted (F17, F23) in place of any pending
+  // schema correction; a schema correction after a catalog rejection that carries a repair; or,
+  // after an ordinary provider failure, the request the failed attempt sent. Deciding it here, at
+  // the start of an attempt the loop actually runs, keeps the corrections on the loop's own attempt
+  // count: a correction is never prepared for an attempt that will not run, and every attempt that
+  // runs after a rejection carries the correction for THAT rejection.
+  private prepareBufferedAttempt(attempt: BufferedChatAttempt, previousError?: Error): void {
+    attempt.state.repair = undefined;
+    const granted = grantedRepair(attempt.originalRequest, previousError);
+    if (granted !== undefined) {
+      attempt.state.request = steeredRepairRequest(attempt.originalRequest, granted.reason);
+      attempt.state.steered = granted;
+      return;
     }
+    if (previousError instanceof GatewayToolCatalogError && previousError.repair !== undefined) {
+      attempt.state.repair = previousError.repair;
+      attempt.state.request = this.requestAfterToolSchemaRejection(
+        attempt.originalRequest,
+        attempt.state.request,
+        attempt.route.capability,
+        previousError,
+      );
+    }
+  }
+
+  // The streamed counterpart of `prepareBufferedAttempt`, on the call's own attempt state, which
+  // spans every loop the stream resumes.
+  private prepareStreamAttempt(
+    state: PreparedStream,
+    previousError: Error | undefined,
+  ): GatewayCallRequest {
+    const { attempts } = state;
+    attempts.count += 1;
+    attempts.schemaRepair = undefined;
+    tallyDiscardedAttempt(attempts.discarded, previousError);
+    const granted = grantedRepair(state.prepared, previousError);
+    if (granted !== undefined) {
+      state.outputRepair.steered = granted;
+      attempts.request = steeredRepairRequest(state.prepared, granted.reason);
+    } else if (
+      previousError instanceof GatewayToolCatalogError &&
+      previousError.repair !== undefined
+    ) {
+      attempts.schemaRepair = previousError.repair;
+      attempts.request = this.requestAfterToolSchemaRejection(
+        state.prepared,
+        attempts.request,
+        state.route.capability,
+        previousError,
+      );
+    }
+    // A call forwards at most two reasoning passages: the first attempt that delivers reasoning and
+    // the one steered repair. Any other attempt after forwarded reasoning — a provider retry or a
+    // schema correction — streams its reasoning undelivered, so a retried outage never repeats a
+    // passage and the turn's reasoning stays within the sidecar's bound of two passages.
+    const forwardsPassage = !attempts.reasoningDelivered || granted !== undefined;
+    return forwardsPassage ? attempts.request : withoutReasoningDelivery(attempts.request);
   }
 
   private requestAfterToolSchemaRejection(
@@ -1268,17 +1426,35 @@ export class Gateway {
   }
 
   private logAttemptRepair(attempt: BufferedChatAttempt, state: "scheduled" | "denied"): void {
-    if (attempt.state.repair === undefined) return;
-    const request = attempt.state.request;
-    const profile = deriveContextProfileFromCapability(attempt.route.capability);
+    this.logRequestRepair(
+      attempt.route.capability,
+      attempt.correlationId,
+      attempt.state.repair,
+      attempt.state.request,
+      state,
+    );
+  }
+
+  // `gateway.tool-catalog.repair` for the attempt that carries a schema correction, buffered or
+  // streamed: `scheduled` once the corrected prompt was admitted, `denied` when it no longer fits
+  // the model's window. Nothing for an attempt without a correction.
+  private logRequestRepair(
+    capability: ModelCapability,
+    correlationId: string,
+    repair: GatewayToolCatalogError["repair"],
+    request: GatewayCallRequest,
+    state: "scheduled" | "denied",
+  ): void {
+    if (repair === undefined) return;
+    const profile = deriveContextProfileFromCapability(capability);
     const maxOutputTokens = request.maxOutputTokens ?? profile.reservedOutputTokens;
     const tools = createGatewayToolCatalogBridge(
       request,
       (): number => this.clock.now(),
-      withCorrelationId(this.log, attempt.correlationId),
+      withCorrelationId(this.log, correlationId),
       false,
     ).tools;
-    this.logToolSchemaRepair(attempt.correlationId, attempt.state.repair, state, {
+    this.logToolSchemaRepair(correlationId, repair, state, {
       promptTokens: countGatewayPromptTokens({ ...request, tools }, profile.tokenAccounting, {
         contextWindow: profile.maxInputTokens,
       }),
@@ -1323,10 +1499,13 @@ export class Gateway {
     );
   }
 
-  // Streaming counterpart of chat(). Routes identically and guards with the circuit
-  // breaker. Startup failures may retry before the first delivered chunk; a mid-stream
-  // retry would replay already-emitted tokens and is never permitted. An adapter without a
-  // streaming variant falls back to a single delta+done synthesised from its buffered call().
+  // Streaming counterpart of chat(). Routes identically and guards with the circuit breaker. A
+  // failure before the first delivered answer delta — at startup, or after nothing but forwarded
+  // reasoning (#3873 review) — goes through the same retry loop as a buffered attempt: the steered
+  // repair the call asked for, a schema correction, a provider retry under the call's policy. Once
+  // answer text or the terminal answer was delivered, a retry would replay it, so the failure
+  // surfaces at once. An adapter without a streaming variant falls back to a single delta+done
+  // synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
     const state = await this.prepareStream(request);
     const { route, ids, start, elapsed, admission } = state;
@@ -1378,16 +1557,27 @@ export class Gateway {
     // Production consumers stop at done without advancing or closing the iterator again.
     // Close the provider, settle spend/circuit state and emit the outcome before handing it off.
     if (terminalResponse !== undefined) {
-      yield this.enrichDone(
-        recoveredResponse(
-          withReasoningPolicy(terminalResponse, forwardsReasoning),
-          state.outputRepair,
-        ),
-        ids.requestId,
-        start,
-        route,
-      );
+      yield this.terminalStreamAnswer(state, terminalResponse, forwardsReasoning, start);
     }
+  }
+
+  // The `done` chunk a settled stream hands its caller: the reasoning policy applied, the steered
+  // repair that recovered it and the attempts it discarded marked, the call's ids and timing added.
+  private terminalStreamAnswer(
+    state: PreparedStream,
+    response: NormalizedResponse,
+    forwardsReasoning: boolean,
+    start: number,
+  ): GatewayStreamChunk {
+    return this.enrichDone(
+      withDiscardedUsage(
+        recoveredResponse(withReasoningPolicy(response, forwardsReasoning), state.outputRepair),
+        state.attempts.discarded,
+      ),
+      state.ids.requestId,
+      start,
+      state.route,
+    );
   }
 
   // #3878: only a call that asks for reasoning delivery (`reasoningDelivery: "forward"`, set by the
@@ -1435,6 +1625,12 @@ export class Gateway {
       promptAdmission: this.promptAdmission(route, ids),
       outageWindowMs,
       outputRepair: {},
+      attempts: {
+        count: 0,
+        request: prepared,
+        reasoningDelivered: false,
+        discarded: emptyDiscardedUsage(),
+      },
     };
   }
 
@@ -1652,8 +1848,9 @@ export class Gateway {
           modelId: logModelId(route.provider.modelId),
           streaming: true,
           chunkCount,
-          // A mid-stream failure has already handed tokens to the caller and cannot be retried
-          // (only startup is inside executeWithRetry); the count is how far it got.
+          // The call's terminal failure: `chunkCount` is how far it got, and a failure after an
+          // answer delta could not be retried (a failure after nothing but reasoning was, inside
+          // the call's retry loop).
           afterFirstChunk: chunkCount > 0,
           outputExhausted: error instanceof ProviderOutputExhaustedError,
         },
@@ -1691,11 +1888,13 @@ export class Gateway {
     );
   }
 
-  // The startup retries of a streamed call, or — resumed after an attempt that failed on forwarded
-  // reasoning alone, exhausted or empty (#3873 F17, F23, option iii) — the one steered repair of it.
+  // The attempts of a streamed call: its startup retries, or — resumed after an attempt that failed
+  // while it had delivered nothing but reasoning (#3873 F17, F23, option iii; #3873 review) — the
+  // rest of the same loop: the one steered repair, a schema correction, or a provider retry under
+  // the call's policy, all on the call's one attempt count and its one repair.
   private async openRetriedStream(
     state: PreparedStream,
-    resume?: RetryResume,
+    failedAttempt?: Error,
   ): Promise<OpenedStream> {
     const {
       adapter,
@@ -1707,11 +1906,12 @@ export class Gateway {
     } = state;
     const budget = streamStartupBudget(state, this.clock.now());
     let admission = initialAdmission;
-    // Under a resumed loop every attempt follows the exhausted one, so each needs its own admission.
+    const resume = streamResume(state, failedAttempt);
+    // Under a resumed loop every attempt follows the failed one, so each needs its own admission.
     let attempt = resume === undefined ? 0 : 1;
     return executeWithRetry(
       async (_attemptMs, remainingMs, previousError, admissionBudgetMs) => {
-        const current = steeredStreamRequest(state, previousError);
+        const current = this.prepareStreamAttempt(state, previousError);
         if (attempt++ > 0) {
           const allowed = await this.admitAttempt(
             route.provider,
@@ -1732,9 +1932,10 @@ export class Gateway {
           remainingMs,
           admission,
           promptAdmission,
+          state.attempts.schemaRepair,
         );
       },
-      // A catalog rejection needs an explicit repair, not replay of the same streamed request.
+      // A catalog rejection is retried only with its schema correction, never replayed as it was.
       streamStartupRetryConfig(state, () => admission, budget),
       this.clock,
       request.cancellationSignal,
@@ -1744,13 +1945,14 @@ export class Gateway {
     );
   }
 
-  // A delivered chunk commits the stream: nothing may be replayed after it. Forwarded reasoning is
-  // the one owner-decided exception (#3873 F17, option iii, 2026-10-06): an answer that exhausts its
-  // output budget — or ends empty (F23) — after nothing but reasoning still gets the one steered
-  // repair, through the same retry loop resumed after the failed attempt — the caller then sees a
-  // second reasoning passage, and no answer text or tool call is ever duplicated. A delivered answer
-  // delta or `done`, and a repair that already ran, close the window: the failure then surfaces at
-  // once.
+  // A delivered answer delta or `done` commits the stream: nothing may be replayed after it, so a
+  // later failure surfaces at once. Forwarded reasoning does not commit it (owner decision
+  // 2026-10-06, #3873 F17 option iii): while a stream has delivered nothing but reasoning, its
+  // failure goes back to the call's retry loop, which decides it exactly like a failure before the
+  // first chunk (#3873 review) — the one steered repair of an exhausted or empty answer, a schema
+  // correction after a catalog rejection, or a provider retry under the call's policy, the outage
+  // window included. The caller then sees a further reasoning passage; no answer text or tool call
+  // is ever duplicated.
   private async *streamFrom(state: PreparedStream): AsyncGenerator<GatewayStreamChunk> {
     let opened = await this.openRetriedStream(state);
     try {
@@ -1758,35 +1960,31 @@ export class Gateway {
         const failure = yield* this.deliverUntilCommitted(state, opened);
         if (failure === undefined) return;
         await opened.iterator.return(undefined);
-        opened = await this.openRetriedStream(state, { failedAttempt: failure });
+        opened = await this.openRetriedStream(state, failure);
       }
     } finally {
       await opened.iterator.return(undefined);
     }
   }
 
-  // Delivers an opened stream. Returns the failure a stream of nothing but reasoning ended with when
-  // the call may still be repaired — the one failure the repair window stays open for — and
-  // rethrows every other failure.
+  // Delivers an opened stream. Returns the failure of a stream that delivered nothing but reasoning
+  // when the call's retry loop can still act on it, and rethrows every other failure.
   private async *deliverUntilCommitted(
     state: PreparedStream,
     opened: OpenedStream,
   ): AsyncGenerator<GatewayStreamChunk, Error | undefined> {
     let committed = commitsStream(opened.first);
     try {
+      noteDelivered(state, opened.first);
       yield opened.first;
       for await (const chunk of opened.iterator) {
         committed ||= commitsStream(chunk);
+        noteDelivered(state, chunk);
         yield chunk;
       }
       return undefined;
     } catch (error) {
-      const repairable =
-        !committed &&
-        state.outputRepair.steered === undefined &&
-        error instanceof Error &&
-        steeredAnswerRepair(error) !== undefined;
-      if (!repairable) throw error;
+      if (committed || !resumableAfterReasoning(state, error)) throw error;
       return error;
     }
   }
@@ -1799,6 +1997,7 @@ export class Gateway {
     remainingMs: number | undefined,
     admission: CircuitBreakerAdmission,
     promptAdmission: GatewayPromptAdmission,
+    schemaRepair?: GatewayToolCatalogError["repair"],
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
     const bounds = chatStreamBounds(route.provider);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
@@ -1813,6 +2012,7 @@ export class Gateway {
       },
       admission,
       promptAdmission,
+      schemaRepair,
     );
     try {
       let first = await iterator.next();
@@ -1835,28 +2035,25 @@ export class Gateway {
     bounds: StreamReadBounds,
     admission: CircuitBreakerAdmission,
     promptAdmission: GatewayPromptAdmission,
+    schemaRepair?: GatewayToolCatalogError["repair"],
   ): AsyncGenerator<GatewayStreamChunk> {
     let reservation: GatewaySpendReservation | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;
     let received = false;
     let terminal: GatewayStreamChunk | undefined;
+    const logRepair = (state: "scheduled" | "denied"): void => {
+      this.logRequestRepair(route.capability, ids.correlationId, schemaRepair, request, state);
+    };
     try {
-      const attemptBudget =
-        adapter.callStream === undefined
-          ? Math.min(bounds.budgetMs, effectiveBufferedAttemptMs(route.provider))
-          : bounds.budgetMs;
+      const attemptBudget = streamAttemptBudgetMs(adapter, route, bounds);
       const remaining = await promptAdmission.admit(request, attemptBudget);
+      logRepair("scheduled");
       bounds = { budgetMs: remaining, silenceMs: Math.min(bounds.silenceMs, remaining) };
       reservation = this.spendBudget?.reserve(route.capability, request, ids.correlationId);
       admitted = true;
-      for await (const chunk of this.readProviderStream(
-        adapter,
-        request,
-        route.provider,
-        ids,
-        bounds,
-      )) {
+      const stream = this.readProviderStream(adapter, request, route.provider, ids, bounds);
+      for await (const chunk of stream) {
         if (chunk.type === "done") {
           usage = chunk.response.usage;
           received = true;
@@ -1868,6 +2065,7 @@ export class Gateway {
       if (!received) throw new TransportError("provider stream ended without an answer");
       admission.settle("success");
     } catch (error) {
+      if (error instanceof ContextOverflowError) logRepair("denied");
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       recordProviderFailure(admission, error, admitted);
       throw error;

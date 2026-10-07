@@ -397,18 +397,26 @@ describe("a completed but empty model answer (#3610)", () => {
   // The same with no reasoning at all.
   const plainEmptyAnswer = (): Response => emptyAnswer({ content: "" });
 
-  // #3873 (F23): an empty answer that carried reasoning now gets the gateway's ONE steered repair,
-  // so each call of the incident's answer reaches the provider twice — the answer and its repair —
-  // and its repair ends empty again. Nothing else about the pin moved: the answer still surfaces as
-  // the provider-coded empty-answer error, and eight such answers (more than twice the breaker's
-  // threshold of three) still never open the breaker. An empty answer with no reasoning is not
-  // repaired and keeps the one-request-per-call count this pin always asserted.
+  // #3873 (F23): on a call that asks for the gateway's steered repair (`answerRepair: "steered"`,
+  // the coding sidecar route), an empty answer that carried reasoning gets ONE repaired attempt, so
+  // each call of the incident's answer reaches the provider twice — the answer and its repair — and
+  // its repair ends empty again. A call without the signal, and an empty answer with no reasoning,
+  // keep the one-request-per-call count this pin always asserted. Nothing else about the pin moved:
+  // the answer surfaces as the provider-coded empty-answer error, and eight such answers (more than
+  // twice the breaker's threshold of three) still never open the breaker.
   it.each([
-    ["a reasoning-only answer", reasoningOnlyAnswer, 8],
-    ["an answer with neither reasoning nor text", plainEmptyAnswer, 4],
+    ["a reasoning-only answer", reasoningOnlyAnswer, undefined, 4],
+    ["an answer with neither reasoning nor text", plainEmptyAnswer, undefined, 4],
+    [
+      "a reasoning-only answer on a call that asks for the repair",
+      reasoningOnlyAnswer,
+      "steered",
+      8,
+    ],
+    ["a plain empty answer on a call that asks for the repair", plainEmptyAnswer, "steered", 4],
   ] as const)(
     "is reported as an empty answer and never opens the breaker (%s)",
-    async (_label, answer, expectedRequests) => {
+    async (_label, answer, answerRepair, expectedRequests) => {
       const events: ModelGatewayLogEvent[] = [];
       const log: ModelGatewayLogSink = { write: (event): void => void events.push(event) };
       let calls = 0;
@@ -429,7 +437,9 @@ describe("a completed but empty model answer (#3610)", () => {
 
       // One more answer than the breaker's failureThreshold of 3: every call reaches the provider.
       for (let attempt = 1; attempt <= 4; attempt += 1) {
-        const failure = await gateway.chat(REQUEST).catch((error: unknown) => error);
+        const failure = await gateway
+          .chat({ ...REQUEST, ...(answerRepair === undefined ? {} : { answerRepair }) })
+          .catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
         expect(failure).toMatchObject({ code: "GATEWAY_PROVIDER_ERROR", httpStatus: 200 });
       }

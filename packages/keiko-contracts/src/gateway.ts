@@ -855,8 +855,9 @@ export interface NormalizedResponse {
    * as `reasoning_content` (LiteLLM's normalization of a reasoning parser's output or of Anthropic
    * thinking). Never part of `content`, unverified model text, and a body: it never enters the
    * Activity Log, a support export or run evidence, where only its counts may appear. Present only
-   * when non-empty, and only on a call whose surface displays reasoning (the gateway discards it
-   * everywhere else).
+   * when non-empty, and only on a call that asks for reasoning delivery (the gateway's local
+   * `reasoningDelivery: "forward"`, set by the coding sidecar route alone); the gateway discards it
+   * everywhere else.
    */
   readonly reasoning?: string | undefined;
   /**
@@ -865,6 +866,21 @@ export interface NormalizedResponse {
    * a tool call or any text (#3873, F23). Absent on every first answer.
    */
   readonly outputRepair?: Extract<GatewayOutputRepairOutcome, "recovered"> | undefined;
+  /**
+   * Set by the gateway, never by a provider (#3873 review): the provider-reported usage of earlier
+   * attempts of this call that the gateway discarded — the first answer of a steered repair, a tool
+   * call the catalog rejected, a stream that failed after its usage arrived — so a caller that
+   * meters every token the provider processed (the coding run's prompt allowance) can count them.
+   * `usage` keeps describing the answer itself. Counts only; absent when no discarded attempt
+   * reported usage.
+   */
+  readonly discardedAttemptUsage?:
+    | {
+        readonly attemptCount: number;
+        readonly promptTokens: number;
+        readonly completionTokens: number;
+      }
+    | undefined;
 }
 
 // ─── Streaming (schema only — Wave 1 adapter does not process chunked streams) ─

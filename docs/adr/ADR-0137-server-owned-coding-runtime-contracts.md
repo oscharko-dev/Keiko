@@ -106,7 +106,10 @@ derive. An invalid value fails the composition closed; neither setting can alter
 envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
 delegation. Native context compaction changes subsequent request size, not cumulative accounting.
 The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
-only where an operator configures one. The former defaults (200,000 tokens and a fixed 30 minutes)
+only where an operator configures one. It therefore counts every prompt the provider processed for
+a turn: the turn's own prompt and, when the gateway discarded attempts on the way to its answer (a
+steered repair's first answer, a catalog-rejected tool call, a stream that failed after its usage
+arrived), their provider-reported prompt tokens (`discardedAttemptUsage`, ADR-0003; #3873 review). The former defaults (200,000 tokens and a fixed 30 minutes)
 rested on the premise that only a refused-edit loop exhausts them; the live Gemma qualification
 (#3873, run `run-65084062444586162471229658028402064666`, Supervised workspace, Gemma 4 31B behind
 LiteLLM) disproved it. An ordinary task — fix 13 ESLint findings across six files, then run

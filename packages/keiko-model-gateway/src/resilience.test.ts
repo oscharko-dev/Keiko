@@ -1179,9 +1179,12 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
     expect(steeredAnswerRepair(error)).toBe(reason);
   });
 
-  it("is the repair every provider retry configuration carries", () => {
+  // #3873 review: the steered repair is opt-in per call (`answerRepair: "steered"`, gateway.ts), so
+  // a provider's own retry configuration never carries it and no surface gets a hidden second
+  // generation it did not ask for.
+  it("is not part of a provider's own retry configuration", () => {
     const config = providerRetryConfig({ timeoutMs: 30_000, maxRetries: 2, retryBaseDelayMs: 500 });
-    expect(config.repair).toBe(steeredAnswerRepair);
+    expect(config.repair).toBeUndefined();
   });
 
   it("names the empty-answer repair on its scheduled line, once, and never retries it as a provider error", async () => {
@@ -1237,5 +1240,38 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
     expect(seen).toEqual([failedAttempt]);
     expect(sleeps).toEqual([0]);
     expect(events[0]?.extra).toMatchObject({ reason: "empty-answer-repair", attempt: 1 });
+  });
+
+  // #3873 review: a stream can be resumed more than once (a provider retry after forwarded
+  // reasoning, then another), so the resumed loop continues the call's own attempt count and its
+  // one repair. Starting from attempt 1 with no repair would grant a second steered repair below.
+  it("continues the call's attempt count and its one repair when it resumes", async () => {
+    const { clock } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    const exhausted = new ProviderOutputExhaustedError("m");
+    let calls = 0;
+    const failure = await executeWithRetry(
+      () => {
+        calls += 1;
+        return Promise.reject(exhausted);
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: { write: (event): void => void events.push(event) }, modelId: "m" },
+      { failedAttempt: new TransportError("reset after reasoning"), attempts: 3, repairs: 1 },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBe(exhausted);
+    expect(calls).toBe(1);
+    const scheduled = events.filter((event) => event.op === "gateway.retry.scheduled");
+    expect(scheduled.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ reason: "retryable-error", attempt: 3 }),
+    ]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 4,
+      reason: "terminal",
+    });
   });
 });

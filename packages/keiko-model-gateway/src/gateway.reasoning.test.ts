@@ -308,9 +308,37 @@ describe("Gateway reasoning policy (#3878)", () => {
     expect(scripted.attempts()).toBe(2);
   });
 
-  it("never replays a stream whose forwarded reasoning already reached the caller", async () => {
+  // #3873 review: forwarded reasoning does not commit a stream (owner decision 2026-10-06, F17
+  // option iii: a further reasoning passage is acceptable, answer text is never duplicated). A
+  // provider failure after nothing but forwarded reasoning goes back to the call's retry loop like
+  // a startup failure, so the outage policy still covers the default streamed path. The retried
+  // attempt streams its reasoning undelivered: the caller sees the first passage once, then the
+  // answer.
+  it("retries a provider failure after forwarded reasoning without repeating the passage", async () => {
     const failing: readonly Step[] = [
       { type: "reasoning", token: "first try" },
+      new TransportError("connection dropped"),
+    ];
+    const scripted = scriptedAdapter([failing, ANSWERED]);
+    const log = recorder();
+    const gateway = gatewayWith(scripted.adapter, config(), log.sink);
+
+    const chunks = await streamed(gateway, CODING);
+
+    expect(kinds(chunks)).toEqual(["reasoning:first try", "delta:answer", "done"]);
+    expect(scripted.attempts()).toBe(2);
+    expect(
+      log.events
+        .filter((event) => event.op === "gateway.retry.scheduled")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["retryable-error"]);
+  });
+
+  // Answer text commits the stream: replaying it would duplicate what the caller already holds.
+  it("never replays a stream whose answer text already reached the caller", async () => {
+    const failing: readonly Step[] = [
+      { type: "reasoning", token: "first try" },
+      { type: "delta", token: "partial" },
       new TransportError("connection dropped"),
     ];
     const scripted = scriptedAdapter([failing, ANSWERED]);
@@ -323,7 +351,7 @@ describe("Gateway reasoning policy (#3878)", () => {
       })(),
     ).rejects.toBeInstanceOf(TransportError);
 
-    expect(seen).toEqual(["reasoning:first try"]);
+    expect(seen).toEqual(["reasoning:first try", "delta:partial"]);
     expect(scripted.attempts()).toBe(1);
   });
 

@@ -1563,7 +1563,10 @@ an invalid configuration — the gateway's own retry policy calls it terminal) a
 away identically), `allowed` otherwise. The line, and the turn's
 `coding-sidecar.gateway.outcome` line, carry `repairAttempted` and, when a repair ran, the closed
 `repairOutcome` (`recovered`, `exhausted-again`, `empty-again`, `failed`), read off the gateway's own
-marks on the response or the error (ADR-0003) and naming how the repaired attempt ended, so an
+marks on the response or the error (ADR-0003) and naming how the repaired attempt ended. An outcome
+line written before the gateway call settled — a turn cut at a byte bound, a cancellation mid-stream —
+cannot know whether a repair ran and omits both fields: absent means unknown, never "no repair"
+(#3873 review). So an
 exhausted turn is reconstructable from `chat.response.streamed outputExhausted=true`,
 `gateway.retry.scheduled reason=output-exhausted-repair`, the second read and these two lines alone,
 and a turn that ended empty after reasoning from `gateway.retry.scheduled reason=empty-answer-repair`
@@ -1601,10 +1604,17 @@ The usage line also records the turn's share of answer text and model reasoning 
 `contentBytes` (the UTF-8 size of the answer text), `reasoningBytes` (the UTF-8 size of the
 `reasoning_content` the provider returned, also when the reasoning display discarded it) and, only
 when the provider reports it, its own `reasoningTokens`; the reasoning text itself is never recorded.
+When the gateway discarded attempts on its way to the answer (a steered repair's first answer, a
+catalog-rejected tool call, a stream that failed after its usage arrived), the line names them
+(`discardedAttemptCount`, `discardedPromptTokens`, `discardedCompletionTokens`), and its prompt-token
+count includes the discarded prompt tokens: the run's allowance counts every prompt the provider
+processed (#3873 review).
 `coding-sidecar.gateway.outcome`
 records the closed accepted, cancelled, failed, or output-limit result under that same request and
-run correlation, and `reasoningFrames` counts the frames that carried reasoning to the coding
-runtime; streamed acceptance is recorded after the terminal frame is written. These records
+run correlation; `reasoningFrames` and `forwardedReasoningBytes` count the frames and bytes that
+carried reasoning to the coding runtime, `limit` names the byte bound (`answer` or `reasoning`) that
+ended an `output-limit` turn, and `reasoningWithheld` marks a buffered answer delivered without its
+oversized reasoning; streamed acceptance is recorded after the terminal frame is written. These records
 contain request and run correlations, counts, closed states, and the source, without message bodies.
 Generic provider policy refusals remain terminal; an error
 that identifies the optional `stream_options` or `include_usage` field may take the bounded

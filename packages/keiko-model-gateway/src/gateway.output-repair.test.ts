@@ -22,6 +22,7 @@ import {
 } from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { providerRequestBudgetMs } from "./resilience.js";
+import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import type {
   Clock,
   GatewayConfig,
@@ -76,11 +77,14 @@ function config(providerValue = provider(), streaming = false): GatewayConfig {
   };
 }
 
+// The coding sidecar route asks for the steered repair with the explicit `answerRepair` signal; a
+// call without it surfaces such an answer at once (pinned below and in gateway.test.ts).
 const REQUEST: GatewayCallRequest = {
   modelId: MODEL,
   messages: [{ role: "user", content: "Read the seven files and fix the bug." }],
   maxOutputTokens: 8_192,
   logContext: { correlationId: "run-f17-324076" },
+  answerRepair: "steered",
 };
 
 function toolCallAnswer(): NormalizedResponse {
@@ -349,10 +353,10 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
     expect(gateway.circuitStatus(MODEL)).toMatchObject({ state: "closed", consecutiveFailures: 0 });
   });
 
-  // The repair window is the stream's startup. Once a chunk reached the caller — answer text here;
-  // a forwarded reasoning chunk closes the window the same way on a surface that displays reasoning
-  // — nothing may be replayed, so a later exhaustion surfaces at once and unmarked: the honest
-  // outcome of what was already shown, never a second answer appended to it.
+  // The repair window closes with the first answer delta: once answer text reached the caller,
+  // nothing may be replayed, so a later exhaustion surfaces at once and unmarked — the honest
+  // outcome of what was already shown, never a second answer appended to it. Forwarded reasoning
+  // does not close it (owner decision 2026-10-06, F17 option iii; pinned in the next describe).
   it("does not repair a streamed exhaustion once a chunk was already delivered", async () => {
     const events: ModelGatewayLogEvent[] = [];
     const requests: GatewayRequest[] = [];
@@ -897,4 +901,154 @@ describe("Gateway steered repair across a provider retry (#3873 F17, F23)", () =
       ]);
     },
   );
+});
+
+// #3873 review: the steered repair is not part of every chat call. A call that does not ask for it
+// (`answerRepair` absent) — the commit draft, interactive chat — surfaces an exhausted or empty
+// answer at once, with one provider request and no scheduled repair, as it did before F17.
+describe("Gateway steered repair is opt-in (#3873 review)", () => {
+  const { answerRepair: _steered, ...UNSTEERED } = REQUEST;
+  const failures = [
+    ["an exhausted answer", (): Error => new ProviderOutputExhaustedError(MODEL)],
+    ["an empty answer after reasoning", (): Error => new ProviderEmptyAnswerError(MODEL, [], true)],
+  ] as const;
+
+  it.each(failures)(
+    "surfaces %s at once on a buffered call that did not ask for the repair",
+    async (_label, failure) => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = bufferedAdapter([failure(), toolCallAnswer()]);
+
+      const error = await gatewayFor(scripted, events)
+        .chat(UNSTEERED)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(GatewayError);
+      expect((error as GatewayError).outputRepair).toBeUndefined();
+      expect(scripted.requests).toHaveLength(1);
+      expect(scheduledLines(events)).toEqual([]);
+    },
+  );
+
+  it.each(failures)(
+    "surfaces %s at once on a streamed call that did not ask for the repair",
+    async (_label, failure) => {
+      const events: ModelGatewayLogEvent[] = [];
+      const scripted = streamingAdapter([failure(), toolCallAnswer()]);
+
+      const error = await drain(
+        gatewayFor(scripted, events, config(provider(), true)).chatStream(UNSTEERED),
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(GatewayError);
+      expect((error as GatewayError).outputRepair).toBeUndefined();
+      expect(scripted.requests).toHaveLength(1);
+      expect(scheduledLines(events)).toEqual([]);
+    },
+  );
+});
+
+// A catalog rejection of an offered tool that carries its schema correction, like the bridge raises.
+function catalogRejection(toolCallId: string, invalidPath: string): GatewayToolCatalogError {
+  return new GatewayToolCatalogError("invalid-arguments", undefined, true, {
+    toolCallId,
+    offeredAlias: "keiko_workspace_read",
+    shape: {
+      missingRequired: [],
+      invalidPaths: [invalidPath],
+      unexpectedPropertyCount: 0,
+      droppedPathCount: 0,
+    },
+  });
+}
+
+// #3873 review: the schema correction of a buffered call is decided when the attempt that carries it
+// starts, on the retry loop's own attempt count. A steered repair sits on top of the provider's
+// attempts, so a call that exhausts once and then repeats an invalid tool call gets a correction
+// for EVERY rejection the loop retries — never a stale one re-sent with a repair line that claims a
+// correction that was not sent.
+describe("Gateway schema correction after a steered repair (#3873 review)", () => {
+  it("corrects each rejection the loop retries, on the provider's attempt count", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const scripted = bufferedAdapter([
+      new ProviderOutputExhaustedError(MODEL),
+      catalogRejection("call-a", "path.first"),
+      catalogRejection("call-b", "path.second"),
+      catalogRejection("call-c", "path.third"),
+    ]);
+
+    const failure = await gatewayFor(scripted, events)
+      .chat(REQUEST)
+      .catch((error: unknown) => error);
+
+    // maxRetries 2: three provider attempts plus the one steered repair, then the rejection surfaces.
+    expect(failure).toBeInstanceOf(GatewayToolCatalogError);
+    expect(scripted.requests).toHaveLength(4);
+    const corrections = scripted.requests.map((request) => request.messages.at(-1)?.content ?? "");
+    expect(corrections[1]).toBe(OUTPUT_EXHAUSTED_REPAIR_MESSAGE);
+    expect(corrections[2]).toContain("path.first");
+    expect(corrections[3]).toContain("path.second");
+    const repairs = events.filter((event) => event.op === "gateway.tool-catalog.repair");
+    expect(repairs.map((event) => [event.extra?.state, event.extra?.toolCallId])).toEqual([
+      ["scheduled", "call-a"],
+      ["scheduled", "call-b"],
+    ]);
+    expect(
+      expectActivityLogProof(
+        "gateway.tool-catalog.repair.emitted-line",
+        formatActivityLogProofLine(repairs[1] ?? {}),
+      ),
+    ).toMatchObject({ state: "scheduled", toolCallId: "call-b" });
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      reason: "max-retries",
+    });
+  });
+});
+
+// #3873 review: the attempts a call discarded — a steered repair's first answer, a rejected tool
+// call, a stream that failed after its usage arrived — were processed by the provider. Their
+// reported usage rides on the answer as `discardedAttemptUsage`, so the coding run's prompt
+// allowance can count them; `usage` keeps describing the answer itself.
+describe("Gateway discarded attempt usage (#3873 review)", () => {
+  function exhaustedWithUsage(promptTokens: number, completionTokens: number): Error {
+    const error = new ProviderOutputExhaustedError(MODEL);
+    error.partialUsage = { promptTokens, completionTokens, streamedChars: 0 };
+    return error;
+  }
+
+  it("reports the usage of the repaired buffered attempt beside the answer's own", async () => {
+    const scripted = bufferedAdapter([exhaustedWithUsage(1_200, 8_192), toolCallAnswer()]);
+
+    const result = await gatewayFor(scripted, []).chat(REQUEST);
+
+    expect(result.usage).toMatchObject({ promptTokens: 20, completionTokens: 30 });
+    expect(result.discardedAttemptUsage).toEqual({
+      attemptCount: 1,
+      promptTokens: 1_200,
+      completionTokens: 8_192,
+    });
+  });
+
+  it("reports the usage of the repaired streamed attempt on the done chunk", async () => {
+    const scripted = streamingAdapter([exhaustedWithUsage(900, 4_000), toolCallAnswer()]);
+
+    const chunks = await drain(
+      gatewayFor(scripted, [], config(provider(), true)).chatStream(REQUEST),
+    );
+
+    const done = chunks.at(-1);
+    expect(done?.type === "done" ? done.response.discardedAttemptUsage : undefined).toEqual({
+      attemptCount: 1,
+      promptTokens: 900,
+      completionTokens: 4_000,
+    });
+  });
+
+  it("adds nothing for an attempt that failed before the provider reported usage", async () => {
+    const scripted = bufferedAdapter([new TransportError("refused"), toolCallAnswer()]);
+
+    const result = await gatewayFor(scripted, []).chat(REQUEST);
+
+    expect(result.discardedAttemptUsage).toBeUndefined();
+  });
 });

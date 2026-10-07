@@ -167,12 +167,25 @@ function settlePromptTokenReservation(
   deps: UiHandlerDeps,
   reservation: PromptTokenReservation,
   actualPromptTokens?: number,
+  discardedPromptTokens = 0,
 ): PromptTokenSettlement {
   const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
   return applyPromptTokenSettlement(deps, reservation, {
-    promptTokens: providerReported ? actualPromptTokens : reservation.reservedPromptTokens,
+    promptTokens:
+      (providerReported ? actualPromptTokens : reservation.reservedPromptTokens) +
+      discardedPromptTokens,
     source: providerReported ? "provider-reported" : "reserved-estimate",
   });
+}
+
+/**
+ * The prompt tokens of the attempts the gateway discarded on its way to this answer (#3873 review):
+ * a steered repair's first answer, a catalog-rejected tool call, a stream that failed after its
+ * usage arrived. The provider processed them, so the run's prompt allowance (ADR-0137 D2, the only
+ * default per-run token bound) counts them beside the answer's own prompt.
+ */
+function discardedPromptTokens(response: NormalizedResponse): number {
+  return response.discardedAttemptUsage?.promptTokens ?? 0;
 }
 
 /**
@@ -589,6 +602,14 @@ const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperatio
     contentBytes: { type: "integer", dataClass: "count", required: false },
     reasoningBytes: { type: "integer", dataClass: "count", required: false },
     reasoningTokens: { type: "integer", dataClass: "count", required: false },
+    // #3873 review: the attempts of this turn the gateway discarded on its way to the answer (a
+    // steered repair's first answer, a catalog-rejected tool call, a stream that failed after its
+    // usage arrived), with their provider-reported tokens. `promptTokens` above already includes
+    // the discarded prompt tokens, because the run's allowance counts every prompt the provider
+    // processed. Absent when no attempt was discarded with reported usage.
+    discardedAttemptCount: { type: "integer", dataClass: "count", required: false },
+    discardedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    discardedCompletionTokens: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -620,6 +641,20 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     // #3878: the frames (or the one buffered answer) that carried model reasoning to the coding
     // runtime; 0 when the answer had none or the reasoning display is off. A count only.
     reasoningFrames: { type: "integer", dataClass: "count", required: false },
+    // #3873 review: the UTF-8 bytes of model reasoning the runtime actually received, beside the
+    // frames that carried them. `required: false`: lines written before this field existed lack it.
+    forwardedReasoningBytes: { type: "integer", dataClass: "count", required: false },
+    // #3873 review: on an `output-limit` turn, which byte bound ended it — the answer's or the
+    // forwarded reasoning's — so a support analysis can tell the two cuts apart.
+    limit: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["answer", "reasoning"],
+    },
+    // #3873 review: a complete buffered answer whose reasoning exceeded the reasoning byte bound is
+    // delivered without it rather than refused; `true` says the reasoning was withheld.
+    reasoningWithheld: { type: "boolean", dataClass: "closed-enum", required: false },
     // The route backstop armed for this turn (#3602 review); absent on lines written before 1.1.7.
     deadlineMs: { type: "integer", dataClass: "duration", required: false },
     // On a cancelled outcome only: which armed abort source ended the turn, so a stall that ran into
@@ -971,9 +1006,10 @@ const CODING_TURN_GATEWAY_POLICY = {
   latencyProfile: "coding-workbench",
   outagePolicy: "outage-window",
   reasoningDelivery: "forward",
+  answerRepair: "steered",
 } as const satisfies Pick<
   GatewayCallRequest,
-  "latencyProfile" | "outagePolicy" | "reasoningDelivery"
+  "latencyProfile" | "outagePolicy" | "reasoningDelivery" | "answerRepair"
 >;
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
@@ -1539,13 +1575,36 @@ interface GatewayOutcomeMetrics {
   readonly outputBytes: number;
   /** Frames (or the one buffered answer) that carried model reasoning to the runtime (#3878). */
   readonly reasoningFrames: number;
+  /** The UTF-8 bytes of reasoning those frames carried (#3873 review). */
+  readonly forwardedReasoningBytes: number;
+  /** On an `output-limit` turn, the byte bound that ended it (#3873 review). */
+  readonly limit?: "answer" | "reasoning";
+  /** A delivered buffered answer whose oversized reasoning was withheld (#3873 review). */
+  readonly reasoningWithheld?: true;
 }
 
 const NO_GATEWAY_OUTPUT: GatewayOutcomeMetrics = {
   completionTokens: 0,
   outputBytes: 0,
   reasoningFrames: 0,
+  forwardedReasoningBytes: 0,
 };
+
+/**
+ * What an outcome line can say about the gateway's steered repair (#3873, F17, F23). A line written
+ * from the settled answer or error knows whether a repair ran and how it ended; a line written
+ * before the call settled — a turn cut at a byte bound, a cancellation mid-stream — cannot know, and
+ * omits both fields (#3873 review): absent means unknown, never "no repair ran".
+ */
+type RepairEvidence =
+  | { readonly settled: true; readonly outcome: GatewayOutputRepairOutcome | undefined }
+  | { readonly settled: false };
+
+const REPAIR_NOT_SETTLED: RepairEvidence = { settled: false };
+
+function settledRepair(outcome: GatewayOutputRepairOutcome | undefined): RepairEvidence {
+  return { settled: true, outcome };
+}
 
 // The gateway's one steered repair of an exhausted or empty answer (#3873, F17, F23), read off what
 // the call settled with: `recovered` rides on the response (`NormalizedResponse.outputRepair`), the
@@ -1554,13 +1613,15 @@ function outputRepairOf(error: unknown): GatewayOutputRepairOutcome | undefined 
   return error instanceof GatewayError ? error.outputRepair : undefined;
 }
 
-function repairEvidence(repair: GatewayOutputRepairOutcome | undefined): {
-  readonly repairAttempted: boolean;
+function repairEvidence(evidence: RepairEvidence): {
+  readonly repairAttempted?: boolean;
   readonly repairOutcome?: GatewayOutputRepairOutcome;
 } {
+  if (!evidence.settled) return {};
+  const { outcome } = evidence;
   return {
-    repairAttempted: repair !== undefined,
-    ...(repair === undefined ? {} : { repairOutcome: repair }),
+    repairAttempted: outcome !== undefined,
+    ...(outcome === undefined ? {} : { repairOutcome: outcome }),
   };
 }
 
@@ -1571,7 +1632,7 @@ function recordGatewayOutcome(
   cancellation: GatewayRequestCancellation,
   outcome: CodingSidecarGatewayRunOutcome,
   metrics: GatewayOutcomeMetrics,
-  repair?: GatewayOutputRepairOutcome,
+  repair: RepairEvidence,
 ): void {
   const { completionTokens, outputBytes } = metrics;
   getServerLogger().info(
@@ -1584,6 +1645,9 @@ function recordGatewayOutcome(
         completionTokens,
         outputBytes,
         reasoningFrames: metrics.reasoningFrames,
+        forwardedReasoningBytes: metrics.forwardedReasoningBytes,
+        ...(metrics.limit === undefined ? {} : { limit: metrics.limit }),
+        ...(metrics.reasoningWithheld === undefined ? {} : { reasoningWithheld: true }),
         deadlineMs: cancellation.deadlineMs,
         ...gatewayOutcomeCancellationCause(cancellation, outcome),
         ...repairEvidence(repair),
@@ -1915,7 +1979,8 @@ function logGatewayTurnFailure(
         published: publicationReason === "published",
         publicationReason,
         runtimeRetry,
-        ...repairEvidence(outputRepairOf(error)),
+        // The turn failed with a settled gateway error, which says whether a repair ran.
+        ...repairEvidence(settledRepair(outputRepairOf(error))),
         ...(error === undefined || frames === undefined ? {} : { frames }),
         ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
         completeness: "complete",
@@ -2715,7 +2780,16 @@ function settleUndeliverableBufferedStream(
   dispatch: GatewayChatDispatchContext,
 ): typeof STREAMING {
   const { deps, runId, cancellation, promptTokenReservation } = dispatch;
-  recordGatewayOutcome(ctx, deps, runId, cancellation, "cancelled", NO_GATEWAY_OUTPUT);
+  // No provider call was started, so no repair can have run.
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    cancellation,
+    "cancelled",
+    NO_GATEWAY_OUTPUT,
+    settledRepair(undefined),
+  );
   releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
   return STREAMING;
 }
@@ -2757,7 +2831,7 @@ function settleFailedGatewayChat(
     cancellation,
     cancelled ? "cancelled" : "failed",
     NO_GATEWAY_OUTPUT,
-    outputRepairOf(error),
+    settledRepair(outputRepairOf(error)),
   );
   const spendReason = gatewaySpendRejectionReason(error);
   const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
@@ -2789,6 +2863,7 @@ async function executeBufferedGatewayChat(
     deps,
     promptTokenReservation,
     response.usage.promptTokens,
+    discardedPromptTokens(response),
   );
   const output = outputMetrics(response);
   const usage = completionUsage(response, output.outputBytes, 0);
@@ -2812,25 +2887,35 @@ async function executeBufferedGatewayChat(
       : settleBufferedOpenAiStreamError(stream, "error");
   }
   const maxOutputTokens = request.maxOutputTokens ?? 1;
-  if (
-    exceedsOutputBudget(metrics, maxOutputTokens) ||
-    exceedsReasoningBudget(response, maxOutputTokens)
-  ) {
-    record("output-limit");
+  if (exceedsOutputBudget(metrics, maxOutputTokens)) {
+    record("output-limit", { limit: "answer" });
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "length");
   }
-  return deliverBufferedGatewayAnswer(ctx, modelAlias, stream, settledResponse, record);
+  return deliverBufferedGatewayAnswer(
+    ctx,
+    modelAlias,
+    stream,
+    withinReasoningBudget(settledResponse, maxOutputTokens),
+    record,
+  );
+}
+
+interface BufferedReasoningDelivery {
+  readonly limit?: "answer";
+  readonly reasoningFrames?: number;
+  readonly forwardedReasoningBytes?: number;
+  readonly reasoningWithheld?: true;
 }
 
 type RecordBufferedOutcome = (
   outcome: CodingSidecarGatewayRunOutcome,
-  reasoningFrames?: number,
+  delivery?: BufferedReasoningDelivery,
 ) => void;
 
-// The outcome line of a buffered turn: the answer's counts, the reasoning frames it carried to the
-// runtime (#3878) and, when the answer came from the gateway's steered repair, that repair (#3873).
+// The outcome line of a buffered turn: the answer's counts, the reasoning it carried to the
+// runtime (#3878) or withheld, and — from the settled answer — the gateway's steered repair (#3873).
 function bufferedOutcomeRecorder(
   ctx: RouteContext,
   dispatch: GatewayChatDispatchContext,
@@ -2838,34 +2923,58 @@ function bufferedOutcomeRecorder(
   response: NormalizedResponse,
 ): RecordBufferedOutcome {
   const { deps, runId, cancellation } = dispatch;
-  return (outcome, reasoningFrames = 0): void => {
+  return (outcome, delivery = {}): void => {
     recordGatewayOutcome(
       ctx,
       deps,
       runId,
       cancellation,
       outcome,
-      { ...metrics, reasoningFrames },
-      response.outputRepair,
+      { reasoningFrames: 0, forwardedReasoningBytes: 0, ...metrics, ...delivery },
+      settledRepair(response.outputRepair),
     );
   };
+}
+
+// A buffered answer is complete when it arrives: its own output bound decides whether it may be
+// delivered, never the size of the reasoning beside it (#3873 review). A reasoning over the byte
+// bound of one model attempt is withheld from the runtime — display-only text — and the answer is
+// delivered without it; the outcome line says so (`reasoningWithheld`).
+function withinReasoningBudget(
+  response: NormalizedResponse,
+  maxOutputTokens: number,
+): BoundedBufferedAnswer {
+  if (!exceedsReasoningBudget(response, maxOutputTokens)) return { response, withheld: false };
+  const { reasoning: _withheld, ...withoutReasoning } = response;
+  return { response: withoutReasoning, withheld: true };
+}
+
+interface BoundedBufferedAnswer {
+  readonly response: NormalizedResponse;
+  readonly withheld: boolean;
 }
 
 function deliverBufferedGatewayAnswer(
   ctx: RouteContext,
   modelAlias: string,
   stream: BufferedOpenAiStreamSession | undefined,
-  response: NormalizedResponse,
+  answer: BoundedBufferedAnswer,
   record: RecordBufferedOutcome,
 ): RouteResult | typeof STREAMING {
-  const reasoningFrames = response.reasoning === undefined ? 0 : 1;
+  const { response } = answer;
+  const delivery: BufferedReasoningDelivery = {
+    reasoningFrames: response.reasoning === undefined ? 0 : 1,
+    forwardedReasoningBytes:
+      response.reasoning === undefined ? 0 : Buffer.byteLength(response.reasoning, "utf8"),
+    ...(answer.withheld ? { reasoningWithheld: true } : {}),
+  };
   if (stream === undefined) {
-    record("accepted", reasoningFrames);
+    record("accepted", delivery);
     return openAiResponse(modelAlias, response);
   }
   completeBufferedOpenAiStream(stream, response);
   const delivered = ctx.res.writableEnded && !ctx.res.destroyed;
-  record(delivered ? "accepted" : "cancelled", delivered ? reasoningFrames : 0);
+  record(delivered ? "accepted" : "cancelled", delivered ? delivery : {});
   return STREAMING;
 }
 
@@ -2889,7 +2998,7 @@ async function streamGatewayChat(
       dispatch.cancellation,
       "failed",
       NO_GATEWAY_OUTPUT,
-      outputRepairOf(error),
+      settledRepair(outputRepairOf(error)),
     );
     const failureCode = gatewayTurnFailureCode(error);
     const runtimeRetry = runtimeRetryFor(error, failureCode);
@@ -3027,7 +3136,8 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
   );
   if (!opened) {
     ctx.res.destroy();
-    recordSessionOutcome(session, "cancelled");
+    // The gateway's generator was never pulled: no provider call, so no repair can have run.
+    recordSessionOutcome(session, "cancelled", settledRepair(undefined));
     return false;
   }
   return true;
@@ -3036,7 +3146,8 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
 function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
-  repair?: GatewayOutputRepairOutcome,
+  repair: RepairEvidence,
+  limit?: "answer" | "reasoning",
 ): void {
   const { ctx, deps, runId, cancellation, metrics } = session;
   recordGatewayOutcome(
@@ -3049,6 +3160,8 @@ function recordSessionOutcome(
       completionTokens: metrics.completionTokens,
       outputBytes: metrics.outputBytes,
       reasoningFrames: metrics.reasoningFrames,
+      forwardedReasoningBytes: metrics.forwardedReasoningBytes,
+      ...(limit === undefined ? {} : { limit }),
     },
     repair,
   );
@@ -3073,12 +3186,12 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
   for (;;) {
     if (isGatewayRequestCancelled(cancellationSignal)) {
       await iterator.return?.();
-      recordSessionOutcome(session, "cancelled");
+      recordSessionOutcome(session, "cancelled", REPAIR_NOT_SETTLED);
       return;
     }
     const next = await iterator.next();
     if (cancellationSignal.aborted) {
-      recordSessionOutcome(session, "cancelled");
+      recordSessionOutcome(session, "cancelled", REPAIR_NOT_SETTLED);
       return;
     }
     if (next.done) break;
@@ -3113,12 +3226,13 @@ function streamGatewayDelta(session: GatewayStreamSession, token: string): Promi
   metrics.completionTokens = Math.ceil(metrics.outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT);
   const budget = { completionTokens: metrics.completionTokens, outputBytes: metrics.outputBytes };
   const overBudget = exceedsOutputBudget(budget, request.maxOutputTokens ?? 1);
-  return forwardStreamText(session, { content: token }, overBudget);
+  return forwardStreamText(session, { content: token }, overBudget ? "answer" : undefined);
 }
 
-// The reasoning passages one turn may carry: the answer attempt's and, after an answer that
-// exhausted its budget on reasoning alone, its one steered repair's (#3873 F17, option iii) —
-// the second passage is the repair working, not an overgrown reasoning.
+// The reasoning passages one turn may carry: the first attempt that forwards reasoning and the
+// gateway's one steered repair (#3873 F17, F23, option iii). The gateway forwards no further
+// passage — a provider retry after forwarded reasoning streams its reasoning undelivered — so the
+// second passage is the repair working, not an overgrown reasoning.
 const REASONING_PASSAGES_PER_TURN = 2;
 
 // #3878: the model's reasoning reaches the coding runtime as `delta.reasoning_content`, the field
@@ -3132,28 +3246,36 @@ async function streamGatewayReasoning(
 ): Promise<boolean> {
   const { request, metrics } = session;
   const counted = incrementalUtf8ByteCount(token, metrics.previousReasoningEndedWithHighSurrogate);
-  metrics.forwardedReasoningBytes += counted.bytes;
-  metrics.previousReasoningEndedWithHighSurrogate = counted.endsWithHighSurrogate;
+  const total = metrics.forwardedReasoningBytes + counted.bytes;
   const overBudget =
-    metrics.forwardedReasoningBytes >
-    outputByteBudget(request.maxOutputTokens ?? 1) * REASONING_PASSAGES_PER_TURN;
-  const forwarded = await forwardStreamText(session, { reasoning_content: token }, overBudget);
-  if (forwarded) metrics.reasoningFrames += 1;
+    total > outputByteBudget(request.maxOutputTokens ?? 1) * REASONING_PASSAGES_PER_TURN;
+  const forwarded = await forwardStreamText(
+    session,
+    { reasoning_content: token },
+    overBudget ? "reasoning" : undefined,
+  );
+  if (forwarded) {
+    // Only bytes the runtime actually received count as forwarded (#3873 review).
+    metrics.forwardedReasoningBytes = total;
+    metrics.previousReasoningEndedWithHighSurrogate = counted.endsWithHighSurrogate;
+    metrics.reasoningFrames += 1;
+  }
   return forwarded;
 }
 
-// One text frame of a live turn, or its end: at the output budget the turn ends with `length`, and
-// a frame that no longer reaches the client ends it as cancelled. Returns true when the stream may
-// continue with the next chunk.
+// One text frame of a live turn, or its end: past a byte bound (`limit`: the answer's or the
+// forwarded reasoning's) the turn ends with `length`, and a frame that no longer reaches the client
+// ends it as cancelled. The gateway call has not settled at either point, so neither line can say
+// whether a steered repair ran. Returns true when the stream may continue with the next chunk.
 async function forwardStreamText(
   session: GatewayStreamSession,
   delta: Readonly<Record<string, string>>,
-  overBudget: boolean,
+  limit: "answer" | "reasoning" | undefined,
 ): Promise<boolean> {
   const { ctx, id, created, modelId, iterator } = session;
-  if (overBudget) {
+  if (limit !== undefined) {
     await iterator.return?.();
-    recordSessionOutcome(session, "output-limit");
+    recordSessionOutcome(session, "output-limit", REPAIR_NOT_SETTLED, limit);
     writeSessionTerminal(session, "length");
     return false;
   }
@@ -3165,7 +3287,7 @@ async function forwardStreamText(
   if (!wrote) {
     ctx.res.destroy();
     await iterator.return?.();
-    recordSessionOutcome(session, "cancelled");
+    recordSessionOutcome(session, "cancelled", REPAIR_NOT_SETTLED);
     return false;
   }
   return true;
@@ -3183,11 +3305,12 @@ async function streamGatewayResponse(
     session.deps,
     promptTokenReservation,
     response.usage.promptTokens,
+    discardedPromptTokens(response),
   );
   settleStreamCompletionUsage(session, response, outcome, promptSettlement);
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
-    recordSessionOutcome(session, "output-limit", response.outputRepair);
+    recordSessionOutcome(session, "output-limit", settledRepair(response.outputRepair), "answer");
     writeSessionTerminal(session, "length");
     return;
   }
@@ -3206,7 +3329,7 @@ async function streamGatewayResponse(
     if (!wrote) {
       ctx.res.destroy();
       await iterator.return?.();
-      recordSessionOutcome(session, "cancelled", response.outputRepair);
+      recordSessionOutcome(session, "cancelled", settledRepair(response.outputRepair));
       return;
     }
   }
@@ -3214,7 +3337,7 @@ async function streamGatewayResponse(
   recordSessionOutcome(
     session,
     ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
-    response.outputRepair,
+    settledRepair(response.outputRepair),
   );
 }
 
@@ -3277,14 +3400,25 @@ interface AnswerShares {
   readonly contentBytes: number;
   readonly reasoningBytes: number;
   readonly reasoningTokens?: number;
+  readonly discardedAttemptCount?: number;
+  readonly discardedPromptTokens?: number;
+  readonly discardedCompletionTokens?: number;
 }
 
 function answerShares(response: NormalizedResponse): AnswerShares {
   const { reasoningBytes, reasoningTokens } = response.usage;
+  const discarded = response.discardedAttemptUsage;
   return {
     contentBytes: Buffer.byteLength(response.content, "utf8"),
     reasoningBytes: reasoningBytes ?? 0,
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    ...(discarded === undefined
+      ? {}
+      : {
+          discardedAttemptCount: discarded.attemptCount,
+          discardedPromptTokens: discarded.promptTokens,
+          discardedCompletionTokens: discarded.completionTokens,
+        }),
   };
 }
 
@@ -3294,6 +3428,22 @@ function exceedsReasoningBudget(response: NormalizedResponse, maxOutputTokens: n
     response.reasoning !== undefined &&
     Buffer.byteLength(response.reasoning, "utf8") > outputByteBudget(maxOutputTokens)
   );
+}
+
+function discardedAttemptFields(shares: AnswerShares): {
+  readonly discardedAttemptCount?: number;
+  readonly discardedPromptTokens?: number;
+  readonly discardedCompletionTokens?: number;
+} {
+  const { discardedAttemptCount, discardedPromptTokens, discardedCompletionTokens } = shares;
+  if (
+    discardedAttemptCount === undefined ||
+    discardedPromptTokens === undefined ||
+    discardedCompletionTokens === undefined
+  ) {
+    return {};
+  }
+  return { discardedAttemptCount, discardedPromptTokens, discardedCompletionTokens };
 }
 
 function logGatewayCompletionUsage(
@@ -3320,6 +3470,7 @@ function logGatewayCompletionUsage(
         ...(metrics.reasoningTokens === undefined
           ? {}
           : { reasoningTokens: metrics.reasoningTokens }),
+        ...discardedAttemptFields(metrics),
         completeness: "complete",
         loss: "none",
       },
@@ -3333,10 +3484,10 @@ function settleGatewayStreamError(
   repair?: GatewayOutputRepairOutcome,
 ): void {
   if (session.cancellation.signal.aborted) {
-    recordSessionOutcome(session, "cancelled", repair);
+    recordSessionOutcome(session, "cancelled", settledRepair(repair));
     return;
   }
-  recordSessionOutcome(session, "failed", repair);
+  recordSessionOutcome(session, "failed", settledRepair(repair));
   if (runtimeRetry === "refused") {
     const { ctx, id, created, modelId, cancellation } = session;
     writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport });

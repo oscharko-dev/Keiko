@@ -381,12 +381,20 @@ export type RetryRepairReason = "output-exhausted-repair" | "empty-answer-repair
 
 /**
  * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
- * resumes after it, so the one steered repair of a streamed answer that failed after nothing but
- * forwarded reasoning is decided, logged and bounded exactly like a repair before the first chunk.
- * The failed attempt is the resumed loop's attempt 1.
+ * resumes after it, so a streamed answer that failed after nothing but forwarded reasoning — its
+ * one steered repair, a schema correction, or a provider retry under the call's policy — is
+ * decided, logged and bounded exactly like a failure before the first chunk.
  */
 export interface RetryResume {
   readonly failedAttempt: Error;
+  /**
+   * How many attempts the call has made, the failed one included, and how many of them were the
+   * steered repair. A stream can be resumed more than once, so the counts carry over and the call
+   * keeps ONE attempt count and ONE repair across its loops (#3873 review). Absent: the failed
+   * attempt is attempt 1 and no repair ran.
+   */
+  readonly attempts?: number | undefined;
+  readonly repairs?: number | undefined;
 }
 
 // The reason a further attempt was scheduled, on the scheduled line.
@@ -396,8 +404,9 @@ type RetryScheduledReason = "retryable-error" | RetryRepairReason;
 // budget (#3873, F17), and one that ended after reasoning without a tool call or any text (F23) —
 // an empty answer that carried no reasoning is the model's final word and gets none (#3610).
 // `Gateway` sends the corrected request on the attempt that follows; the loop only grants that
-// attempt, once. The single classification every path consults: the buffered attempt, the streamed
-// startup, and the stream resumed after forwarded reasoning.
+// attempt, once, and only on a call whose retry configuration carries it (`RetryConfig.repair`).
+// The single classification every path consults: the buffered attempt, the streamed startup, and
+// the stream resumed after forwarded reasoning.
 export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined {
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted-repair";
   return error instanceof ProviderEmptyAnswerError && error.afterReasoning
@@ -914,8 +923,8 @@ export function executeWithRetry<T>(
       sink: resolveLogSink(logContext.sink),
       elapsed: logTimer(),
       start: clock.now(),
-      attempt: 1,
-      repairs: 0,
+      attempt: resume?.attempts ?? 1,
+      repairs: resume?.repairs ?? 0,
       lastError: undefined,
     };
     const advance = (): void => {
@@ -933,8 +942,9 @@ export function executeWithRetry<T>(
       advance();
       return;
     }
-    // The failed attempt is attempt 1: its repair or retry decision, and the line that says which,
-    // come first; a stop rejects with the failure itself, exactly as the loop would have.
+    // The failed attempt comes first (attempt 1, or the call's count so far): its repair or retry
+    // decision, and the line that says which; a stop rejects with the failure itself, exactly as
+    // the loop would have.
     void recordFailedAttempt(state, resume.failedAttempt).then(() => {
       state.attempt += 1;
       advance();
@@ -981,15 +991,16 @@ export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
 // the budget derived from it bounds the call. Every chat call — buffered, and a stream before its
-// first content — derives its policy from here, so the one steered repair of an exhausted or empty
-// answer (#3873, F17, F23) is part of it rather than re-attached by each caller.
+// first content — derives its policy from here. The one steered repair of an exhausted or empty
+// answer (#3873, F17, F23) is NOT part of it: only a call that asks for it with the explicit
+// `answerRepair: "steered"` signal gets it (`gateway.ts` `callRetryConfig`), so an interactive
+// surface such as the commit draft never makes a hidden second generation (#3873 review).
 export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
   return {
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
     attemptTimeoutMs: chatAttemptTimeoutMs(provider),
     timeoutMs: providerRequestBudgetMs(provider),
-    repair: steeredAnswerRepair,
   };
 }
 

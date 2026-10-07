@@ -961,11 +961,26 @@ function assertUsableAssistantResponse(
   }
   // The budget ran out before any content: a reasoning model spent it on reasoning (#3591).
   if (response.finishReason === "length") {
-    throw new ProviderOutputExhaustedError(modelId, secrets);
+    throw withAnswerUsage(new ProviderOutputExhaustedError(modelId, secrets), response);
   }
   // The answer completed with nothing usable in it: the model's result, not a broken stream (#3610).
   // Whether reasoning preceded it decides if the gateway steers a repair for it (#3873, F23).
-  throw new ProviderEmptyAnswerError(modelId, secrets, carriedReasoning(response));
+  throw withAnswerUsage(
+    new ProviderEmptyAnswerError(modelId, secrets, carriedReasoning(response)),
+    response,
+  );
+}
+
+// The provider answered, and its usage is known: it rides on the error like a failed stream's
+// partial usage, so a call that discards this answer for a steered repair can still count what the
+// provider processed (#3873 review). Counts only.
+function withAnswerUsage<E extends GatewayError>(error: E, response: NormalizedResponse): E {
+  error.partialUsage = {
+    promptTokens: response.usage.promptTokens,
+    completionTokens: response.usage.completionTokens,
+    streamedChars: 0,
+  };
+  return error;
 }
 
 // A provider error body is untrusted and may be megabytes long (the chat path caps it at 10 MB).

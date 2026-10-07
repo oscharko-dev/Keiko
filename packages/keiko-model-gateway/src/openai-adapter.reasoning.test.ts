@@ -276,6 +276,36 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
     },
   );
 
+  // #3873 review: the provider answered and reported its usage, so the failure carries it as counts
+  // — the gateway adds it to the call's discarded usage when it steers a repair of this answer.
+  it.each([
+    ["an exhausted", "length", ProviderOutputExhaustedError],
+    ["an empty", "stop", ProviderEmptyAnswerError],
+  ] as const)(
+    "carries the provider-reported usage of %s buffered answer on the failure",
+    async (_label, finishReason, failureClass) => {
+      const adapter = adapterAnswering(() =>
+        json({
+          choices: [
+            {
+              finish_reason: finishReason,
+              message: { role: "assistant", content: "", reasoning_content: REASONING_TEXT },
+            },
+          ],
+          usage: { prompt_tokens: 1_200, completion_tokens: 8_192 },
+        }),
+      );
+
+      const failure = await adapter.call(REQUEST, CONFIG).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(failureClass);
+      expect(failure).toMatchObject({
+        partialUsage: { promptTokens: 1_200, completionTokens: 8_192, streamedChars: 0 },
+      });
+      expect(JSON.stringify(failure)).not.toContain(REASONING_TEXT);
+    },
+  );
+
   it("keeps a reasoning-only answer that spent its budget an exhausted-output failure, not an empty one", async () => {
     const adapter = adapterAnswering(() =>
       sse([streamDelta({ reasoning_content: "thinking only" }), finish("length"), DONE]),

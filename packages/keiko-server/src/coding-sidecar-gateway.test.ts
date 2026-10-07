@@ -37,6 +37,7 @@ import {
   ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
+  TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -2956,6 +2957,9 @@ describe("coding-sidecar gateway", () => {
       cancellationCause: "client-disconnect",
       deadlineMs: expect.any(Number) as number,
     });
+    // #3873 review: the gateway call never settled, so the line cannot know whether a steered
+    // repair was running (a disconnect during a repair looks the same) and says nothing about it.
+    expect(outcome?.extra).not.toHaveProperty("repairAttempted");
   });
 
   // #3602 review: a stream that stalls until the route backstop fires used to leave the same
@@ -6461,9 +6465,187 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     expect(response.body()).not.toContain("never sent");
     expect(response.body()).not.toContain(endless.slice(0, 64));
     expect(response.body()).toContain('"finish_reason":"length"');
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    // #3873 review: the line names the reasoning bound and the bytes the runtime received, and —
+    // written before the gateway call settled — says nothing about a steered repair it cannot know.
+    expect(outcome?.extra).toMatchObject({
+      outcome: "output-limit",
+      limit: "reasoning",
+      reasoningFrames: 0,
+      forwardedReasoningBytes: 0,
+    });
+    expect(outcome?.extra).not.toHaveProperty("repairAttempted");
+    expect(outcome?.extra).not.toHaveProperty("repairOutcome");
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.outcome.line",
+        formatActivityLogProofLine(outcome ?? {}),
+      ),
+    ).toMatchObject({ outcome: "output-limit", limit: "reasoning" });
+  });
+
+  it("names the answer bound of an output-limit turn and the reasoning the runtime received", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-answer-limit" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) =>
+        async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          yield { type: "reasoning", token: "Prüfe" };
+          yield { type: "delta", token: "a".repeat(1_000_000) };
+          yield { type: "done", response: assistantResponse("azure-coding-model") };
+        },
+    );
+
+    await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps);
+
+    expect(response.body()).toContain('"finish_reason":"length"');
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "output-limit",
+      limit: "answer",
+      reasoningFrames: 1,
+      forwardedReasoningBytes: Buffer.byteLength("Prüfe", "utf8"),
+    });
+    expect(outcome?.extra).not.toHaveProperty("repairAttempted");
+  });
+
+  // #3873 review: a buffered answer is complete when it arrives, so the size of the reasoning beside
+  // it never refuses it (before, a reasoning averaging more than four bytes per token turned a valid
+  // answer into a 503). The reasoning is display-only: it is withheld, and the line says so.
+  it("delivers a complete buffered answer and withholds a reasoning that outgrew its bound", async () => {
+    const sink = captureServerLog("info");
+    const reasoned: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "Fixed.",
+      reasoning: "r".repeat(1_000_000),
+    };
+    const answer = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix it" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-withheld-reasoning" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.resolve(reasoned),
+      ),
+    );
+
+    assertRouteResult(answer);
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({ choices: [{ message: { content: "Fixed." } }] });
+    expect(JSON.stringify(answer.body)).not.toContain("reasoning_content");
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "accepted",
+      reasoningWithheld: true,
+      reasoningFrames: 0,
+      forwardedReasoningBytes: 0,
+      repairAttempted: false,
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.outcome.line",
+        formatActivityLogProofLine(outcome ?? {}),
+      ),
+    ).toMatchObject({ outcome: "accepted", reasoningWithheld: true });
+  });
+
+  // #3873 review: the attempts the gateway discarded on its way to the answer — a steered repair's
+  // first answer, a rejected tool call — were processed by the provider, so the run's prompt
+  // allowance counts them beside the answer's own prompt, and the usage line names them.
+  it("counts the prompt tokens of the attempts the gateway discarded against the run allowance", async () => {
+    const sink = captureServerLog("info");
+    const settlePromptTokens = vi.fn(
+      (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
+    );
+    const repaired: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      outputRepair: "recovered",
+      discardedAttemptUsage: { attemptCount: 1, promptTokens: 1_200, completionTokens: 8_192 },
+    };
+    const answer = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix it" }],
+        tools: modelVisibleTools(),
+      }),
+      {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-discarded" } }),
+          (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+            Promise.resolve(repaired),
+        ),
+        runtimeCapabilityAuthenticator: {
+          authenticate: () => ({ ok: true, binding: { runId: "run-discarded" } }),
+          reservePromptTokens: () => ({ ok: true, runId: "run-discarded" }),
+          settlePromptTokens,
+        },
+      },
+    );
+
+    assertRouteResult(answer);
+    expect(answer.status).toBe(200);
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, , actual] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(actual).toBe(12 + 1_200);
+    const usage = sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled");
+    expect(usage?.extra).toMatchObject({
+      promptTokens: 12 + 1_200,
+      promptSource: "provider-reported",
+      discardedAttemptCount: 1,
+      discardedPromptTokens: 1_200,
+      discardedCompletionTokens: 8_192,
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.usage-settled.line",
+        formatActivityLogProofLine(usage ?? {}),
+      ),
+    ).toMatchObject({ discardedAttemptCount: 1 });
+  });
+
+  // #3873 review: a stream that already delivered answer text cannot be replayed without
+  // duplicating it, so a provider failure after it ends the turn with `finish_reason: "error"` and
+  // leaves the retry to the runtime (`runtimeRetry=allowed`). A failure while only reasoning was
+  // delivered is retried inside the gateway under the turn's outage policy (gateway tests).
+  it("ends a live turn whose provider failed after answer text with an error the runtime may retry", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-after-text" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            throw new TransportError("connection reset after answer text");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).toContain("partial");
+    expect(response.body()).toContain('"finish_reason":"error"');
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
-    ).toMatchObject({ outcome: "output-limit", reasoningFrames: 0 });
+    ).toMatchObject({ outcome: "failed", repairAttempted: false });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runId: "run-after-text", runtimeRetry: "allowed" });
   });
 });
 
@@ -6476,9 +6658,22 @@ describe("admittedOutputTokens — coding turns reserve room for reasoning (#387
   const WINDOW = 131_072;
   const PROMPT = 20_000;
 
-  function codingBounds(maxOutputTokens: number): CodingWorkbenchSidecarGatewayRunMetadata {
+  function codingBounds(
+    maxOutputTokens: number,
+    route: { readonly streaming?: boolean; readonly codingStreaming?: "on" | "off" } = {},
+  ): CodingWorkbenchSidecarGatewayRunMetadata {
+    const config = configValue(
+      provider(),
+      capability({
+        contextWindow: WINDOW,
+        maxOutputTokens,
+        ...(route.streaming === undefined ? {} : { streaming: route.streaming }),
+      }),
+    );
     const result = resolveCodingSafeSidecarGatewayProfile(
-      configValue(provider(), capability({ contextWindow: WINDOW, maxOutputTokens })),
+      route.codingStreaming === undefined
+        ? config
+        : { ...config, codingStreaming: route.codingStreaming },
       { modelId: "azure-coding-model" },
     );
     if (result.status !== "available") throw new Error("expected an available coding profile");
@@ -6508,6 +6703,17 @@ describe("admittedOutputTokens — coding turns reserve room for reasoning (#387
   it("shrinks the coding reserve to what the prompt leaves after the safety margin", () => {
     // 131,072 window, 4,096 safety margin at that size: a 120,000-token prompt leaves 6,976.
     expect(admittedOutputTokens(codingBounds(0), 120_000)).toBe(WINDOW - 120_000 - 4_096);
+  });
+
+  // #3873 review: a buffered coding turn is one whole-body read under the buffered attempt bound.
+  // At self-hosted throughput the larger reserve would outlive it and turn a runaway answer into a
+  // provider timeout the breaker counts and nothing repairs, so it keeps the shared reserve, and
+  // the runaway ends as an exhausted answer the gateway steers a repair for.
+  it.each([
+    ["a route that does not stream", { streaming: false }],
+    ["coding streaming switched off", { codingStreaming: "off" }],
+  ] as const)("keeps the shared 8,192 reserve on %s", (_label, route) => {
+    expect(admittedOutputTokens(codingBounds(0, route), PROMPT)).toBe(8_192);
   });
 });
 
