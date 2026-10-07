@@ -872,6 +872,7 @@ export function CodingWorkbenchWindow({
     actions,
     codingModels,
     catalogInconclusive(chatCatalog, catalogSettled),
+    configuredCodingModelIds(chatCatalog),
   );
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
@@ -976,21 +977,40 @@ function catalogInconclusive(catalog: ChatSessionCatalog | null, settled: boolea
   return (catalog?.models.length ?? 0) === 0 && !settled;
 }
 
+function configuredCodingModelIds(
+  catalog: ChatSessionCatalog | null,
+): readonly string[] | undefined {
+  return catalog?.configuredModelIds;
+}
+
 function useCodingModelSelection(
   state: CodingWorkbenchRuntimeState,
   actions: CodingWorkbenchRuntimeActions,
   models: readonly ModelCapability[],
   catalogEmpty: boolean,
+  configuredModelIds: readonly string[] | undefined,
 ): void {
+  const selectionPending =
+    state.selectedModelId !== null &&
+    configuredModelIds?.includes(state.selectedModelId) === true &&
+    !models.some((model) => model.id === state.selectedModelId);
+  const catalogUnavailable = catalogEmpty || selectionPending;
   const selected = models.find((model) => model.id === state.selectedModelId);
   useEffect(() => {
-    if (state.runtimePreference !== "managed-gateway" || catalogEmpty) return;
+    if (state.runtimePreference !== "managed-gateway" || catalogUnavailable) return;
     // #3873: the operator's saved choice while the gateway still offers it, else the default.
     const next = selected?.id ?? offeredSavedCodingModel(models)?.id ?? models[0]?.id ?? null;
     if (next !== state.selectedModelId) actions.setSelectedModel(next);
-  }, [actions, catalogEmpty, models, selected?.id, state.runtimePreference, state.selectedModelId]);
+  }, [
+    actions,
+    catalogUnavailable,
+    models,
+    selected?.id,
+    state.runtimePreference,
+    state.selectedModelId,
+  ]);
   useEffect(() => {
-    if (catalogEmpty) return;
+    if (catalogUnavailable) return;
     const efforts = selected?.reasoningEfforts ?? [];
     const currentAllowed =
       state.reasoningEffort !== null && efforts.includes(state.reasoningEffort);
@@ -998,7 +1018,7 @@ function useCodingModelSelection(
       ? state.reasoningEffort
       : (efforts.find((effort) => effort === "medium") ?? efforts[0] ?? null);
     if (next !== state.reasoningEffort) actions.setReasoningEffort(next);
-  }, [actions, catalogEmpty, selected, state.reasoningEffort]);
+  }, [actions, catalogUnavailable, selected, state.reasoningEffort]);
 }
 
 interface WorkbenchContentProps {

@@ -426,6 +426,50 @@ describe("useChatSession bootstrap", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a deliberate choice through a background readiness outage and restores it", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    act(() => result.current.setSelectedModel("chat-alt"));
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live" }), model({ id: "chat-alt", conversationReady: false })],
+    });
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.noEligibleModels).toBe(true);
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
+    });
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.selectedModel).toBe("chat-alt");
+    unmount();
+    vi.useRealTimers();
+  });
+
+  it("clears only the recovered catalog error after a background read succeeds", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const { result, unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    vi.mocked(fetchModels).mockRejectedValueOnce(new TypeError("Synthetic catalog failure."));
+    act(() => requestGatewayModelCatalogRefresh());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.error).toContain("Synthetic catalog failure.");
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.selectedModel).toBe("chat-live");
+    unmount();
+    vi.useRealTimers();
+  });
+
   it("honors a child window binding immediately after bootstrap", async () => {
     const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
     const boundChat = chat({ id: "chat-bound", updatedAt: 10 });

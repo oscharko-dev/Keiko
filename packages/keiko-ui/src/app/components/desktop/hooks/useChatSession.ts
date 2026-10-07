@@ -1480,6 +1480,7 @@ export interface UseChatSessionResult {
   models: ModelCapability[];
   /** True when the server catalog contains configured models, even if none is conversation-ready. */
   readonly configuredModelsAvailable?: boolean | undefined;
+  readonly configuredModelIds?: readonly string[] | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // undefined when no conversation-eligible model is configured (AC #1 / #4).
@@ -1576,6 +1577,7 @@ interface SessionState {
   messages: ChatMessage[];
   models: ModelCapability[];
   configuredModelsAvailable: boolean;
+  configuredModelIds: readonly string[];
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1669,6 +1671,7 @@ const INITIAL_STATE: SessionState = {
   messages: [],
   models: [],
   configuredModelsAvailable: false,
+  configuredModelIds: [],
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
@@ -2179,6 +2182,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   // create/send decides honestly; only an observed `false` filters out.
   const chatModels = modelPayload.models.filter(isUsableConversationModel);
   const configuredModelsAvailable = modelPayload.models.length > 0;
+  const configuredModelIds = modelPayload.models.map((model) => model.id);
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects();
@@ -2195,6 +2199,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     return {
       models: chatModels,
       configuredModelsAvailable,
+      configuredModelIds,
       selectedModel: selection.id,
       selectedModelElected: selection.elected,
       projects: Array.from(projects),
@@ -2214,6 +2219,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     return {
       models: chatModels,
       configuredModelsAvailable,
+      configuredModelIds,
       selectedModel: defaultModel,
       selectedModelElected: true,
       projects: Array.from(projects),
@@ -2235,6 +2241,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   return {
     models: chatModels,
     configuredModelsAvailable,
+    configuredModelIds,
     selectedModel: created.chat.selectedModel,
     // The server's walk elected this model for the auto-created chat; no user chose it.
     selectedModelElected: true,
@@ -2274,28 +2281,48 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   return pending.then(cloneSessionPatch);
 }
 
+function sessionSelectionUnavailable(state: SessionState): boolean {
+  const remembered = state.selectedModel ?? state.restorableModelId;
+  return (
+    remembered !== undefined &&
+    state.configuredModelIds.includes(remembered) &&
+    !isPreservedSelection(remembered, state.models)
+  );
+}
+
+function currentSessionModelId(state: SessionState): string | undefined {
+  return sessionSelectionUnavailable(state)
+    ? undefined
+    : resolveSelectedModelId(state.selectedModel, state.models);
+}
+
 function refreshSessionModels(
   previous: SessionState,
   capabilities: readonly ModelCapability[],
 ): SessionState {
   const models = capabilities.filter(isUsableConversationModel);
+  const configuredModelIds = capabilities.map((model) => model.id);
   const remembered = previous.selectedModel ?? previous.restorableModelId;
-  const selection = resolveSelection(remembered, models);
-  // Provenance survives a refresh that keeps the id: a live selection keeps its own flag, a
-  // restored pending memo carries the flag it was remembered with, and a freshly elected
-  // fallback is elected regardless.
+  const pending =
+    remembered !== undefined &&
+    configuredModelIds.includes(remembered) &&
+    !isPreservedSelection(remembered, models);
+  const selection = pending
+    ? { id: undefined, elected: false }
+    : resolveSelection(remembered, models);
   const keptProvenance =
     previous.selectedModel !== undefined
       ? previous.selectedModelElected
       : previous.restorableModelElected;
-  const selectedModelElected = selection.elected || keptProvenance;
   return {
     ...previous,
     models,
+    configuredModelIds,
     configuredModelsAvailable: capabilities.length > 0,
     selectedModel: selection.id,
-    selectedModelElected,
-    restorableModelId: undefined,
+    selectedModelElected: selection.elected || keptProvenance,
+    restorableModelId: pending ? remembered : undefined,
+    restorableModelElected: pending && keptProvenance,
   };
 }
 
@@ -2403,6 +2430,7 @@ function resolveSendMessageAdmission(input: {
   readonly models: readonly ModelCapability[];
   readonly pendingAttachmentCount: number;
   readonly sendInFlight: boolean;
+  readonly selectionUnavailable: boolean;
 }): SendMessageAdmission {
   const {
     options,
@@ -2422,7 +2450,9 @@ function resolveSendMessageAdmission(input: {
   ) {
     return { kind: "rejected", error: CANONICAL_VOICE_PENDING_ERROR };
   }
-  if (sendInFlight) return { kind: "rejected" };
+  if (sendInFlight || (canonicalTarget === undefined && input.selectionUnavailable)) {
+    return { kind: "rejected" };
+  }
   const content = (options?.text ?? draft).trim();
   const project = canonicalTarget?.project ?? (chat && canonicalProjectTarget(chat));
   const modelId = canonicalTarget?.modelId ?? resolveSelectedModelId(selectedModel, models);
@@ -3236,6 +3266,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, [autoCreate, canonicalVoiceProjectionRef]);
 
   useEffect(() => {
+    let catalogError: string | undefined;
     return subscribeGatewayModelRefresh((result): void => {
       if (result.kind === "pending") {
         setError(undefined);
@@ -3243,9 +3274,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return;
       }
       if (result.kind === "failure") {
+        catalogError = result.message;
         setError(result.message);
         return;
       }
+      const recoveredError = catalogError;
+      catalogError = undefined;
+      setError((previous) => (previous === recoveredError ? undefined : previous));
       setState((previous) => refreshSessionModels(previous, result.models));
     });
   }, []);
@@ -3342,6 +3377,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         ...previous,
         selectedModel: id,
         selectedModelElected: false,
+        restorableModelId: undefined,
+        restorableModelElected: false,
         activeChat:
           previous.activeChat === undefined
             ? previous.activeChat
@@ -3417,6 +3454,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       });
   }, []);
 
+  const selectedSessionModelId = currentSessionModelId(state);
+  const selectionUnavailable = sessionSelectionUnavailable(state);
+
   const openNewChat = useCallback(
     async (
       projectOverride?: ProjectWithAvailability,
@@ -3424,7 +3464,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     ): Promise<Chat | undefined> => {
       const preservedSelection =
         !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
-      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      const modelId = selectedSessionModelId;
       if (modelId === undefined) {
         setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
@@ -3465,6 +3505,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch,
       state.selectedModel,
       state.selectedModelElected,
+      selectedSessionModelId,
       state.activeProject,
       state.models,
     ],
@@ -4225,6 +4266,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         activeChat: state.activeChat,
         selectedModel: state.selectedModel,
         models: state.models,
+        selectionUnavailable,
         pendingAttachmentCount: pendingAttachments.length,
         sendInFlight: isInFlight(sendStatusRef.current),
       });
@@ -4327,6 +4369,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     },
     [
       draftState,
+      selectionUnavailable,
       state.activeChat,
       state.selectedModel,
       state.models,
@@ -4741,7 +4784,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (isInFlight(sendStatusRef.current)) return;
       const chat = state.activeChat;
       const project = state.activeProject;
-      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      const modelId = selectedSessionModelId;
       if (chat === undefined || project === undefined || modelId === undefined) return;
       updateSendStatus("queued");
       setRegeneratingMessageId(assistantMessageId);
@@ -4808,8 +4851,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [
       state.activeChat,
       state.activeProject,
-      state.selectedModel,
-      state.models,
+      selectedSessionModelId,
       buildMemoryRequest,
       updateOwnedSendStatus,
       updateSendStatus,
@@ -4835,8 +4877,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setNotice(undefined);
   }, []);
 
-  const noEligibleModels =
-    !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined;
+  const noEligibleModels = !loading && selectedSessionModelId === undefined;
 
   return useMemo<UseChatSessionResult>(
     () => ({
@@ -4846,6 +4887,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       streamingAssistantMessage,
       models: state.models,
       configuredModelsAvailable: state.configuredModelsAvailable,
+      configuredModelIds: state.configuredModelIds,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -4900,6 +4942,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       streamingAssistantMessage,
       state.models,
       state.configuredModelsAvailable,
+      state.configuredModelIds,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

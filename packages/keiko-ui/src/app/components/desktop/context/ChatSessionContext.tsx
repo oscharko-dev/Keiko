@@ -50,6 +50,7 @@ export type ChatSessionCatalog = Pick<
   | "projects"
   | "chats"
   | "models"
+  | "configuredModelIds"
   | "activeProject"
   | "activeChat"
   | "selectedModel"
@@ -145,6 +146,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       projects: value.projects,
       chats: value.chats,
       models: value.models,
+      configuredModelIds: value.configuredModelIds,
       activeProject: value.activeProject,
       activeChat: value.activeChat,
       selectedModel: value.selectedModel,
@@ -156,6 +158,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.projects,
       value.chats,
       value.models,
+      value.configuredModelIds,
       value.activeProject,
       value.activeChat,
       value.selectedModel,

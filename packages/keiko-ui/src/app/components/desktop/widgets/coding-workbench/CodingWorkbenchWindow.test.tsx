@@ -82,6 +82,7 @@ const chatCatalogMock = vi.hoisted(() => ({
   // #3642: mutable so a test can simulate a catalog refresh (chat's own
   // `clearSessionModelsForPendingRefresh`, useChatSession.ts) publishing an empty list mid-flight.
   models: [] as ModelCapability[],
+  configuredModelIds: undefined as readonly string[] | undefined,
 }));
 // PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
 // published mid-refresh from one a successful refresh settled on.
@@ -208,6 +209,7 @@ vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
       activeProject: chatCatalogMock.activeProject,
       projects: chatCatalogMock.projects,
       models: chatCatalogMock.models,
+      configuredModelIds: chatCatalogMock.configuredModelIds,
       noEligibleModels: true,
     }),
   };
@@ -470,6 +472,7 @@ beforeEach(() => {
   chatCatalogMock.activeProject = undefined;
   chatCatalogMock.projects = [];
   chatCatalogMock.models = [];
+  chatCatalogMock.configuredModelIds = undefined;
   catalogRefreshMock.settled = false;
   // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
   // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
@@ -4355,6 +4358,25 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
     // The refresh succeeds and returns the SAME models: the selection must still be there,
     // rather than falling back to models[0] because the mid-refresh empty list already cleared it.
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+  });
+
+  it("keeps the configured model and effort through a readiness outage", () => {
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({
+      state: liveState({ selectedModelId: "model-b", reasoningEffort: "high" }),
+      actions: liveActions,
+    });
+    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    chatCatalogMock.models = [MODEL_A];
+    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
     chatCatalogMock.models = [MODEL_A, MODEL_B];
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
     expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
