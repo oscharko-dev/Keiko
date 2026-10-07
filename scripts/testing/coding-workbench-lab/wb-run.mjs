@@ -11,8 +11,6 @@ import { isMainModule } from "../../lib/is-main-module.mjs";
 import {
   TERMINAL_STATES,
   approvalPolicyLine,
-  assertCheckoutSelected,
-  checkoutRequest,
   describeSnapshot,
   exitCodeForState,
   formatTaskList,
@@ -26,6 +24,7 @@ import {
   parseCli,
   resolveTaskInput,
   runMain,
+  selectLabCheckout,
 } from "./lab-common.mjs";
 
 const USAGE = [
@@ -61,14 +60,9 @@ const POLL_MS = 3000;
 // Key of the one notice a paused run gets; permission request ids never look like it.
 const PAUSED_NOTICE = "paused";
 
-async function selectCheckout(session, repo, branch) {
-  const response = await session.request(
-    "POST",
-    "/api/task-workspaces/local",
-    checkoutRequest(repo, branch),
-  );
-  log("local checkout", response.status);
-  assertCheckoutSelected(response.status);
+/** Registers the lab copy and selects it as the dev server's workspace; a refusal throws before any run. */
+export function selectCheckout(session, repo, branch) {
+  return selectLabCheckout((path, body) => session.request("POST", path, body), repo, branch);
 }
 
 async function startRun(session, { text, mode, model }) {
@@ -171,21 +165,14 @@ async function printAnswer(session) {
   console.log(`----- answer -----\n${text || "(no assistant text)"}`);
 }
 
-async function main() {
-  const cli = parseCli({ usage: USAGE, options: OPTIONS });
-  if (cli.help) return 0;
-  if (cli.values["list-tasks"]) {
-    console.log(formatTaskList());
-    return 0;
-  }
-  const { text, mode } = resolveTaskInput(cli.values);
-  const approve = parseApprove(cli.values.approve);
-  const repo = labRepositoryPath(cli.values.repo);
-  const timeoutMs = minutesToMs(cli.values["timeout-min"]);
-  const session = await openApiSession(labBaseUrl(cli.values["base-url"]));
+/**
+ * One run on the lab repository on a paired session: select the repository, start the task, follow
+ * the run until it ends and print the answer. A refused checkout throws before any run starts.
+ */
+export async function operateRun(session, { approve, repo, branch, task, model, timeoutMs }) {
   log(approvalPolicyLine("wb-run", approve));
-  await selectCheckout(session, repo, cli.values.branch);
-  const runId = await startRun(session, { text, mode, model: cli.values.model });
+  await selectCheckout(session, repo, branch);
+  const runId = await startRun(session, { text: task.text, mode: task.mode, model });
   const snapshot = await watchRun(session, runId, { approve, deadline: Date.now() + timeoutMs });
   const summary = {
     state: snapshot?.state,
@@ -198,6 +185,22 @@ async function main() {
   log(approvalPolicyLine("wb-run", approve));
   console.log(`----- run ${runId} -----`);
   return exitCodeForState(snapshot?.state);
+}
+
+async function main() {
+  const cli = parseCli({ usage: USAGE, options: OPTIONS });
+  if (cli.help) return 0;
+  if (cli.values["list-tasks"]) {
+    console.log(formatTaskList());
+    return 0;
+  }
+  const task = resolveTaskInput(cli.values);
+  const approve = parseApprove(cli.values.approve);
+  const repo = labRepositoryPath(cli.values.repo);
+  const timeoutMs = minutesToMs(cli.values["timeout-min"]);
+  const session = await openApiSession(labBaseUrl(cli.values["base-url"]));
+  const { branch, model } = cli.values;
+  return operateRun(session, { approve, repo, branch, task, model, timeoutMs });
 }
 
 if (isMainModule(import.meta.url)) runMain(main);

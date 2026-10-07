@@ -11,6 +11,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
+import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 import type {
   CodingWorkbenchResourceStatus,
   CodingWorkbenchClientError,
@@ -136,20 +137,47 @@ function joinedAnnouncements(announcements: readonly string[]): string {
     );
 }
 
+// The run phases the live status sentence states. A model gateway that is unavailable and being
+// retried rides on for minutes, and the run state beside it ("Running") reads the same as a healthy
+// run, so a reader who cannot see the status line would hear nothing of the outage (review thread
+// 6pydza). The other phases change with every tool call: announcing them would make the polite
+// region chatter, so they are shown beside the sentence and not in it.
+const ANNOUNCED_PHASES: ReadonlySet<CodingWorkbenchRunPhase> = new Set(["gateway"]);
+
 /**
- * What the run itself is doing, for the live run status region: its state and revision, a
- * completed recovery acknowledgement and an active research grant, then — only when there are any —
- * the readiness facts that need attention (`readinessAttentionFacts`). #3873 live review: the
- * region used to open with all the readiness facts, so a reader heard "Model source ready. …"
- * before learning whether the run was still working; the healthy facts now live in the readiness
- * details. #3873 review: moving every fact there also left an unavailable runtime or an unpaired
- * window announced to no one, so a fact that says the Workbench cannot start stays in this polite,
- * atomic sentence, where it is also visible text, and the setup layout announces it as well.
+ * True for a run phase that the live status sentence states (`runStatusAnnouncement`). That sentence
+ * is also the visible text of the status line, so the line must not show such a phase a second time
+ * beside it.
+ */
+export function runPhaseIsAnnounced(phase: CodingWorkbenchRunPhase | null): boolean {
+  return phase !== null && ANNOUNCED_PHASES.has(phase);
+}
+
+function phaseAnnouncement(
+  phase: CodingWorkbenchRunPhase | null,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (phase === null || !ANNOUNCED_PHASES.has(phase)) return "";
+  return withClosingPunctuation(t(`codingWorkbench.runStatus.phase.${phase}`));
+}
+
+/**
+ * What the run itself is doing, for the live run status region: its state and revision, its phase
+ * when that is one the operator must hear (`runPhaseIsAnnounced`: a model gateway that is being
+ * retried), a completed recovery acknowledgement and an active research grant, then — only when
+ * there are any — the readiness facts that need attention (`readinessAttentionFacts`). #3873 live
+ * review: the region used to open with all the readiness facts, so a reader heard "Model source
+ * ready. …" before learning whether the run was still working; the healthy facts now live in the
+ * readiness details. #3873 review: moving every fact there also left an unavailable runtime or an
+ * unpaired window announced to no one, so a fact that says the Workbench cannot start stays in this
+ * polite, atomic sentence, where it is also visible text, and the setup layout announces it as
+ * well. The setup layout has no run and so no phase to pass.
  */
 export function runStatusAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
   researchGrant: CodingWorkbenchRuntimeResearchGrant | null = null,
+  phase: CodingWorkbenchRunPhase | null = null,
 ): string {
   const snapshot = state.run.value;
   const recovery =
@@ -158,6 +186,7 @@ export function runStatusAnnouncement(
       : "";
   return joinedAnnouncements([
     runAnnouncement(state, t),
+    phaseAnnouncement(phase, t),
     recovery,
     researchAnnouncement(researchGrant, t),
     readinessAttentionFacts(state, t),
@@ -322,14 +351,25 @@ export function activeRunState(state: CodingWorkbenchRuntimeStateName | undefine
 }
 
 /**
- * True while the run's model may still be producing text: before its first turn and while it runs.
- * An `awaiting-approval` run has finished its turn and waits for the operator, a `paused` run takes
- * no further turn and a `stopping` run is ending, so an answer shown then is finished and keeps its
- * code highlighting and Copy button (#3873 review). Narrower than `activeRunState`, which keeps the
- * end controls and the bridge lease for the whole live run.
+ * True while the run's model may still be producing text: before its first turn, while it runs and
+ * while it is paused. An `awaiting-approval` run has finished its turn and waits for the operator
+ * and a `stopping` run is ending, so an answer shown then is finished and keeps its code
+ * highlighting and Copy button (#3873 review).
+ *
+ * A `paused` run's answer is not finished. Review thread 6pyds7 inverted the earlier pins that
+ * treated it as finished: pausing refuses new work — an approval, a child tool mutation, a new
+ * model-call admission — but aborts nothing, so the call the run had already admitted keeps
+ * streaming into its message, and the safe-activity feed keeps delivering it while the run reads
+ * `paused`. Offering Copy on that message would copy a partial code block and re-highlight it on
+ * every batch. The cost is deliberate: the last text of a paused run that really is finished cannot
+ * be told from one still being written, so it stays in its streaming form (no Copy button, no
+ * highlighting) until the run settles or a tool call that began after it closes the message.
+ *
+ * Narrower than `activeRunState`, which keeps the end controls and the bridge lease for the whole
+ * live run.
  */
 export function generatingRunState(state: CodingWorkbenchRuntimeStateName | undefined): boolean {
-  return state === "starting" || state === "ready" || state === "running";
+  return state === "starting" || state === "ready" || state === "running" || state === "paused";
 }
 
 export function eventTitle(

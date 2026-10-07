@@ -10,7 +10,12 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
-import { activeRunState, readinessFacts, runStatusAnnouncement } from "./codingWorkbenchLabels";
+import {
+  activeRunState,
+  readinessFacts,
+  runPhaseIsAnnounced,
+  runStatusAnnouncement,
+} from "./codingWorkbenchLabels";
 import {
   formatRunDuration,
   runSettledAt,
@@ -91,6 +96,8 @@ function ElapsedTime({
   );
 }
 
+// A phase the live status sentence already states (the model gateway outage) is not shown a second
+// time beside it: the sentence is the visible text as well as the announcement.
 function RunPhase({
   phase,
   t,
@@ -98,7 +105,7 @@ function RunPhase({
   readonly phase: CodingWorkbenchRunPhase | null;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
-  if (phase === null) return null;
+  if (phase === null || runPhaseIsAnnounced(phase)) return null;
   return (
     <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-phase">
       {t(`codingWorkbench.runStatus.phase.${phase}`)}
@@ -137,7 +144,11 @@ export interface CodingWorkbenchRunStatusProps {
  * unavailable runtime, an unpaired window — `readinessAttentionFacts`): they follow the run
  * sentence inside the live region, so they are announced and visible without opening anything
  * (#3873 review). Only the state sentence is a live region: the elapsed time is a timer, which
- * ticks silently.
+ * ticks silently. The phase is a fact beside that sentence, except the one the operator must hear
+ * whether or not the line is in view: a model gateway that is unavailable and being retried joins
+ * the sentence itself (`runPhaseIsAnnounced`; review thread 6pydza). It used to sit in its own span
+ * outside the region, so a screen reader announced "Running" for the whole outage. The other
+ * phases change with every tool call and would make the region chatter.
  */
 export function CodingWorkbenchRunStatus({
   state,
@@ -156,7 +167,7 @@ export function CodingWorkbenchRunStatus({
           aria-live="polite"
           aria-atomic="true"
         >
-          {runStatusAnnouncement(state, t, researchGrant)}
+          {runStatusAnnouncement(state, t, researchGrant, phase)}
         </span>
         <ElapsedTime elapsed={elapsed} t={t} />
         <RunPhase phase={phase} t={t} />

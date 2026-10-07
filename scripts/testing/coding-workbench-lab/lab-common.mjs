@@ -7,6 +7,7 @@
 // dev server happens to have selected.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parseArgs } from "node:util";
@@ -218,13 +219,76 @@ export function checkoutRequest(repo, branch) {
   return { root: repo, branch, requestedBy: "studio-operator" };
 }
 
+/**
+ * The body that registers the lab copy as a project (POST /api/projects, as the UI's
+ * `createProject`). It carries no `selectionIntent`: the first registration with
+ * "explicit-folder-selection" also grants package-script trust, which would silently consume the
+ * trust pause the lab measures (the guide, step 5).
+ */
+export function registerProjectRequest(root) {
+  return { path: root };
+}
+
+const REFUSAL_REASON_MAX_CHARS = 200;
+
+/**
+ * A refusal of the dev server in one phrase: its HTTP status and, when the body is the server's
+ * error envelope `{ error: { code, message } }`, its own code and message, so the operator reads
+ * why (an unregistered copy, a run still active, a missing branch) and not only that it refused.
+ * Both are fixed sentences of the server; they are bounded and stripped of control characters.
+ */
+export function describeRefusal(status, body) {
+  const { code, message } = body?.error ?? {};
+  const head = [`HTTP ${String(status)}`, typeof code === "string" ? code : ""]
+    .filter((part) => part !== "")
+    .join(" ");
+  const text = typeof message === "string" ? message.replaceAll(/\p{Cc}+/gu, " ").trim() : "";
+  return (text === "" ? head : `${head}: ${text}`).slice(0, REFUSAL_REASON_MAX_CHARS);
+}
+
+function isSuccess(status) {
+  return status >= 200 && status < 300;
+}
+
 /** A run never starts unless the dev server accepted the lab repository as its workspace. */
-export function assertCheckoutSelected(status) {
-  if (status < 200 || status >= 300) {
-    throw new Error(
-      `the dev server did not select the lab repository (HTTP ${String(status)}); not starting a run in whichever workspace it has open`,
-    );
-  }
+export function assertCheckoutSelected(status, body) {
+  if (isSuccess(status)) return;
+  throw new Error(
+    `the dev server did not select the lab repository (${describeRefusal(status, body)}); not starting a run in whichever workspace it has open`,
+  );
+}
+
+/** The dev server only selects a repository it has registered, so a refused registration is final. */
+export function assertProjectRegistered(status, body) {
+  if (isSuccess(status)) return;
+  throw new Error(
+    `the dev server did not register the lab repository as a project (${describeRefusal(status, body)}); see ${LAB_GUIDE}, step 5`,
+  );
+}
+
+/**
+ * Registers the lab copy as a project, once or again (the server upserts, so a repeat is not a
+ * failure), and returns the path the dev server knows it by. That is the real path: the server
+ * resolves a root before it looks for the project, and refuses a project whose path has a symlink
+ * in it. `post(path, body)` sends one JSON body and answers `{ status, json }`.
+ */
+export async function registerLabRepository(post, repo) {
+  const root = await realpath(repo);
+  const registered = await post("/api/projects", registerProjectRequest(root));
+  log("lab project", registered.status);
+  assertProjectRegistered(registered.status, registered.json);
+  return root;
+}
+
+/**
+ * Registers the lab copy and selects it as the dev server's workspace. A refusal throws with the
+ * server's own reason, before anything starts in whichever workspace the server has open.
+ */
+export async function selectLabCheckout(post, repo, branch) {
+  const root = await registerLabRepository(post, repo);
+  const selected = await post("/api/task-workspaces/local", checkoutRequest(root, branch));
+  log("local checkout", selected.status);
+  assertCheckoutSelected(selected.status, selected.json);
 }
 
 /** Normalizes `run-123...` or a trailing part of the id; refuses suffixes that would match the whole log. */

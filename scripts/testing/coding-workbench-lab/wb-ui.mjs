@@ -15,9 +15,7 @@ import {
   CSRF_HEADERS,
   TERMINAL_STATES,
   approvalPolicyLine,
-  assertCheckoutSelected,
   browserBaseUrl,
-  checkoutRequest,
   describeSnapshot,
   exitCodeForState,
   formatTaskList,
@@ -31,6 +29,7 @@ import {
   parseCli,
   resolveTaskInput,
   runMain,
+  selectLabCheckout,
 } from "./lab-common.mjs";
 
 const USAGE = [
@@ -102,13 +101,20 @@ async function waitForWorkbench(page) {
   return workbench;
 }
 
-async function selectCheckout(page, repo, branch) {
-  const response = await page.request.post("/api/task-workspaces/local", {
-    headers: CSRF_HEADERS,
-    data: checkoutRequest(repo, branch),
-  });
-  log("local checkout", response.status());
-  assertCheckoutSelected(response.status());
+/** Registers the lab copy and selects it as the dev server's workspace; a refusal throws before any run. */
+export function selectCheckout(page, repo, branch) {
+  return selectLabCheckout(
+    async (path, data) => {
+      const response = await page.request.post(path, { headers: CSRF_HEADERS, data });
+      return { status: response.status(), json: await response.json().catch(() => undefined) };
+    },
+    repo,
+    branch,
+  );
+}
+
+/** Reloads the page so the Workbench opens on the repository the dev server just selected. */
+async function reopenWorkbench(page) {
   await page.reload();
   return waitForWorkbench(page);
 }
@@ -246,17 +252,15 @@ async function reportRun(page, workbench, runId, snapshot, { shots, textOut, app
   if (shots) await page.screenshot({ path: join(shots, "zz-final.png"), fullPage: true });
 }
 
-async function driveRun(browser, options) {
-  const { repo, base, branch, shots, textOut, approve, timeoutMs, task } = options;
-  const context = await browser.newContext({ viewport: VIEWPORT, baseURL: base });
-  const page = await context.newPage();
-  page.on("pageerror", (error) => log("pageerror", String(error).slice(0, 200)));
-  await seedWorkbenchWindow(page, repo);
-  const { fragment } = await mintPairing();
-  await page.goto(`/${fragment}`);
-  await waitForWorkbench(page);
+/**
+ * One run on a paired page: select the lab repository, start the task, follow the run until it
+ * ends and report it. A refused checkout throws before the Workbench is touched, so no run starts.
+ */
+export async function operateRun(page, options) {
+  const { repo, branch, shots, textOut, approve, timeoutMs, task } = options;
   log(approvalPolicyLine("wb-ui", approve));
-  const workbench = await selectCheckout(page, repo, branch);
+  await selectCheckout(page, repo, branch);
+  const workbench = await reopenWorkbench(page);
   const runId = await startRun(page, workbench, task);
   const snapshot = await watchRun(page, runId, {
     approve,
@@ -265,6 +269,17 @@ async function driveRun(browser, options) {
   });
   await reportRun(page, workbench, runId, snapshot, { shots, textOut, approve });
   return exitCodeForState(snapshot.state);
+}
+
+async function driveRun(browser, options) {
+  const context = await browser.newContext({ viewport: VIEWPORT, baseURL: options.base });
+  const page = await context.newPage();
+  page.on("pageerror", (error) => log("pageerror", String(error).slice(0, 200)));
+  await seedWorkbenchWindow(page, options.repo);
+  const { fragment } = await mintPairing();
+  await page.goto(`/${fragment}`);
+  await waitForWorkbench(page);
+  return operateRun(page, options);
 }
 
 async function main() {

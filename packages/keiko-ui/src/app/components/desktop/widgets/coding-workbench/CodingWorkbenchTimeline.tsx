@@ -73,8 +73,9 @@ type TimelineItem =
       readonly message: CodingSafeActivityMessage;
       readonly runId: string;
       /**
-       * The open message of a run that is generating: its answer may still be streaming. A finished
-       * answer is never live, however long the run then waits for a decision.
+       * The open message of a run that is generating (starting, running or paused): its answer may
+       * still be streaming. An answer is not live once the run waits for a decision, however long
+       * that takes, or once a tool call began after it.
        */
       readonly live: boolean;
     }
@@ -104,10 +105,12 @@ type TimelineItem =
 export interface CodingWorkbenchTimelineProps {
   readonly active?: boolean;
   /**
-   * True while the run's model may still be producing text: the run is starting or running, not
-   * waiting for a decision, paused or stopping. Defaults to `active`; the Workbench passes the
-   * narrower fact, so an answer that is finished keeps its code highlighting and Copy button while
-   * the run waits for the operator (#3873 review).
+   * True while the run's model may still be producing text: the run is starting, running or
+   * paused, not waiting for a decision or stopping. A paused run stays generating because pausing
+   * aborts no call the run had already admitted, so its message may still grow (review thread
+   * 6pyds7). Defaults to `active`; the Workbench passes the narrower fact, so an answer that is
+   * finished keeps its code highlighting and Copy button while the run waits for the operator
+   * (#3873 review).
    */
   readonly generating?: boolean;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];

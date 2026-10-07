@@ -7,8 +7,10 @@
 
 import { describe, expect, it } from "vitest";
 
+import { opencodeRegistrationSet } from "../../packages/keiko-tool-catalog/dist/opencode.js";
 import { clip, lengthOf, subtract, unionOf } from "../testing/coding-workbench-lab/intervals.mjs";
 import {
+  EDIT_TOOL,
   PROFILE_CONTRACT,
   formatProfile,
   profileRun,
@@ -168,6 +170,14 @@ const trustSettled = (offset) =>
     state: "settled",
     decision: "workspace-script-trust",
   });
+const reviewDecided = (offset, disposition = "review-required") =>
+  line("coding-runtime.editor-review.decided", offset, RUN, {
+    mode: disposition === "review-required" ? "governed-assist" : "supervised-coding",
+    risk: "medium",
+    disposition,
+  });
+const mutationSettled = (offset, state = "succeeded") =>
+  line("coding-runtime.editor-mutation.settled", offset, RUN, { state, actionKind: "edit" });
 const toolSideDecision = (offset) =>
   line("coding-runtime.operator-decision", offset, RUN, {
     decision: "workspace-script-trust",
@@ -323,6 +333,25 @@ describe("profileRun: a streamed or buffered turn", () => {
       settled(5),
     ];
     expect(profile(rows).turns[0].headersS).toBeCloseTo(1.7, 3);
+  });
+
+  it("takes no headers for an attempt whose own fetch failed when only the next attempt's counter call followed", () => {
+    // The retry's token-counter call completes, and the client leaves before the retry's admission
+    // line is written: no model fetch of any attempt completed, so that counter call is not one.
+    const id = "req-1";
+    const rows = [
+      line("coding-sidecar.gateway.request-validated", 0, id, { runId: RUN, inputMessageCount: 3 }),
+      line("gateway.stream.started", 0.005, id, { streaming: true }),
+      line("gateway.prompt.admission", 0.14, id, { state: "admitted" }),
+      line("http.gateway.fetch.failed", 0.3, id, {}, { durationMs: 150 }),
+      line("gateway.retry.scheduled", 0.31, id, { attempt: 1 }),
+      line("http.gateway.fetch.completed", 1.2, id, {}, { durationMs: 700 }),
+      line("gateway.stream.abandoned", 2.0, id, {}, { durationMs: 2000 }),
+      settled(5),
+    ];
+    const [turn] = profile(rows).turns;
+    expect(turn.headersS).toBeUndefined();
+    expect(turn.retries).toEqual(["scheduled"]);
   });
 
   it("falls back to the last fetch before the read when the log has no admission line", () => {
@@ -622,6 +651,22 @@ describe("profileRun: operator pauses, tools and gaps", () => {
     expect(run.waits[0].count).toBe(2);
   });
 
+  it("never counts a queued approval that was not promoted, whatever happens to the active one", () => {
+    // The promotion of the queued ask (a second waiting line without a queue position) is what
+    // makes it block the run; without one it must not start a wait that outlives the active ask.
+    const run = profile([
+      ...twoTurns(30),
+      approvalWaiting(10.1, "permission-a"),
+      approvalWaiting(10.6, "permission-b", { queuePosition: 1 }),
+      approvalDecided(11.1, "permission-a"),
+      settled(40),
+    ]);
+    expect(run.seconds.pauses).toBeCloseTo(1, 3);
+    expect(run.waits).toEqual([
+      { label: "approval command-execution", count: 1, seconds: expect.closeTo(1, 3) },
+    ]);
+  });
+
   it("lasts an unanswered approval until the run's last event", () => {
     const run = profile([
       ...modelRequest("req-1", 1, { length: 9, read: undefined, headersMs: 500, counterMs: 100 }),
@@ -659,7 +704,11 @@ describe("profileRun: operator pauses, tools and gaps", () => {
     );
   });
 
-  it("splits the wall clock into slices that add up to it, whatever the overlap", () => {
+  it("gives every slice of the wall clock its own value, whatever the overlap", () => {
+    // `other` is the wall minus the four slices, so a sum of the slices says nothing: each value is
+    // asserted. Model 1 to 10 and 20 to 25. The approval wait (10.2 to 12.2) lies in the gap between
+    // the turns and the verification tool (11 to 17) starts inside it, so the pause is taken out of
+    // the tool: the tool keeps 12.2 to 17. The gap keeps 10 to 10.2 and 17 to 20. Nobody claims 25 to 30.
     const run = profile([
       ...twoTurns(20),
       approvalWaiting(10.2, "permission-1"),
@@ -668,8 +717,153 @@ describe("profileRun: operator pauses, tools and gaps", () => {
       settled(30),
     ]);
     const { model, pauses, tools, gaps, other } = run.seconds;
-    expect(model + pauses + tools + gaps + other).toBeCloseTo(run.wall, 6);
-    expect(Math.min(model, pauses, tools, gaps, other)).toBeGreaterThanOrEqual(0);
+    expect(run.wall).toBeCloseTo(29, 3);
+    expect(model).toBeCloseTo(14, 3);
+    expect(pauses).toBeCloseTo(2, 3);
+    expect(tools).toBeCloseTo(4.8, 3);
+    expect(gaps).toBeCloseTo(3.2, 3);
+    expect(other).toBeCloseTo(5, 3);
+  });
+
+  describe("the change review of Ask for approval (the edit invocation waits for a person)", () => {
+    // `tool` writes the invocation's own lines; the review lines sit between them, as in the product:
+    // the lease is registered while the edit prepares, and settles before the invocation does.
+    const edit = (id, start, seconds) => tool(id, EDIT_TOOL, start, seconds);
+
+    it("books the wait of a review as an operator pause, out of the edit's tool time (the review repro)", () => {
+      const run = profile([
+        ...twoTurns(131),
+        ...edit("edit-1", 10.2, 119.9),
+        reviewDecided(10.3),
+        mutationSettled(130),
+        settled(140),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(119.7, 3);
+      expect(run.seconds.tools).toBeCloseTo(0.2, 3);
+      expect(run.waits).toEqual([
+        { label: "change review", count: 1, seconds: expect.closeTo(119.7, 3) },
+      ]);
+      expect(run.turns[0].then).toBe("changeset.edit 119.9s  wait 119.7s  gap 1.1s");
+      expect(formatProfile(run).find((entry) => entry.startsWith("breakdown:"))).toMatch(
+        /operator pauses 120s \(\d+%\) \[change review x1 120s\]/u,
+      );
+    });
+
+    it("pairs each review with the next settlement by order, the two lines sharing the run's correlation id", () => {
+      const run = profile([
+        ...twoTurns(101),
+        ...edit("edit-1", 10.2, 39.9),
+        reviewDecided(10.3),
+        mutationSettled(50),
+        ...edit("edit-2", 60, 40.1),
+        reviewDecided(60.1),
+        mutationSettled(100),
+        settled(110),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(39.7 + 39.9, 3);
+      expect(run.waits).toEqual([
+        { label: "change review", count: 2, seconds: expect.closeTo(79.6, 3) },
+      ]);
+    });
+
+    it("counts a review the person rejected like any other: the settlement ends it", () => {
+      const run = profile([
+        ...twoTurns(40),
+        ...edit("edit-1", 10.2, 20),
+        reviewDecided(10.3),
+        mutationSettled(30, "rejected"),
+        settled(50),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(19.7, 3);
+    });
+
+    it("leaves an edit that needs no review alone: the mode allowed it, so nobody waited", () => {
+      const run = profile([
+        ...twoTurns(20),
+        ...edit("edit-1", 10.2, 0.5),
+        reviewDecided(10.3, "allowed"),
+        mutationSettled(10.6),
+        settled(30),
+      ]);
+      expect(run.seconds.pauses).toBe(0);
+      expect(run.seconds.tools).toBeCloseTo(0.5, 3);
+      expect(run.waits).toEqual([]);
+    });
+
+    it("closes the start of an edit refused after its registration at that edit's end, never at the next edit's settlement", () => {
+      // The first edit registers, waits for a live Workbench (no review is shown to anyone), is
+      // refused and settles at 22: no settlement ever follows its review line. The second edit's
+      // settlement at 90 belongs to the second edit alone.
+      const run = profile([
+        ...twoTurns(100),
+        ...edit("edit-refused", 10.2, 11.8),
+        reviewDecided(10.3),
+        ...edit("edit-reviewed", 30, 60.1),
+        reviewDecided(30.1),
+        mutationSettled(90),
+        settled(110),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(90 - 30.1, 3);
+      expect(run.waits).toEqual([
+        { label: "change review", count: 1, seconds: expect.closeTo(59.9, 3) },
+      ]);
+      // The refused edit's own seconds stay tool time: it waited for the Workbench, not for a person.
+      expect(run.seconds.tools).toBeCloseTo(11.8 + 0.2, 3);
+    });
+
+    it("keeps a refused sibling out of a review the person is still making (parallel edits)", () => {
+      const run = profile([
+        ...twoTurns(131),
+        ...edit("edit-refused", 10.2, 0.7),
+        ...edit("edit-reviewed", 10.25, 119.85),
+        reviewDecided(10.3),
+        reviewDecided(10.35),
+        mutationSettled(130),
+        settled(140),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(130 - 10.35, 3);
+      expect(run.waits[0]).toMatchObject({ label: "change review", count: 1 });
+    });
+
+    it("keeps a review with the edit when another tool runs beside it and ends first", () => {
+      const run = profile([
+        ...twoTurns(131),
+        ...tool("read-1", "keiko.workspace.read", 10, 0.6),
+        ...edit("edit-1", 10.25, 119.85),
+        reviewDecided(10.3),
+        mutationSettled(130),
+        settled(140),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(130 - 10.3, 3);
+    });
+
+    it("lasts a review nobody settled until the run's end, whether or not the edit invocation ever ended", () => {
+      const [started] = edit("edit-1", 10.2, 100);
+      const run = profile([
+        ...modelRequest("req-1", 1, { length: 9, read: undefined, headersMs: 500, counterMs: 100 }),
+        started,
+        reviewDecided(10.3),
+        settled(60),
+      ]);
+      expect(run.seconds.pauses).toBeCloseTo(60 - 10.3, 3);
+    });
+
+    it("counts nothing for a review line when the log holds no edit invocation around it", () => {
+      const run = profile([...twoTurns(20), reviewDecided(10.3), settled(60)]);
+      expect(run.seconds.pauses).toBe(0);
+      expect(run.waits).toEqual([]);
+    });
+
+    it("ignores a settlement that no review waited for, and a review inside another tool's invocation", () => {
+      const run = profile([
+        ...twoTurns(20),
+        mutationSettled(10.1),
+        ...tool("read-1", "keiko.workspace.read", 10.2, 2),
+        reviewDecided(10.3),
+        settled(60),
+      ]);
+      expect(run.seconds.pauses).toBe(0);
+    });
   });
 
   it("uses the durationMs of a settled tool and the timestamps when it has none", () => {
@@ -797,5 +991,18 @@ describe("the profile's contract with the registry", () => {
 
   it("does not read the operations that were never registered", () => {
     expect(Object.keys(PROFILE_CONTRACT)).not.toContain("coding-runtime.run.resumed");
+  });
+
+  it("reads the change review from the two registered review operations, and the disposition of the first", () => {
+    expect(PROFILE_CONTRACT["coding-runtime.editor-review.decided"]).toEqual(["disposition"]);
+    expect(PROFILE_CONTRACT["coding-runtime.editor-mutation.settled"]).toEqual([]);
+  });
+
+  it("names the edit tool by the id the tool catalog gives it, the one invocation a review happens in", () => {
+    const entry = opencodeRegistrationSet().entries.find(
+      (candidate) => candidate.alias === "keiko_changeset_edit",
+    );
+    expect(entry?.descriptor.toolRef.canonicalId).toBe(EDIT_TOOL);
+    expect(entry?.descriptor.effects).toContain("workspace-write");
   });
 });

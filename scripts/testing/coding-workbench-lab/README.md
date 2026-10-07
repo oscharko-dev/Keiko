@@ -28,7 +28,12 @@ not defaults:
 - **No repository, no run.** `--repo` or `KEIKO_LAB_REPO` is required; the drivers never run in
   whichever workspace the dev server has open. The checkout must be a copy of the fixture (its
   `package.json` names `ledger-lab`), and a run does not start unless the dev server accepted it
-  as its workspace. `wb-trust.mjs` and `verify-latency.mjs` apply the same rule.
+  as its workspace. `wb-trust.mjs` and `verify-latency.mjs` apply the same rule. The drivers (and
+  `wb-trust.mjs`) register the copy as a project first, since the server selects registered
+  repositories only: `POST /api/projects` with its canonical real path and no `selectionIntent`
+  (an explicit folder selection would also grant package-script trust), repeated without harm on
+  every run. A refusal prints the server's own code and message, for example `MISSING_REPOSITORY`,
+  `LOCK_CONTENTION` or `INVALID_BASE_BRANCH`.
 - **No implicit trust.** `wb-trust.mjs` takes `grant` or `revoke`; neither is a default.
 
 ## Environment
@@ -99,12 +104,15 @@ to the next request. A model server that answers a tool call as one block (Ollam
 headers after the whole generation: `hdr s` is then the model's whole time, `gen s` is close to zero
 and `tok/s` stays `-` (a rate needs a read that streamed). The breakdown that follows splits the wall
 clock, bounded at the run's settlement, into slices that never overlap: model time (accepted,
-failed and cancelled turns), operator pauses (a package-script trust wait, or an approval from
-`coding-runtime.approval.waiting` to its decision or expiry), tools, the gaps between turns and
-"other". A repository-instructions line (`AGENTS.md` state, bytes attached and the estimated tokens
-re-sent with every turn) precedes the table when the run logged one. The log names these tools read
-are checked against `docs/observability/op-catalog.generated.json` at start, so a renamed operation
-or field fails loudly instead of printing zeros.
+failed and cancelled turns), operator pauses (a package-script trust wait, an approval from
+`coding-runtime.approval.waiting` to its decision or expiry, or the change review of an edit in Ask
+for approval, from `coding-runtime.editor-review.decided` to
+`coding-runtime.editor-mutation.settled`: the edit tool waits in place for the person, so that wait
+is carved out of its tool time), tools, the gaps between turns and "other". A
+repository-instructions line (`AGENTS.md` state, bytes attached and the estimated tokens re-sent
+with every turn) precedes the table when the run logged one. The log names these tools read are
+checked against `docs/observability/op-catalog.generated.json` at start, so a renamed operation or
+field fails loudly instead of printing zeros.
 
 ```bash
 node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits>
@@ -148,13 +156,13 @@ node scripts/testing/coding-workbench-lab/run-summary.mjs run-<digits> --ledger-
 | `wb-ui.mjs`               | Runs one task through the real Workbench UI in headless Chromium (`--headed` to watch); the driver for every editing task |
 | `wb-run.mjs`              | Runs one task over the HTTP API; read-only tasks only, because edits need the live editor bridge (finding F4)             |
 | `wb-stop.mjs`             | Stops a run                                                                                                               |
-| `wb-trust.mjs`            | Grants or revokes package-script trust for a lab repository (`grant` or `revoke`, no default)                             |
+| `wb-trust.mjs`            | Grants or revokes package-script trust for a lab repository (`grant` or `revoke`, no default); registers the copy first   |
 | `pair.mjs`                | Prints a one-time pairing URL (or the attestation JSON); valid about 30 seconds, usable once                              |
 | `run-summary.mjs`         | Body-free run summary and, with `--ledger-row`, a draft ledger row that names the driver and the approval policy          |
 | `turn-profile.mjs`        | Body-free per-turn timing profile of a run (model, operator pauses, tools, gaps), bounded at the run's settlement         |
 | `rawtl.mjs`               | Body-free raw timeline of a run and its child requests, optionally filtered by operation                                  |
 | `chaos-proxy.mjs`         | Fault-injecting proxy between LiteLLM and the model server (503 bursts, outage, latency, drop, stall, hang)               |
-| `chaos-suite.mjs`         | Runs the scenarios S1 to S7 against task C1 and writes one summary line per scenario                                      |
+| `chaos-suite.mjs`         | Runs the scenarios S1 to S7 against task C1, one summary line each; exits 1 if one started no run                         |
 | `verify-latency.mjs`      | Times the server's enforced verification path on the lab repository (finding F14)                                         |
 | `lab-common.mjs`          | Shared helpers: option parsing, approval policy, lab-repository check, loopback-only base URL, pairing, task catalog      |
 | `activity-log-events.mjs` | Reads the Activity Log through the file grammar in `keiko-contracts` (a library, not a command)                           |
@@ -166,6 +174,9 @@ fault handling, the catalog and fixture consistency) is covered by
 `scripts/__tests__/coding-workbench-lab-*.test.mjs`.
 
 Every command prints its usage with `--help`. Exit codes of the run drivers: 0 the run succeeded,
-1 it ended in another terminal state, 3 the timeout elapsed, 2 a usage error. The drivers talk to a
-loopback `http` dev server only, since they send a pairing attestation; the dev server serves pages on
-`localhost` and redirects `127.0.0.1` page loads, so the UI driver always browses `localhost`.
+1 it ended in another terminal state, 3 the timeout elapsed, 2 a usage error. `chaos-suite.mjs`
+exits 0 when every scenario started a run (its `summary.log` ends with `DONE`), 1 when at least one
+scenario was refused before a run started (it ends with `INCOMPLETE`), 2 for a usage error. The
+drivers talk to a loopback `http` dev server only, since they send a pairing attestation; the dev
+server serves pages on `localhost` and redirects `127.0.0.1` page loads, so the UI driver always
+browses `localhost`.

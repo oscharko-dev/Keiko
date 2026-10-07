@@ -784,9 +784,10 @@ setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, 
 
 At peak load the LiteLLM gateway or the model server behind it answers 429 or 503, or stops
 answering, for a few minutes. A Workbench run keeps working instead of failing: its status line
-reads "Model gateway unavailable, retrying" while the gateway is being retried, and returns to
-"Waiting for the model" once a call is answered again. With Run details open the timeline lists
-"Model gateway unavailable, retrying" and "Model gateway answered again".
+reads "Running. Revision 4. Model gateway unavailable, retrying." while the gateway is being
+retried (a screen reader announces the same sentence), and returns to "Waiting for the model" once
+a call is answered again. With Run details open the timeline lists "Model gateway unavailable,
+retrying" and "Model gateway answered again".
 
 **Root Cause**
 

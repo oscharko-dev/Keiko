@@ -516,6 +516,25 @@ describe("the proxy ends a call whose client went away (review finding)", () => 
     await proxy.errors.next(/^upstream response error: /u);
   });
 
+  it("ends the client's call as a truncated response when the model server resets the connection mid-body (review finding)", async () => {
+    // A reset (RST) reaches the proxy as an error of the upstream request, before the response's own
+    // 'aborted'; ending the client's response there would hand LiteLLM a complete, chunk-terminated
+    // answer and record a crashed model server as a finished one.
+    const upstream = await startUpstream(({ res }) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: first\n\n");
+    });
+    const proxy = await startProxy({ upstreamPort: upstream.port });
+    const call = openCall(proxy.port);
+    // The head and the first chunk are on the client's side, so the proxy has sent its headers.
+    await call.untilBytes(1);
+    upstream.seen[0].res.socket.resetAndDestroy();
+    await call.closed;
+    expect(call.status).toBe(200);
+    expect(call.complete).toBe(false);
+    await proxy.errors.next(/^upstream error: /u);
+  });
+
   it("keeps serving after a client aborts in the middle of its request body", async () => {
     const upstream = await echoUpstream();
     const proxy = await startProxy({ upstreamPort: upstream.port });
@@ -527,6 +546,9 @@ describe("the proxy ends a call whose client went away (review finding)", () => 
     );
     aborted.destroy();
     await proxy.logs.next(/client closed the connection before the response ended/u);
+    // Node emits the request's error only for a body that never completed, and only to a listener:
+    // the proxy's own request-error handler is what puts the diagnostic on the operator's sink.
+    await proxy.errors.next(/^client request error: Error: aborted$/u);
     expect(upstream.seen).toHaveLength(0);
     const healthy = openCall(proxy.port, { method: "GET", path: "/__chaos", body: undefined });
     await healthy.closed;

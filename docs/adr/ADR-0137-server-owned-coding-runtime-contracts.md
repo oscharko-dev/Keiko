@@ -601,7 +601,13 @@ the call.
   while it is `model-gateway-retrying`, the run status names the phase "Model gateway unavailable,
   retrying" instead of "Waiting for the model". The recovery fact, and any later event of the run
   (a failed turn, a pause, a settlement), ends the phase, so a lost recovery frame cannot leave the
-  status claiming an outage for good. A decision the run waits for still takes precedence.
+  status claiming an outage for good. A decision the run waits for still takes precedence. This is
+  the one phase that joins the status sentence itself, which is the polite, atomic live region
+  (`role="status"`): a screen reader announces "Running. Revision 4. Model gateway unavailable,
+  retrying." where it had read only "Running" for the whole outage, and the status line shows the
+  phase once, not a second time beside the sentence. The other phases (waiting for the model,
+  running a tool, running a verifier, waiting for a decision) change with every step, so they stay
+  visible beside the sentence and are not announced.
 - **Evidence.** Each publication, refused or not, leaves one body-free
   `coding-sidecar.gateway.retry-surfaced` line under the run's correlation: the run revision and
   state, the fact, what a `retrying` fact followed — the failed `attempt` of a retry, or the

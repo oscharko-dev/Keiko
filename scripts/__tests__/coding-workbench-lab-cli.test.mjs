@@ -4,7 +4,7 @@
 // validated, and the one that gets past them stops at the missing launcher secret.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,14 @@ function labCopy(name) {
   const directory = tempDirectory("keiko-lab-cli-repo-");
   writeFileSync(join(directory, "package.json"), JSON.stringify({ name }));
   return directory;
+}
+
+/** A directory with a given name, whose package.json names `packageName`. */
+function namedCopy(directoryName, packageName) {
+  const root = join(tempDirectory("keiko-lab-cli-named-"), directoryName);
+  mkdirSync(root);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: packageName }));
+  return root;
 }
 
 /** Runs one lab command with none of the lab environment set, so a refusal cannot come from a leftover. */
@@ -85,6 +93,20 @@ describe("the drivers refuse to run in whichever workspace the dev server has op
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/is not a lab repository \(its package\.json names "keiko"\)/u);
   });
+
+  it.each(["wb-run.mjs", "wb-ui.mjs", "wb-trust.mjs"])(
+    "%s takes the lab marker from the package.json, not from a directory called ledger-lab",
+    (script) => {
+      const repo = namedCopy("ledger-lab", "keiko");
+      const args =
+        script === "wb-trust.mjs"
+          ? ["grant", "--repo", repo]
+          : ["--task-id", "T1", "--approve", "all", "--repo", repo];
+      const result = run(script, args);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/is not a lab repository \(its package\.json names "keiko"\)/u);
+    },
+  );
 
   it("chaos-suite.mjs needs a repository before it sets a single fault", () => {
     const result = run("chaos-suite.mjs", ["--approve", "none"]);

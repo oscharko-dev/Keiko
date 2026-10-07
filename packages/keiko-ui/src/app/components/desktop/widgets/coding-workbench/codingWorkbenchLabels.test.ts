@@ -26,11 +26,13 @@ import {
   modelSourceLabel,
   readinessAttentionFacts,
   readinessFacts,
+  runPhaseIsAnnounced,
   runStatusAnnouncement,
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
 } from "./codingWorkbenchLabels";
+import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 
 // Echo translator: announcements are asserted on their catalog keys so the tests pin the
 // branching logic without re-stating locale catalog text.
@@ -420,6 +422,99 @@ describe("runStatusAnnouncement research grant", () => {
       run: ready({ schemaVersion: "1", state: "idle", revision: 0, updatedAt: AT }),
     };
     expect(runStatusAnnouncement(idle, t)).toBe("codingWorkbench.runState.idle");
+  });
+});
+
+// Review thread 6pydza: the phase the status line names was a span OUTSIDE the polite, atomic
+// status sentence, so a screen reader heard "Running" for the whole of a model gateway outage while
+// the visible line named it. The gateway phase — and only it — is part of the sentence now. The
+// other phases change with every tool call and would make the region chatter, so they stay visible
+// only; and a phase the sentence states is never shown a second time beside it.
+describe("runStatusAnnouncement run phase", () => {
+  const RUN_SENTENCE = "codingWorkbench.announcement.runRevision";
+  const GATEWAY_PHASE = "codingWorkbench.runStatus.phase.gateway";
+  // Keyed by the phase type, so a new phase cannot be added without deciding here whether it is
+  // announced.
+  const PHASES = {
+    decision: true,
+    gateway: true,
+    verifier: true,
+    tool: true,
+    model: true,
+  } as const satisfies Record<CodingWorkbenchRunPhase, true>;
+  const running: CodingWorkbenchRuntimeState = {
+    ...createInitialCodingWorkbenchRuntimeState(),
+    run: ready({
+      schemaVersion: "1",
+      state: "running",
+      revision: 4,
+      updatedAt: AT,
+      runId: "run-1",
+    }),
+  };
+
+  it("states a model gateway that is unavailable and being retried, right after the run itself", () => {
+    expect(runStatusAnnouncement(running, t, null, "gateway")).toBe(
+      `${RUN_SENTENCE}. ${GATEWAY_PHASE}.`,
+    );
+  });
+
+  it("reads as one sentence in the operator's language", () => {
+    const en: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench("en", key, values);
+    const de: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench("de", key, values);
+    expect(runStatusAnnouncement(running, en, null, "gateway")).toBe(
+      "Running. Revision 4. Model gateway unavailable, retrying.",
+    );
+    expect(runStatusAnnouncement(running, de, null, "gateway")).toBe(
+      "Wird ausgeführt. Revision 4. Modell-Gateway nicht erreichbar, neuer Versuch.",
+    );
+  });
+
+  it.each(["decision", "verifier", "tool", "model"] as const)(
+    "leaves the %s phase out of the sentence: it changes with every step and would chatter",
+    (phase) => {
+      expect(runStatusAnnouncement(running, t, null, phase)).toBe(
+        runStatusAnnouncement(running, t),
+      );
+    },
+  );
+
+  it("leaves a run without a known phase as it was", () => {
+    expect(runStatusAnnouncement(running, t, null, null)).toBe(RUN_SENTENCE);
+    expect(runStatusAnnouncement(running, t)).toBe(RUN_SENTENCE);
+  });
+
+  it("puts the phase before the research grant and the readiness attention facts", () => {
+    const grant: CodingWorkbenchRuntimeResearchGrant = {
+      grantId: "grant-1",
+      domains: ["nodejs.org"],
+      expiresAt: "2026-07-13T12:30:00.000Z",
+    };
+    const status = runStatusAnnouncement({ ...running, pairing: "unpaired" }, t, grant, "gateway");
+    const positions = [
+      RUN_SENTENCE,
+      GATEWAY_PHASE,
+      "codingWorkbench.announcement.researchActive",
+      "codingWorkbench.pairing.unpaired",
+    ].map((part) => status.indexOf(part));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+  });
+
+  it.each(Object.keys(PHASES) as CodingWorkbenchRunPhase[])(
+    "states the %s phase in the sentence exactly when the status line leaves it out",
+    (phase) => {
+      const stated = runStatusAnnouncement(running, t, null, phase).includes(
+        `codingWorkbench.runStatus.phase.${phase}`,
+      );
+      expect(runPhaseIsAnnounced(phase)).toBe(stated);
+    },
+  );
+
+  it("announces nothing for an absent phase", () => {
+    expect(runPhaseIsAnnounced(null)).toBe(false);
   });
 });
 
@@ -859,13 +954,20 @@ describe("activeRunState", () => {
 // #3873 review: `streaming` removes code highlighting and the Copy button from an answer, and the
 // timeline derived it from `activeRunState`, so a finished answer lost both for as long as the run
 // waited for the operator. `generatingRunState` is the narrower fact: the model may still produce
-// text only before its first turn and while it runs.
+// text before its first turn, while it runs and while it is paused.
+//
+// Review thread 6pyds7 INVERTS this block's earlier pins on `paused` (they held that a paused run
+// takes no further turn, so an answer shown then is finished). Pausing refuses NEW work only — an
+// approval, a child tool mutation, a new model-call admission — and aborts nothing: the call the
+// run had already admitted keeps streaming into its message, and the safe-activity feed keeps
+// delivering it while the run reads `paused`. The inversion is deliberate; a future edit must not
+// restore the old expectation without a server change that aborts the admitted call on pause.
 describe("generatingRunState", () => {
   it.each(CODING_WORKBENCH_RUNTIME_STATE_NAMES)(
     "treats %s as generating only while the model may still produce text",
     (state) => {
       expect(generatingRunState(state)).toBe(
-        state === "starting" || state === "ready" || state === "running",
+        state === "starting" || state === "ready" || state === "running" || state === "paused",
       );
     },
   );
@@ -876,8 +978,13 @@ describe("generatingRunState", () => {
     }
   });
 
-  it("does not count a run that waits for the operator, is paused or is stopping", () => {
-    for (const state of ["awaiting-approval", "paused", "stopping"] as const) {
+  it("counts a paused run as generating: the call it had admitted keeps streaming", () => {
+    expect(activeRunState("paused")).toBe(true);
+    expect(generatingRunState("paused")).toBe(true);
+  });
+
+  it("does not count a run that waits for the operator or is stopping", () => {
+    for (const state of ["awaiting-approval", "stopping"] as const) {
       expect(activeRunState(state)).toBe(true);
       expect(generatingRunState(state)).toBe(false);
     }

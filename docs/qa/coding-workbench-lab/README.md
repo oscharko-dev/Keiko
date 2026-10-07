@@ -173,11 +173,12 @@ Workbench's _Coding model_ picker must now list `gemma-4-31b-it`. The activity l
 
 Never work inside `tests/fixtures/`: copy the fixture out and give it a Git history on branch `main`.
 Pick the baseline the task needs (see _Baselines and the planted defects_); apply at most one
-patch, to the copy, before its first commit.
+patch, inside the copy's own repository, after `git init` and before its first commit.
 
 ```bash
 export KEIKO_LAB_REPO="$HOME/keiko-lab-ledger"
 mkdir -p "$KEIKO_LAB_REPO" && cp -R tests/fixtures/coding-workbench-lab/ledger-lab/. "$KEIKO_LAB_REPO"/
+git -C "$KEIKO_LAB_REPO" init -b main
 # T1 to T3 ran on the initial lab state:
 # git -C "$KEIKO_LAB_REPO" apply "$PWD/tests/fixtures/coding-workbench-lab/patches/initial-state.patch"
 # T8, T9 and T12 start from the reference T7 result:
@@ -185,12 +186,22 @@ mkdir -p "$KEIKO_LAB_REPO" && cp -R tests/fixtures/coding-workbench-lab/ledger-l
 # T13 measures an AGENTS.md above the loader's cap:
 # git -C "$KEIKO_LAB_REPO" apply "$PWD/tests/fixtures/coding-workbench-lab/patches/head-md.patch"
 cd "$KEIKO_LAB_REPO"
-git init -b main && git add -A
+git add -A
 git -c user.name="Keiko Lab" -c user.email=lab@keiko.invalid -c commit.gpgsign=false commit -m "Baseline"
 npm install && npm test
 git init --bare "$HOME/keiko-lab-remote.git" && git remote add origin "$HOME/keiko-lab-remote.git"   # T6 delivers here
 cd -
 ```
+
+Initialise the copy before you apply a patch. `git apply` only changes paths inside the repository it
+runs in, so in a copy that sits inside another repository's work tree (a dotfiles-managed `$HOME` is
+enough) and is not a repository itself, it applies nothing, prints nothing and exits 0, and so do
+`git apply --check` and `git apply --check -R`. Every task then runs on the wrong baseline with
+nothing to show it. To see that a patch is in scope, `git -C "$KEIKO_LAB_REPO" apply --stat <patch>`
+names the files it changes (it prints `0 files changed` when it is not; `--verbose` says
+`Skipped patch`), and `head+md` shows in the size of its `AGENTS.md`:
+`wc -c < "$KEIKO_LAB_REPO/AGENTS.md"` prints 30621, while the file of every other baseline is under
+1 KiB.
 
 The first run that needs the repository's npm scripts pauses for the operator's package-script trust
 decision. `wb-ui.mjs --approve all` allows it, `wb-trust.mjs grant` grants it beforehand. Between
@@ -202,6 +213,21 @@ The drivers act as the local operator, so they fail closed. They work only on th
 by `--repo` or `KEIKO_LAB_REPO` (never on whichever workspace the dev server has open), and only on
 a copy of the fixture: a checkout whose `package.json` does not name `ledger-lab` is refused, and a
 run does not start unless the dev server accepted that repository as its workspace.
+
+**The drivers register the copy.** The dev server selects a repository only after a project with
+that exact path is registered, and refuses anything else with `MISSING_REPOSITORY` ("Select a
+registered repository."). So `wb-run.mjs`, `wb-ui.mjs` and `wb-trust.mjs` first register the copy
+(`POST /api/projects`, as the Workbench's own `createProject` does) under its canonical real path,
+the one the server resolves a root to, and then select it (`POST /api/task-workspaces/local`).
+Registering is idempotent, so a repeat run, or a copy you added in the Workbench yourself, is no
+failure. The registration carries no `selectionIntent`: a folder added as an explicit folder
+selection (what the Workbench's folder pickers send) is granted package-script trust on its first
+registration, which would silently consume the trust pause that the runs of this guide measure.
+`wb-trust.mjs grant` registers too, so on a state directory that has never seen the copy trust can be
+granted before the first run. When the server refuses, the driver stops and prints its own code and
+message, not only the status. The usual ones are `LOCK_CONTENTION` ("A coding run is still active.":
+wait for that run or stop it with `wb-stop.mjs`) and `INVALID_BASE_BRANCH` ("Select an existing
+local branch.": the copy has no local branch `main`; create it or pass `--branch`).
 
 ### 6. Run a task and read the run
 
@@ -226,13 +252,17 @@ or answer in a Workbench window paired with `pair.mjs`). Every run prints `drive
 before its last line, and the ledger row says it (step 7). The Ask-for-approval tasks (T4, T10, T11)
 exist to show a human decision: run them with `--approve ask` and answer yourself to record
 human-in-the-loop evidence; with `--approve all` the run proves only that an ask was raised and that
-approving it lets the work land.
+approving it lets the work land. The change review of an edit is not a permission ask: the edit tool
+waits in place for your decision while the run stays `running`, and `turn-profile.mjs` shows that
+wait as a `change review` operator pause (the edit's own seconds in the `then` column still include
+it).
 
 The activity log is the evidence. `run-summary.mjs`, `turn-profile.mjs` and `rawtl.mjs` are quick
 local views over it (model turns, provider-reported prompt tokens, edit outcomes, retries,
 settlement and, per turn, where the time went: the model's own time to the response headers, the
-time to the first data event, decoding, the tools, the operator pauses and the gap to the next
-request; buffered and streamed turns, failed turns included). The supported, shareable form is
+time to the first data event, decoding, the tools, the operator pauses (the package-script trust
+decision, permission asks and the change review of an edit in Ask for approval) and the gap to the
+next request; buffered and streamed turns, failed turns included). The supported, shareable form is
 `keiko support export --correlation-id <run id>` followed by `keiko support analyze`
 ([`AGENTS.md`](../../../AGENTS.md), section 8). None of them contains a prompt, code or model
 output.
@@ -461,8 +491,11 @@ and T3 when you want the conditions of the recorded runs.
 
 Each scenario sets one fault on the chaos proxy and runs the short read-only task C1 through
 `wb-run.mjs`; `chaos-suite.mjs` runs them one after another (about half an hour for S1 to S7) and
-prints one body-free line per scenario. The ledger's _Resilience under gateway load_ section holds
-the recorded outcomes and the finding F10 behind them.
+prints one body-free line per scenario. A scenario whose driver was refused (a missing launcher
+secret, a copy the dev server did not accept) starts no run and shows `no-run-id`; the suite then
+ends `summary.log` with `INCOMPLETE` instead of `DONE` and exits 1, so a scripted campaign never
+reads as passed. The ledger's _Resilience under gateway load_ section holds the recorded outcomes
+and the finding F10 behind them.
 
 | Id  | Fault                                | Control body                                                   |
 | --- | ------------------------------------ | -------------------------------------------------------------- |

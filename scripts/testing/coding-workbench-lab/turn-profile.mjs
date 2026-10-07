@@ -22,9 +22,11 @@
 // Reasoning tokens and bytes come from the end line. Failures are visible: a failed, exhausted or
 // abandoned turn has an end, and its seconds are model time ("failed"), not "other".
 // A breakdown of the wall clock follows, bounded at `coding-runtime.run.settled`. Its slices never
-// overlap: model, then operator pauses (a script-trust wait, or an approval from
-// `coding-runtime.approval.waiting` to its `.decided` / `.retired`), then tools, then the gaps
-// between a turn and the next; "other" is what no slice claims.
+// overlap: model, then operator pauses (a script-trust wait, an approval from
+// `coding-runtime.approval.waiting` to its `.decided` / `.retired`, or a change review of Ask for
+// approval, which the edit invocation itself waits for, from `coding-runtime.editor-review.decided`
+// to `coding-runtime.editor-mutation.settled`), then tools, then the gaps between a turn and the
+// next; "other" is what no slice claims.
 // The log names this tool reads are checked against docs/observability/op-catalog.generated.json
 // at start, so a renamed operation or field fails loudly instead of printing zeros.
 import { isMainModule } from "../../lib/is-main-module.mjs";
@@ -44,8 +46,9 @@ const USAGE = [
   "Reads <log dir>/activity-*.jsonl through the Activity Log file grammar and prints one row per",
   "model turn (buffered or streamed, failed turns included) plus a breakdown of where the wall",
   "clock went. The log directory is --log-dir, else KEIKO_LAB_LOG_DIR, else",
-  "<KEIKO_STATE_DIR or ./.keiko/dev>/logs. Times are UTC. Operator pauses (script trust and",
-  "approvals) are their own slice, taken out of the tool time or gap they overlap.",
+  "<KEIKO_STATE_DIR or ./.keiko/dev>/logs. Times are UTC. Operator pauses (script trust, approvals",
+  "and the change reviews of Ask for approval) are their own slice, taken out of the tool time or gap",
+  "they overlap.",
 ].join("\n");
 
 const REQUEST_VALIDATED = "coding-sidecar.gateway.request-validated";
@@ -57,6 +60,13 @@ const RUN_OPERATOR_DECISION = "coding-runtime.run.operator-decision";
 const OPERATOR_DECISION = "coding-runtime.operator-decision";
 const TOOL_STARTED = "tool-catalog.invocation-started";
 const TOOL_SETTLED = "tool-catalog.invocation-settled";
+const REVIEW_DECIDED = "coding-runtime.editor-review.decided";
+const MUTATION_SETTLED = "coding-runtime.editor-mutation.settled";
+/**
+ * The tool catalog's id of the edit tool. A change review happens inside its invocation: the call
+ * waits in place for the person's decision on the diff (packages/keiko-tool-catalog opencode.ts).
+ */
+export const EDIT_TOOL = "keiko.changeset.edit";
 const INSTRUCTIONS_CONTEXT = "coding-runtime.repository-instructions.context";
 const RETRY_OR_CIRCUIT = /^gateway\.(?:retry|circuit)\./u;
 // A tool that starts this long before the turn's response is still attributed to the turn.
@@ -104,6 +114,8 @@ export const PROFILE_CONTRACT = Object.freeze({
   [APPROVAL_RETIRED]: ["requestId"],
   [RUN_OPERATOR_DECISION]: ["state"],
   [OPERATOR_DECISION]: [],
+  [REVIEW_DECIDED]: ["disposition"],
+  [MUTATION_SETTLED]: [],
   [RUN_SETTLED]: [],
   [INSTRUCTIONS_CONTEXT]: ["state", "byteCount", "totalByteCount", "estimatedTokens", "reason"],
 });
@@ -302,8 +314,77 @@ function approvalWaits(rows, tEnd) {
   return waits;
 }
 
+const CHANGE_REVIEW = "change review";
+
+/** The edit invocation a review line belongs to: the oldest running one that has none yet. */
+function claimEditInvocation(edits) {
+  for (const [invocationId, claimed] of edits) {
+    if (!claimed) {
+      edits.set(invocationId, true);
+      return invocationId;
+    }
+  }
+  return undefined;
+}
+
+function trackEditInvocation({ edits }, row) {
+  if (row.toolCanonicalId === EDIT_TOOL) edits.set(row.invocationId, false);
+}
+
+function openChangeReview(state, row) {
+  if (row.disposition !== "review-required") return;
+  state.open.push({ start: seconds(row), invocationId: claimEditInvocation(state.edits) });
+}
+
+function settleChangeReview(state, row) {
+  const review = state.open.shift();
+  if (review !== undefined) {
+    state.waits.push({ label: CHANGE_REVIEW, start: review.start, end: seconds(row) });
+  }
+}
+
+/** The edit ended without a settlement: it was refused, nobody reviewed it, so its start is retired. */
+function retireChangeReviews(state, row) {
+  state.edits.delete(row.invocationId);
+  state.open = state.open.filter((review) => review.invocationId !== row.invocationId);
+}
+
+// Per-operation updates of the change-review pairing; a Map, like the request handlers above.
+const REVIEW_EVENT_HANDLERS = new Map([
+  [TOOL_STARTED, trackEditInvocation],
+  [REVIEW_DECIDED, openChangeReview],
+  [MUTATION_SETTLED, settleChangeReview],
+  [TOOL_SETTLED, retireChangeReviews],
+]);
+
+/**
+ * The change reviews of Ask for approval. The run stays `running` and no approval is asked: the edit
+ * invocation itself waits in place for the person, from the registration that requires a review
+ * (`editor-review.decided`, disposition `review-required`) to the edit's `editor-mutation.settled`.
+ * Both lines carry the run's own correlation id, so they pair by order, never by correlation.
+ * An edit refused after its registration (no live Workbench, a refusal of the editor route) shows
+ * no review to anyone and never settles: its start is retired when that edit invocation settles,
+ * without a wait, so it is neither booked as a pause (its seconds before the refusal are tool time,
+ * the registration comes before the bounded wait for a Workbench) nor paired with a later edit's
+ * settlement. A review still open when the log ends lasted until its last event.
+ */
+function changeReviewWaits(rows, tEnd) {
+  const state = { waits: [], open: [], edits: new Map() };
+  for (const row of rows) REVIEW_EVENT_HANDLERS.get(row.op)?.(state, row);
+  for (const review of state.open) {
+    if (review.invocationId !== undefined) {
+      state.waits.push({ label: CHANGE_REVIEW, start: review.start, end: tEnd });
+    }
+  }
+  return state.waits;
+}
+
 function collectWaits(rows, tEnd) {
-  return [...scriptTrustWaits(rows, tEnd), ...approvalWaits(rows, tEnd)];
+  return [
+    ...scriptTrustWaits(rows, tEnd),
+    ...approvalWaits(rows, tEnd),
+    ...changeReviewWaits(rows, tEnd),
+  ];
 }
 
 // ---- turns ----------------------------------------------------------------------------------

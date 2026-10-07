@@ -225,8 +225,11 @@ function forward(req, res, body, context, exchange, fault) {
     // Destroying the upstream request is this proxy's own teardown of an abandoned call.
     if (exchange.closed) return;
     logError(`upstream error: ${error.name}: ${error.message}`);
+    // A reset (RST) mid-body reaches this handler before the response's own 'aborted' error. Ending
+    // the client's response here would hand it a complete, chunk-terminated answer, so a crashed
+    // model server would be recorded as a finished one: tear the connection down, as for a FIN.
     if (res.headersSent) {
-      res.end();
+      res.destroy();
       return;
     }
     res.writeHead(502, TEXT_HEADERS);

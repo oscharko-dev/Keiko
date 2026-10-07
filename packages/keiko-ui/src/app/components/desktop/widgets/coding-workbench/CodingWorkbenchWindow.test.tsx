@@ -9,7 +9,7 @@ import {
   largestHolding,
   startsShown,
 } from "./_restoredConversationTestSupport";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -376,6 +376,13 @@ function renderWorkbench(
 function openWorkbenchInformation(): HTMLElement {
   fireEvent.click(screen.getByRole("button", { name: "Open Coding Workbench information" }));
   return screen.getByRole("dialog", { name: "Coding Workbench information" });
+}
+
+// The run status sentence is the one live region that speaks for the run: polite and atomic.
+function expectPoliteAtomicStatus(announcement: HTMLElement): void {
+  expect(announcement).toHaveAttribute("role", "status");
+  expect(announcement).toHaveAttribute("aria-live", "polite");
+  expect(announcement).toHaveAttribute("aria-atomic", "true");
 }
 
 function activeWorkspaceWithBinding(
@@ -1786,12 +1793,6 @@ describe("CodingWorkbenchWindow", () => {
       },
     } as const satisfies CodingWorkbenchRuntimeState["runtime"];
 
-    function expectPoliteAtomicStatus(announcement: HTMLElement): void {
-      expect(announcement).toHaveAttribute("role", "status");
-      expect(announcement).toHaveAttribute("aria-live", "polite");
-      expect(announcement).toHaveAttribute("aria-atomic", "true");
-    }
-
     it("announces an unavailable runtime in the run status sentence, after the run itself", (): void => {
       renderWorkbench(liveState({ canStart: false, runtime: UNAVAILABLE_RUNTIME }));
 
@@ -1886,17 +1887,22 @@ describe("CodingWorkbenchWindow", () => {
       );
     }
 
+    // Review thread 6pydza: the phase sat in a span outside the live region, so the polite, atomic
+    // sentence read "Running. Revision 4." for the whole outage — a screen reader user heard
+    // "Running" while the visible line named the outage. The phase is in that sentence now (it is
+    // the visible text too, so it is shown once), and the sentence is the one that changes.
     it("says so in the run status instead of waiting for the model", (): void => {
       renderRunning([gatewayFact(1, "model-gateway-retrying")]);
 
-      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(
-        "Model gateway unavailable, retrying",
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveTextContent(
+        /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
       );
-      expect(screen.getByTestId("coding-runtime-phase")).not.toHaveTextContent(
+      expect(announcement).toBeVisible();
+      expect(screen.queryByTestId("coding-runtime-phase")).toBeNull();
+      expect(screen.getByTestId("coding-runtime-status")).not.toHaveTextContent(
         "Waiting for the model",
-      );
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-        /^Running\. Revision 4\.$/u,
       );
     });
 
@@ -1907,6 +1913,9 @@ describe("CodingWorkbenchWindow", () => {
       ]);
 
       expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+        /^Running\. Revision 4\.$/u,
+      );
     });
 
     it("lists the facts among the run's details, apart from attention-grade failures", async (): Promise<void> => {
@@ -4472,8 +4481,19 @@ describe("sessionGrowthKey", () => {
 // #3873 review: `streaming` removes code highlighting and the Copy button, and the Workbench used
 // to hand it to every message of an active run, so an answer that was finished lost both for as
 // long as the operator took to decide. Only a run whose model may still produce text is generating.
+//
+// Review thread 6pyds7 moved `paused` from the finished side of this block (where it was pinned
+// beside `awaiting-approval` and `stopping`) to the generating side, deliberately inverting those
+// pins: pausing refuses new work but aborts no call the run had already admitted, so the message
+// it is writing keeps growing while the run reads `paused`, and the safe-activity feed keeps
+// delivering it.
 describe("CodingWorkbenchWindow finished answers", () => {
-  function codeAnswerFeed(): AvailableCodingSafeActivityFeed {
+  const FINISHED_ANSWER = "Run:\n\n```sh\nnpm test\n```";
+  // The same answer cut off inside its code block, which is what a message still being written is.
+  const PARTIAL_ANSWER = "Run:\n\n```sh\nnpm te";
+  const AFTER_THE_ANSWER = "2026-07-13T12:00:05.000Z";
+
+  function answerFeed(answer: string, toolAt?: string): AvailableCodingSafeActivityFeed {
     return {
       schemaVersion: "1",
       availability: "available",
@@ -4487,11 +4507,21 @@ describe("CodingWorkbenchWindow finished answers", () => {
               messageId: "message-code",
               role: "assistant",
               occurredAt: AT,
-              segments: [{ kind: "text", text: "Run:\n\n```sh\nnpm test\n```", truncated: false }],
+              segments: [{ kind: "text", text: answer, truncated: false }],
               truncated: false,
             },
           ],
-          tools: [],
+          tools:
+            toolAt === undefined
+              ? []
+              : [
+                  {
+                    callId: "call-command",
+                    tool: "keiko_run_command",
+                    state: "pending",
+                    occurredAt: toolAt,
+                  },
+                ],
           truncated: false,
         },
       ],
@@ -4500,18 +4530,44 @@ describe("CodingWorkbenchWindow finished answers", () => {
     };
   }
 
-  function renderRunInState(state: CodingWorkbenchRuntimeStateName): void {
+  function showRun(
+    state: CodingWorkbenchRuntimeStateName,
+    feed: AvailableCodingSafeActivityFeed,
+  ): void {
     activityHookMock.mockReturnValue({
       status: "live",
-      feed: codeAnswerFeed(),
+      feed,
       errorCode: null,
       retry: vi.fn(),
     } satisfies UseCodingWorkbenchSafeActivityResult);
-    renderWorkbench(
-      liveState({
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
         run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
       }),
-    );
+      actions: actions(),
+    });
+  }
+
+  function renderRunInState(
+    state: CodingWorkbenchRuntimeStateName,
+    feed: AvailableCodingSafeActivityFeed = answerFeed(FINISHED_ANSWER),
+  ): ReturnType<typeof render> {
+    showRun(state, feed);
+    return render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+  }
+
+  // The run moves on (its message grows, it settles): the hooks answer anew and the Window renders
+  // again, inside `act` so the selector's own asynchronous updates settle with it.
+  async function updateRun(
+    view: ReturnType<typeof render>,
+    state: CodingWorkbenchRuntimeStateName,
+    feed: AvailableCodingSafeActivityFeed,
+  ): Promise<void> {
+    showRun(state, feed);
+    await act(async () => {
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      await Promise.resolve();
+    });
   }
 
   function copyButtons(): readonly HTMLElement[] {
@@ -4521,7 +4577,7 @@ describe("CodingWorkbenchWindow finished answers", () => {
     );
   }
 
-  it.each(["awaiting-approval", "paused", "stopping"] as const)(
+  it.each(["awaiting-approval", "stopping"] as const)(
     "keeps Copy on a finished answer while the run is %s",
     (state) => {
       renderRunInState(state);
@@ -4536,6 +4592,54 @@ describe("CodingWorkbenchWindow finished answers", () => {
       expect(copyButtons()).toHaveLength(0);
     },
   );
+
+  // Thread 6pyds7's probe: with an answer ending in an unclosed fence the Copy buttons were 0 while
+  // `running` and 1 while `paused`, so Copy was offered on a partial code block and the block was
+  // re-highlighted on every batch the feed kept delivering.
+  describe("a paused run", () => {
+    // The order the live run takes: the answer streams while the run runs, then the operator pauses.
+    // The pause must not flip the message into its finished form while its text keeps growing.
+    it("does not flip a streaming message into its finished form when the run is paused", async () => {
+      const view = renderRunInState("running", answerFeed(PARTIAL_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+
+      await updateRun(view, "paused", answerFeed(PARTIAL_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+    });
+
+    it("keeps the answer it is still extending in its streaming form as the answer grows", async () => {
+      const view = renderRunInState("paused", answerFeed(PARTIAL_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+
+      await updateRun(view, "paused", answerFeed(`${PARTIAL_ANSWER}st`));
+      expect(screen.getByRole("list", { name: "Coding run event timeline" })).toHaveTextContent(
+        "npm test",
+      );
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+    });
+
+    // The trade-off, stated so that nobody mistakes it for an oversight: from the feed alone a
+    // finished last text of a paused run cannot be told from one that is still being written, so it
+    // stays in its streaming form (no Copy, no highlighting) until the run settles, or until the
+    // model moves on to a tool call (next test).
+    it("leaves the last text of a paused run without Copy until the run settles", async () => {
+      const view = renderRunInState("paused", answerFeed(FINISHED_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+
+      await updateRun(view, "cancelled", answerFeed(FINISHED_ANSWER));
+      expect(copyButtons()).toHaveLength(1);
+      expect(document.querySelector(".sm-code-block-header")).not.toBeNull();
+    });
+
+    it("closes the message once a tool began after it, exactly as for a running run", () => {
+      renderRunInState("paused", answerFeed(FINISHED_ANSWER, AFTER_THE_ANSWER));
+      expect(copyButtons()).toHaveLength(1);
+    });
+  });
 
   it("keeps Copy on the answer of a settled run", () => {
     renderRunInState("succeeded");

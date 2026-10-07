@@ -1,11 +1,21 @@
 // Tests for what the Coding Workbench live-lab drivers do on the operator's behalf: the approval
 // policy applied to the two gates of a run (shared by wb-run.mjs and wb-ui.mjs), the poll loop of
 // wb-run.mjs and the buttons of wb-ui.mjs (permissions, the package-script trust pause and the
-// change review of Ask for approval) against fakes, and the pairing helpers of lab-common.mjs (a
-// minted attestation is checked with the product's own pairing port, and the HTTP session against a
-// stubbed fetch). Nothing here talks to a dev server.
+// change review of Ask for approval) against fakes, the checkout every run starts with (the lab
+// copy is registered as a project, selected as the workspace, and a run never starts when the dev
+// server refuses it), and the pairing helpers of lab-common.mjs (a minted attestation is checked
+// with the product's own pairing port, and the HTTP session against a stubbed fetch). Nothing here
+// talks to a dev server: its two checkout routes are modelled by `devServer` below.
 
-import { readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,6 +25,8 @@ import * as sessionCookies from "../../packages/keiko-server/dist/coding-app-ses
 import {
   CSRF_HEADERS,
   LAB_COMMANDS,
+  LAB_REPOSITORY_NAME,
+  MODES,
   REPO_ROOT,
   UsageError,
   gateActions,
@@ -23,13 +35,27 @@ import {
   openApiSession,
   runMain,
 } from "../testing/coding-workbench-lab/lab-common.mjs";
-import { watchRun } from "../testing/coding-workbench-lab/wb-run.mjs";
-import { answerGates } from "../testing/coding-workbench-lab/wb-ui.mjs";
+import { applyTrust } from "../testing/coding-workbench-lab/wb-trust.mjs";
+import {
+  operateRun as operateApiRun,
+  selectCheckout as selectApiCheckout,
+  watchRun,
+} from "../testing/coding-workbench-lab/wb-run.mjs";
+import {
+  answerGates,
+  operateRun as operateUiRun,
+  selectCheckout as selectUiCheckout,
+} from "../testing/coding-workbench-lab/wb-ui.mjs";
+
+const TEMP_PATHS = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   process.exitCode = undefined;
+  while (TEMP_PATHS.length > 0) {
+    rmSync(TEMP_PATHS.pop(), { recursive: true, force: true });
+  }
 });
 
 const RUNNING = { state: "running", revision: 1 };
@@ -395,6 +421,323 @@ describe("wb-ui.mjs: the change review of Ask for approval", () => {
     expect(labels).toContain(
       `"codingWorkbench.changesetReview.deny": "${reject.reviewButtons[0].name}"`,
     );
+  });
+});
+
+/** A lab copy and a symlink to it: the dev server only knows a repository by its real path. */
+function labRepository() {
+  const real = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lab-drivers-")));
+  const alias = `${real}-alias`;
+  symlinkSync(real, alias);
+  TEMP_PATHS.push(real, alias);
+  writeFileSync(join(real, "package.json"), JSON.stringify({ name: LAB_REPOSITORY_NAME }));
+  return { real, alias };
+}
+
+const MISSING_REPOSITORY = {
+  status: 400,
+  json: { error: { code: "MISSING_REPOSITORY", message: "Select a registered repository." } },
+};
+const LOCK_CONTENTION = {
+  status: 409,
+  json: { error: { code: "LOCK_CONTENTION", message: "A coding run is still active." } },
+};
+const INVALID_BASE_BRANCH = {
+  status: 400,
+  json: { error: { code: "INVALID_BASE_BRANCH", message: "Select an existing local branch." } },
+};
+const REFUSALS = [
+  [MISSING_REPOSITORY, "HTTP 400 MISSING_REPOSITORY: Select a registered repository."],
+  [LOCK_CONTENTION, "HTTP 409 LOCK_CONTENTION: A coding run is still active."],
+  [INVALID_BASE_BRANCH, "HTTP 400 INVALID_BASE_BRANCH: Select an existing local branch."],
+];
+
+/**
+ * The two routes of a checkout as the dev server answers them. POST /api/projects registers the path
+ * it is given (an upsert: a repeat answers 201 again, as the store does) and POST
+ * /api/task-workspaces/local refuses a root that no registered project has as its path, with the
+ * server's own error envelope (task-workspace/local-checkout.ts). `refuse` makes it refuse
+ * whatever was registered, as a busy server or a missing branch does.
+ */
+function devServer({ refuse, registration } = {}) {
+  const projects = new Set();
+  return {
+    projects,
+    handle(path, body) {
+      if (path === "/api/projects") {
+        if (registration !== undefined) return registration;
+        projects.add(body.path);
+        return { status: 201, json: { project: { path: body.path } } };
+      }
+      if (path !== "/api/task-workspaces/local") return undefined;
+      if (refuse !== undefined) return refuse;
+      return projects.has(realpathSync(body.root))
+        ? { status: 200, json: { active: {} } }
+        : MISSING_REPOSITORY;
+    },
+  };
+}
+
+/** An API session on `server` that also answers one short run to its end, and records every call. */
+function runSession(server, snapshots = [DONE]) {
+  const calls = [];
+  let poll = 0;
+  return {
+    calls,
+    request(method, path, body) {
+      calls.push({ method, path, body });
+      const answered = server.handle(path, body);
+      if (answered !== undefined) return Promise.resolve(answered);
+      if (method === "POST" && path === "/api/coding-workbench/runtime/runs") {
+        return Promise.resolve({ status: 202, json: { runId: "run-1", state: "running" } });
+      }
+      if (method === "GET" && path === "/api/coding-workbench/runtime/runs/run-1") {
+        const snapshot = snapshots[Math.min(poll, snapshots.length - 1)];
+        poll += 1;
+        return Promise.resolve({ status: 200, json: { snapshot } });
+      }
+      if (path === "/api/coding-workbench/app-session/channel") {
+        return Promise.resolve({ status: 200, json: { content: { feed: { turns: [] } } } });
+      }
+      return Promise.reject(new Error(`unexpected request ${method} ${path}`));
+    },
+  };
+}
+
+const silent = () => vi.spyOn(console, "log").mockImplementation(() => undefined);
+const startsRun = (call) => call.path === "/api/coding-workbench/runtime/runs";
+
+describe("wb-run.mjs: the lab copy is registered and selected before a run starts", () => {
+  const run = (repo, extra = {}) => ({
+    approve: "none",
+    repo,
+    branch: "main",
+    task: { text: "List the modules in src/.", mode: MODES[0] },
+    model: "gemma-4-31b-it",
+    timeoutMs: 60_000,
+    ...extra,
+  });
+
+  it("registers the copy under its real path, without any selection intent, then selects it", async () => {
+    silent();
+    const { real, alias } = labRepository();
+    const session = runSession(devServer());
+    await selectApiCheckout(session, alias, "main");
+    // `toEqual` pins the body of the registration: `selectionIntent: "explicit-folder-selection"`
+    // would grant package-script trust on the first registration and consume the trust pause.
+    expect(session.calls).toEqual([
+      { method: "POST", path: "/api/projects", body: { path: real } },
+      {
+        method: "POST",
+        path: "/api/task-workspaces/local",
+        body: { root: real, branch: "main", requestedBy: "studio-operator" },
+      },
+    ]);
+  });
+
+  it("does not fail the run when the copy is already registered", async () => {
+    silent();
+    const { alias } = labRepository();
+    const server = devServer();
+    await selectApiCheckout(runSession(server), alias, "main");
+    await expect(selectApiCheckout(runSession(server), alias, "main")).resolves.toBeUndefined();
+    expect(server.projects.size).toBe(1);
+  });
+
+  it.each(REFUSALS)(
+    "refuses a checkout the server refused, with its own code and message (%#)",
+    async (refusal, reason) => {
+      silent();
+      const { alias } = labRepository();
+      const session = runSession(devServer({ refuse: refusal }));
+      const failure = await selectApiCheckout(session, alias, "main").catch((error) => error);
+      expect(failure.message).toContain(reason);
+      expect(failure.message).toContain("not starting a run");
+    },
+  );
+
+  it("stops at a refused registration, with the server's reason, before it selects anything", async () => {
+    silent();
+    const { alias } = labRepository();
+    const denied = {
+      status: 403,
+      json: { error: { code: "DENIED", message: "The project path is excluded." } },
+    };
+    const session = runSession(devServer({ registration: denied }));
+    const failure = await selectApiCheckout(session, alias, "main").catch((error) => error);
+    expect(failure.message).toContain("HTTP 403 DENIED: The project path is excluded.");
+    expect(session.calls.map((call) => call.path)).toEqual(["/api/projects"]);
+  });
+
+  it("never starts a run when the dev server refused the checkout", async () => {
+    silent();
+    const { alias } = labRepository();
+    const session = runSession(devServer({ refuse: MISSING_REPOSITORY }));
+    await expect(operateApiRun(session, run(alias))).rejects.toThrow(/MISSING_REPOSITORY/u);
+    expect(session.calls.some(startsRun)).toBe(false);
+  });
+
+  it("registers, selects, then starts the run, in that order, and follows it to its end", async () => {
+    const print = silent();
+    const { alias } = labRepository();
+    const session = runSession(devServer());
+    await expect(operateApiRun(session, run(alias))).resolves.toBe(0);
+    expect(session.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      "POST /api/projects",
+      "POST /api/task-workspaces/local",
+      "POST /api/coding-workbench/runtime/runs",
+      "GET /api/coding-workbench/runtime/runs/run-1",
+      "GET /api/coding-workbench/app-session/channel",
+    ]);
+    expect(print.mock.calls.map((call) => String(call[0]))).toContain("----- run run-1 -----");
+  });
+});
+
+/** An APIResponse of Playwright's `page.request`: the status and the body are read through calls. */
+const apiResponse = ({ status, json }) => ({
+  status: () => status,
+  json: () => Promise.resolve(json),
+});
+
+/**
+ * A page that answers `page.request.post` as the dev server does and counts reloads. Anything the
+ * Workbench's own controls would be reached through throws: it is how a run that started
+ * although the checkout was refused shows up.
+ */
+function serverPage(server) {
+  const posts = [];
+  const reached = (name) => () => {
+    throw new Error(`${name} reached: the run was started`);
+  };
+  return {
+    posts,
+    reloads: 0,
+    request: {
+      post(url, options) {
+        posts.push({ url, options });
+        return Promise.resolve(
+          apiResponse(server.handle(url, options.data) ?? { status: 404, json: {} }),
+        );
+      },
+    },
+    reload() {
+      this.reloads += 1;
+      return Promise.resolve();
+    },
+    getByRole: reached("getByRole"),
+    locator: reached("locator"),
+  };
+}
+
+describe("wb-ui.mjs: the lab copy is registered and selected before a run starts", () => {
+  const run = (repo) => ({
+    approve: "none",
+    repo,
+    branch: "main",
+    timeoutMs: 60_000,
+    task: { text: "List the modules in src/.", mode: MODES[0], model: "gemma-4-31b-it" },
+  });
+
+  it("registers the copy under its real path, without any selection intent, then selects it", async () => {
+    silent();
+    const { real, alias } = labRepository();
+    const page = serverPage(devServer());
+    await selectUiCheckout(page, alias, "main");
+    expect(page.posts).toEqual([
+      { url: "/api/projects", options: { headers: CSRF_HEADERS, data: { path: real } } },
+      {
+        url: "/api/task-workspaces/local",
+        options: {
+          headers: CSRF_HEADERS,
+          data: { root: real, branch: "main", requestedBy: "studio-operator" },
+        },
+      },
+    ]);
+  });
+
+  it("does not fail the run when the copy is already registered", async () => {
+    silent();
+    const { alias } = labRepository();
+    const server = devServer();
+    await selectUiCheckout(serverPage(server), alias, "main");
+    await expect(selectUiCheckout(serverPage(server), alias, "main")).resolves.toBeUndefined();
+    expect(server.projects.size).toBe(1);
+  });
+
+  it.each(REFUSALS)(
+    "refuses a checkout the server refused, with its own code and message (%#)",
+    async (refusal, reason) => {
+      silent();
+      const { alias } = labRepository();
+      const page = serverPage(devServer({ refuse: refusal }));
+      const failure = await selectUiCheckout(page, alias, "main").catch((error) => error);
+      expect(failure.message).toContain(reason);
+      expect(failure.message).toContain("not starting a run");
+    },
+  );
+
+  it("never reloads the Workbench or touches its controls when the checkout was refused", async () => {
+    silent();
+    const { alias } = labRepository();
+    const page = serverPage(devServer({ refuse: LOCK_CONTENTION }));
+    await expect(operateUiRun(page, run(alias))).rejects.toThrow(/LOCK_CONTENTION/u);
+    expect(page.reloads).toBe(0);
+    expect(page.posts.map((post) => post.url)).toEqual([
+      "/api/projects",
+      "/api/task-workspaces/local",
+    ]);
+  });
+});
+
+describe("wb-trust.mjs: trust is granted to the registered lab copy", () => {
+  const TRUST = "/api/editor/verification/trust";
+  const NOT_FOUND = {
+    status: 404,
+    json: { error: { code: "PROJECT_NOT_FOUND", message: "The project is not registered." } },
+  };
+  // The trust route names a registered project only, as the server does (workspace-script-trust.ts).
+  const trustServer = ({ refuse } = {}) => {
+    const server = devServer();
+    return {
+      ...server,
+      handle(path, body) {
+        if (path !== TRUST) return server.handle(path, body);
+        if (refuse !== undefined) return refuse;
+        return server.projects.has(body.projectId) ? { status: 200, json: {} } : NOT_FOUND;
+      },
+    };
+  };
+
+  it("registers the copy first and names it by its real path, so a fresh state can be granted", async () => {
+    silent();
+    const { real, alias } = labRepository();
+    const session = runSession(trustServer());
+    await expect(applyTrust(session, "grant", alias)).resolves.toBe(0);
+    expect(session.calls).toEqual([
+      { method: "POST", path: "/api/projects", body: { path: real } },
+      { method: "POST", path: TRUST, body: { projectId: real } },
+    ]);
+  });
+
+  it("revokes with DELETE on the same project", async () => {
+    silent();
+    const { real, alias } = labRepository();
+    const session = runSession(trustServer());
+    await expect(applyTrust(session, "revoke", alias)).resolves.toBe(0);
+    expect(session.calls.at(-1)).toEqual({
+      method: "DELETE",
+      path: TRUST,
+      body: { projectId: real },
+    });
+  });
+
+  it("exits 1 when the server refuses the grant", async () => {
+    silent();
+    const { alias } = labRepository();
+    const denied = { status: 403, json: { error: { code: "DENIED", message: "Refused." } } };
+    await expect(
+      applyTrust(runSession(trustServer({ refuse: denied })), "grant", alias),
+    ).resolves.toBe(1);
   });
 });
 

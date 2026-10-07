@@ -75,8 +75,13 @@ ESLint 10.10.0 and typescript-eslint 8.70.0). One change per file, 13 findings i
 | `head+t7` | `ledger-lab/` plus `patches/head-t7.patch`       | T8, T9, T12 (they verify with `npm run check`)    |
 | `head+md` | `ledger-lab/` plus `patches/head-md.patch`       | T13 (per-turn cost of an AGENTS.md above the cap) |
 
-Apply a patch to the copy before its first commit (`git apply` works outside a repository), and
-never on top of another baseline's patch: each one starts from `ledger-lab/` as it is.
+Apply a patch inside the copy's own repository (`git init` first) and before its first commit, and
+never on top of another baseline's patch: each one starts from `ledger-lab/` as it is. `git apply`
+only changes paths inside the repository it runs in: in a copy that sits inside another repository's
+work tree (a dotfiles-managed `$HOME` is enough) and is not a repository itself, it applies nothing
+and still exits 0, and so do `git apply --check` and `git apply --check -R`. To see that a patch is
+in scope, `git apply --stat <patch>` names the files it changes (it prints `0 files changed` when it
+is not).
 
 `replant-t2-t3.patch` is the lighter way to run T2 or T3 on the `head` tree. Its `AGENTS.md` asks
 for `npm run check`, so the 13 unrelated lint findings keep that check red until T7 has run.
@@ -96,11 +101,12 @@ out and give it a Git history (the Workbench works on a Git repository on branch
 LAB=$HOME/keiko-lab-ledger
 mkdir -p "$LAB" && cp -R tests/fixtures/coding-workbench-lab/ledger-lab/. "$LAB"/
 cd "$LAB"
+git init -b main
 # Pick the baseline the task needs; at most one of these:
 # T1 to T3:      git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/initial-state.patch
 # T8, T9, T12:   git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-t7.patch
 # T13:           git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-md.patch
-git init -b main && git add -A
+git add -A
 git -c user.name="Keiko Lab" -c user.email=lab@keiko.invalid -c commit.gpgsign=false commit -m "Baseline"
 npm install
 ```

@@ -144,21 +144,74 @@ describe("CodingWorkbenchRunStatus", () => {
 
   // #3873 review: an outage rides on for minutes, and "Waiting for the model" read the same as a
   // slow generation. The phase names a model gateway that is unavailable and being retried.
-  it("names a model gateway that is unavailable and being retried as the run's phase", async () => {
+  //
+  // Review thread 6pydza: that phase sat in a span outside the live region, so the live sentence
+  // read "Running. Revision 4." for the whole outage and a screen reader user heard nothing of it.
+  // The gateway phase is part of the polite, atomic status sentence — which is also the visible
+  // text, so the phase is shown once, not twice — and no separate phase span repeats it.
+  it("announces a model gateway that is unavailable and being retried in the live status sentence", async () => {
     const { container } = render(
       <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="gateway" />,
     );
 
-    expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(
-      "Model gateway unavailable, retrying",
+    const announcement = screen.getByTestId("coding-runtime-announcement");
+    expect(announcement).toHaveAttribute("role", "status");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+    expect(announcement).toBeVisible();
+    expect(announcement).toHaveTextContent(
+      /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
     );
-    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
-      /^Running\. Revision 4\.$/u,
-    );
+    expect(announcement).not.toHaveTextContent("Waiting for the model");
+
+    expect(screen.queryByTestId("coding-runtime-phase")).toBeNull();
+    const line = screen.getByTestId("coding-runtime-status").textContent ?? "";
+    expect(line.match(/Model gateway unavailable, retrying/gu) ?? []).toHaveLength(1);
 
     vi.useRealTimers();
     expect(await axe(container, AXE_OPTIONS)).toHaveNoViolations();
   });
+
+  // A live region announces a CHANGE of its content, so the sentence must change inside the one
+  // region that is already in the document; text that is mounted together with its region is
+  // announced unreliably. Entering and leaving the outage is that change.
+  it("changes the text of one standing live region as the gateway outage begins and ends", () => {
+    const { rerender } = render(
+      <CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />,
+    );
+    const region = screen.getByTestId("coding-runtime-announcement");
+    expect(region).toHaveTextContent(/^Running\. Revision 4\.$/u);
+
+    rerender(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="gateway" />);
+    expect(screen.getByTestId("coding-runtime-announcement")).toBe(region);
+    expect(region).toHaveTextContent(
+      /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
+    );
+
+    rerender(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase="model" />);
+    expect(screen.getByTestId("coding-runtime-announcement")).toBe(region);
+    expect(region).toHaveTextContent(/^Running\. Revision 4\.$/u);
+    expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
+  });
+
+  // The phases that change with every tool call would make the polite region chatter, so only the
+  // outage is announced; the others stay visible in their own span, beside the sentence.
+  it.each([
+    ["model", "Waiting for the model"],
+    ["tool", "Running a tool"],
+    ["verifier", "Running a verifier"],
+    ["decision", "Waiting for your decision"],
+  ] as const)(
+    "keeps the %s phase out of the live sentence and shows it beside it",
+    (phase, text) => {
+      render(<CodingWorkbenchRunStatus state={RUNNING} researchGrant={null} phase={phase} />);
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expect(announcement).toHaveTextContent(/^Running\. Revision 4\.$/u);
+      expect(announcement).not.toContainElement(screen.getByTestId("coding-runtime-phase"));
+      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent(text);
+    },
+  );
 
   it("ticks once a second while the run lives and stops at settlement", () => {
     const { rerender } = render(

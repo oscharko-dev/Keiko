@@ -3,7 +3,7 @@
 // policy and lab-repository rules, the loopback-only base URL, run-id handling and the task
 // catalog. The drivers that call them are exercised end to end by `coding-workbench-lab-cli`.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,8 +18,10 @@ import {
   approvalPolicyText,
   assertCheckoutSelected,
   assertLabRepository,
+  assertProjectRegistered,
   browserBaseUrl,
   checkoutRequest,
+  describeRefusal,
   describeSnapshot,
   exitCodeForState,
   formatTaskList,
@@ -30,6 +32,7 @@ import {
   normalizeRunSuffix,
   parseApprove,
   parseCli,
+  registerProjectRequest,
   resolveMode,
   resolveTaskInput,
 } from "../testing/coding-workbench-lab/lab-common.mjs";
@@ -40,6 +43,16 @@ function labCopy(name = LAB_REPOSITORY_NAME) {
   const root = mkdtempSync(join(tmpdir(), "keiko-lab-common-"));
   TEMP_DIRECTORIES.push(root);
   writeFileSync(join(root, "package.json"), JSON.stringify({ name, version: "0.1.0" }));
+  return root;
+}
+
+/** A repository directory with a given name whose package.json names `packageName`. */
+function namedCopy(directoryName, packageName) {
+  const parent = mkdtempSync(join(tmpdir(), "keiko-lab-named-"));
+  TEMP_DIRECTORIES.push(parent);
+  const root = join(parent, directoryName);
+  mkdirSync(root);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: packageName }));
   return root;
 }
 
@@ -136,6 +149,17 @@ describe("lab repository (fail closed)", () => {
     expect(() => labRepositoryPath(real, {})).toThrow(/names "keiko"/u);
   });
 
+  it("takes the marker from the package.json, never from the name of the directory", () => {
+    // A copy of the fixture keeps its package name whatever its folder is called, and a folder that
+    // is only called ledger-lab proves nothing: the drivers approve edits on what they accept.
+    const impostor = namedCopy(LAB_REPOSITORY_NAME, "keiko");
+    expect(() => labRepositoryPath(impostor, {})).toThrow(UsageError);
+    expect(() => labRepositoryPath(impostor, {})).toThrow(/names "keiko"/u);
+    expect(() => assertLabRepository(impostor)).toThrow(/is not a lab repository/u);
+    const renamed = namedCopy("my-copy", LAB_REPOSITORY_NAME);
+    expect(labRepositoryPath(renamed, {})).toBe(resolve(renamed));
+  });
+
   it("refuses a directory with no package.json, an unreadable one and one without a name", () => {
     const empty = mkdtempSync(join(tmpdir(), "keiko-lab-empty-"));
     TEMP_DIRECTORIES.push(empty);
@@ -165,6 +189,51 @@ describe("lab repository (fail closed)", () => {
     for (const status of [199, 300, 400, 409, 500]) {
       expect(() => assertCheckoutSelected(status)).toThrow(/not starting a run/u);
     }
+  });
+
+  it("registers the copy by its path alone: an explicit folder selection would also grant package-script trust", () => {
+    expect(registerProjectRequest("/real/lab")).toEqual({ path: "/real/lab" });
+    expect(Object.keys(registerProjectRequest("/real/lab"))).toEqual(["path"]);
+  });
+
+  it("refuses a registration the dev server did not accept, with its reason and the guide step", () => {
+    expect(() => assertProjectRegistered(201)).not.toThrow();
+    expect(() => assertProjectRegistered(200)).not.toThrow();
+    const denied = { error: { code: "DENIED", message: "The project path is excluded." } };
+    expect(() => assertProjectRegistered(403, denied)).toThrow(
+      /did not register the lab repository as a project \(HTTP 403 DENIED: The project path is excluded\.\)/u,
+    );
+    expect(() => assertProjectRegistered(500)).toThrow(new RegExp(`${LAB_GUIDE}, step 5`, "u"));
+  });
+});
+
+describe("describeRefusal", () => {
+  it("names the status and, from the server's error envelope, its code and message", () => {
+    const body = { error: { code: "LOCK_CONTENTION", message: "A coding run is still active." } };
+    expect(describeRefusal(409, body)).toBe(
+      "HTTP 409 LOCK_CONTENTION: A coding run is still active.",
+    );
+    expect(() => assertCheckoutSelected(409, body)).toThrow(
+      /did not select the lab repository \(HTTP 409 LOCK_CONTENTION: A coding run is still active\.\); not starting a run/u,
+    );
+  });
+
+  it("says what it has when the body has only a code, only a message or no envelope at all", () => {
+    expect(describeRefusal(400, { error: { code: "INVALID_REQUEST" } })).toBe(
+      "HTTP 400 INVALID_REQUEST",
+    );
+    expect(describeRefusal(400, { error: { message: "Bad." } })).toBe("HTTP 400: Bad.");
+    for (const body of [undefined, null, {}, { raw: "<html>" }, { error: "text" }, { error: {} }]) {
+      expect(describeRefusal(502, body)).toBe("HTTP 502");
+    }
+    expect(describeRefusal(400, { error: { code: 7, message: ["x"] } })).toBe("HTTP 400");
+  });
+
+  it("bounds the phrase and keeps control characters out of the terminal", () => {
+    const body = { error: { code: "X", message: `${"a".repeat(500)}` } };
+    expect(describeRefusal(400, body)).toHaveLength(200);
+    const noisy = { error: { code: "X", message: "first\u001b[31m\nsecond\u0007" } };
+    expect(describeRefusal(400, noisy)).toBe("HTTP 400 X: first [31m second");
   });
 });
 

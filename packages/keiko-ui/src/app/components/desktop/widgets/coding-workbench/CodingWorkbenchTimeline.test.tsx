@@ -1060,7 +1060,10 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
 
 // #3873 review: `streaming` removes code highlighting and the Copy button, so only text that is
 // still being produced may carry it. A finished answer keeps both while the run waits for the
-// operator's approval, is paused or is stopping.
+// operator's approval or is stopping. A paused run is not on that list (review thread 6pyds7
+// inverted the earlier pin): pausing aborts no call the run had already admitted, so the Workbench
+// keeps handing it `generating`, and this component renders what it is told. The Workbench-level
+// pins for the paused run are in CodingWorkbenchWindow.test.tsx ("a paused run").
 describe("CodingWorkbenchTimeline finished answers", () => {
   const LATER = "2026-07-19T12:00:05.000Z";
   const CODE_ANSWER = "Run the tests:\n\n```sh\nnpm test\n```";

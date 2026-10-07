@@ -4,7 +4,9 @@
 // records one body-free summary line (scenario, seconds, run id, final state). The runs take
 // minutes each: S3 holds a three-minute outage, S6 a seven-minute stall, S7 a ten-minute timeout.
 // wb-run.mjs answers the run's permission asks as --approve says; the suite has no default for it
-// and passes it, and the lab repository, through unchanged.
+// and passes it, and the lab repository, through unchanged. A scenario whose driver is refused (a
+// missing secret, a lab copy the dev server did not accept) starts no run: the suite then ends with
+// INCOMPLETE instead of DONE and exits 1, so a scripted campaign never reads as passed.
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +38,8 @@ const USAGE = [
   "choice (a denial only blocks a command the task does not need).",
   "Per-scenario run logs and summary.log go to --out-dir (default: a new temporary directory).",
   "Environment: KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET (required), KEIKO_LAB_BASE_URL.",
+  "Exit code: 0 every scenario started a run (summary.log ends with DONE), 1 at least one scenario",
+  "started no run because its driver was refused (summary.log ends with INCOMPLETE), 2 usage.",
 ].join("\n");
 
 export const SCENARIOS = [
@@ -109,12 +113,31 @@ export function wbRunArguments({ model, timeoutMin, approve, repo }) {
   ];
 }
 
+/** What a scenario reports when its driver was refused before a run started. */
+export const NO_RUN_ID = "no-run-id";
+// The driver names the run in two lines of its own: `<time> started run-<digits> ...` as soon as the
+// run exists and `----- run run-<digits> -----` last. Anything else in a log that looks like a run id
+// (a repository path, an error message) is not one.
+const RUN_ID_LINE = /^(?:\S+ started|----- run) (run-\d+)\b/mu;
+
 /** The run id and the final line of a wb-run.mjs log, or the closed placeholders when it has none. */
 export function summarizeRunLog(log) {
   return {
-    runId: /run-\d+/u.exec(log)?.[0] ?? "no-run-id",
+    runId: RUN_ID_LINE.exec(log)?.[1] ?? NO_RUN_ID,
     final: /^\S+ final (.*)$/mu.exec(log)?.[1] ?? "no final line",
   };
+}
+
+/**
+ * How a campaign ended. `DONE` means every scenario started a run; a scenario whose driver was
+ * refused (a missing secret, a lab copy the dev server did not accept) produced no run to compare,
+ * so a campaign with one is incomplete, however many others ran, and its exit code says so.
+ */
+export function campaignVerdict(results) {
+  const refused = results.filter(({ runId }) => runId === NO_RUN_ID).length;
+  if (refused === 0) return { marker: "DONE", exitCode: 0 };
+  const scenarios = `${String(refused)} of ${String(results.length)} scenarios started no run`;
+  return { marker: `INCOMPLETE ${scenarios} (see their logs)`, exitCode: 1 };
 }
 
 /** Runs wb-run.mjs for the read-only chaos task; a failed run still yields its log. */
@@ -143,7 +166,7 @@ async function runScenario(scenario, { proxy, outDir, ...settings }) {
   writeFileSync(join(outDir, `${label}.log`), log);
   const { runId, final } = summarizeRunLog(log);
   const seconds = Math.round((Date.now() - startedAt) / 1000);
-  return `${label} ${String(seconds)}s ${runId} final ${final}`;
+  return { runId, line: `${label} ${String(seconds)}s ${runId} final ${final}` };
 }
 
 async function main() {
@@ -159,7 +182,7 @@ async function main() {
       "out-dir": { type: "string" },
     },
   });
-  if (cli.help) return;
+  if (cli.help) return 0;
   const approve = parseApprove(cli.values.approve);
   const repo = labRepositoryPath(cli.values.repo);
   const proxy = labBaseUrl(cli.values.proxy);
@@ -172,7 +195,7 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
   await assertProxyReachable(proxy);
   console.log(`logs: ${outDir}`);
-  const lines = [];
+  const results = [];
   for (const scenario of scenarios) {
     const settings = {
       proxy,
@@ -183,11 +206,15 @@ async function main() {
       approve,
       repo,
     };
-    const line = await runScenario(scenario, settings);
-    console.log(line);
-    lines.push(line);
+    const result = await runScenario(scenario, settings);
+    console.log(result.line);
+    results.push(result);
   }
-  writeFileSync(join(outDir, "summary.log"), `${lines.join("\n")}\nDONE\n`);
+  const verdict = campaignVerdict(results);
+  const lines = results.map(({ line }) => line);
+  writeFileSync(join(outDir, "summary.log"), `${lines.join("\n")}\n${verdict.marker}\n`);
+  if (verdict.exitCode !== 0) console.error(verdict.marker);
+  return verdict.exitCode;
 }
 
 if (isMainModule(import.meta.url)) runMain(main);
