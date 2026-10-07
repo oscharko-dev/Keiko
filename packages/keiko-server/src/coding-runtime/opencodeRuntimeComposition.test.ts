@@ -70,6 +70,33 @@ import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
 
+const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
+
+// Observe the real source producer without replacing its generated tools or source definitions.
+vi.mock("./opencodeToolSchemas.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./opencodeToolSchemas.js")>();
+  return {
+    ...actual,
+    OPENCODE_TOOL_SOURCE_DEFINITIONS: new Proxy(actual.OPENCODE_TOOL_SOURCE_DEFINITIONS, {
+      get(target, property, receiver): unknown {
+        if (property !== "map") return Reflect.get(target, property, receiver) as unknown;
+        return (...args: unknown[]): unknown => {
+          const result: unknown = Reflect.apply(target.map.bind(target), target, args);
+          generatedToolSources.passes += 1;
+          if (Array.isArray(result)) {
+            for (const entry of result as unknown[]) {
+              if (Array.isArray(entry) && typeof entry[1] === "string") {
+                generatedToolSources.utf8Bytes += Buffer.byteLength(entry[1], "utf8");
+              }
+            }
+          }
+          return result;
+        };
+      },
+    }),
+  };
+});
+
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
@@ -356,6 +383,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly onSpawn?: (() => void) | undefined;
   readonly stdinLifetime?: {
     readonly supports: true;
     readonly launches: RuntimeSupervisorLaunchRequest[];
@@ -502,6 +530,7 @@ async function startBridgeFixture(
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
       ...fixtureStdinOwnership(control),
       spawnOwnedTree: (request): RuntimeProcessTree => {
+        control?.onSpawn?.();
         stdout.end(fixtureStartupLine(request, control));
         return {
           treeId: "tool-bridge-tree",
@@ -823,6 +852,32 @@ afterAll(() => {
 });
 
 describe("unmounted OpenCode runtime composition", () => {
+  it("materializes native tools once without regenerating a discarded legacy bundle at readiness", async () => {
+    const before = { ...generatedToolSources };
+    const atSpawn: (typeof before)[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: (): Promise<{ status: "completed"; evidence: never[] }> =>
+          Promise.resolve({ status: "completed", evidence: [] }),
+      },
+      undefined,
+      {
+        onSpawn: (): void => {
+          atSpawn.push({ ...generatedToolSources });
+        },
+      },
+    );
+    try {
+      expect(atSpawn).toHaveLength(1);
+      expect(atSpawn[0]?.passes).toBe(before.passes + 1);
+      expect(atSpawn[0]?.utf8Bytes).toBeGreaterThan(before.utf8Bytes);
+      expect(generatedToolSources).toEqual(atSpawn[0]);
+      expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("shows the human task without replaying attached issue context as a user message", () => {
     const context = "PRIVATE_ISSUE_CONTEXT";
     const intent = "Summarize the issue";

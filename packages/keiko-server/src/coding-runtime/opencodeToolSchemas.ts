@@ -679,6 +679,10 @@ export function opencodeGatewayOfferLifetimeMs(requestDeadlineMs: number): numbe
  * 1.18.30 runtime's own generated tool source.
  */
 const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([opencodeRegistrationSet()]);
+const OPENCODE_GATEWAY_PROJECTION = compileToolProjection(
+  OPENCODE_GATEWAY_CATALOG,
+  OPENCODE_GATEWAY_PROFILE,
+);
 
 /**
  * A tool the advertisement offers can never be a working binding when its declared
@@ -796,7 +800,7 @@ export function openCodeGatewayCatalogProjection(): Pick<
 > {
   return {
     catalog: OPENCODE_GATEWAY_CATALOG,
-    projection: compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE),
+    projection: OPENCODE_GATEWAY_PROJECTION,
   };
 }
 

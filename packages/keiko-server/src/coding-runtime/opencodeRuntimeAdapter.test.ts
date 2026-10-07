@@ -3,6 +3,7 @@ import { Script } from "node:vm";
 
 import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
@@ -78,47 +79,7 @@ interface AdapterReady {
   readonly configDigest: string;
 }
 
-interface GovernedEvent {
-  readonly id: string;
-  readonly aggregateId: string;
-  readonly sequence: number;
-  readonly digest: string;
-  readonly kind:
-    | "observation"
-    | "permission"
-    | "question"
-    | "tool"
-    | "terminal"
-    | "terminal-control"
-    | "terminal-failure";
-  readonly compaction?:
-    | {
-        readonly event: "started";
-        readonly compactionIdSha256: string;
-        readonly auto: boolean;
-        readonly overflow: boolean;
-        readonly retainedTail: false;
-      }
-    | {
-        readonly event: "tail-retained";
-        readonly compactionIdSha256: string;
-        readonly auto: boolean;
-        readonly overflow: boolean;
-        readonly retainedTail: true;
-        readonly tailStartIdSha256: string;
-      }
-    | {
-        readonly event: "completed";
-        readonly compactionIdSha256: string;
-      }
-    | {
-        readonly event: "failed";
-        readonly compactionIdSha256: string;
-        readonly errorKind: string;
-        readonly finishReason: string;
-      }
-    | undefined;
-}
+type GovernedEvent = OpenCodeReconciliationEvent;
 
 type OpenCodeSyncHint =
   | { readonly id: string; readonly requiresHistoryIdentity?: true }
@@ -161,7 +122,7 @@ interface OpenCodeRuntimeAdapterPorts {
     readonly configDigest: string;
     readonly nativeContextConfigured?: true;
     readonly verifyTargetAttestation: () => Promise<boolean>;
-    readonly materialize: (bundle: GeneratedOpenCodeBundle) => Promise<boolean>;
+    readonly materialize: () => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
     readonly health: (
       authorization: "basic" | "none",
@@ -435,8 +396,8 @@ function readinessPorts(failAt?: ReadinessPhase): {
         configDigest: DIGEST,
         verifyTargetAttestation: (): Promise<boolean> =>
           Promise.resolve(failed("target-attestation")),
-        materialize: (bundle: GeneratedOpenCodeBundle): Promise<boolean> => {
-          materialized.push(bundle);
+        materialize: (): Promise<boolean> => {
+          materialized.push(createGeneratedOpenCodeBundle());
           return Promise.resolve(failed("config-materialization"));
         },
         startupLine: (): Promise<string> =>

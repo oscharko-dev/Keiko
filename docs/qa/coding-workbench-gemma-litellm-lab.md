@@ -409,6 +409,31 @@ media, other native tools and a separately attested external host payload remain
 integrity proves the published modules, not their source-commit build provenance. No production
 host or additional native tool was activated.
 
+The separately staged external host was also independently qualified from its actual npm
+tarball, using the approved official Node 24.18.0 executable and unchanged OpenCode 2.0.10
+modules. All retained file bytes and modes matched the builder. npm removed exactly eight
+publisher `.npmignore` metadata files; the strict inventory difference remains recorded, and the
+actual final payload tree is pinned separately. The independent original Read task passed with
+seven synthetic provider turns, three successful reads and three expected protected-read
+failures, exact native schema/paging/instructions, authentication refusal, retained framework
+SQLite, stdin-EOF exit and refusal to reuse stale state. No protected content or foreign fetch
+was forwarded. This private package is 100,060,181 bytes packed and 465,893,248 bytes unpacked.
+Production artifact approval, final-tree integration, current run authority and broader native
+tool boundaries remain open; this is not production activation or a performance claim.
+
+Two focused allocation changes preserve the original native service and current tool contracts.
+V2 readiness now calls the existing no-argument materialization port instead of generating a
+discarded legacy bundle: one additional traversal and 158,697 UTF-8 bytes of generated source
+strings are avoided per handshake. Explicit legacy/fixture consumers remain available. The
+canonical producer's recursively frozen OpenCode projection is compiled once; two request offers
+avoid two repeated compilations of the 29,599-byte serialized projection. Each offer still gets
+its own UUID, deadline and current real handler coverage, with prior offers unchanged and all
+gateway capture/revalidation intact. Independent forced affected-graph and strict source/test
+types, scoped lint/format, 294 server tests, 46 gateway boundary tests, 111 catalog tests and one
+pinned native system-context/startup test passed. Two existing optional server cases and four
+other native cases were not executed. These are producer-call/source-string measurements, not
+measured heap, token or latency improvements. Chat search controls remain unchanged.
+
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations
 is a separate case: Keiko then starts from the setup placeholder until its long-context probe

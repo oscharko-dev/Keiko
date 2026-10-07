@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   CatalogDigest,
@@ -10,6 +10,7 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   deriveGatewayCatalogReadiness,
   hasExactOpenCodeVisibleToolContract,
+  openCodeGatewayCatalogProjection,
   OPENCODE_MODEL_VISIBLE_TOOLS,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   projectedGatewaySchema,
@@ -19,6 +20,25 @@ import {
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 import { OPENCODE_GOVERNED_SYSTEM_PROMPT } from "./opencodeLaunchProfile.js";
+import { createCanonicalOpenCodeHandlerCoverage } from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+
+const projectionCompilations = vi.hoisted(() => ({ count: 0, utf8Bytes: 0 }));
+
+vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-tool-catalog")>();
+  return {
+    ...actual,
+    compileToolProjection: (
+      ...args: Parameters<typeof actual.compileToolProjection>
+    ): ReturnType<typeof actual.compileToolProjection> => {
+      const projection = actual.compileToolProjection(...args);
+      projectionCompilations.count += 1;
+      projectionCompilations.utf8Bytes += Buffer.byteLength(JSON.stringify(projection), "utf8");
+      return projection;
+    },
+  };
+});
 
 /** Minimal, independently-constructed `CompiledCatalogTool` fixture -- built here, not through
  * `createToolDescriptor`, since the point of this test is to exercise `handlerRequirement` shapes
@@ -383,6 +403,70 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(first.offered.offerId).not.toBe(second.offered.offerId);
     expect(first.projection.projectionDigest).toBe(second.projection.projectionDigest);
     expect(first.offered.expiresAt).toBe(new Date(1_000 + 120_000 + 5_000).toISOString());
+  });
+
+  it("does not recompile the immutable projection while producing fresh request offers", () => {
+    const initial = openCodeGatewayCatalogProjection();
+    const bytes = JSON.stringify(initial.projection);
+    const before = { ...projectionCompilations };
+    const first = createOpenCodeGatewayToolCatalogAdvertisement(1_000, undefined, 30_000);
+    const second = createOpenCodeGatewayToolCatalogAdvertisement(2_000, undefined, 60_000);
+
+    expect(projectionCompilations).toEqual(before);
+    expect(first.projection).toBe(initial.projection);
+    expect(second.projection).toBe(initial.projection);
+    expect(JSON.stringify(second.projection)).toBe(bytes);
+    expect(first.offered.offerId).not.toBe(second.offered.offerId);
+    expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+    expect(second.offered.expiresAt).toBe(new Date(62_000).toISOString());
+  });
+
+  it("shares only recursively immutable catalog facts and returns independent wrappers", () => {
+    const first = openCodeGatewayCatalogProjection();
+    const second = openCodeGatewayCatalogProjection();
+    const bytes = JSON.stringify(second);
+    const tool = first.projection.tools[0];
+    if (tool === undefined) throw new Error("expected a compiled OpenCode tool");
+
+    expect(first).not.toBe(second);
+    expect(first.catalog).toBe(second.catalog);
+    expect(first.projection).toBe(second.projection);
+    expect(Reflect.set(tool.inputSchema, "type", "string")).toBe(false);
+    expect(Reflect.set(first.projection.tools, "0", undefined)).toBe(false);
+    expect(Reflect.set(first.catalog, "catalogRevision", "different")).toBe(false);
+    expect(Reflect.set(first, "projection", undefined)).toBe(true);
+    expect(JSON.stringify(second)).toBe(bytes);
+  });
+
+  it("recomputes real handler availability without changing a previous request offer", () => {
+    const unavailable = new Set<OpenCodeOptionalToolName>();
+    const first = createOpenCodeGatewayToolCatalogAdvertisement(
+      1_000,
+      createCanonicalOpenCodeHandlerCoverage(unavailable),
+      30_000,
+    );
+    const child = first.projection.tools.find((tool) => tool.alias === "keiko_child_agent");
+    if (child === undefined) throw new Error("expected the child tool in the real projection");
+    const previous = JSON.stringify(first.offered);
+    unavailable.add("keiko_child_agent");
+    const second = createOpenCodeGatewayToolCatalogAdvertisement(
+      2_000,
+      createCanonicalOpenCodeHandlerCoverage(unavailable),
+      30_000,
+    );
+
+    expect(second.projection).toBe(first.projection);
+    expect(second.offered.binding.handlerSetDigest).not.toBe(
+      first.offered.binding.handlerSetDigest,
+    );
+    expect(first.offered.toolRefs.map((ref) => ref.canonicalId)).toContain(
+      child.toolRef.canonicalId,
+    );
+    expect(second.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
+      child.toolRef.canonicalId,
+    );
+    expect(JSON.stringify(first.offered)).toBe(previous);
+    expect(second.offered.toolRefs).not.toBe(first.offered.toolRefs);
   });
 
   // The offer used to expire after a fixed 30 s. A ~6k-token `keiko_changeset_edit` call took 49 s

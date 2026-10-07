@@ -285,7 +285,7 @@ export interface OpenCodeRuntimeAdapterPorts {
     readonly configDigest: string;
     readonly nativeContextConfigured?: true | undefined;
     readonly verifyTargetAttestation: () => Promise<boolean>;
-    readonly materialize: (bundle: GeneratedOpenCodeBundle) => Promise<boolean>;
+    readonly materialize: () => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
     readonly health: (
       authorization: "basic" | "none",
@@ -713,7 +713,7 @@ async function startAdapter(
       return fail("target-attestation");
     }
     phase = recordReadinessPhase(ports, "config-materialization");
-    if (!(await readiness.materialize(createGeneratedOpenCodeBundle()))) {
+    if (!(await readiness.materialize())) {
       return fail("config-materialization");
     }
     phase = recordReadinessPhase(ports, "endpoint");
@@ -1192,8 +1192,8 @@ function runCleanup(safety: OpenCodeRuntimeAdapterPorts["safety"]): void {
 
 export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   return {
-    // The no-argument bundle is used only by the adapter's readiness shape and hermetic tool-source
-    // fixtures. Production materialization passes the per-run config built from admitted gateway
+    // Legacy and hermetic tool-source consumers request this bundle explicitly. Production
+    // materialization passes the per-run config built from admitted gateway
     // geometry in opencodeRuntimeComposition.ts.
     config: createFixedOpenCodeConfig({
       contextWindowTokens: 32_768,
