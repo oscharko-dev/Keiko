@@ -271,17 +271,17 @@ qualification, #3873). A failed task outcome carries no cause of its own, and se
 `runtime-failed` told an operator "internal error" for runs that had only reached a bound: run
 `run-65084062444586162471229658028402064666` used up its prompt allowance, and run
 `run-272120967981827964065820685403290179367` reached its 30-minute envelope with a model call in
-flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-stopped`). At settlement
-the orchestrator reads, before it stops the runtime, the facts the owning layers hold: the runtime
-authority answers whether the run's most recent model-call admission was refused by the cumulative
-prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run state that
-admits no model call; a refusal by the run's CI-repair prompt budget, which counts the same
-`maxPromptTokens` over the repair and answers before the authority is asked, is recorded in the same
-place, so it names the limit as well) and whether the run's envelope ran out of time (`maxRuntimeMs`
-after minting or `expiresAt`, whichever comes first), and the control plane's event hub keeps the
-closed cause the coding sidecar gateway reported for the run's most recent failed model call until a
-later call of the run is answered, with the gateway's own fact that the provider could not serve
-that call. In that order, the run settles `prompt-allowance-exhausted`,
+flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-stopped`). At
+settlement the orchestrator reads, before it stops the runtime, the facts the owning layers hold:
+the runtime authority answers whether the run's most recent model-call admission was refused by the
+cumulative prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run
+state that admits no model call; a refusal by the run's CI-repair prompt budget, which counts the
+same `maxPromptTokens` over the repair and answers before the authority is asked, is recorded in the
+same place, so it names the limit as well) and whether the run's envelope ran out of time
+(`maxRuntimeMs` after minting or `expiresAt`, whichever comes first), and the control plane's event
+hub keeps the closed cause the coding sidecar gateway reported for the run's most recent failed
+model call until a later call of the run is answered, with the gateway's own fact that the provider
+could not serve that call. In that order, the run settles `prompt-allowance-exhausted`,
 `envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
 ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
 again), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
@@ -301,18 +301,20 @@ a refused credential is `provider-failed` there as on the buffered path (and, be
 final for the runtime), so it can no longer settle a run "nothing was rejected, check that the
 gateway is running" (PR #3876 review). A run whose refused edits escalated (above) comes before all
 of these facts: it settles `edits-blocked` or `edit-retries-exhausted` whatever its last model call
-reported. A run that is stopped settles `cancelled`, as before. The Workbench says the run was
+reported. It settles so whatever the stopped runtime's terminal result reports as well: the
+escalation is Keiko's own decision to end the run, and a runtime stopped mid-turn reports
+`cancelled`; only a runtime that did not stop puts the run into `recovery-required` (F26, #3873 live
+qualification). A run that is stopped settles `cancelled`, as before. The Workbench says the run was
 stopped and that nothing failed, and never who stopped it: the operator's Stop and `shutdown()` —
 which ends the live run when the server goes away (an update, a restart, a machine shutdown) — take
 the same stop path, so the settled snapshot and its terminal status event are identical, and only
 `coding-runtime.run.shutdown` in the server's Activity Log names a shutdown. An earlier text claimed
 "You stopped this run" for every `cancelled` run, which blamed the operator for a restart (#3873
 review). Nothing is read from OpenCode's error text. `coding-runtime.run.settled` records the cause
-with `failureBasis`
-(`prompt-allowance`, `envelope-duration`, `model-call-failure`, `no-model-call-failure`, or
-`refusal-escalation` for an escalated run) and `modelCallFailure` (a `provider-unavailable` run that
-ended on a retryable status names `provider-failed` there), and an error class that matches it
-instead of `internal`.
+with `failureBasis` (`prompt-allowance`, `envelope-duration`, `model-call-failure`,
+`no-model-call-failure`, or `refusal-escalation` for an escalated run) and `modelCallFailure` (a
+`provider-unavailable` run that ended on a retryable status names `provider-failed` there), and an
+error class that matches it instead of `internal`.
 
 **A settled run carries its effort roll-up** (#3873), so one line answers how many model turns and
 tool calls the run made and where its time went. `coding-runtime.run.settled` adds counts and
