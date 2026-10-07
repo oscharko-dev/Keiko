@@ -82,6 +82,66 @@ export interface DiscoveryStats {
   readonly maxFilesPruned: number;
 }
 
+export const WORKSPACE_PATH_DISCOVERY_MODES = Object.freeze([
+  "keywords",
+  "glob",
+  "directory",
+] as const);
+export type WorkspacePathDiscoveryMode = (typeof WORKSPACE_PATH_DISCOVERY_MODES)[number];
+
+export const WORKSPACE_PATH_DISCOVERY_LIMITS = Object.freeze({
+  queryChars: 256,
+  maxResults: 100,
+  outputBytes: 65_536,
+});
+
+export interface WorkspacePathDiscoveryRequest {
+  readonly mode: WorkspacePathDiscoveryMode;
+  /** Empty selects the original workspace root; other values are admitted relative directories. */
+  readonly directory: string;
+  /** Keywords or a root-relative filename glob; directory mode uses "*". */
+  readonly query: string;
+  readonly maxResults: number;
+}
+
+export interface WorkspacePathDiscoveryEntry {
+  readonly relativePath: string;
+  readonly kind: "file" | "directory";
+  readonly sizeBytes: number;
+}
+
+export const WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS = Object.freeze([
+  "result-limit",
+  "output-limit",
+  "directory-limit",
+  "io-error",
+  "time-limit",
+  "unrepresentable-path",
+] as const);
+export type WorkspacePathDiscoveryTruncationReason =
+  (typeof WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS)[number];
+
+export interface WorkspacePathDiscoveryStats {
+  readonly filesDiscovered: number;
+  readonly directoriesDiscovered: number;
+  readonly directoriesPruned: number;
+  readonly denied: number;
+  readonly ignored: number;
+  readonly ioErrors: number;
+  readonly unrepresentablePaths: number;
+}
+
+export interface WorkspacePathDiscoveryResult {
+  readonly entries: readonly WorkspacePathDiscoveryEntry[];
+  /** Canonical JSON of entries, bounded independently from result count; never diagnostic data. */
+  readonly text: string;
+  readonly byteCount: number;
+  readonly matchedCount: number;
+  readonly coverageIncomplete: boolean;
+  readonly truncationReasons: readonly WorkspacePathDiscoveryTruncationReason[];
+  readonly stats: WorkspacePathDiscoveryStats;
+}
+
 // ─── File reads ─────────────────────────────────────────────────────────────────
 
 export interface ReadOptions {

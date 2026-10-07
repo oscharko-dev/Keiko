@@ -340,6 +340,8 @@ export interface CodingToolEgressReadResult {
 export interface CodingToolReadResult extends CodingToolEgressReadResult {
   /** Total number of lines in the whole file. */
   readonly totalLines: number;
+  /** Discovery only: the actual selected item count, independent of serialized text lines. */
+  readonly returnedPathCount?: number;
   /** 1-based first line after the window; absent when the window reached the end of the file. */
   readonly nextStartLine?: number;
 }

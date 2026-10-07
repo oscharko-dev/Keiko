@@ -8,6 +8,8 @@ import {
   validateSafeId,
 } from "./coding-workbench-runtime-api-validation.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
+import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
+import { EDITOR_AGENT_CONFLICT_CODES, EDITOR_AGENT_FAILURE_CODES } from "./editor-agent.js";
 
 export const CODING_SAFE_ACTIVITY_CONTRACT_VERSION = "1" as const;
 export const CODING_SAFE_ACTIVITY_MESSAGE_ROLES = ["user", "assistant"] as const;
@@ -43,6 +45,39 @@ export const CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS = 64;
 export const CODING_SAFE_ACTIVITY_MAX_PLAN_STEP_TEXT_CHARS = 256;
 // Fits inside the aggregate feed budget beside a fully populated turn history.
 export const CODING_SAFE_ACTIVITY_MAX_PLAN_UTF8_BYTES = 8 * 1_024;
+
+/** The existing governed edit facade's closed refusal vocabulary, shared with its live UI. */
+export const CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES = [
+  ...EDITOR_AGENT_CONFLICT_CODES,
+  ...EDITOR_AGENT_FAILURE_CODES,
+  "RESPONSE_TOO_LARGE",
+  "TRANSPORT_FAILURE",
+  "REDIRECT_BLOCKED",
+  "EDIT_TRANSPORT_ERROR",
+  "EDIT_PREPARE_FAILED",
+  "WORKSPACE_ACCESS_LOST",
+  "EDIT_MUTATION_FAILED",
+  "ci-observation-required",
+] as const;
+export type CodingSafeActivityEditRefusalReason =
+  (typeof CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)[number];
+
+/** Canonical server facts only. Live authenticated presentation; never Activity Log evidence. */
+export interface CodingSafeActivityToolPresentation {
+  /** The workspace-contained file a completed governed read actually returned. */
+  readonly relativePath?: string;
+  /** The authoritative file at which edit materialization refused; absent if unknown. */
+  readonly affectedRelativePath?: string;
+  /** Bytes in the returned read window, not the whole file. */
+  readonly readByteCount?: number;
+  /** Line count of the whole read file, not the returned window. */
+  readonly totalFileLines?: number;
+  /** Actual discovery items returned after filtering and limits, not inventory or text lines. */
+  readonly returnedPathCount?: number;
+  readonly refusalReason?: CodingSafeActivityEditRefusalReason;
+  /** Elapsed bridge service time; includes governed waits, excludes model generation time. */
+  readonly bridgeDurationMs?: number;
+}
 
 export type CodingSafeActivityMessageRole = (typeof CODING_SAFE_ACTIVITY_MESSAGE_ROLES)[number];
 export type CodingSafeActivityToolState = (typeof CODING_SAFE_ACTIVITY_TOOL_STATES)[number];
@@ -84,10 +119,11 @@ export interface CodingSafeActivityMessage {
 
 export interface CodingSafeActivityTool {
   readonly callId: string;
-  /** Closed-adapter safe label only; tool arguments, results, paths, and provider data are absent. */
+  /** Closed-adapter safe label only; raw arguments/results and provider data are absent. */
   readonly tool: string;
   readonly state: CodingSafeActivityToolState;
   readonly occurredAt: string;
+  readonly presentation?: CodingSafeActivityToolPresentation;
 }
 
 export interface CodingSafeActivityTurn {
@@ -442,13 +478,75 @@ function validateTool(value: unknown, path: string, ids: Set<string>, errors: st
     errors.push(`${path} must be an object`);
     return;
   }
-  errors.push(...exactKeys(value, ["callId", "tool", "state", "occurredAt"], path));
+  errors.push(...exactKeys(value, ["callId", "tool", "state", "occurredAt", "presentation"], path));
   validateUniqueId(value.callId, `${path}.callId`, ids, errors);
   validateSafeId(value.tool, `${path}.tool`, errors, CODING_SAFE_ACTIVITY_TOOL_LABEL_MAX_CHARS);
   if (!isOneOf(value.state, CODING_SAFE_ACTIVITY_TOOL_STATES)) {
     errors.push(`${path}.state is invalid`);
   }
   validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
+  if (
+    value.presentation !== undefined &&
+    !isCodingSafeActivityToolPresentation(value.presentation)
+  ) {
+    errors.push(`${path}.presentation is invalid`);
+  }
+}
+
+export function isCodingSafeActivityToolPresentation(
+  value: unknown,
+): value is CodingSafeActivityToolPresentation {
+  if (!isRecord(value) || Object.keys(value).length === 0) return false;
+  const allowed = [
+    "relativePath",
+    "affectedRelativePath",
+    "readByteCount",
+    "totalFileLines",
+    "returnedPathCount",
+    "refusalReason",
+    "bridgeDurationMs",
+  ];
+  if (exactKeys(value, allowed, "presentation").length > 0) return false;
+  if (!validPresentationPaths(value) || !validPresentationCounts(value)) return false;
+  return (
+    value.refusalReason === undefined ||
+    isOneOf(value.refusalReason, CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES)
+  );
+}
+
+function validPresentationPaths(value: Record<string, unknown>): boolean {
+  return ["relativePath", "affectedRelativePath"].every(
+    (key) => value[key] === undefined || isCodingSafeActivityPresentationPath(value[key]),
+  );
+}
+
+function validPresentationCounts(value: Record<string, unknown>): boolean {
+  return ["readByteCount", "totalFileLines", "returnedPathCount", "bridgeDurationMs"].every(
+    (key) => {
+      const count = value[key];
+      return (
+        count === undefined ||
+        (typeof count === "number" && Number.isSafeInteger(count) && count >= 0)
+      );
+    },
+  );
+}
+
+/** Reuses the workspace path contract and excludes deceptive/control characters from UI labels. */
+export function isCodingSafeActivityPresentationPath(value: unknown): value is string {
+  return (
+    isPortableWorkspaceRelativePath(value) &&
+    stripUnsafeFormatChars(value) === value &&
+    displayPathHasNoControls(value)
+  );
+}
+
+function displayPathHasNoControls(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127) return false;
+  }
+  return true;
 }
 
 function validateUniqueId(value: unknown, path: string, ids: Set<string>, errors: string[]): void {

@@ -2,19 +2,20 @@
 // exercises the real allowlist + discovery + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in command-runner-routes.test.ts.
 
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
-import type { ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseCommandTaskRunRequest } from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import {
   CommandDeniedError,
   DEFAULT_SANDBOX_POLICY,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
+import type { CommandRunnerEvent, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import {
   createCommandRunnerManager,
   type CommandRunnerManager,
@@ -26,7 +27,14 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { redactLogFields } from "@oscharko-dev/keiko-activity-log";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
+import {
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./task-workspace/workspace-root-access.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { deriveManagedWorktreePath, deriveRepositoryId } from "./task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
+import type { ServerDiagnosticSink } from "./diagnostics-log.js";
 
 // ── Fake spawn helpers (mirrors terminal.test.ts) ────────────────────────────────
 
@@ -146,6 +154,7 @@ function makeManager(
     store,
     evidenceStore,
     processEnv: { PATH: "/usr/bin" },
+    diagnostics: { record: (): void => undefined },
     isWorkspaceTrustedForPackageScripts: () => true,
     runDeps: {
       spawn: spawnImpl,
@@ -164,9 +173,179 @@ function collect(manager: CommandRunnerManager): CommandRunnerEvent[] {
   return events;
 }
 
+function linkedCommandWorktree(managedRoot: string): WorkspaceInstance {
+  const git = (args: readonly string[]): string =>
+    execFileSync("git", [...args], { cwd: workspaceRoot, encoding: "utf8" });
+  git(["init", "-q", "-b", "dev"]);
+  git(["add", "package.json"]);
+  git([
+    "-c",
+    "user.name=Keiko Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--no-gpg-sign",
+    "-qm",
+    "fixture",
+  ]);
+  const workspaceId = "ws_0123456789abcdef01234567";
+  const repositoryRoot = realpathSync(workspaceRoot);
+  const repositoryId = deriveRepositoryId(repositoryRoot);
+  assertManagedRootOwned(managedRoot);
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  const taskBranch = "keiko/task/g1-command-runner-01234567";
+  mkdirSync(dirname(managedWorktreePath), { recursive: true });
+  git(["worktree", "add", "-q", "-b", taskBranch, managedWorktreePath, "HEAD"]);
+  const identity = inspectManagedGitdirIdentity(managedWorktreePath, repositoryRoot);
+  if (identity === undefined) throw new Error("Linked fixture worktree identity was unavailable.");
+  return {
+    schemaVersion: "1",
+    workspaceId,
+    taskId: "command-fixture",
+    repositoryId,
+    repositoryRoot,
+    baseBranch: "dev",
+    taskBranch,
+    managedWorktreePath,
+    gitdirIdentity: identity.identity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "command-fixture-root",
+  };
+}
+
 // ── Discovery ─────────────────────────────────────────────────────────────────────
 
 describe("CommandRunnerManager — discovery", () => {
+  it("uses the production ownership and lifecycle proof for an unregistered linked task root", async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-linked-")));
+    const activity: ServerLogEvent[] = [];
+    try {
+      const managedRoot = join(base, ".keiko", "task-workspaces");
+      let instance = linkedCommandWorktree(managedRoot);
+      const spawn = vi.fn(makeSpawn());
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (requested): WorkspaceRootAccess | undefined =>
+          resolveManagedWorkspaceRootAccess(
+            {
+              managedTaskWorkspaceRoot: managedRoot,
+              workspaceProvisioning: {
+                provision: (): never => {
+                  throw new Error("Fixture does not provision.");
+                },
+                activate: (): never => {
+                  throw new Error("Fixture does not activate.");
+                },
+                getInstance: (id) => (id === instance.workspaceId ? instance : undefined),
+              },
+            },
+            requested,
+            {
+              activityLog: {
+                write: (event): void => {
+                  activity.push(event);
+                },
+              },
+            },
+          ),
+      });
+      const input = { projectId: instance.managedWorktreePath, taskId: "npm-script:test" };
+      expect(store.listProjects().some((project) => project.path === input.projectId)).toBe(false);
+      expect(manager.discover(input.projectId).tasks).not.toHaveLength(0);
+      expect((await manager.execute(input)).failureReason).toBe("none");
+      expect(spawn).toHaveBeenCalledOnce();
+      manager.subscribe((event) => {
+        if (event.kind === "run-started") instance = { ...instance, lifecycleState: "archived" };
+      });
+      expect((await manager.execute(input)).failureReason).toBe("denied");
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(activity.find((event) => event.op === "workspace.root.denied")?.extra).toMatchObject({
+        reason: "managed-root-lifecycle",
+      });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers and runs an unregistered root proven to be a managed task", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-unregistered-")));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      const spawn = vi.fn(makeSpawn());
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (requested): WorkspaceRootAccess | undefined =>
+          requested === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+      });
+      expect(store.listProjects().some((project) => project.path === worktreeRoot)).toBe(false);
+      expect(manager.discover(worktreeRoot).tasks.map((task) => task.id)).toContain(
+        "npm-script:test",
+      );
+      expect(
+        (await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }))
+          .failureReason,
+      ).toBe("none");
+      expect(spawn).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve an unknown ordinary root through the focused registered project", async () => {
+    const spawn = vi.fn(makeSpawn());
+    const resolve = vi.fn((): WorkspaceRootAccess => ({
+      kind: "ordinary",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    }));
+    const manager = makeManager(spawn, { resolveWorkspaceRootAccess: resolve });
+    expect(() => manager.discover("/unregistered/ordinary")).toThrow(
+      expect.objectContaining({ code: "PROJECT_NOT_FOUND" }),
+    );
+    await expect(
+      manager.execute({ projectId: "/unregistered/ordinary", taskId: "npm-script:test" }),
+    ).rejects.toMatchObject({ code: "PROJECT_NOT_FOUND" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("records technical managed-root resolver causes without content or paths", () => {
+    const record = vi.fn<ServerDiagnosticSink["record"]>();
+    const manager = makeManager(makeSpawn(), {
+      diagnostics: { record },
+      resolveWorkspaceRootAccess: (): never => {
+        throw new TypeError(`private-root-marker ${workspaceRoot}`, {
+          cause: new RangeError("private-root-cause"),
+        });
+      },
+    });
+    expect(() => manager.discover("/unregistered/managed")).toThrow(
+      expect.objectContaining({ code: "PROJECT_NOT_FOUND" }),
+    );
+    expect(record).toHaveBeenCalledOnce();
+    const diagnostic = record.mock.calls[0]?.[0];
+    expect(diagnostic).toMatchObject({
+      operation: "command.workspace-root",
+      code: "command-workspace-root-resolution-failed",
+      diagnosticOutcome: "request-failed",
+      causeChain: ["RangeError"],
+    });
+    expect(diagnostic?.frames?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostic)).not.toContain("private-root-marker");
+    expect(JSON.stringify(diagnostic)).not.toContain("private-root-cause");
+    expect(JSON.stringify(diagnostic)).not.toContain(workspaceRoot);
+  });
+
   it("uses managed-root access and fails closed when central resolution denies it", () => {
     const access: WorkspaceRootAccess = {
       kind: "managed-task",
@@ -382,6 +561,383 @@ describe("CommandRunnerManager — discovery", () => {
 // ── Execution outcomes ─────────────────────────────────────────────────────────────
 
 describe("CommandRunnerManager — execution", () => {
+  it("refuses authority revoked by a synchronous run-start subscriber before spawn", async () => {
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn);
+    let authorized = true;
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") authorized = false;
+    });
+    const beforeSpawn = vi.fn(() => authorized);
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      beforeSpawn,
+    });
+    expect(result.failureReason).toBe("denied");
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("refuses manifest trust drift in a run-start subscriber before spawn", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-start-drift-")));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+      });
+      manager.subscribe((event) => {
+        if (event.kind === "run-started") {
+          writeFileSync(
+            join(worktreeRoot, "package.json"),
+            PACKAGE_JSON.replace("vitest run", "node attacker.js"),
+            "utf8",
+          );
+        }
+      });
+      const result = await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(result.failureReason).toBe("denied");
+      expect(spawn).not.toHaveBeenCalled();
+      expect(manager.inFlightCount()).toBe(0);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a same-path root replacement after a run started", async () => {
+    const savedRoot = `${workspaceRoot}-saved`;
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn);
+    try {
+      manager.subscribe((event) => {
+        if (event.kind !== "run-started") return;
+        renameSync(workspaceRoot, savedRoot);
+        mkdirSync(workspaceRoot);
+        writeFileSync(join(workspaceRoot, "package.json"), PACKAGE_JSON, "utf8");
+      });
+      const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+      expect(result.failureReason).toBe("denied");
+      expect(spawn).not.toHaveBeenCalled();
+      expect(manager.inFlightCount()).toBe(0);
+    } finally {
+      rmSync(savedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rechecks caller authority after the final script-trust callback", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let authorized = true;
+    let started = false;
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        if (started) authorized = false;
+        return true;
+      },
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") started = true;
+    });
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      beforeSpawn: () => authorized,
+    });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses manifest replacement inside the last caller authority callback", async () => {
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn);
+    let callerChecks = 0;
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      beforeSpawn: (): boolean => {
+        callerChecks += 1;
+        if (callerChecks === 2) {
+          writeFileSync(
+            join(workspaceRoot, "package.json"),
+            PACKAGE_JSON.replace("vitest run", "node attacker.js"),
+            "utf8",
+          );
+        }
+        return true;
+      },
+    });
+    expect(callerChecks).toBe(2);
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses standing trust revoked inside the last caller authority callback", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let trusted = true;
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: (): boolean => trusted,
+    });
+    let callerChecks = 0;
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      beforeSpawn: (): boolean => {
+        callerChecks += 1;
+        if (callerChecks === 2) trusted = false;
+        return true;
+      },
+    });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses manifest replacement inside a script-trust callback that returns allowed", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let started = false;
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        if (started) {
+          writeFileSync(
+            join(workspaceRoot, "package.json"),
+            PACKAGE_JSON.replace("vitest run", "node attacker.js"),
+            "utf8",
+          );
+        }
+        return true;
+      },
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") started = true;
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("materializes the manifest after the last script-trust callback", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let started = false;
+    let postStartTrustChecks = 0;
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        if (started && ++postStartTrustChecks === 2) {
+          writeFileSync(
+            join(workspaceRoot, "package.json"),
+            PACKAGE_JSON.replace("vitest run", "node attacker.js"),
+            "utf8",
+          );
+        }
+        return true;
+      },
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") started = true;
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+    expect(postStartTrustChecks).toBe(2);
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("materializes root identity after the last script-trust callback", async () => {
+    const savedRoot = `${workspaceRoot}-saved`;
+    const spawn = vi.fn(makeSpawn());
+    let started = false;
+    let postStartTrustChecks = 0;
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        if (started && ++postStartTrustChecks === 2) {
+          renameSync(workspaceRoot, savedRoot);
+          mkdirSync(workspaceRoot);
+          writeFileSync(join(workspaceRoot, "package.json"), PACKAGE_JSON, "utf8");
+        }
+        return true;
+      },
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") started = true;
+    });
+    try {
+      const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+      expect(postStartTrustChecks).toBe(2);
+      expect(result.failureReason).toBe("denied");
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(savedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes the manifest after the last central root-resolution callback", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let started = false;
+    let postStartRootChecks = 0;
+    const manager = makeManager(spawn, {
+      resolveWorkspaceRootAccess: (): WorkspaceRootAccess => {
+        if (started && ++postStartRootChecks === 2) {
+          writeFileSync(
+            join(workspaceRoot, "package.json"),
+            PACKAGE_JSON.replace("vitest run", "node attacker.js"),
+            "utf8",
+          );
+        }
+        return {
+          kind: "ordinary",
+          canonicalRoot: realpathSync(workspaceRoot),
+          fs: nodeWorkspaceFs,
+        };
+      },
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") started = true;
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("rechecks root identity after the final script-trust callback", async () => {
+    const savedRoot = `${workspaceRoot}-saved`;
+    const spawn = vi.fn(makeSpawn());
+    let started = false;
+    let replaced = false;
+    const manager = makeManager(spawn, {
+      isWorkspaceTrustedForPackageScripts: (): boolean => {
+        if (started && !replaced) {
+          renameSync(workspaceRoot, savedRoot);
+          mkdirSync(workspaceRoot);
+          writeFileSync(join(workspaceRoot, "package.json"), PACKAGE_JSON, "utf8");
+          replaced = true;
+        }
+        return true;
+      },
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") started = true;
+    });
+    try {
+      const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+      expect(result.failureReason).toBe("denied");
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(savedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses root access revoked by a synchronous run-start subscriber", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let accessLive = true;
+    const manager = makeManager(spawn, {
+      resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined =>
+        accessLive
+          ? { kind: "ordinary", canonicalRoot: realpathSync(workspaceRoot), fs: nodeWorkspaceFs }
+          : undefined,
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") accessLive = false;
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("refuses a managed root rebound to a different repository before spawn", async () => {
+    const spawn = vi.fn(makeSpawn());
+    let repositoryRoot = workspaceRoot;
+    const manager = makeManager(spawn, {
+      resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+        kind: "managed-task",
+        canonicalRoot: realpathSync(workspaceRoot),
+        fs: nodeWorkspaceFs,
+        repositoryRoot,
+      }),
+    });
+    manager.subscribe((event) => {
+      if (event.kind === "run-started") repositoryRoot = "/different/repository";
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("reports technical caller-check causes without logging their messages or root", async () => {
+    const record = vi.fn<ServerDiagnosticSink["record"]>();
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn, { diagnostics: { record } });
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      beforeSpawn: (): never => {
+        throw new TypeError(`private-marker ${workspaceRoot}`, {
+          cause: new RangeError("private-cause"),
+        });
+      },
+    });
+    expect(result.failureReason).toBe("denied");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledOnce();
+    const diagnostic = record.mock.calls[0]?.[0];
+    expect(diagnostic).toMatchObject({
+      operation: "command.before-spawn",
+      code: "command-spawn-authority-revoked",
+      diagnosticOutcome: "request-refused",
+      causeChain: ["TypeError", "RangeError"],
+    });
+    expect(diagnostic?.frames?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostic)).not.toContain("private-marker");
+    expect(JSON.stringify(diagnostic)).not.toContain(workspaceRoot);
+    expect(JSON.stringify(diagnostic)).not.toContain("private-cause");
+  });
+
+  it("preserves cancellation raised during the hidden caller check", async () => {
+    const controller = new AbortController();
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn);
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      signal: controller.signal,
+      beforeSpawn: (): boolean => {
+        controller.abort();
+        return true;
+      },
+    });
+    expect(result.failureReason).toBe("cancelled");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.inFlightCount()).toBe(0);
+  });
+
+  it("keeps the hidden caller check outside the wire request vocabulary", () => {
+    expect(
+      parseCommandTaskRunRequest({
+        projectId: workspaceRoot,
+        taskId: "npm-script:test",
+        beforeSpawn: true,
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("runs normally when a server caller remains authorized through both checks", async () => {
+    const spawn = vi.fn(makeSpawn());
+    const manager = makeManager(spawn);
+    const beforeSpawn = vi.fn(() => true);
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      taskId: "npm-script:test",
+      beforeSpawn,
+    });
+    expect(result.failureReason).toBe("none");
+    expect(beforeSpawn).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
   it("denies repository-authored scripts before spawn unless the server trusts the workspace", async () => {
     const spawn = vi.fn<SpawnFn>(makeSpawn({ stdout: "should not run", exitCode: 0 }));
     const manager = makeManager(spawn, { isWorkspaceTrustedForPackageScripts: undefined });

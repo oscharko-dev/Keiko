@@ -191,6 +191,55 @@ function feedWithRepeatedTools(): AvailableCodingSafeActivityFeed {
   };
 }
 
+function feedWithPresentedTools(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const tools = [
+    {
+      callId: "read-1",
+      tool: "keiko_workspace_read",
+      state: "succeeded" as const,
+      occurredAt: AT,
+      presentation: {
+        relativePath: "packages/ui/deep/First.tsx",
+        readByteCount: 120,
+        totalFileLines: 800,
+        bridgeDurationMs: 15,
+      },
+    },
+    {
+      callId: "read-2",
+      tool: "keiko_workspace_read",
+      state: "succeeded" as const,
+      occurredAt: AT,
+      presentation: {
+        relativePath: "packages/ui/deep/Second.tsx",
+        readByteCount: 30,
+        totalFileLines: 200,
+        bridgeDurationMs: 3,
+      },
+    },
+    {
+      callId: "discover-1",
+      tool: "keiko_workspace_discover",
+      state: "succeeded" as const,
+      occurredAt: AT,
+      presentation: { returnedPathCount: 2, bridgeDurationMs: 70 },
+    },
+    {
+      callId: "edit-1",
+      tool: "keiko_changeset_edit",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: {
+        refusalReason: "CONTENT_HASH_MISMATCH" as const,
+        affectedRelativePath: "packages/ui/deep/Conflict.tsx",
+        bridgeDurationMs: 6,
+      },
+    },
+  ];
+  return { ...feed, turns: [{ turnId: "turn-tools", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -234,6 +283,28 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it("keeps each presented call visible with precise canonical facts", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithPresentedTools())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const group = container.querySelector<HTMLDetailsElement>(`.${styles.cmpToolGroup}`);
+    if (group === null) throw new Error("expected completed tool group");
+    fireEvent.click(group.querySelector("summary")!);
+    expect(screen.getByText("packages/ui/deep/First.tsx")).toBeInTheDocument();
+    expect(screen.getByText("packages/ui/deep/Second.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Read: 120 bytes · Whole file: 800 lines")).toBeInTheDocument();
+    expect(screen.getByText("Returned paths: 2")).toBeInTheDocument();
+    expect(screen.getByText("Tool service: 15 ms")).toBeInTheDocument();
+    expect(screen.getByText("Edit refusal: CONTENT_HASH_MISMATCH")).toBeInTheDocument();
+    expect(screen.getByText("Affected file: packages/ui/deep/Conflict.tsx")).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-timeline-kind="tool"]')).toHaveLength(4);
+  });
+
   it.each([false, true])(
     "retains terminal activity recovery with existing content: %s",
     (hasContent) => {

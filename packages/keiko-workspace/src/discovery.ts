@@ -682,18 +682,53 @@ export interface StreamingDiscoveryStats {
   readonly ignored: number;
   readonly denied: number;
   readonly ioErrors: number;
+  readonly directoriesDiscovered?: number;
+  readonly directoriesPruned?: number;
+}
+
+export interface StreamingDiscoveryOptions {
+  readonly onDirectory?: (directory: DiscoveredFile) => Promise<void>;
+  readonly recursive?: boolean;
+  /** Reuses the bounded inventory's directory-memory ceiling without limiting file visits. */
+  readonly boundPendingDirectories?: boolean;
 }
 
 interface StreamingWalk {
   entriesSinceYield: number;
   readonly walk: Walk;
   readonly onFile: (file: DiscoveredFile) => Promise<void>;
+  readonly options: StreamingDiscoveryOptions | undefined;
   filesDiscovered: number;
+  directoriesDiscovered: number;
+  directoriesPruned: number;
+  pendingDirectoryCount: number;
 }
 
 interface PendingStreamingDirectory {
   readonly absolute: string;
   readonly relativeDir: string;
+}
+
+async function retainStreamingDirectory(
+  state: StreamingWalk,
+  current: CurrentEntry,
+  directories: PendingStreamingDirectory[],
+): Promise<void> {
+  state.directoriesDiscovered += 1;
+  await state.options?.onDirectory?.({
+    relativePath: current.relativePath,
+    sizeBytes: current.stat.size,
+  });
+  if (state.options?.recursive === false) return;
+  if (
+    state.options?.boundPendingDirectories === true &&
+    state.pendingDirectoryCount >= MAX_DIRECTORY_ENTRIES
+  ) {
+    state.directoriesPruned += 1;
+    return;
+  }
+  state.pendingDirectoryCount += 1;
+  directories.push({ absolute: current.absolutePath, relativeDir: current.relativePath });
 }
 
 async function visitStreamingEntry(
@@ -712,8 +747,7 @@ async function visitStreamingEntry(
   }
   const current = currentContainedEntry(walk, path);
   if (current === undefined || !isAllowed(walk, path, current.stat.isDirectory)) return;
-  if (current.stat.isDirectory)
-    directories.push({ absolute: current.absolutePath, relativeDir: path });
+  if (current.stat.isDirectory) await retainStreamingDirectory(state, current, directories);
   else if (current.stat.isFile) {
     state.filesDiscovered += 1;
     await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
@@ -733,17 +767,28 @@ async function* admittedStreamingDirectoryEntries(
       throw new WorkspaceReadError("Directory streaming is unavailable.", relativeDir);
     }
     yield* walk.fs.iterateDirectory(current);
-    currentContainedDirectory(walk, current, relativeDir);
+    revalidateStreamedDirectory(walk, current, relativeDir);
   } catch (error) {
     if (
       error instanceof WorkspaceDescriptorReadError &&
       error.reason === "directory-membership-changed"
     ) {
+      assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
       walk.ioErrors = (walk.ioErrors ?? 0) + 1;
       return;
     }
     if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return;
     throw directoryReadFailure(relativeDir, error);
+  }
+}
+
+function revalidateStreamedDirectory(walk: Walk, absolute: string, relativeDir: string): void {
+  const priorErrors = walk.ioErrors ?? 0;
+  if (
+    currentContainedDirectory(walk, absolute, relativeDir) === undefined &&
+    (walk.ioErrors ?? 0) === priorErrors
+  ) {
+    walk.ioErrors = priorErrors + 1;
   }
 }
 
@@ -769,6 +814,7 @@ async function* streamingDirectoryChildren(
   while (pending.length > 0) {
     const directory = pending.pop();
     if (directory === undefined) break;
+    state.pendingDirectoryCount -= 1;
     const children: PendingStreamingDirectory[] = [];
     yield collectStreamingDirectory(
       state,
@@ -785,6 +831,7 @@ async function visitStreamingDirectory(
   relativeDir: string,
 ): Promise<void> {
   const pending: PendingStreamingDirectory[] = [{ absolute, relativeDir }];
+  state.pendingDirectoryCount += 1;
   for await (const children of streamingDirectoryChildren(state, pending)) {
     // Finish and close the current descriptor before descending. Only directory paths are queued;
     // file contents and file inventories are never retained by discovery.
@@ -824,11 +871,29 @@ async function visitSelectedStreamingPath(state: StreamingWalk, path: string): P
   }
   if (!isAllowed(walk, path, false)) return;
   const current = admittedSearchScopeEntry(walk.fs, walk.root, path);
+  if (current !== undefined && !isAllowed(walk, path, current.stat.isDirectory)) return;
   if (current?.stat.isDirectory) await visitStreamingDirectory(state, current.path, path);
   else if (current?.stat.isFile) {
     state.filesDiscovered += 1;
     await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
   }
+}
+
+function streamingDiscoveryStats(state: StreamingWalk): StreamingDiscoveryStats {
+  const walk = state.walk;
+  return {
+    filesDiscovered: state.filesDiscovered,
+    ignored: walk.ignored,
+    denied: walk.denied,
+    ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
+    ioErrors: walk.ioErrors ?? 0,
+    ...(state.options === undefined
+      ? {}
+      : {
+          directoriesDiscovered: state.directoriesDiscovered,
+          directoriesPruned: state.directoriesPruned,
+        }),
+  };
 }
 
 async function* selectedStreamingVisits(
@@ -851,30 +916,28 @@ export async function visitWorkspaceFiles(
   control: StructuralExecutionControl,
   onFile: (file: DiscoveredFile) => Promise<void>,
   onStats?: (stats: StreamingDiscoveryStats) => void,
+  options?: StreamingDiscoveryOptions,
 ): Promise<StreamingDiscoveryStats> {
   const walk = streamingScopeWalk(workspace, relativePaths, applyGitignore, fs, control);
-  const state: StreamingWalk = { walk, onFile, filesDiscovered: 0, entriesSinceYield: 0 };
+  const state: StreamingWalk = {
+    walk,
+    onFile,
+    options,
+    filesDiscovered: 0,
+    directoriesDiscovered: 0,
+    directoriesPruned: 0,
+    pendingDirectoryCount: 0,
+    entriesSinceYield: 0,
+  };
   const selected =
     relativePaths.length === 0 ? [""] : canonicalSearchScopeRelativePaths(relativePaths);
   try {
     for await (const _visit of selectedStreamingVisits(state, selected)) {
       // Drain one selected root at a time; traversal records its counts in state.
     }
-    return {
-      filesDiscovered: state.filesDiscovered,
-      ignored: walk.ignored,
-      denied: walk.denied,
-      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
-      ioErrors: walk.ioErrors ?? 0,
-    };
+    return streamingDiscoveryStats(state);
   } finally {
-    onStats?.({
-      filesDiscovered: state.filesDiscovered,
-      ignored: walk.ignored,
-      denied: walk.denied,
-      ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
-      ioErrors: walk.ioErrors ?? 0,
-    });
+    onStats?.(streamingDiscoveryStats(state));
   }
 }
 

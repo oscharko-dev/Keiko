@@ -404,6 +404,16 @@ diagnostic events are transient, bounded, and access-controlled. Durable operati
 evidence are a separate content-free projection; they carry only ids, digests, counts, booleans,
 closed states/codes, and safe labels.
 
+The authenticated live safe-activity tool projection also carries canonical per-call facts
+(#3874): a completed read's workspace-relative path, returned-window bytes and whole-file line
+count; the actual number of discovery entries returned; a closed edit refusal and the affected
+relative path only when materialization identified it; and elapsed bridge service time. Service
+time includes governed waits and excludes model generation. These facts come from the governed
+producer, remain bounded by the existing aggregate feed limits, and survive native restatement
+and immutable replay. Raw arguments/results, unknown refusal strings and unsafe paths are rejected.
+Paths never enter Activity Log evidence, model-facing edit refusal replies or Coding History;
+the existing tool-result operation records service duration through its standard duration field.
+
 The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
 in the existing local UI conversation store. Native V2 history is validated and captured continuously
 through the armed runtime's capture port, independently of the live display projection's TTL, turn

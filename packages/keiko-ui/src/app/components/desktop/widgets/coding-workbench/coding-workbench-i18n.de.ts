@@ -1082,6 +1082,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.checks":
     "Prüfungen: {passed} bestanden, {failed} nicht erfolgreich, {skipped} übersprungen",
   "codingWorkbench.verification.duration": "Dauer: {duration} ms",
+  "codingWorkbench.activity.readBytes": "Gelesen: {bytes} Bytes",
+  "codingWorkbench.activity.readFacts": "Gelesen: {bytes} Bytes · Ganze Datei: {lines} Zeilen",
+  "codingWorkbench.activity.returnedPaths": "Zurückgegebene Pfade: {count}",
+  "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
+  "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
+  "codingWorkbench.activity.serviceDuration": "Tool-Verarbeitung: {duration} ms",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

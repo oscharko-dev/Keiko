@@ -60,6 +60,49 @@ function availableFeed(): CodingSafeActivityFeed {
 }
 
 describe("coding safe-activity contract", () => {
+  it("admits only bounded canonical tool presentation facts", () => {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new Error("expected available fixture");
+    const turn = feed.turns[0];
+    const tool = turn?.tools[0];
+    if (turn === undefined || tool === undefined) throw new Error("expected tool fixture");
+    const presentation = {
+      bridgeDurationMs: 120,
+      relativePath: "packages/ui/src/deep/Component.tsx",
+      readByteCount: 80,
+      totalFileLines: 400,
+    };
+    const withPresentation = (value: unknown): unknown => ({
+      ...feed,
+      turns: [{ ...turn, tools: [{ ...tool, presentation: value }] }],
+    });
+    expect(validateCodingSafeActivityFeed(withPresentation(presentation)).ok).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(
+        withPresentation({ bridgeDurationMs: 2, returnedPathCount: 0 }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateCodingSafeActivityFeed(
+        withPresentation({ bridgeDurationMs: 3, refusalReason: "CONTENT_HASH_MISMATCH" }),
+      ).ok,
+    ).toBe(true);
+    for (const invalid of [
+      { ...presentation, stdout: "RAW_OUTPUT_SENTINEL" },
+      { ...presentation, relativePath: "/private/absolute.ts" },
+      { ...presentation, relativePath: "../escape.ts" },
+      { ...presentation, relativePath: "unsafe\u202e.ts" },
+      { ...presentation, bridgeDurationMs: Number.NaN },
+      { ...presentation, bridgeDurationMs: Number.POSITIVE_INFINITY },
+      { ...presentation, bridgeDurationMs: -1 },
+      { ...presentation, readByteCount: 0.5 },
+      { ...presentation, returnedPathCount: -1 },
+      { ...presentation, refusalReason: "arbitrary provider text" },
+    ]) {
+      expect(validateCodingSafeActivityFeed(withPresentation(invalid)).ok).toBe(false);
+    }
+  });
+
   it("accepts typed turns and the complete closed tool-state vocabulary", () => {
     for (const state of CODING_SAFE_ACTIVITY_TOOL_STATES) {
       const feed = availableFeed();

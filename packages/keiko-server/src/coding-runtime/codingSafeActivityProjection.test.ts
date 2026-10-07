@@ -72,6 +72,152 @@ function populateBoundedTurns(
 }
 
 describe("bounded coding safe-activity projection", () => {
+  it("owns canonical tool facts across native restatement and replay without logging paths", () => {
+    const log = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      activityLog: log,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_presented",
+      tool: "keiko_workspace_read",
+      state: "running",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    const presentation = {
+      relativePath: "packages/deep/RELATIVE_PATH_SENTINEL.ts",
+      readByteCount: 12,
+      totalFileLines: 300,
+      bridgeDurationMs: 25,
+    };
+    const settled = {
+      kind: "tool" as const,
+      callId: "call_presented",
+      state: "succeeded" as const,
+      occurredAt: "2026-07-18T17:00:00.003Z",
+      presentation,
+    };
+    expect(projection.ingest(RUN_ID, settled)).toBe(true);
+    presentation.readByteCount = 999;
+    presentation.relativePath = "CHANGED_CALLER_PATH.ts";
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      callId: settled.callId,
+      state: "succeeded",
+      messageId: "msg_assistant",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      callId: settled.callId,
+      state: "running",
+      messageId: "msg_assistant",
+      occurredAt: "2026-07-18T17:00:00.004Z",
+    });
+    expect(projection.currentContent()).toMatchObject({
+      feed: {
+        turns: [
+          {
+            tools: [
+              {
+                presentation: {
+                  relativePath: "packages/deep/RELATIVE_PATH_SENTINEL.ts",
+                  readByteCount: 12,
+                  totalFileLines: 300,
+                  bridgeDurationMs: 25,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(log.events).toHaveLength(1);
+    expect(log.events[0]?.op).toBe("coding-runtime.safe-activity");
+    expect(JSON.stringify(log.events)).not.toMatch(/RELATIVE_PATH_SENTINEL|CHANGED_CALLER_PATH/u);
+    const replay = projection.currentContent()?.feed;
+    const replayFacts =
+      replay?.availability === "available" ? replay.turns[0]?.tools[0]?.presentation : undefined;
+    if (replayFacts === undefined) throw new Error("Expected replayed tool facts");
+    expect(Object.isFrozen(replayFacts)).toBe(true);
+    expect(Reflect.set(replayFacts, "readByteCount", 999)).toBe(false);
+  });
+
+  it("keeps presented paths inside the existing aggregate feed byte ceiling", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxTurnBytes: 512, maxTotalBytes: 1_024 },
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    for (let index = 0; index < 8; index += 1) {
+      const signal = {
+        kind: "tool" as const,
+        messageId: "msg_assistant",
+        callId: `call_bound_${String(index)}`,
+        tool: "keiko_workspace_read",
+        state: "succeeded" as const,
+        occurredAt: "2026-07-18T17:00:00.002Z",
+        presentation: { relativePath: `src/${"long-path-".repeat(100)}.ts`, bridgeDurationMs: 1 },
+      };
+      projection.ingest(RUN_ID, signal);
+    }
+    const content = projection.currentContent();
+    expect(content).not.toBeNull();
+    expect(Buffer.byteLength(JSON.stringify(content?.feed), "utf8")).toBeLessThanOrEqual(1_024);
+    expect(content?.feed).toMatchObject({ turns: [{ truncated: true }] });
+  });
+
+  it.each([
+    { bridgeDurationMs: Number.NaN },
+    { bridgeDurationMs: Number.POSITIVE_INFINITY },
+    { refusalReason: "RAW_REFUSAL_SENTINEL" },
+    { bridgeDurationMs: 1, stdout: "RAW_OUTPUT_SENTINEL" },
+    { relativePath: "../PATH_ESCAPE_SENTINEL.ts" },
+  ])("rejects noncanonical presentation at the producer signal boundary: %s", (presentation) => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    const signal: CodingSafeActivitySignal = {
+      kind: "tool",
+      messageId: "msg_user",
+      callId: "call_invalid",
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    };
+    Object.defineProperty(signal, "presentation", { value: presentation, enumerable: true });
+    expect(projection.ingest(RUN_ID, signal)).toBe(false);
+    expect(JSON.stringify(projection.currentContent())).not.toContain("SENTINEL");
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(1);
+  });
+
   it("projects typed conversation and monotonic tool-state transitions without raw tool payloads", () => {
     const projection = createCodingSafeActivityProjection({
       now: () => 1_721_323_200_000,

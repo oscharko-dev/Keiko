@@ -2227,6 +2227,45 @@ describe("private OpenCode tool bridge", () => {
     };
   };
 
+  it("settles governed read facts with the actual bridge service duration and no raw output", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const facade: CodingToolFacade = {
+      execute: vi.fn(() => {
+        now += 125;
+        return Promise.resolve({ ...completed, read: { ...completed.read, totalLines: 400 } });
+      }),
+    };
+    const activity = activityRecorder();
+    const fixture = await startBridgeFixture(facade, undefined, {
+      safeActivity: activity.safeActivity,
+    });
+    try {
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: toolBody("call_facts"),
+      });
+      expect(activity.settlements).toEqual([
+        expect.objectContaining({
+          actionId: "tool:call_facts",
+          state: "succeeded",
+          presentation: {
+            relativePath: "src/index.ts",
+            readByteCount: 7,
+            totalFileLines: 400,
+            bridgeDurationMs: 125,
+          },
+        }),
+      ]);
+      expect(JSON.stringify(activity.settlements)).not.toContain("fixture");
+      expect(JSON.stringify(activity.settlements)).not.toContain("digest");
+    } finally {
+      clock.mockRestore();
+      await fixture.stop();
+    }
+  });
+
   // #3390 (ADR-0043 D11-D14): a negative proof that no production path re-opens a second loopback
   // listener for this bridge. The public port's OWN shape is the guard: it exposes exactly `url`
   // (a fixed string, never a self-issued port), `requestDeadlineMs` (a plain number the route

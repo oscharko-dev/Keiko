@@ -7,6 +7,16 @@ import {
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 
 describe("recordGovernedToolModelContent", () => {
+  it("records measured bridge service time in the existing body-free result line", () => {
+    const log = createBufferedServerLogSink();
+    recordGovernedToolModelContent(log, "run-service-duration", { status: "completed" }, 125);
+    expect(log.events).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.tool-result-rendered",
+        durationMs: 125,
+      }),
+    ]);
+  });
   it("records a block rendering body-free under the run correlation", () => {
     const activityLog = createBufferedServerLogSink();
 

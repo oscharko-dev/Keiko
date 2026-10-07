@@ -8,6 +8,7 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isCodingSafeActivityToolPresentation } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
@@ -330,19 +331,41 @@ function safeActivityController(
     recordDrops: (count): void => {
       if (armed) projection.recordDrops(runId, "validation-rejected", count);
     },
-    settleTool: ({ actionId, state, occurredAt }): void => {
+    settleTool: (input): void => {
       if (!armed) return;
-      const callId = callIdFromAction(actionId);
-      if (callId === undefined) {
+      const signal = settledToolSignal(input);
+      if (signal === undefined) {
         projection.recordDrop(runId, "validation-rejected");
         return;
       }
-      const signal = { kind: "tool", callId, state, occurredAt } as const;
+      const { callId } = signal;
       rememberTerminal(runId, callId, signal, projection, terminal, knownCalls);
       if (knownCalls.values.has(callId)) {
         schedulePendingTerminal(runId, callId, projection, terminal, knownCalls);
       }
     },
+  };
+}
+
+function settledToolSignal({
+  actionId,
+  state,
+  occurredAt,
+  presentation,
+}: Parameters<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["settleTool"]>[0]):
+  Extract<CodingSafeActivitySignal, { readonly kind: "tool" }> | undefined {
+  const callId = callIdFromAction(actionId);
+  if (
+    callId === undefined ||
+    (presentation !== undefined && !isCodingSafeActivityToolPresentation(presentation))
+  )
+    return undefined;
+  return {
+    kind: "tool",
+    callId,
+    state,
+    occurredAt,
+    ...(presentation === undefined ? {} : { presentation: Object.freeze({ ...presentation }) }),
   };
 }
 

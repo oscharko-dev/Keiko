@@ -1048,6 +1048,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.checks":
     "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
   "codingWorkbench.verification.duration": "Duration: {duration} ms",
+  "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
+  "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
+  "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
+  "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
+  "codingWorkbench.activity.affectedFile": "Affected file: {path}",
+  "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

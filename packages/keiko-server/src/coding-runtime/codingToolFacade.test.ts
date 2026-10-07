@@ -15,6 +15,7 @@ import {
 } from "../tool-catalog/catalogToolFacadeBridge.js";
 import {
   createCodingToolFacade,
+  codingToolEditPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -174,6 +175,33 @@ describe("CodingToolFacade", () => {
       status: "completed",
       evidence: [{ kind: "governed-delegate", code: "completed" }],
       skills: empty,
+    });
+  });
+
+  it("preserves canonical discovery item counts without treating text lines as paths", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        read: {
+          text: "one\nfilename.ts\nsecond.ts\n",
+          byteCount: 0,
+          digest: "b".repeat(64),
+          totalLines: 3,
+          returnedPathCount: 2,
+        },
+      }),
+    );
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "discover", query: "*", maxResults: 10 }),
+      capability,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      read: {
+        totalLines: 3,
+        returnedPathCount: 2,
+      },
     });
   });
 
@@ -1825,6 +1853,44 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
       prepareCause: "replacement-read-failed",
       readReason: "not-text",
     };
+
+    it.each(["src/deep/AFFECTED_FILE.ts", "../escape.ts", "/private/file.ts", ".env"])(
+      "projects only a safe authoritative refusal path and keeps it out of evidence: %s",
+      async (affectedRelativePath) => {
+        const { subject, outcomes } = observedFacade({ ...unreadable, affectedRelativePath });
+        const result = await subject.execute({
+          body: requestBody({ action: "edit", changeset }),
+          capability,
+        });
+        const expected =
+          affectedRelativePath === "src/deep/AFFECTED_FILE.ts"
+            ? { refusalReason: "EDIT_PREPARE_FAILED", affectedRelativePath }
+            : { refusalReason: "EDIT_PREPARE_FAILED" };
+        expect(codingToolEditPresentation(result)).toEqual(expected);
+        expect(JSON.stringify(result)).not.toContain(affectedRelativePath);
+        expect(JSON.stringify(outcomes)).not.toContain(affectedRelativePath);
+      },
+    );
+
+    it("keeps unknown refusals and a path without an authoritative read absent", async () => {
+      expect(
+        codingToolEditPresentation({
+          status: "failed",
+          evidence: [],
+          reasonCode: "RAW_PROVIDER_SENTINEL",
+        }),
+      ).toEqual({});
+      const { subject } = observedFacade({
+        ...unreadable,
+        prepareCause: "guard-denied",
+        affectedRelativePath: "src/UNPROVEN_CULPRIT.ts",
+      });
+      const result = await subject.execute({
+        body: requestBody({ action: "edit", changeset }),
+        capability,
+      });
+      expect(codingToolEditPresentation(result)).toEqual({ refusalReason: "EDIT_PREPARE_FAILED" });
+    });
 
     it("reports the closed prepare cause and read reason beside the code", async () => {
       const { subject, outcomes } = observedFacade(unreadable);

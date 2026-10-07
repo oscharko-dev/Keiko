@@ -44,10 +44,20 @@ import {
   CODING_TOOL_MAX_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
   parseCodingToolRequest,
+  type CodingToolActionRequest,
   type CodingToolResult,
 } from "./codingToolIpc.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
-import { humanDecisionFeedback, humanDecisionToolResult } from "./codingToolFacade.js";
+import {
+  codingToolEditPresentation,
+  humanDecisionFeedback,
+  humanDecisionToolResult,
+} from "./codingToolFacade.js";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
+import {
+  isCodingSafeActivityPresentationPath,
+  type CodingSafeActivityToolPresentation,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
   createOpenCodeV2HttpClient,
@@ -191,6 +201,7 @@ export interface OpenCodeRuntimeCompositionInput {
           readonly actionId: string;
           readonly state: OpenCodeToolSettlementState;
           readonly occurredAt: string;
+          readonly presentation?: CodingSafeActivityToolPresentation;
         }) => void;
       }
     | undefined;
@@ -1881,21 +1892,25 @@ async function executeToolRequest(
     admission.release();
     return { status: 400, body: "" };
   }
-  const actionId = parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
+  const service = {
+    request: parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES),
+    startedAtMs: Date.now(),
+  };
+  const actionId = service.request?.actionId;
   const work = startFacadeExecution(facade, capability, headers, body, admission);
   releaseAdmissionWhenSettled(work, admission);
   try {
     const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
-    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
-    return responseForToolResult(result, deps, actionId);
+    if (reason !== undefined) return abortedToolResponse(deps, service, admission, reason);
+    return responseForToolResult(result, deps, service);
   } catch (error) {
     const reason = abortReason(admission.controller.signal);
     // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
     // surfaced to the operator.
-    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
+    if (reason !== undefined) return abortedToolResponse(deps, service, admission, reason);
     emitFacadeFailureDiagnostic(diagnostics, actionId, error);
-    settleSafeTool(settleTool, actionId, "failed");
+    settleSafeTool(settleTool, actionId, "failed", bridgeServicePresentation(service));
     return { status: 502, body: "" };
   }
 }
@@ -1906,11 +1921,12 @@ async function executeToolRequest(
 // line of its own (PR #3452, F44).
 function abortedToolResponse(
   deps: ToolBridgeExecutionDeps,
-  actionId: string | undefined,
+  service: ToolService,
   admission: AdmittedToolRequest,
   reason: string,
 ): { readonly status: number; readonly body: string } {
-  settleSafeTool(deps.settleTool, actionId, "cancelled");
+  const actionId = service.request?.actionId;
+  settleSafeTool(deps.settleTool, actionId, "cancelled", bridgeServicePresentation(service));
   if (reason !== DEADLINE_ABORT) return { status: 502, body: "" };
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: actionCorrelationId(actionId),
@@ -1928,19 +1944,27 @@ function abortedToolResponse(
 function responseForToolResult(
   result: CodingToolResult,
   deps: ToolBridgeExecutionDeps,
-  actionId: string | undefined,
+  service: ToolService,
 ): { readonly status: number; readonly body: string } {
+  const actionId = service.request?.actionId;
+  const presentation = bridgeServicePresentation(service, result);
   if (result.status === "busy") {
-    settleSafeTool(deps.settleTool, actionId, "failed");
+    settleSafeTool(deps.settleTool, actionId, "failed", presentation);
     return { status: 429, body: "" };
   }
-  settleSafeTool(deps.settleTool, actionId, safeToolState(result));
+  settleSafeTool(deps.settleTool, actionId, safeToolState(result), presentation);
   const responseBody = JSON.stringify(result);
   if (Buffer.byteLength(responseBody, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
     return { status: 502, body: "" };
   }
   if (deps.renderedResults !== undefined) {
-    recordRenderedToolResult(deps.renderedResults, deps.diagnostics, actionId, result);
+    recordRenderedToolResult(
+      deps.renderedResults,
+      deps.diagnostics,
+      actionId,
+      result,
+      presentation.bridgeDurationMs,
+    );
   }
   return { status: 200, body: responseBody };
 }
@@ -1956,9 +1980,10 @@ function recordRenderedToolResult(
   diagnostics: ServerDiagnosticSink | undefined,
   actionId: string | undefined,
   result: CodingToolResult,
+  bridgeDurationMs: number | undefined,
 ): void {
   try {
-    recordGovernedToolModelContent(rendered.sink, rendered.correlationId, result);
+    recordGovernedToolModelContent(rendered.sink, rendered.correlationId, result, bridgeDurationMs);
   } catch (error) {
     emitServerDiagnostic(diagnostics, {
       correlationId: actionCorrelationId(actionId),
@@ -2046,9 +2071,63 @@ function settleSafeTool(
   settleTool: SafeToolSettlement | undefined,
   actionId: string | undefined,
   state: OpenCodeToolSettlementState,
+  presentation?: CodingSafeActivityToolPresentation,
 ): void {
   if (actionId === undefined) return;
-  settleTool?.({ actionId, state, occurredAt: new Date().toISOString() });
+  settleTool?.({
+    actionId,
+    state,
+    occurredAt: new Date().toISOString(),
+    ...(presentation === undefined ? {} : { presentation }),
+  });
+}
+
+interface ToolService {
+  readonly request: CodingToolActionRequest | undefined;
+  readonly startedAtMs: number;
+}
+
+function bridgeServicePresentation(
+  service: ToolService,
+  result?: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  const facts =
+    result === undefined || service.request === undefined
+      ? {}
+      : governedToolPresentation(service.request, result);
+  return Object.freeze({
+    ...facts,
+    bridgeDurationMs: Math.max(0, Date.now() - service.startedAtMs),
+  });
+}
+
+function governedToolPresentation(
+  request: CodingToolActionRequest,
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (request.action === "edit") return codingToolEditPresentation(result);
+  if (result.status !== "completed" || !("read" in result)) return {};
+  if (request.action === "discover") {
+    return "returnedPathCount" in result.read && typeof result.read.returnedPathCount === "number"
+      ? { returnedPathCount: result.read.returnedPathCount }
+      : {};
+  }
+  return request.action === "read" ? governedReadPresentation(request, result.read) : {};
+}
+
+function governedReadPresentation(
+  request: Extract<CodingToolActionRequest, { action: "read" }>,
+  read:
+    | import("./codingToolIpc.js").CodingToolReadResult
+    | import("./codingToolIpc.js").CodingToolEgressReadResult,
+): CodingSafeActivityToolPresentation {
+  if (!isCodingSafeActivityPresentationPath(request.relativePath) || isDenied(request.relativePath))
+    return {};
+  return {
+    relativePath: request.relativePath,
+    readByteCount: read.byteCount,
+    ...("totalLines" in read ? { totalFileLines: read.totalLines } : {}),
+  };
 }
 
 function safeToolState(result: CodingToolResult): OpenCodeToolSettlementState {

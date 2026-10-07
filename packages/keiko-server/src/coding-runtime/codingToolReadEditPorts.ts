@@ -6,6 +6,7 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { isCodingSafeActivityPresentationPath } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -113,6 +114,7 @@ type EditOutcome =
       readonly message?: string | undefined;
       readonly prepareCause?: EditPrepareCause | undefined;
       readonly readReason?: WorkspaceReadFailureReason | undefined;
+      readonly affectedRelativePath?: string | undefined;
     };
 
 // NO_ACTIVE_SESSION means the bounded wait for a live Workbench editor bridge
@@ -230,13 +232,13 @@ async function executeDiscover(
     if (resolved === undefined) return { status: "failed" };
     const discovered = await discoverPaths(resolved, signal);
     stats = discovered.stats;
-    const text = discoveredPathText(discovered.files, request.query, request.maxResults);
+    const selected = discoveredPathText(discovered.files, request.query, request.maxResults);
     if (!discoveryPostflight(deps, resolved.root, binding, signal, mutationGuard)) {
       reason = isAborted(signal) ? "cancelled" : "authority-denied";
       return { status: "failed" };
     }
     reason = "none";
-    return { status: "completed", read: discoveryReadResult(text) };
+    return { status: "completed", read: discoveryReadResult(selected) };
   } catch (error) {
     failure = error;
     reason = isAborted(signal) ? "cancelled" : "inventory-failed";
@@ -406,7 +408,7 @@ function discoveredPathText(
   files: DiscoveryResult["files"],
   query: string,
   maxResults: number,
-): string {
+): { readonly text: string; readonly returnedPathCount: number } {
   const terms = discoveryTerms(query);
   const selected: string[] = [];
   let bytes = 0;
@@ -418,7 +420,10 @@ function discoveredPathText(
     selected.push(path);
     bytes += lineBytes;
   }
-  return selected.length === 0 ? "" : `${selected.join("\n")}\n`;
+  return {
+    text: selected.length === 0 ? "" : `${selected.join("\n")}\n`,
+    returnedPathCount: selected.length,
+  };
 }
 
 function matchesDiscoveryTerms(path: string, terms: readonly string[]): boolean {
@@ -440,13 +445,20 @@ function discoveryTerms(query: string): readonly string[] {
   return terms;
 }
 
-function discoveryReadResult(text: string): CodingToolReadResult {
+function discoveryReadResult({
+  text,
+  returnedPathCount,
+}: {
+  readonly text: string;
+  readonly returnedPathCount: number;
+}): CodingToolReadResult {
   const totalLines = text.length === 0 ? 0 : text.split("\n").length - 1;
   return {
     text,
     byteCount: Buffer.byteLength(text, "utf8"),
     digest: createHash("sha256").update(text, "utf8").digest("hex"),
     totalLines,
+    returnedPathCount,
   };
 }
 
@@ -1262,6 +1274,9 @@ function materializationRefused(
     return editRefused(deps, correlationId, "EDIT_PREPARE_FAILED", {
       prepareCause: result.reason === "cancelled" ? "cancelled" : "replacement-read-failed",
       readReason: result.reason,
+      ...(isCodingSafeActivityPresentationPath(result.file) && !isDenied(result.file)
+        ? { affectedRelativePath: result.file }
+        : {}),
       ...(message === undefined ? {} : { message }),
       ...evidence,
     });
@@ -1459,6 +1474,7 @@ interface EditRefusalDetail extends Partial<EditFormEvidence> {
   readonly prepareCause?: EditPrepareCause;
   readonly readReason?: WorkspaceReadFailureReason;
   readonly replacementRefusal?: ReplacementRefusalEvidence;
+  readonly affectedRelativePath?: string;
 }
 
 function editRefused(
@@ -1467,7 +1483,7 @@ function editRefused(
   reasonCode: string | undefined,
   detail: EditRefusalDetail = {},
 ): EditOutcome {
-  const { message, ...evidence } = detail;
+  const { message, affectedRelativePath, ...evidence } = detail;
   // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
   // the activity log, only the outcome returned to the caller.
   logEditRefused(deps, correlationId, reasonCode, evidence);
@@ -1475,6 +1491,7 @@ function editRefused(
     status: "failed",
     reasonCode,
     ...(message === undefined ? {} : { message }),
+    ...(affectedRelativePath === undefined ? {} : { affectedRelativePath }),
     ...refusalCauseFields(evidence),
   };
 }

@@ -429,7 +429,9 @@ function canMergeToolItem(
     previous?.kind === "tool" &&
     previous.tool.state === "succeeded" &&
     tool.state === "succeeded" &&
-    previous.tool.tool === tool.tool
+    previous.tool.tool === tool.tool &&
+    previous.tool.presentation === undefined &&
+    tool.presentation === undefined
   );
 }
 
@@ -919,6 +921,9 @@ function ToolRow({
           <span className={styles.toolIcon} aria-hidden="true" />
           <div className={styles.toolMeta}>
             <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
+            {item.tool.presentation?.relativePath === undefined ? null : (
+              <code className={styles.toolName}>{item.tool.presentation.relativePath}</code>
+            )}
           </div>
           {item.count > 1 ? (
             <span className={styles.toolCount}>
@@ -930,8 +935,46 @@ function ToolRow({
           </span>
         </summary>
         <code className={styles.toolName}>{item.tool.tool}</code>
+        <ToolPresentationDetails tool={item.tool} t={t} />
       </details>
     </li>
+  );
+}
+
+function ToolPresentationDetails({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const facts = tool.presentation;
+  if (facts === undefined) return null;
+  return (
+    <div className={styles.toolMeta}>
+      {facts.readByteCount === undefined ? null : (
+        <p>
+          {facts.totalFileLines === undefined
+            ? t("codingWorkbench.activity.readBytes", { bytes: facts.readByteCount })
+            : t("codingWorkbench.activity.readFacts", {
+                bytes: facts.readByteCount,
+                lines: facts.totalFileLines,
+              })}
+        </p>
+      )}
+      {facts.returnedPathCount === undefined ? null : (
+        <p>{t("codingWorkbench.activity.returnedPaths", { count: facts.returnedPathCount })}</p>
+      )}
+      {facts.refusalReason === undefined ? null : (
+        <p>{t("codingWorkbench.activity.editRefusal", { reason: facts.refusalReason })}</p>
+      )}
+      {facts.affectedRelativePath === undefined ? null : (
+        <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
+      )}
+      {facts.bridgeDurationMs === undefined ? null : (
+        <p>{t("codingWorkbench.activity.serviceDuration", { duration: facts.bridgeDurationMs })}</p>
+      )}
+    </div>
   );
 }
 

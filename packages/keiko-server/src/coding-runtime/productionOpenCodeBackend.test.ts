@@ -41,6 +41,78 @@ import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 describe("production OpenCode backend composition", () => {
+  it("owns presented facts when bridge completion arrives before the native call identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-tool-presentation-race-"));
+    const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+    try {
+      const backend = createProductionOpenCodeBackend(
+        backendInput(root, windowsDevLaneRuntime(root)),
+      );
+      const run = backend.createRun(runInput(root));
+      const activity = compose.mock.calls[0]?.[0].safeActivity;
+      const projection = backend.safeActivityProjection;
+      if (activity === undefined || projection === undefined)
+        throw new Error("Missing activity port");
+      projection.open({
+        runId: "run-windows",
+        workspaceId: "workspace-windows",
+        authorityExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        workspaceIsCurrent: () => true,
+      });
+      activity.arm();
+      const occurredAt = new Date().toISOString();
+      const presentation = {
+        relativePath: "src/ORIGINAL_PATH.ts",
+        readByteCount: 7,
+        totalFileLines: 30,
+        bridgeDurationMs: 15,
+      };
+      const settlement = {
+        actionId: "session:call_presented",
+        state: "succeeded" as const,
+        occurredAt,
+        presentation,
+      };
+      activity.settleTool(settlement);
+      presentation.readByteCount = 999;
+      presentation.relativePath = "src/CHANGED_PATH.ts";
+      activity.ingest({ kind: "message", messageId: "msg_user", role: "user", occurredAt });
+      activity.ingest({
+        kind: "message",
+        messageId: "msg_assistant",
+        role: "assistant",
+        parentMessageId: "msg_user",
+        occurredAt,
+      });
+      activity.ingest({
+        kind: "tool",
+        messageId: "msg_assistant",
+        callId: "call_presented",
+        tool: "keiko_workspace_read",
+        state: "running",
+        occurredAt,
+      });
+      await Promise.resolve();
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          turns: [
+            {
+              tools: [
+                {
+                  state: "succeeded",
+                  presentation: { relativePath: "src/ORIGINAL_PATH.ts", readByteCount: 7 },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      await run.dispose?.();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("captures durable native messages only after readiness is armed, independently of display acceptance", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-native-history-port-"));
     const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");

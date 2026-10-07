@@ -25,6 +25,8 @@ import {
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
+  isCodingSafeActivityToolPresentation,
+  type CodingSafeActivityToolPresentation,
   type CodingSafeActivityReasoning,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
@@ -183,6 +185,7 @@ export type CodingSafeActivitySignal =
       readonly callId: string;
       readonly tool?: string | undefined;
       readonly state: CodingSafeActivityToolState;
+      readonly presentation?: CodingSafeActivityToolPresentation;
     })
   | (SignalBase & {
       readonly kind: "plan";
@@ -1045,6 +1048,11 @@ function applyTool(
       ...existing,
       state: signal.state,
       occurredAt: signal.occurredAt,
+      ...(signal.presentation === undefined
+        ? {}
+        : {
+            presentation: Object.freeze({ ...signal.presentation }),
+          }),
     };
     return "accepted";
   }
@@ -1058,6 +1066,11 @@ function applyTool(
     tool: signal.tool,
     state: signal.state,
     occurredAt: signal.occurredAt,
+    ...(signal.presentation === undefined
+      ? {}
+      : {
+          presentation: Object.freeze({ ...signal.presentation }),
+        }),
   });
   return "accepted";
 }
@@ -1336,7 +1349,8 @@ function validToolSignal(
   return (
     (signal.messageId === undefined || safeId(signal.messageId)) &&
     safeId(signal.callId) &&
-    (signal.tool === undefined || safeId(signal.tool))
+    (signal.tool === undefined || safeId(signal.tool)) &&
+    (signal.presentation === undefined || isCodingSafeActivityToolPresentation(signal.presentation))
   );
 }
 
@@ -1411,7 +1425,7 @@ const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readon
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
   plan: ["anchorMessageId", "steps"],
-  tool: ["messageId", "callId", "tool", "state"],
+  tool: ["messageId", "callId", "tool", "state", "presentation"],
 };
 
 function exactSignalKeys(signal: CodingSafeActivitySignal): boolean {
@@ -1544,7 +1558,15 @@ function boundedDropIncrement(count: number, maximum: number): number {
 }
 
 function cloneFeed(feed: CodingSafeActivityFeed): CodingSafeActivityFeed {
-  return structuredClone(feed);
+  const copy = structuredClone(feed);
+  if (copy.availability === "available") {
+    for (const turn of copy.turns) {
+      for (const tool of turn.tools) {
+        if (tool.presentation !== undefined) Object.freeze(tool.presentation);
+      }
+    }
+  }
+  return copy;
 }
 
 function safeWorkspaceCheck(check: () => boolean): boolean {

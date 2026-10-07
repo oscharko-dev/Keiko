@@ -496,6 +496,41 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     },
   );
 
+  it("counts returned discovery paths independently of lines inside a filename", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-count-"));
+    try {
+      writeFileSync(join(root, "one\nfilename.ts"), "export {};\n");
+      writeFileSync(join(root, "second.ts"), "export {};\n");
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-discover-count",
+          authorityRef: { runId: "run-discover-count", envelopeDigest: DIGEST },
+          origin: "agent",
+        }),
+        resolveWorkspaceRoot: () => root,
+      });
+      const result = await ports.repositoryDiscover.execute(
+        {
+          action: "discover",
+          actionId: "discover-count",
+          idempotencyKey: "discover-count-key",
+          query: "*",
+          maxResults: 10,
+        },
+        undefined,
+        { check: (): true => true },
+      );
+      expect(result).toMatchObject({
+        status: "completed",
+        read: { returnedPathCount: 2, totalLines: 3 },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
     try {
@@ -2113,6 +2148,7 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       reasonCode: "EDIT_PREPARE_FAILED",
       prepareCause: "replacement-read-failed",
       readReason: "busy",
+      affectedRelativePath: "src/a.ts",
     });
     expect(events.map((event) => event.op)).toEqual([
       "coding-runtime.workspace-read",
@@ -2133,6 +2169,7 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       editForm: "replacements",
     });
     expect(events[1]).toMatchObject({ errorKind: "unavailable" });
+    expect(JSON.stringify(events)).not.toContain("src/a.ts");
   });
 
   it("records a cancelled materialization read as cancelled, not as unavailable", async () => {
@@ -2147,6 +2184,7 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       reasonCode: "EDIT_PREPARE_FAILED",
       prepareCause: "cancelled",
       readReason: "cancelled",
+      affectedRelativePath: "src/a.ts",
     });
     expect(events[0]).toMatchObject({
       op: "coding-runtime.workspace-read",
