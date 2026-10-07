@@ -52,7 +52,7 @@ interface RefreshSequences {
 
 export interface RuntimeResources {
   readonly refreshProfile: () => Promise<void>;
-  readonly refreshSource: () => Promise<void>;
+  readonly refreshSource: (catalogAlreadyCurrent?: boolean) => Promise<void>;
   readonly prepareCodexSetup: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
@@ -133,13 +133,14 @@ async function refreshManagedGatewaySource(
   sequence: number,
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
+  catalogAlreadyCurrent: boolean,
 ): Promise<void> {
   dispatch({ kind: "profile-empty" });
   const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
   // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
   // unproven context window) and stores it, so the model catalog the picker filters may have
   // changed underneath: a catalog fetched before the read would show an empty picker.
-  requestGatewayModelCatalogRefresh();
+  if (!catalogAlreadyCurrent) requestGatewayModelCatalogRefresh();
   if (sequenceRef.current !== sequence) return;
   dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
   if (sourceVerificationPending(profile)) scheduleReread(sequence);
@@ -177,43 +178,51 @@ function useSourceRefresh(
   sequenceRef: RefObject<number>,
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
-): () => Promise<void> {
+): (catalogAlreadyCurrent?: boolean) => Promise<void> {
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
   const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
-  const refresh = useCallback(async (): Promise<void> => {
-    const sequence = (sequenceRef.current += 1);
-    const preference = stateRef.current.runtimePreference;
-    dispatch({ kind: "resource-loading", resource: "source" });
-    try {
-      if (preference === "managed-gateway") {
-        await refreshManagedGatewaySource(sequenceRef, sequence, dispatch, scheduleReread);
-        return;
-      }
-      dispatch({ kind: "resource-loading", resource: "profile" });
-      const profile = await fetchCodingWorkbenchCodexSubscriptionProfile();
-      if (sequenceRef.current !== sequence) return;
-      setCodexSubscriptionSource(profile, dispatch);
-    } catch (error) {
-      if (sequenceRef.current !== sequence) return;
-      const mapped = codingWorkbenchRuntimeApiError(error);
-      dispatch({
-        kind: "resource-failed",
-        resource: "source",
-        status: codingWorkbenchFailureStatus(mapped),
-        error: mapped,
-      });
-      if (preference === "codex-subscription") {
+  refreshRef.current = useCallback(
+    async (catalogAlreadyCurrent = false): Promise<void> => {
+      const sequence = (sequenceRef.current += 1);
+      const preference = stateRef.current.runtimePreference;
+      dispatch({ kind: "resource-loading", resource: "source" });
+      try {
+        if (preference === "managed-gateway") {
+          await refreshManagedGatewaySource(
+            sequenceRef,
+            sequence,
+            dispatch,
+            scheduleReread,
+            catalogAlreadyCurrent,
+          );
+          return;
+        }
+        dispatch({ kind: "resource-loading", resource: "profile" });
+        const profile = await fetchCodingWorkbenchCodexSubscriptionProfile();
+        if (sequenceRef.current !== sequence) return;
+        setCodexSubscriptionSource(profile, dispatch);
+      } catch (error) {
+        if (sequenceRef.current !== sequence) return;
+        const mapped = codingWorkbenchRuntimeApiError(error);
         dispatch({
           kind: "resource-failed",
-          resource: "profile",
+          resource: "source",
           status: codingWorkbenchFailureStatus(mapped),
           error: mapped,
         });
+        if (preference === "codex-subscription") {
+          dispatch({
+            kind: "resource-failed",
+            resource: "profile",
+            status: codingWorkbenchFailureStatus(mapped),
+            error: mapped,
+          });
+        }
       }
-    }
-  }, [dispatch, scheduleReread, sequenceRef, stateRef]);
-  refreshRef.current = refresh;
-  return refresh;
+    },
+    [dispatch, scheduleReread, sequenceRef, stateRef],
+  );
+  return refreshRef.current;
 }
 
 function setCodexSubscriptionSource(

@@ -387,6 +387,8 @@ describe("useChatSession bootstrap", () => {
 
   it("adopts startup readiness in the background without Settings or losing selection", async () => {
     vi.useFakeTimers();
+    const catalogUpdated = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-updated", catalogUpdated);
     vi.mocked(fetchModels).mockResolvedValue({
       models: [
         model({ id: "chat-live", conversationReady: true }),
@@ -411,7 +413,13 @@ describe("useChatSession bootstrap", () => {
     });
     expect(result.current.models).toHaveLength(2);
     expect(result.current.selectedModel).toBe("chat-live");
+    expect(catalogUpdated).toHaveBeenCalledOnce();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(catalogUpdated).toHaveBeenCalledOnce();
     unmount();
+    window.removeEventListener("keiko:gateway-model-catalog-updated", catalogUpdated);
     const calls = vi.mocked(fetchModels).mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchModels).toHaveBeenCalledTimes(calls);

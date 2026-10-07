@@ -2,6 +2,7 @@ import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "r
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_UPDATED_EVENT,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import type {
   CodingWorkbenchRuntimeSnapshot,
@@ -48,7 +49,7 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
 }: {
   readonly state: CodingWorkbenchRuntimeState;
   readonly refreshRuntime: () => Promise<void>;
-  readonly refreshSource: () => Promise<void>;
+  readonly refreshSource: (catalogAlreadyCurrent?: boolean) => Promise<void>;
   readonly refreshRun: () => Promise<void>;
 }): void {
   useEffect(() => {
@@ -66,11 +67,17 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
       void refreshSource();
       void refreshRuntime();
     };
+    const adoptCatalog = (): void => {
+      void refreshSource(true);
+      void refreshRuntime();
+    };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refresh);
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refresh);
+    window.addEventListener(GATEWAY_MODEL_CATALOG_UPDATED_EVENT, adoptCatalog);
     return (): void => {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refresh);
       window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refresh);
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_UPDATED_EVENT, adoptCatalog);
     };
   }, [refreshRuntime, refreshSource]);
   useEffect(() => {

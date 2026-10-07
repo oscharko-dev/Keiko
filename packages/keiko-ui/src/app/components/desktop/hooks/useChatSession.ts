@@ -56,6 +56,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+  notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
@@ -1716,6 +1717,7 @@ type GatewayModelRefreshResult =
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
 let gatewayModelRefreshTimer: ReturnType<typeof setInterval> | undefined;
+let backgroundGatewayModelSnapshot: string | undefined;
 
 // Readiness is completed by the BFF after browser bootstrap. This reads only the local projection;
 // it never starts a provider probe or clears a usable model selection while checking for updates.
@@ -1726,6 +1728,11 @@ function refreshGatewayModelsInBackground(): void {
       if (generation !== gatewayModelRefreshGeneration) return;
       invalidateSharedBootstrap();
       publishGatewayModelRefresh({ kind: "success", models });
+      const snapshot = JSON.stringify(models);
+      if (snapshot !== backgroundGatewayModelSnapshot) {
+        backgroundGatewayModelSnapshot = snapshot;
+        notifyGatewayModelCatalogUpdated();
+      }
     },
     (error: unknown): void => {
       reportClientDiagnostic(
@@ -1932,6 +1939,7 @@ function sharedFetchChatMessages(
 
 export function clearChatSessionBootstrapCacheForTests(): void {
   invalidateSharedBootstrap();
+  backgroundGatewayModelSnapshot = undefined;
   gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();

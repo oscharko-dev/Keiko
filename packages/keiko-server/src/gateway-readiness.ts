@@ -2116,8 +2116,8 @@ export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: st
 
 /** Whether any model the Workbench could still elect has its verification open. */
 export function isAnyCodingWorkbenchProbePending(config: GatewayConfig): boolean {
-  return workbenchProbeTargets(config).some((target) =>
-    isCodingWorkbenchProbePending(config, target.modelId),
+  return config.providers.some((provider) =>
+    isCodingWorkbenchProbePending(config, provider.modelId),
   );
 }
 

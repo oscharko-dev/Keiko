@@ -132,7 +132,11 @@ function lifecycle(project, stateDir, port, configPath, pairingSecret) {
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: pairingSecret,
     KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
   };
-  return (action) => run(process.execPath, [bin, action, ...args], { cwd: project, env });
+  return (action) =>
+    run(process.execPath, [bin, action, ...args, ...(action === "start" ? ["--no-open"] : [])], {
+      cwd: project,
+      env,
+    });
 }
 
 function activityLines(stateDir) {

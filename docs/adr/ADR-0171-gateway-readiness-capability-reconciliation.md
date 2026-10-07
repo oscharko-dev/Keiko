@@ -61,6 +61,9 @@ per-question checks: without it one conclusive answer at startup left the model 
 restart or a Settings change. The browser refreshes the local catalog every five seconds while
 model consumers are mounted, without clearing a usable selection during background reads. Only
 in-flight requests are cached; settled model responses cannot conceal subsequent readiness results.
+Changed background catalogs notify the existing window bus, so an already open Coding Workbench
+refreshes its source and runtime posture without requiring Settings. This notification adopts the
+catalog already read; it neither invalidates the picker nor triggers a recursive catalog fetch.
 Recognized LiteLLM connections also reuse setup discovery at startup to refresh declared context
 limits and add newly discovered chat models with conservative capabilities. Existing connections,
 policy, and configured models are retained. A bounded serial queue verifies missing or expired

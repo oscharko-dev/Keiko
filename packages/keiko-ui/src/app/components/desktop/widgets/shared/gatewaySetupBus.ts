@@ -33,6 +33,9 @@ export const GATEWAY_CONFIG_UPDATED_EVENT = "keiko:gateway-config-updated";
  */
 export const GATEWAY_MODEL_READINESS_UPDATED_EVENT = "keiko:gateway-model-readiness-updated";
 
+/** A background read has already adopted a changed catalog; consumers can refresh their posture. */
+export const GATEWAY_MODEL_CATALOG_UPDATED_EVENT = "keiko:gateway-model-catalog-updated";
+
 /**
  * Requested when a visible model picker is opened. This is deliberately separate from
  * GATEWAY_CONFIG_UPDATED_EVENT: opening a picker needs a current catalog, but must never
@@ -77,6 +80,11 @@ export function notifyGatewayConfigUpdated(): void {
 export function notifyGatewayModelReadinessUpdated(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_READINESS_UPDATED_EVENT));
+}
+
+export function notifyGatewayModelCatalogUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_CATALOG_UPDATED_EVENT));
 }
 
 /** Request a fresh gateway model catalog without changing configuration-readiness state. */

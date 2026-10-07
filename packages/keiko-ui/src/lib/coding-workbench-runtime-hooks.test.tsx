@@ -227,6 +227,25 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
     });
   });
 
+  it("adopts a background catalog update without requesting another catalog refresh", async () => {
+    vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+      status: "available",
+    } as CodingWorkbenchSidecarGatewayResult);
+    const { resources, dispatch } = renderResources(runtimeState());
+    const requested = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", requested);
+    try {
+      await act(() => resources.refreshSource(true));
+      expect(requested).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({ available: true }),
+      });
+    } finally {
+      window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", requested);
+    }
+  });
+
   // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway
   // it answers `model-verification-pending`; the Workbench reads again after the pause instead
   // of leaving a refusal that the next read would have lifted.

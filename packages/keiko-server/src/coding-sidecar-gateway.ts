@@ -4068,7 +4068,7 @@ function gatewayReadinessProjection(
     return result;
   // #3591 (1.1.7): while the automatic probe is still running against a slow gateway the shortfall
   // is not a verdict. The profile says so, and the Workbench re-reads it instead of refusing.
-  const pending = readinessProbePending(deps, result, shortfall);
+  const pending = readinessProbePending(deps, result);
   const reason: CodingWorkbenchReadinessShortfall = pending
     ? "model-verification-pending"
     : shortfall;
@@ -4164,9 +4164,7 @@ type CodingWorkbenchReadinessShortfall =
 function readinessProbePending(
   deps: UiHandlerDeps,
   result: CodingWorkbenchSidecarGatewayResult,
-  shortfall: CodingWorkbenchReadinessShortfall,
 ): boolean {
-  if (shortfall === "no-tool-calling") return false;
   const config = currentGatewayConfig(deps);
   if (config === undefined) return false;
   // An unavailable projection (an unverified tool-calling proof) names no model: its verification
