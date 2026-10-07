@@ -106,6 +106,7 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
       values: ["vitest", "jest", "mocha", "node-test", "unknown"],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
+    metadataOnly: { type: "boolean", dataClass: "closed-enum", required: false },
     trustBasis: {
       type: "string",
       dataClass: "closed-enum",
@@ -762,6 +763,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           state: "selected",
           runnerId: workspace.testFramework,
           stepCount,
+          metadataOnly: true,
           ...(trustBasis === undefined ? {} : { trustBasis }),
         },
       ),
@@ -1094,7 +1096,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         project === undefined ? "Project not found." : "Project root path could not be resolved.",
       );
     }
-    const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs);
+    const workspace = detectWorkspaceAt(access.canonicalRoot, access.fs, {
+      scanSourceFilesForLanguages: false,
+    });
     const repositoryRoot = access.kind === "managed-task" ? access.repositoryRoot : undefined;
     if (repositoryRoot === undefined) {
       return {

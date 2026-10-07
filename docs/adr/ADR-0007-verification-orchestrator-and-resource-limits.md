@@ -54,6 +54,8 @@ invocation. The execution and dependency-bootstrap root stays the accepted repos
 workspace dependencies remain available without broadening filesystem or network authority.
 Project selectors and test paths are validated; the project root is checked again at execution.
 Failure locations are rebased to the repository so an edit/read/retest cycle finds the actual file.
+Verifier discovery reads project metadata without recursively inventorying source languages; the
+existing runner-selection activity records that metadata-only selection.
 Ordinary root tests and other framework invocations retain their existing selection rules.
 
 ### D1 — A pure `classifyOutcome` with a fixed precedence maps every run path to a status

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "afb50d5e1db7da0eefd050058e2a324ea292aa9a95426973656986e739807465",
+    "catalogDigest": "879d12bbe6dc52cd43b07b3de13d00272cd0d686abef2bef76f8ef2f1c1a47d0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11720,8 +11720,8 @@
         "failureClasses": ["verification-dependency-bootstrap"],
         "proofIds": ["editor.verification.dependencies.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:185",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:779"]
+        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:186",
+        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:781"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -11756,6 +11756,11 @@
           "stepCount": {
             "type": "integer",
             "dataClass": "count",
+            "required": false
+          },
+          "metadataOnly": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
             "required": false
           },
           "trustBasis": {
@@ -12024,9 +12029,9 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:88",
         "emitterSites": [
-          "packages/keiko-server/src/editor/verificationRunner.ts:758",
-          "packages/keiko-server/src/editor/verificationRunner.ts:821",
-          "packages/keiko-server/src/editor/verificationRunner.ts:850"
+          "packages/keiko-server/src/editor/verificationRunner.ts:759",
+          "packages/keiko-server/src/editor/verificationRunner.ts:823",
+          "packages/keiko-server/src/editor/verificationRunner.ts:852"
         ]
       },
       {
@@ -83702,6 +83707,12 @@
                   "required": false
                 },
                 {
+                  "name": "metadataOnly",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "networkEnforcement",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -83985,6 +83996,12 @@
                   "name": "maxStepDurationMs",
                   "type": "integer",
                   "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "metadataOnly",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -88857,7 +88874,7 @@
     {
       "op": "editor.verification.dependencies",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:188",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:189",
       "package": "keiko-server"
     },
     {
@@ -88883,14 +88900,14 @@
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:955",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:957",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1159",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1163",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

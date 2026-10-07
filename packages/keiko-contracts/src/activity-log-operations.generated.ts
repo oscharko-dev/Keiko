@@ -11209,6 +11209,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      metadataOnly: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       trustBasis: {
         type: "string",
         dataClass: "closed-enum",

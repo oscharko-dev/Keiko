@@ -183,6 +183,28 @@ function makeManager(
 }
 
 describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
+  it("resolves verifier metadata without scanning the repository source tree", () => {
+    const visited: string[] = [];
+    const manager = makeManager({
+      fs: {
+        ...nodeWorkspaceFs,
+        readDir: (path, maximum) => {
+          visited.push(path);
+          return nodeWorkspaceFs.readDir(path, maximum);
+        },
+        iterateDirectory: (path) => {
+          visited.push(path);
+          const iterate = nodeWorkspaceFs.iterateDirectory;
+          if (iterate === undefined) throw new TypeError("Fixture directory iterator unavailable.");
+          return iterate(path);
+        },
+      },
+    });
+
+    expect(manager.discover(workspaceRoot).kinds).not.toHaveLength(0);
+    expect(visited).not.toContain(join(realpathSync(workspaceRoot), "src"));
+  });
+
   it("uses managed-root access for planning and execution and fails closed when denied", async () => {
     // `repositoryRoot` is production-shaped: `canonicalManagedRootAccess` sets it on EVERY granted
     // managed access, and since #3382 `WorkspaceRootAccess`'s `managed-task` member REQUIRES it, so
