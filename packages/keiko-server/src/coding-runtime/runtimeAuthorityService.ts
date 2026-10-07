@@ -250,7 +250,10 @@ const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },
     // #3873: the minted envelope duration beside the allowance, so a run that later fails closed on
     // expiry is reconstructable from this one line (both are operator settings, ADR-0137 D2).
-    maxRuntimeMs: { type: "integer", dataClass: "duration", required: true },
+    // `required: false` only because a record written before this field existed (1.2.0) lacks it,
+    // and a missing REQUIRED field would read as an incomplete record; every line written since
+    // carries it.
+    maxRuntimeMs: { type: "integer", dataClass: "duration", required: false },
   },
   causal: "correlation",
   lifecycle: "start",

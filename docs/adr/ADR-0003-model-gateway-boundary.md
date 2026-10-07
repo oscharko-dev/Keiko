@@ -715,9 +715,10 @@ the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
 left, after earlier attempts or provider cooldowns consumed that budget, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
-coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable startup failure only before delivering its
-first non-empty delta or terminal response. Empty role deltas do not commit the answer. Once any
-content is delivered, a failure is terminal: replay must never duplicate text or tool effects.
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable failure only before delivering its first
+non-empty answer delta or terminal response; forwarded reasoning does not commit the answer (see the
+streamed chunk model below), and empty role deltas do not either. Once answer text is delivered, a
+failure is terminal: replay must never duplicate text or tool effects.
 Startup retries use the existing retry executor, configured retry count, backoff, cancellation,
 and activity-log events; every attempt reserves and settles its own spend budget. On a terminal response, the provider iterator closes, the admission and reservation settle, and completion evidence is emitted before `done` reaches the consumer. A consumer that stops reading at `done` without another `next()` or `return()` cannot strand a half-open probe, spend reservation or outcome line. A later iterator cleanup never duplicates settlement. Cancellation before the first attempt and early consumer departure release their admitted circuit probe without counting as provider recovery or failure. Every admission settles once and is bound to its circuit generation; old completions cannot release, close or reopen a later probe window. This applies to streamed and buffered calls, including spend refusal. Stream startup retries treat tool-catalog validation failures as terminal rather than replaying unchanged tool arguments. Half-open
 circuit probes get one attempt. All attempts and delays share one `streamRequestBudgetMs`
@@ -816,10 +817,13 @@ States:
   tool's schema, including the catalog rejection `GatewayToolCatalogError` and the redaction-depth
   refusal `ResponseRedactionError`, which both extend it. The gateway still retries a schema
   rejection so the model can regenerate the call — on the buffered and, since the #3873 review, the
-  streamed path alike: a streamed tool call is delivered only with the terminal answer, so a rejected
-  one was never handed to the caller, and the next attempt carries the schema correction
-  (`gateway.tool-catalog.repair state=scheduled`); a streamed rejection that carries no correction is
-  never replayed as it was. The correction is decided when the attempt that carries it starts, on the
+  streamed path alike, while the stream has delivered nothing but reasoning: a streamed tool call is
+  delivered only with the terminal answer, so a rejected one was never handed to the caller, and the
+  next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). A
+  streamed rejection that carries no correction is never replayed as it was, and one that follows
+  answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
+  once, because a repair would deliver that text a second time; the coding sidecar then ends the turn
+  as `invalid-tool-call` with `runtimeRetry=allowed`, and the runtime retries the turn. The correction is decided when the attempt that carries it starts, on the
   retry loop's own attempt count, so a steered repair on top of the provider's attempts never leaves
   a rejection uncorrected or re-sends a stale correction. The provider answered every time: a lab run of
   1.1.8 behind a LiteLLM `hosted_vllm` route opened the breaker after five such calls and failed the

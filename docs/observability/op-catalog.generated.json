@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0c125dfda042dc8c911e51040b81dc993eed42f8ae289cff08fedf620ff84bd2",
+    "catalogDigest": "6d9d5de8c132813919ca6a3517d92c02cf8aad63f7161d998efde1ec6f1fc647",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5564,7 +5564,7 @@
         "proofIds": ["coding-runtime.authority.mint-failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:156",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:821"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:824"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5639,7 +5639,7 @@
           "maxRuntimeMs": {
             "type": "integer",
             "dataClass": "duration",
-            "required": true
+            "required": false
           }
         },
         "causal": "correlation",
@@ -5649,7 +5649,7 @@
         "proofIds": ["coding-runtime.authority.minted.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:200",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:866"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:869"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5767,8 +5767,8 @@
         "failureClasses": ["coding-runtime-authority-revalidation"],
         "proofIds": ["coding-runtime.authority.revalidation-refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:322",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:1399"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:325",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:1402"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6128,8 +6128,8 @@
         "failureClasses": ["coding-runtime-description-authority"],
         "proofIds": ["coding-runtime.description-authority.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:263",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:977"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:266",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:980"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -50719,7 +50719,7 @@
                   "name": "maxRuntimeMs",
                   "type": "integer",
                   "dataClass": "duration",
-                  "required": true
+                  "required": false
                 },
                 {
                   "name": "networkPolicyMode",
@@ -86979,7 +86979,7 @@
     {
       "op": "coding-runtime.authority.revalidation-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:325",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:328",
       "package": "keiko-server"
     },
     {
@@ -87010,7 +87010,7 @@
     {
       "op": "coding-runtime.description-authority",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:266",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:269",
       "package": "keiko-server"
     },
     {

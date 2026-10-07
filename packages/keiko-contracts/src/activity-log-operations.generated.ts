@@ -5374,7 +5374,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       maxRuntimeMs: {
         type: "integer",
         dataClass: "duration",
-        required: true,
+        required: false,
       },
     },
     causal: "correlation",

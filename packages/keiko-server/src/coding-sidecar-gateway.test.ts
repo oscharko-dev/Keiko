@@ -6709,11 +6709,22 @@ describe("admittedOutputTokens — coding turns reserve room for reasoning (#387
   // At self-hosted throughput the larger reserve would outlive it and turn a runaway answer into a
   // provider timeout the breaker counts and nothing repairs, so it keeps the shared reserve, and
   // the runaway ends as an exhausted answer the gateway steers a repair for.
-  it.each([
-    ["a route that does not stream", { streaming: false }],
-    ["coding streaming switched off", { codingStreaming: "off" }],
-  ] as const)("keeps the shared 8,192 reserve on %s", (_label, route) => {
-    expect(admittedOutputTokens(codingBounds(0, route), PROMPT)).toBe(8_192);
+  it("keeps the shared 8,192 reserve on a model that does not stream", () => {
+    expect(admittedOutputTokens(codingBounds(0, { streaming: false }), PROMPT)).toBe(8_192);
+  });
+
+  // #3873 review: with coding streaming switched off, a streaming-capable model is still read over
+  // its own stream under the silence floor (`readsOverStream`), not under the whole-body bound, so
+  // shrinking its reserve would only bring back F17's exhaustion.
+  it("keeps the 16,384 coding reserve when only the sidecar's streaming is switched off", () => {
+    expect(admittedOutputTokens(codingBounds(0, { codingStreaming: "off" }), PROMPT)).toBe(16_384);
+  });
+
+  // Accepted case (#3873 review): a DECLARED output limit is the operator's statement and is used as
+  // declared on every route; the troubleshooting entry tells them to declare a non-streaming route's
+  // limit only as high as one whole-body attempt can produce.
+  it("uses a declared output limit as declared on a model that does not stream", () => {
+    expect(admittedOutputTokens(codingBounds(12_000, { streaming: false }), PROMPT)).toBe(12_000);
   });
 });
 

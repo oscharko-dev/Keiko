@@ -396,6 +396,20 @@ describe("CodingRuntimeAuthorityService", () => {
         formatActivityLogProofLine(mintedEvent),
       ),
     ).toMatchObject({ runId: "run-0001", effectiveMode: "supervised-coding" });
+    // #3873 review: a 1.2.0 line was written before `maxRuntimeMs` existed. It must still validate
+    // as a complete record, so the field is optional although every new line carries it.
+    const persisted = JSON.parse(formatActivityLogProofLine(mintedEvent)) as Record<
+      string,
+      unknown
+    >;
+    expect(persisted).toHaveProperty("maxRuntimeMs");
+    const { maxRuntimeMs: _added, ...olderLine } = persisted;
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.authority.minted.emitted-line",
+        JSON.stringify(olderLine),
+      ),
+    ).not.toHaveProperty("maxRuntimeMs");
   });
 
   it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {

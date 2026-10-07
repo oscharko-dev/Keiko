@@ -605,6 +605,51 @@ describe("Gateway streamed tool-schema repair (#3873 review)", () => {
     ).toEqual(["retryable-error"]);
   });
 
+  // Answer text the caller already received commits the stream: a preface sentence, then a
+  // malformed call, surfaces at once, because a repair would deliver the sentence a second time.
+  it("does not repair a rejected tool call that follows answer text the caller received", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const preface = { content: "I will edit the file." };
+    const call = {
+      tool_calls: [
+        {
+          index: 0,
+          id: "call-after-text",
+          type: "function",
+          function: {
+            name: "keiko_changeset_edit",
+            arguments: JSON.stringify({
+              changeset: {
+                edits: [],
+                deletions: [],
+                renames: [],
+                files: INVALID_ARGUMENT_SECRET,
+                selectedFiles: [],
+              },
+            }),
+          },
+        },
+      ],
+    };
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: preface }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: call, finish_reason: "tool_calls" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response(frames, { headers: { "content-type": "text/event-stream" } })),
+    );
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      fetchImpl,
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(drainStream(gateway)).rejects.toBeInstanceOf(GatewayToolCatalogError);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.op === "gateway.tool-catalog.repair")).toEqual([]);
+  });
+
   // Without a correction there is nothing to repair: the stream is not replayed as it was.
   it("does not replay a streamed catalog rejection that carries no repair", async () => {
     const events: ModelGatewayLogEvent[] = [];

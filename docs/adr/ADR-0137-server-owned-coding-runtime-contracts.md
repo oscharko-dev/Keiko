@@ -141,6 +141,19 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
+**Default envelope widened — owner decision (2026-10-07, PR #3876).** Raising the two defaults
+widens the default Authority Envelope of every installation: ten times the prompt-token allowance,
+four times the duration, and with `expiresAt` a minted run capability that lives up to 120 minutes
+instead of 30. The owner decided to ship these defaults (2,000,000 tokens, 120 minutes) for every
+installation, with the two variables as the operator's opt-down, rather than a tighter compromise:
+the measured need of ordinary multi-file tasks on self-hosted reasoning models exceeds the former
+defaults (above), and a run still fails closed at either bound. Operators who meter a paid provider
+set `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES` before
+the server starts, and configure a Model Gateway spend ceiling where they need a per-provider cost
+bound. Release note: "Coding Workbench runs now allow up to 2,000,000 prompt tokens and 120 minutes
+by default (previously 200,000 tokens and 30 minutes); lower them with
+`KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` and `KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES`."
+
 The same aggregate answers a budget question without spending: `delegationFits` says whether one
 more delegation of a given usage would still fit the run's budget, for the same capability, run and
 binding a delegation is admitted on, and reserves neither budget nor replay identity. Approved-skill
