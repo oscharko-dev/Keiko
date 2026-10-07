@@ -302,6 +302,23 @@ actual pinned-request assertions failed before this correction and passed after 
 production multi-target completion controls also passed. No planner, retry executor, completion
 classifier or ledger rule changed; live model adherence to this refinement remains to be checked.
 
+The live projection volume was also inspected before changing its performance. Of the 1,154
+projection lines above, 1,121 carried live deltas, 998 carried reasoning signals and none described
+an unchanged pass. The existing adapter does not periodically read history while the session is
+busy. Its rates and timers remain unchanged. One redundant private history-map copy at checkpoint
+acknowledgement was removed instead. A real producer/reconciler control with 50 history rows and
+12 streaming deltas measured 24 → 12 copied maps and 2,424 → 1,212 copied entries, with identical
+incremental output. Ownership, rejected acknowledgement, replay and clear/restage controls passed
+in 207 targeted tests. This is an allocation-specific result, not a measured live latency gain.
+
+The first private graceful-restart qualification on the same published source admitted
+`run-22546568907284095253233715578286954795` once through the normal UI. Its subsequent control
+read missed the STARTING phase, so the driver sent no signal, restarted nothing and acknowledged
+no recovery. That case does not qualify F25. The accepted read-only task subsequently succeeded
+from 21:07:42 to 21:09:17 UTC with three accepted turns, two workspace reads and zero edits. The
+one-shot reservation is retained; the driver observation is being corrected before a distinct
+interruption case. No task resubmission or process cleanup was used to manufacture a pass.
+
 F21 active turn failures now describe the observed cause without premature operator repair advice.
 The timeline claims an automatic retry only when the existing gateway retry fact confirms it;
 terminal failures retain the repair advice. Recovered and unrelated historical runs are controls.

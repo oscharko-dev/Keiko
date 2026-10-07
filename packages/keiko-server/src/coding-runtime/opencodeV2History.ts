@@ -863,7 +863,7 @@ function conversationCapture(
 export function createOpenCodeV2HistoryProjection(
   activity?: HistoryActivity,
 ): OpenCodeV2HistoryProjection {
-  let known = new Map<string, KnownCandidate>();
+  let known: ReadonlyMap<string, KnownCandidate> = new Map();
   let pending: PendingProjection | undefined;
   let pendingStart = -1;
   const capture = conversationCapture(activity);
@@ -873,7 +873,8 @@ export function createOpenCodeV2HistoryProjection(
     project(sessionId, messages, checkpoint): readonly OpenCodeReconciliationEvent[] {
       const position = checkpoint ?? -1;
       if (pending !== undefined && position === pendingStart + pending.events.length) {
-        known = new Map(pending.nextKnown);
+        // This snapshot is privately owned; subsequent staging always copies before writing.
+        known = pending.nextKnown;
         pending = undefined;
       }
       if (pending !== undefined && position !== pendingStart) {

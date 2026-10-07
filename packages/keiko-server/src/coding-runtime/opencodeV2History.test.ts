@@ -12,6 +12,32 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+function historyMapCopies(): {
+  readonly read: () => { readonly count: number; readonly entries: number };
+  readonly restore: () => void;
+} {
+  const NativeMap = Map;
+  let count = 0;
+  let entries = 0;
+  class CountedMap<Key, Value> extends NativeMap<Key, Value> {
+    constructor(values?: Iterable<readonly [Key, Value]> | null) {
+      super(values);
+      if (!(values instanceof NativeMap)) return;
+      const first: unknown = values.values().next().value;
+      if (typeof first !== "object" || first === null || !("digest" in first)) return;
+      count += 1;
+      entries += values.size;
+    }
+  }
+  vi.stubGlobal("Map", CountedMap);
+  return {
+    read: (): { readonly count: number; readonly entries: number } => ({ count, entries }),
+    restore: (): void => {
+      vi.stubGlobal("Map", NativeMap);
+    },
+  };
+}
+
 function toolHistory(name: string, status = "completed"): readonly Record<string, unknown>[] {
   return [
     { id: "msg_user", type: "user", time: { created: 1 }, text: "Ask me a question." },
@@ -476,6 +502,82 @@ describe("OpenCode V2 live streamed text", () => {
         ),
       );
   }
+
+  it("copies known history once per acknowledged live delta instead of copying the owned snapshot", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const completed = Array.from({ length: 24 }, (_, index) => [
+      { id: `msg_user_${String(index)}`, type: "user", time: { created: 1 }, text: "Task" },
+      {
+        id: `msg_done_${String(index)}`,
+        type: "assistant",
+        time: { created: 2 },
+        content: [part("text", "Completed answer.")],
+      },
+    ]).flat();
+    const messages = [...completed, ...liveHistory([empty("text")])];
+    const reconciler = createOpenCodeReconciler();
+    const first = projection.project(SESSION, messages, undefined);
+    expect(reconciler.ingest(first).ok).toBe(true);
+    const data = { sessionID: SESSION, assistantMessageID: ASSISTANT, ordinal: 0 };
+    projection.observeLiveEvent(SESSION, { id: "evt_start", type: "session.text.started", data });
+    const copies = historyMapCopies();
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        projection.observeLiveEvent(SESSION, {
+          id: `evt_delta_${String(index)}`,
+          type: "session.text.delta",
+          data: { ...data, delta: "word " },
+        });
+        const events = projection.project(SESSION, messages, reconciler.checkpoints()[SESSION]);
+        expect(events).toHaveLength(1);
+        expect(reconciler.ingest(events)).toMatchObject({ ok: true, applied: 1 });
+        expect(
+          growth(
+            events.flatMap((event) => projection.takeSignal(event) ?? []),
+            "text",
+          ),
+        ).toEqual(["word "]);
+      }
+      expect(copies.read()).toEqual({ count: 12, entries: first.length * 12 });
+    } finally {
+      copies.restore();
+    }
+  });
+
+  it("keeps acknowledged state private while old pages are held and preserves replay after clearing signals", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    const initialHistory = liveHistory([part("text", "Initial answer")]);
+    const first = projection.project(SESSION, initialHistory, undefined);
+    const firstSignals = first.flatMap((event) => projection.takeSignal(event) ?? []);
+    expect(reconciler.ingest(first).ok).toBe(true);
+    const before = reconciler.checkpoints()[SESSION];
+    expect(projection.project(SESSION, initialHistory, before)).toEqual([]);
+
+    // A held public page and its consumed signal cannot mutate the adopted private known-state map.
+    Object.assign(first.at(-1) ?? {}, { digest: "e".repeat(64), sequence: 9_999 });
+    Object.assign(first, { length: 0 });
+    Object.assign(firstSignals.at(-1) ?? {}, { text: "Changed held signal" });
+    const nextHistory = liveHistory([part("text", "Initial answer continued")]);
+    const next = projection.project(SESSION, nextHistory, before);
+    expect(next).toHaveLength(1);
+    expect(projection.project(SESSION, nextHistory, before)).toBe(next);
+    expect(() => projection.project(SESSION, nextHistory, 9_999)).toThrow(
+      "opencode-v2-checkpoint-invalid",
+    );
+    const event = next[0];
+    if (event === undefined) throw new Error("Expected a continued answer event");
+    projection.clearSignals();
+    expect(projection.takeSignal(event)).toBeUndefined();
+    expect(projection.project(SESSION, nextHistory, before)).toBe(next);
+    expect(projection.takeSignal(event)).toMatchObject({ kind: "text", text: " continued" });
+    expect(projection.takeSignal(event)).toBeUndefined();
+    expect(reconciler.ingest(next)).toMatchObject({ ok: true, applied: 1 });
+    const after = reconciler.checkpoints()[SESSION];
+    expect(projection.project(SESSION, nextHistory, after)).toEqual([]);
+    Object.assign(next, { length: 0 });
+    expect(projection.project(SESSION, nextHistory, after)).toEqual([]);
+  });
 
   it("shows an answer as it streams while the history holds the part empty", () => {
     const live = streaming();
