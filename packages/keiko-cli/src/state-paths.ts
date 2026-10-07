@@ -290,9 +290,10 @@ export function takeBrowserOpenRequest(
   stateDir: string,
   pid: number,
   launchId: string,
+  onFailure?: (error: unknown) => void,
 ): BrowserOpenRequestOutcome {
   const path = join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE);
-  const record = readBrowserRequest(path, pid, launchId);
+  const record = readBrowserRequest(path, pid, launchId, onFailure);
   if (record.state !== "accepted") return record;
   rmSync(path, { force: true });
   return record;
@@ -302,14 +303,15 @@ function readBrowserRequest(
   path: string,
   pid: number,
   launchId: string,
+  onFailure: ((error: unknown) => void) | undefined,
 ): BrowserOpenRequestOutcome {
   let fd: number;
   try {
     fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
   } catch (error) {
-    return isFsCode(error, "ENOENT")
-      ? { state: "absent" }
-      : { state: "refused", reason: "unsafe-request" };
+    if (isFsCode(error, "ENOENT")) return { state: "absent" };
+    reportBrowserRequestFailure(onFailure, error);
+    return { state: "refused", reason: "unsafe-request" };
   }
   try {
     assertRegularSingleLinkFile(fd, path);
@@ -319,11 +321,19 @@ function readBrowserRequest(
     if (bytes === 0 || bytes === buffer.length)
       return { state: "refused", reason: "invalid-request" };
     return parseBrowserRequest(buffer.subarray(0, bytes).toString("utf8"), pid, launchId);
-  } catch {
+  } catch (error) {
+    reportBrowserRequestFailure(onFailure, error);
     return { state: "refused", reason: "unsafe-request" };
   } finally {
     closeSync(fd);
   }
+}
+
+function reportBrowserRequestFailure(
+  onFailure: ((error: unknown) => void) | undefined,
+  error: unknown,
+): void {
+  onFailure?.(error);
 }
 
 function parseBrowserRequest(

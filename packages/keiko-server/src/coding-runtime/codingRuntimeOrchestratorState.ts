@@ -22,11 +22,17 @@ export interface AuxiliaryEventFacts {
   readonly auxiliaryOutcome?: CodingWorkbenchRuntimeEvent["auxiliaryOutcome"];
   readonly contentTrust?: CodingWorkbenchRuntimeEvent["contentTrust"];
   readonly verificationSummary?: CodingWorkbenchRuntimeEvent["verificationSummary"];
+  readonly nativeRetry?: CodingWorkbenchRuntimeEvent["nativeRetry"];
 }
 
 /** Projects the forwardable auxiliary facts off an ingested runtime event. */
 export function auxiliaryEventFacts(event: CodingWorkbenchRuntimeEvent): AuxiliaryEventFacts {
+  return forwardedAuxiliaryEventFacts(event);
+}
+
+function forwardedAuxiliaryEventFacts(event: AuxiliaryEventFacts = {}): AuxiliaryEventFacts {
   return {
+    ...(event.nativeRetry === undefined ? {} : { nativeRetry: event.nativeRetry }),
     ...(event.auxiliaryOutcome === undefined ? {} : { auxiliaryOutcome: event.auxiliaryOutcome }),
     ...(event.contentTrust === undefined ? {} : { contentTrust: event.contentTrust }),
     ...(event.verificationSummary === undefined
@@ -118,15 +124,7 @@ export class CodingRuntimeOrchestratorState {
             state: snapshot.state,
             revision: snapshot.revision,
             eventKind,
-            ...(auxiliary?.auxiliaryOutcome === undefined
-              ? {}
-              : { auxiliaryOutcome: auxiliary.auxiliaryOutcome }),
-            ...(auxiliary?.verificationSummary === undefined
-              ? {}
-              : { verificationSummary: auxiliary.verificationSummary }),
-            ...(auxiliary?.contentTrust === undefined
-              ? {}
-              : { contentTrust: auxiliary.contentTrust }),
+            ...forwardedAuxiliaryEventFacts(auxiliary),
           }
         : {
             schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,

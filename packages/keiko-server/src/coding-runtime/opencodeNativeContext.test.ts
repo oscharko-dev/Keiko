@@ -84,6 +84,9 @@ describe("native OpenCode context interface", () => {
     expect(guidance).toBe(OPENCODE_NATIVE_CONTEXT_ADDENDUM);
     expect(guidance).toContain("verify the resulting workspace with keiko_verification");
     expect(guidance).toContain("repair the cause without weakening assertions, and verify again");
+    expect(guidance).toContain(
+      "rerun every verification target previously attempted in this task; all must pass before completion",
+    );
     expect(guidance).toContain("Never report an unrun or failed check as passed");
     expect(guidance).toContain("Planning-only and read-only tasks may finish without edits");
     expect(guidance).toContain("Progress text alone does not complete requested implementation");

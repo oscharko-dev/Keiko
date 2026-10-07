@@ -515,6 +515,7 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
         "runtime-health",
         "task-submitted",
         "observation-streamed",
+        "native-retry-changed",
         "permission-requested",
         "diff-summarized",
         "verification-summarized",

@@ -4443,60 +4443,6 @@
     },
     {
       "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeChat",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeDocumentInput",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeEmbedding",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeImageInput",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeJsonSchema",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeLongContext",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeReasoning",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeReranker",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
-      "owner": "probeStreaming",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/gateway-readiness.ts",
       "owner": "readJsonBody",
       "kind": "unregistered-catch",
       "count": 2

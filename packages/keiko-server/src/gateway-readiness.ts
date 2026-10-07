@@ -842,7 +842,7 @@ async function probeConfiguredEmbedding(
     return embeddingVectorResult(outcome.value.vector, start);
   } catch (probeError) {
     settleGatewayProbeSpend(reservation, undefined);
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "embedding",
@@ -901,7 +901,7 @@ async function probeReranker(
     });
     return rerankerSelectionResult(selection, start);
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "reranker",
@@ -1012,7 +1012,7 @@ function providerWarning(errorValue: unknown): string {
 // operator sink keyed by the run's correlation id, with the failing probe named by `source`.
 // Content-free: error class, machine code, gateway request id — never a probe body, an endpoint,
 // or a credential.
-function probeFailure(
+function reportProbeFailure(
   deps: UiHandlerDeps,
   correlationId: string,
   name: GatewayReadinessProbeName,
@@ -1140,7 +1140,7 @@ async function probeChat(
         : "Basic chat did not return a valid assistant response.",
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "chat",
@@ -1187,7 +1187,7 @@ async function probeStreaming(
         : "Streaming completed without the expected text delta.",
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "streaming",
@@ -1221,7 +1221,7 @@ async function probeToolCalling(
     provider,
     deps.gatewayReadinessFetch,
     (error) => {
-      failure = probeFailure(
+      failure = reportProbeFailure(
         deps,
         correlationId,
         "tool_calling",
@@ -1288,7 +1288,7 @@ async function probeJsonSchema(
     }
     return jsonSchemaPayloadResult(start, await readProviderJson(response));
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "json_schema",
@@ -1380,7 +1380,7 @@ async function probeReasoning(
       detected ? undefined : qwenReasoningWarning(provider),
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "reasoning",
@@ -1435,7 +1435,7 @@ async function probeImageInput(
         : "The endpoint accepted image input but did not identify the test image content.",
     );
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "image_input",
@@ -1467,7 +1467,7 @@ async function probeDocumentInput(
     }
     return documentInputPayloadResult(start, await readProviderJson(response));
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "document_input",
@@ -1622,7 +1622,7 @@ async function probeLongContext(
     }
     return longContextPayloadResult(start, tokens, sentinel, await readProviderJson(response));
   } catch (probeError) {
-    return probeFailure(
+    return reportProbeFailure(
       deps,
       correlationId,
       "long_context",

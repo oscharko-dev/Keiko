@@ -1681,3 +1681,36 @@ describe("model reasoning in the live feed", () => {
     expect(projected(projection)).not.toHaveProperty("reasoning");
   });
 });
+
+describe("committed native retry signal metadata", () => {
+  it("admits only canonical assistant facts while retaining no retry or provider error body", () => {
+    let current = true;
+    const projection = createCodingSafeActivityProjection({
+      now: () => Date.parse("2026-07-18T17:00:00.000Z"),
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => current,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    const retry = {
+      ...message("msg_assistant", "assistant", "msg_user"),
+      nativeRetry: { attempt: 2, scheduledAt: "2026-07-18T17:00:02.000Z" },
+    };
+    expect(projection.ingest(RUN_ID, retry)).toBe(true);
+    const shown = JSON.stringify(projection.currentContent());
+    expect(shown).not.toContain("nativeRetry");
+    for (const invalid of [
+      { ...retry, nativeRetry: { ...retry.nativeRetry, error: "PRIVATE" } },
+      { ...retry, nativeRetry: { ...retry.nativeRetry, scheduledAt: "2026-02-30T17:00:02.000Z" } },
+      { ...retry, role: "user" as const },
+    ])
+      expect(projection.ingest(RUN_ID, invalid)).toBe(false);
+    expect(JSON.stringify(projection.currentContent())).not.toContain("PRIVATE");
+    current = false;
+    expect(projection.ingest(RUN_ID, retry)).toBe(false);
+    expect(projection.currentContent()).toBeNull();
+  });
+});

@@ -74,6 +74,23 @@ export function modelGatewayRetrying(
   return newest?.kind === "runtime-event" && newest.eventKind === "model-gateway-retrying";
 }
 
+/** Native OpenCode attempt/schedule only; gateway retries never supply these physical facts. */
+export function nativeRunRetry(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null,
+  events: readonly CodingWorkbenchRuntimeSseEvent[],
+): NonNullable<
+  Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>["nativeRetry"]
+> | null {
+  if (snapshot?.state !== "running" || snapshot.runId === undefined) return null;
+  const fact = events.findLast(
+    (event) =>
+      event.runId === snapshot.runId &&
+      event.kind === "runtime-event" &&
+      event.eventKind === "native-retry-changed",
+  );
+  return fact?.kind === "runtime-event" ? (fact.nativeRetry ?? null) : null;
+}
+
 /** The current phase of the run, or null when the run is not live or its phase is not known. */
 export function runPhase(input: CodingWorkbenchRunPhaseInput): CodingWorkbenchRunPhase | null {
   if (awaitsDecision(input)) return "decision";

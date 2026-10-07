@@ -1224,6 +1224,9 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           system?.includes("You are an AI agent running in OpenCode, a coding agent harness."),
         ).toBe(true);
         expect(system?.includes(OPENCODE_NATIVE_CONTEXT_ADDENDUM)).toBe(true);
+        expect(system).toContain(
+          "rerun every verification target previously attempted in this task; all must pass before completion",
+        );
         expect(system?.includes("Governed workflow, in order")).toBe(false);
         expect(request?.messages.some((message) => message.content.includes(repository))).toBe(
           true,

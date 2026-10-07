@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e64fba7f58e60386c4f40d9abe3f54264045506e6b922fec1b79075a8e0e793c"
+    "catalogDigest": "74d39f99747e4c85b2ba67178488023832ed87ddb7b2efe0d17558ebb0ae8f5e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1133,7 +1133,8 @@
       "packages/keiko-cli/src/install-layout.activity-log-proof.test.ts"
     ],
     "cli.lifecycle.browser-handoff.outcome": [
-      "packages/keiko-cli/src/lifecycle-browser-default.test.ts"
+      "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
+      "packages/keiko-cli/src/ui-browser-handoff.test.ts"
     ],
     "cli.lifecycle.stop-escalated.disposition": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"

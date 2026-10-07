@@ -2096,3 +2096,33 @@ describe("canonical Workbench verifier summary agreement", () => {
     ).toBe(false);
   });
 });
+
+describe("native OpenCode retry runtime facts", () => {
+  function event(nativeRetry: unknown): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      eventId: "event-runtime-status-2",
+      runId: "run-1",
+      occurredAt: "2026-10-07T12:00:00.000Z",
+      kind: "native-retry-changed",
+      nativeRetry,
+    };
+  }
+  it.each([null, { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" }])(
+    "admits only explicit native physical attempt/schedule or authoritative clear",
+    (retry) => {
+      const input = event(retry);
+      expect(validateCodingWorkbenchRuntimeEvent(input)).toEqual({ ok: true, value: input });
+    },
+  );
+  it.each([
+    undefined,
+    { attempt: 0, scheduledAt: "2026-10-07T12:00:02.000Z" },
+    { attempt: 2.5, scheduledAt: "2026-10-07T12:00:02.000Z" },
+    { attempt: 2, scheduledAt: "2026-02-30T12:00:02.000Z" },
+    { attempt: 2, scheduledAt: "2026-10-07T12:00:02Z" },
+    { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z", error: "PRIVATE" },
+  ])("refuses noncanonical or content-bearing native facts: %j", (retry) => {
+    expect(validateCodingWorkbenchRuntimeEvent(event(retry)).ok).toBe(false);
+  });
+});

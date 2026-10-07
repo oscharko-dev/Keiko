@@ -8,6 +8,11 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  isCodingWorkbenchNativeRetry,
+  type CodingWorkbenchNativeRetry,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type {
@@ -22,6 +27,7 @@ import {
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);
 
 const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -37,6 +43,7 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     // #3878: how many of the signals carried model reasoning to the live timeline; a count only.
     // `required: false`: lines written before this field existed lack it.
     reasoningSignalCount: { type: "integer", dataClass: "count", required: false },
+    nativeRetrySignalCount: { type: "integer", dataClass: "count", required: false },
     // #3873 review (PR #3876): the runtime event stream's events that did not cost a history read of
     // their own, because a read already queued or a later control hint's read covered them
     // (`coalescedSyncHints`), since the previous line. Each one is a read saved; when a run's timeline
@@ -110,6 +117,7 @@ interface Candidate {
   readonly compaction?: OpenCodeCompactionActivity;
   readonly signal?: CodingSafeActivitySignal | undefined;
   readonly emptyText?: true;
+  readonly nativeRetryState?: true;
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
   // the live text the timeline shows while the part streams: partial answers are not captured.
   readonly capturedText?: string;
@@ -120,6 +128,7 @@ interface PendingProjection {
   readonly events: readonly OpenCodeReconciliationEvent[];
   readonly signals: ReadonlyMap<string, CodingSafeActivitySignal>;
   readonly emptyTextCount: number;
+  readonly nativeRetrySignalCount: number;
 }
 
 interface KnownCandidate {
@@ -429,6 +438,49 @@ function assistantCandidates(
   return result;
 }
 
+function nativeRetryFacts(value: unknown): CodingWorkbenchNativeRetry | undefined {
+  if (value === undefined) return undefined;
+  const retry = record(value);
+  if (retry === undefined || Object.keys(retry).some((key) => !NATIVE_RETRY_FIELDS.has(key))) {
+    throw new OpenCodeV2HistoryError("reason=native-retry-shape-invalid");
+  }
+  const at = retry.at;
+  if (
+    typeof at !== "number" ||
+    !Number.isSafeInteger(at) ||
+    at < 0 ||
+    at > 253_402_300_799_999 ||
+    record(retry.error) === undefined
+  ) {
+    throw new OpenCodeV2HistoryError("reason=native-retry-shape-invalid");
+  }
+  const facts = { attempt: retry.attempt, scheduledAt: new Date(at).toISOString() };
+  if (!isCodingWorkbenchNativeRetry(facts)) {
+    throw new OpenCodeV2HistoryError("reason=native-retry-shape-invalid");
+  }
+  return facts;
+}
+
+function nativeRetryCandidate(
+  message: Readonly<Record<string, unknown>>,
+  id: string,
+  parentMessageId: string,
+  occurredAt: string,
+): Candidate {
+  const nativeRetry = nativeRetryFacts(message.retry);
+  return {
+    ...candidate(`${id}:retry`, "observation", nativeRetry ?? null, {
+      kind: "message",
+      role: "assistant",
+      messageId: id,
+      parentMessageId,
+      occurredAt,
+      ...(nativeRetry === undefined ? {} : { nativeRetry }),
+    }),
+    nativeRetryState: true,
+  };
+}
+
 interface PartOrdinals {
   text: number;
   reasoning: number;
@@ -622,14 +674,27 @@ function allCandidates(
   sessionId: string,
   messages: readonly Readonly<Record<string, unknown>>[],
   live: OpenCodeV2LiveText,
+  known: ReadonlyMap<string, KnownCandidate>,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
   let parentMessageId: string | undefined;
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
     result.push(...messageCandidates(message, parentMessageId, live));
+    result.push(...changedNativeRetryCandidates(message, parentMessageId, known));
   }
   return result;
+}
+
+function changedNativeRetryCandidates(
+  message: Readonly<Record<string, unknown>>,
+  parentMessageId: string | undefined,
+  known: ReadonlyMap<string, KnownCandidate>,
+): readonly Candidate[] {
+  if (message.type !== "assistant" || parentMessageId === undefined) return [];
+  const id = messageId(message);
+  if (message.retry === undefined && !known.has(`${id}:retry`)) return [];
+  return [nativeRetryCandidate(message, id, parentMessageId, eventTime(message))];
 }
 
 // Coding History records what the runtime persisted: a text part's own text, never the live text the
@@ -637,8 +702,8 @@ function allCandidates(
 // and a streaming turn does not rewrite the stored message on every delta.
 function conversationMessages(candidates: readonly Candidate[]): readonly CodingHistoryMessage[] {
   const messages = new Map<string, CodingHistoryMessage>();
-  for (const { signal, capturedText } of candidates) {
-    if (signal?.kind === "message")
+  for (const { signal, capturedText, nativeRetryState } of candidates) {
+    if (signal?.kind === "message" && !nativeRetryState)
       messages.set(signal.messageId, {
         messageId: signal.messageId,
         role: signal.role,
@@ -665,16 +730,18 @@ function makePending(
   const events: OpenCodeReconciliationEvent[] = [];
   const signals = new Map<string, CodingSafeActivitySignal>();
   let emptyTextCount = 0;
+  let nativeRetrySignalCount = 0;
   for (const item of candidates) {
     const previous = known.get(item.key);
     if (previous?.digest === item.digest) continue;
     const sequence = checkpoint + events.length + 1;
-    const id = `evt_${item.digest.slice(0, 32)}`;
+    const identity = historyEventDigest(item, sessionId, sequence);
+    const id = `evt_${identity.slice(0, 32)}`;
     const event = {
       id,
       aggregateId: sessionId,
       sequence,
-      digest: item.digest,
+      digest: identity,
       kind: item.kind,
       ...(item.compaction === undefined ? {} : { compaction: item.compaction }),
     };
@@ -685,11 +752,17 @@ function makePending(
       ...(text === undefined ? {} : { textLength: text.length }),
     });
     if (item.emptyText) emptyTextCount += 1;
+    nativeRetrySignalCount += Number(item.nativeRetryState === true);
     const signal = incrementalSignal(item, previous);
     if (signal !== undefined) signals.set(`${sessionId}\u0000${String(sequence)}`, signal);
     if (events.length === 256) break;
   }
-  return { nextKnown, events, signals, emptyTextCount };
+  return { nextKnown, events, signals, emptyTextCount, nativeRetrySignalCount };
+}
+
+function historyEventDigest(item: Candidate, sessionId: string, sequence: number): string {
+  // Repeated native clears have identical facts but are distinct committed transitions.
+  return item.nativeRetryState ? digest([sessionId, sequence, item.digest]) : item.digest;
 }
 
 type GrowingTextSignal = Extract<CodingSafeActivitySignal, { readonly kind: "text" | "reasoning" }>;
@@ -760,6 +833,7 @@ function recordHistoryProjection(
         eventCount: pending.events.length,
         signalCount: pending.signals.size,
         emptyTextCount: pending.emptyTextCount,
+        nativeRetrySignalCount: pending.nativeRetrySignalCount,
         reasoningSignalCount: [...pending.signals.values()].filter(
           (signal) => signal.kind === "reasoning",
         ).length,
@@ -806,7 +880,7 @@ export function createOpenCodeV2HistoryProjection(
         throw new Error("opencode-v2-checkpoint-invalid");
       }
       if (pending === undefined) {
-        const candidates = allCandidates(sessionId, messages, live);
+        const candidates = allCandidates(sessionId, messages, live, known);
         pending = makePending(sessionId, position, known, candidates);
         capture(candidates);
         recordHistoryProjection(activity, pending, live);

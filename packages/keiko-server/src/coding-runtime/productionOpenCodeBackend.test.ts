@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+
 import type { CodingToolResult } from "./codingToolIpc.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as gatewayBackend from "./devLaneRuntimeProcessBackend.js";
@@ -632,3 +634,137 @@ function trustedContext(workspaceRoot: string): CodingRuntimeTrustedContext {
     expiresAt: "2026-09-03T00:00:00.000Z",
   };
 }
+
+function retryActivityFixture(root: string): {
+  readonly activity: NonNullable<composition.OpenCodeRuntimeCompositionInput["safeActivity"]>;
+  readonly projection: NonNullable<
+    ReturnType<typeof createProductionOpenCodeBackend>["safeActivityProjection"]
+  >;
+  readonly events: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimeEvent[];
+  readonly dispose: () => void | Promise<void>;
+} {
+  const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+  const backend = createProductionOpenCodeBackend(backendInput(root, windowsDevLaneRuntime(root)));
+  const events: import("@oscharko-dev/keiko-contracts").CodingWorkbenchRuntimeEvent[] = [];
+  const input = runInput(root);
+  const run = backend.createRun({
+    ...input,
+    request: { ...input.request, runId: "run-1" },
+    minted: { ...input.minted, authorityRef: { ...input.minted.authorityRef, runId: "run-1" } },
+    onRuntimeEvent: (event): void => {
+      events.push(event);
+    },
+  });
+  const activity = compose.mock.calls[0]?.[0].safeActivity;
+  const projection = backend.safeActivityProjection;
+  if (activity === undefined || projection === undefined) throw new Error("Missing activity port");
+  projection.open({
+    runId: "run-1",
+    workspaceId: "workspace-windows",
+    authorityExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    workspaceIsCurrent: () => true,
+  });
+  return { activity, projection, events, dispose: (): void | Promise<void> => run.dispose?.() };
+}
+
+function retryMessage(): Extract<
+  import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
+  { kind: "message" }
+> {
+  return {
+    kind: "message",
+    messageId: "msg_retry_first",
+    parentMessageId: "msg_retry_user",
+    role: "assistant",
+    occurredAt: new Date().toISOString(),
+    nativeRetry: { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+  };
+}
+
+describe("production native retry projection", () => {
+  it("rejects accessor facts without invoking them at the real backend projection", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-retry-record-"));
+    try {
+      const f = retryActivityFixture(root);
+      f.activity.arm();
+      const message = retryMessage();
+      f.activity.ingest({
+        kind: "message",
+        messageId: "msg_retry_user",
+        role: "user",
+        occurredAt: message.occurredAt,
+      });
+      const getter = vi.fn((): number => 2);
+      const nativeRetry = Object.defineProperty(
+        { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+        "attempt",
+        { enumerable: true, get: getter },
+      );
+      expect(f.activity.ingest({ ...message, nativeRetry })).toBe(false);
+      expect(f.events).toEqual([]);
+      expect(getter).not.toHaveBeenCalled();
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears the private observation state when the existing controller is cleared and rearmed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-retry-rearm-"));
+    try {
+      const f = retryActivityFixture(root);
+      const message = retryMessage();
+      f.activity.arm();
+      f.activity.ingest({
+        kind: "message",
+        messageId: "msg_retry_user",
+        role: "user",
+        occurredAt: message.occurredAt,
+      });
+      f.activity.ingest(message);
+      f.activity.clear();
+      f.activity.arm();
+      f.activity.ingest(message);
+      expect(f.events).toHaveLength(2);
+      expect(new Set(f.events.map((event) => event.eventId)).size).toBe(2);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes only armed accepted retry facts, deduplicates them, and reports native clear", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-retry-"));
+    try {
+      const f = retryActivityFixture(root);
+      const message = retryMessage();
+      f.activity.ingest(message);
+      expect(f.events).toEqual([]);
+      f.activity.arm();
+      f.activity.ingest(message);
+      expect(f.events).toEqual([]);
+      f.activity.ingest({
+        kind: "message",
+        messageId: "msg_retry_user",
+        role: "user",
+        occurredAt: message.occurredAt,
+      });
+      f.activity.ingest(message);
+      f.activity.ingest(message);
+      expect(f.events).toMatchObject([
+        { kind: "native-retry-changed", nativeRetry: message.nativeRetry },
+      ]);
+      const { nativeRetry: _nativeRetry, ...clear } = message;
+      f.activity.ingest(clear);
+      expect(f.events).toMatchObject([{ nativeRetry: message.nativeRetry }, { nativeRetry: null }]);
+      expect(f.events.every((event) => validateCodingWorkbenchRuntimeEvent(event).ok)).toBe(true);
+      expect(f.projection.currentContent()?.feed).not.toHaveProperty("nativeRetry");
+      f.activity.clear();
+      f.activity.ingest(message);
+      expect(f.events).toHaveLength(2);
+      await f.dispose();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

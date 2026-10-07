@@ -23,8 +23,13 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { UiStore, WorkspaceManifestRecordRow } from "../store/index.js";
 import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
-import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+} from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
+import { securityErrorKind } from "@oscharko-dev/keiko-security";
 import type {
   WorkspaceRootAccess,
   WorkspaceRootAccessOutcome,
@@ -269,7 +274,9 @@ export function editorAgentSnapshotLocation(
   if (recorded !== undefined) return recorded.canonicalRoot;
   try {
     return realpathSync(snapshot.workspaceRoot);
-  } catch {
+  } catch (error) {
+    if (securityErrorKind(error) !== "ENOENT")
+      recordContainmentPortFailure(error, undefined, "snapshot-location");
     return resolve(snapshot.workspaceRoot);
   }
 }
@@ -411,14 +418,24 @@ export function resolveEditorAgentContainmentPort(
     : { ok: true, fs: nodeWorkspaceFs };
 }
 
-function recordContainmentPortFailure(error: unknown, correlationId: string | undefined): void {
+function recordContainmentPortFailure(
+  error: unknown,
+  correlationId: string | undefined,
+  stage?: "snapshot-location",
+): void {
   emitServerDiagnostic(undefined, {
     correlationId: correlationIdOrUnknown(correlationId),
     timestamp: new Date().toISOString(),
     operation: "editor.agent.root-containment",
-    source: "editor.agent-root-boundary",
+    source:
+      stage === undefined
+        ? "editor.agent-root-boundary"
+        : "editor.agent-root-boundary.snapshot-location",
     errorClass: contentFreeErrorClass(error),
-    message: "editor-agent-root-authority-unresolvable",
+    message:
+      stage === undefined
+        ? "editor-agent-root-authority-unresolvable"
+        : DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   });
 }
 

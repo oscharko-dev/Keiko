@@ -49,6 +49,7 @@ import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
 import type { ScriptTrustDecision, VerificationRunnerManager } from "./verificationRunner.js";
 import {
   editorAgentPathBoundaryReason,
+  editorAgentSnapshotLocation,
   editorAgentRootContainmentReason,
   resolveEditorAgentActionRoot,
   resolveEditorAgentContainmentPort,
@@ -62,6 +63,11 @@ import {
   type WorkspaceRootAccessOutcome,
 } from "../task-workspace/workspace-root-access.js";
 import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, realpathSync: vi.fn(actual.realpathSync) };
+});
 
 const HASH = "a".repeat(64);
 let temporaryRoot: string;
@@ -341,6 +347,39 @@ afterEach(() => {
 });
 
 describe("editor agent root boundary", () => {
+  it("reports a historical location fault without changing fallback or exposing its body", () => {
+    const diagnostic = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
+    const error = Object.assign(new TypeError(`PRIVATE_ROOT ${rootA} synthetic-token`), {
+      code: "EACCES",
+    });
+    vi.mocked(realpathSync).mockImplementationOnce(() => {
+      throw error;
+    });
+    expect(editorAgentSnapshotLocation(snapshot(rootA, undefined, "historical"))).toBe(rootA);
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic.mock.calls[0]?.[0]).toMatchObject({
+      operation: "editor.agent.root-containment",
+      source: "editor.agent-root-boundary.snapshot-location",
+      errorClass: "TypeError",
+    });
+    const logged = JSON.stringify(diagnostic.mock.calls);
+    expect(logged).not.toContain("PRIVATE_ROOT");
+    expect(logged).not.toContain(rootA);
+    expect(logged).not.toContain("synthetic-token");
+    diagnostic.mockRestore();
+  });
+
+  it("keeps an absent historical location as a silent fallback", () => {
+    const diagnostic = vi
+      .spyOn(defaultServerDiagnosticSink, "record")
+      .mockImplementation(() => undefined);
+    const missing = join(rootA, "gone");
+    expect(editorAgentSnapshotLocation(snapshot(missing, undefined, "historical"))).toBe(missing);
+    expect(diagnostic).not.toHaveBeenCalled();
+    diagnostic.mockRestore();
+  });
   it("binds an authorized runtime to its selected ordinary root without using UI focus", () => {
     const selected = snapshot(rootB, undefined, "runtime-selected-b");
     expect(resolveEditorAgentSessionRoot(selected, store)).toEqual({

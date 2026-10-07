@@ -960,3 +960,151 @@ describe("OpenCode V2 actual compaction history", () => {
     ).toThrow("opencode-v2-history-invalid");
   });
 });
+
+// OpenCode 2.0.10, b8cedc1a7a5e2916bbb65dc1d4b620729c261638:
+// core/test/session-projector.test.ts "projects retry state and clears it at the next step or
+// execution terminal" produces attempt=2, at=2000. message-updater.ts persists those facts;
+// schema/session-message.ts encodes DateTimeUtcFromMillis as milliseconds. No backoff is inferred.
+function nativeRetryHistory(retry: unknown): readonly Record<string, unknown>[] {
+  return [
+    { id: "msg_retry_user", type: "user", time: { created: 0 }, text: "Task" },
+    {
+      id: "msg_retry_first",
+      type: "assistant",
+      time: { created: 0 },
+      content: [],
+      ...(retry === undefined ? {} : { retry }),
+    },
+  ];
+}
+
+const NATIVE_RETRY = {
+  attempt: 2,
+  at: 2000,
+  error: { type: "provider.transport", message: "PRIVATE_PROVIDER_FAILURE" },
+};
+
+describe("OpenCode V2 native retry history", () => {
+  it("logs native schedule and clear counts once per committed page without provider bodies", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-native-retry",
+      activityLog: sink,
+    });
+    let checkpoint: number | undefined;
+    for (const retry of [NATIVE_RETRY, undefined]) {
+      const history = nativeRetryHistory(retry);
+      const events = projection.project("ses_retry", history, checkpoint);
+      projection.project("ses_retry", history, checkpoint);
+      checkpoint = events.at(-1)?.sequence;
+    }
+    const records = sink.events.map((event) =>
+      expectActivityLogProof(
+        "coding-runtime.history-projection.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    );
+    expect(records.map((event) => event.nativeRetrySignalCount)).toEqual([1, 1]);
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_PROVIDER_FAILURE");
+    expect(JSON.stringify(records)).not.toContain("provider.transport");
+  });
+
+  it("keeps durable assistant text when native retry metadata is projected separately", () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-retry-capture",
+      activityLog: undefined,
+      captureMessages,
+    });
+    const history = nativeRetryHistory(NATIVE_RETRY).map((message) =>
+      message.type === "assistant"
+        ? { ...message, content: [{ type: "text", text: "Persisted answer before retry" }] }
+        : message,
+    );
+    projection.project("ses_retry", history, undefined);
+    expect(captureMessages).toHaveBeenCalledWith([
+      { messageId: "msg_retry_user", role: "user", content: "Task" },
+      { messageId: "msg_retry_first", role: "assistant", content: "Persisted answer before retry" },
+    ]);
+  });
+
+  it("commits repeated native schedule/clear episodes through the real reconciler", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    let checkpoint: number | undefined;
+    const identities = new Set<string>();
+    for (const retry of [
+      undefined,
+      NATIVE_RETRY,
+      undefined,
+      { ...NATIVE_RETRY, attempt: 3 },
+      undefined,
+    ]) {
+      const events = projection.project("ses_retry", nativeRetryHistory(retry), checkpoint);
+      const result = reconciler.ingest(events);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("Native retry reconciliation failed");
+      expect(result.applied).toBe(events.length);
+      for (const event of events) {
+        expect(identities.has(event.id)).toBe(false);
+        identities.add(event.id);
+      }
+      checkpoint = reconciler.checkpoints().ses_retry;
+    }
+  });
+
+  it("projects the producer's physical attempt and schedule, then its authoritative clear", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const first = projection.project("ses_retry", nativeRetryHistory(NATIVE_RETRY), undefined);
+    const signals = first.map((event) => projection.takeSignal(event)).filter(Boolean);
+    expect(signals).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        messageId: "msg_retry_first",
+        nativeRetry: { attempt: 2, scheduledAt: "1970-01-01T00:00:02.000Z" },
+      }),
+    );
+    const checkpoint = first.at(-1)?.sequence;
+    expect(
+      projection.project(
+        "ses_retry",
+        nativeRetryHistory({
+          ...NATIVE_RETRY,
+          error: { type: "provider.transport", message: "DIFFERENT_PRIVATE_ERROR" },
+        }),
+        checkpoint,
+      ),
+    ).toEqual([]);
+    const cleared = projection.project("ses_retry", nativeRetryHistory(undefined), checkpoint);
+    expect(cleared).toHaveLength(1);
+    const clear = cleared[0];
+    if (clear === undefined) throw new Error("Expected native retry clear");
+    expect(projection.takeSignal(clear)).toEqual({
+      kind: "message",
+      role: "assistant",
+      messageId: "msg_retry_first",
+      parentMessageId: "msg_retry_user",
+      occurredAt: "1970-01-01T00:00:00.000Z",
+    });
+    expect(JSON.stringify([first, signals, cleared])).not.toContain("PRIVATE");
+  });
+
+  it.each([
+    { ...NATIVE_RETRY, attempt: 0 },
+    { ...NATIVE_RETRY, attempt: 1.5 },
+    { ...NATIVE_RETRY, at: -1 },
+    { ...NATIVE_RETRY, at: Number.MAX_SAFE_INTEGER },
+    { ...NATIVE_RETRY, at: "2000" },
+    { ...NATIVE_RETRY, injected: "PRIVATE" },
+    { ...NATIVE_RETRY, error: "PRIVATE" },
+    null,
+  ])("refuses malformed native retry without publishing partial history: %j", (retry) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    expect(() => projection.project("ses_retry", nativeRetryHistory(retry), undefined)).toThrow(
+      "opencode-v2-history-invalid",
+    );
+    expect(projection.project("ses_retry", nativeRetryHistory(undefined), undefined)).not.toEqual(
+      [],
+    );
+  });
+});

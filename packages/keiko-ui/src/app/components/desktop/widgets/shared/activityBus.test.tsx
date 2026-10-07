@@ -9,6 +9,34 @@ import {
 } from "./activityBus";
 
 describe("activityBus", () => {
+  it("records native retry schedule and clear as observations without gateway counts", () => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "run-1:1",
+      sequence: 1,
+      occurredAt: "2026-06-15T10:00:01.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 2,
+      eventKind: "native-retry-changed",
+      nativeRetry: { attempt: 2, scheduledAt: "2026-06-15T10:00:02.000Z" },
+    };
+    act(() =>
+      logRuntimeActivityEvents([
+        event,
+        event,
+        { ...event, nativeRetry: null, sequence: 2, cursor: "run-1:2" },
+      ]),
+    );
+    expect(getActivity()).toHaveLength(2);
+    expect(
+      getActivity().every((row) => row.labelKey === "activity.event.observationStreamed"),
+    ).toBe(true);
+    expect(JSON.stringify(getActivity())).not.toContain("nativeRetry");
+    expect(JSON.stringify(getActivity())).not.toContain("modelGateway");
+  });
+
   beforeEach(() => {
     delete window.__keikoActivity;
     vi.useFakeTimers();

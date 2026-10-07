@@ -240,6 +240,7 @@ export type CodingWorkbenchRuntimeEventKind =
   | "runtime-health"
   | "task-submitted"
   | "observation-streamed"
+  | "native-retry-changed"
   | "permission-requested"
   | "diff-summarized"
   | "verification-summarized"
@@ -258,6 +259,7 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "runtime-health",
     "task-submitted",
     "observation-streamed",
+    "native-retry-changed",
     "permission-requested",
     "diff-summarized",
     "verification-summarized",
@@ -650,12 +652,47 @@ export interface CodingWorkbenchVerificationSummary {
   readonly durationMs: number;
 }
 
+/** Native OpenCode physical attempt (initial attempt is 1), never the gateway retry counter. */
+export interface CodingWorkbenchNativeRetry {
+  readonly attempt: number;
+  /** Canonical UTC millisecond instant copied from the native retry schedule. */
+  readonly scheduledAt: string;
+}
+
+/** Closed, body-free native retry facts shared by history, runtime events and SSE. */
+export function isCodingWorkbenchNativeRetry(value: unknown): value is CodingWorkbenchNativeRetry {
+  if (!nativeRetryDataRecord(value)) return false;
+  const facts = value;
+  if (!Number.isSafeInteger(facts.attempt) || Number(facts.attempt) < 1) return false;
+  const at = facts.scheduledAt;
+  if (typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(at))
+    return false;
+  const millis = Date.parse(at);
+  return Number.isFinite(millis) && new Date(millis).toISOString() === at;
+}
+
+// The existing ownDataRecord convention: inspect descriptors before reading untrusted fields.
+function nativeRetryDataRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype) return false;
+  const fields = Object.getOwnPropertyDescriptors(value);
+  return (
+    Reflect.ownKeys(fields).length === 2 &&
+    Object.hasOwn(fields, "attempt") &&
+    Object.hasOwn(fields, "scheduledAt") &&
+    Object.values(fields).every((field) => "value" in field && field.enumerable === true)
+  );
+}
+
 export interface CodingWorkbenchRuntimeEvent {
   readonly schemaVersion: typeof CODING_WORKBENCH_SCHEMA_VERSION;
   readonly eventId: string;
   readonly runId: string;
   readonly occurredAt: string;
   readonly kind: CodingWorkbenchRuntimeEventKind;
+  /** Required only on native-retry-changed; null is the native history's explicit clear. */
+  readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly requestedMode?: CodingWorkbenchMode | undefined;

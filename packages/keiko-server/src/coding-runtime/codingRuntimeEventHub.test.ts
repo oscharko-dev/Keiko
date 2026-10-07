@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CODING_RUNTIME_EVENT_HUB_MAX_BYTES,
@@ -725,5 +725,51 @@ describe("CodingRuntimeEventHub verifier metadata ownership", () => {
     if (ownedSummary === undefined) throw new Error("expected verifier metadata");
     expect(Reflect.set(ownedSummary, "stdout", "UNVALIDATED_PRIVATE_CANARY")).toBe(false);
     expect(Reflect.set(published.event, "revision", 99)).toBe(false);
+  });
+});
+
+describe("native OpenCode retry replay", () => {
+  it("rejects accessor facts before materialization can turn them into data properties", () => {
+    const getter = vi.fn((): number => 2);
+    const nativeRetry = Object.defineProperty(
+      { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+      "attempt",
+      { enumerable: true, get: getter },
+    );
+    const hub = new CodingRuntimeEventHub();
+    expect(
+      hub.publish({
+        ...status("run-native", 1),
+        kind: "runtime-event",
+        eventKind: "native-retry-changed",
+        nativeRetry,
+      }),
+    ).toEqual({ ok: false, reason: "invalid-event" });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("owns native attempt facts and retains their explicit clear without gateway reinterpretation", () => {
+    const hub = new CodingRuntimeEventHub();
+    const nativeRetry = { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" };
+    const input = {
+      ...status("run-native", 1),
+      kind: "runtime-event" as const,
+      eventKind: "native-retry-changed" as const,
+      nativeRetry,
+    };
+    expect(hub.publish(input).ok).toBe(true);
+    nativeRetry.attempt = 99;
+    expect(hub.publish({ ...input, nativeRetry: null }).ok).toBe(true);
+    const replay = hub.replay("run-native");
+    expect(replay).toMatchObject({
+      ok: true,
+      events: [
+        { nativeRetry: { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" } },
+        { nativeRetry: null },
+      ],
+    });
+    if (!replay.ok) throw new Error("Expected retry replay");
+    const first = replay.events[0];
+    expect(first?.kind === "runtime-event" && Object.isFrozen(first.nativeRetry)).toBe(true);
   });
 });

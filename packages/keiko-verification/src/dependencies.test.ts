@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceInfo, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { DEPENDENCY_INSTALL_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
@@ -55,6 +55,18 @@ function workspaceAt(root: string): WorkspaceInfo {
     testDirs: ["tests"],
     languages: ["typescript"],
     ignoreLines: [],
+  };
+}
+
+function npmConfigFaultFs(root: string, error: Error): WorkspaceFs {
+  const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+  return {
+    ...nodeWorkspaceFs,
+    readFileUtf8SameDescriptor: (...args): ReturnType<NonNullable<typeof read>> => {
+      if (args[0] === join(root, ".npmrc")) throw error;
+      if (read === undefined) throw new TypeError("Expected descriptor read");
+      return read(...args);
+    },
   };
 }
 
@@ -207,6 +219,60 @@ describe("planDependencyBootstrap", () => {
       reason: "project-npm-config",
       lockfile: "absent",
     });
+  });
+
+  it("reports the original project npm config read fault without changing its refusal", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(join(root, ".npmrc"), "ignore-scripts=true\n");
+    const onFailure = vi.fn();
+    const error = Object.assign(new Error(`PRIVATE_CONFIG ${root} synthetic-token`), {
+      code: "EIO",
+    });
+    const fs = npmConfigFaultFs(root, error);
+    expect(planDependencyBootstrap(workspaceAt(root), fs, onFailure)).toEqual({
+      kind: "refused",
+      reason: "project-npm-config",
+      lockfile: "absent",
+    });
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith({ stage: "inspection", error });
+  });
+
+  it("refuses an unreadable npm config metadata record instead of treating it as absent", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(join(root, ".npmrc"), "ignore-scripts=true\n");
+    const error = Object.assign(new Error(`PRIVATE_CONFIG ${root} synthetic-token`), {
+      code: "EIO",
+    });
+    const onFailure = vi.fn();
+    const fs = {
+      ...nodeWorkspaceFs,
+      stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
+        if (path === join(root, ".npmrc")) throw error;
+        return nodeWorkspaceFs.stat(path);
+      },
+    };
+    expect(planDependencyBootstrap(workspaceAt(root), fs, onFailure)).toEqual({
+      kind: "refused",
+      reason: "project-npm-config",
+      lockfile: "absent",
+    });
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith({
+      stage: "inspection",
+      error: expect.objectContaining({ cause: error }) as unknown,
+    });
+  });
+
+  it("keeps an absent project npm config approved and silent", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    const onFailure = vi.fn();
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs, onFailure)).toEqual({
+      kind: "install",
+      lockfile: "absent",
+    });
+    expect(onFailure).not.toHaveBeenCalled();
   });
 
   it("admits script-restricting npm configuration without permitting source or credential overrides", () => {
@@ -1140,6 +1206,30 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(rec.calls()).toHaveLength(0);
     expect(outcome.summary.state).toBe("failed");
     expect(outcome.summary.completionRecorded).toBe(false);
+  });
+
+  it("reports the original npm config fault during the final pre-spawn inspection", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeFileSync(join(root, ".npmrc"), "ignore-scripts=true\n");
+    const error = Object.assign(new Error(`PRIVATE_CONFIG ${root} synthetic-token`), {
+      code: "EIO",
+    });
+    const onFailure = vi.fn();
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      fs: npmConfigFaultFs(root, error),
+      onFailure,
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(onFailure).toHaveBeenCalledWith({ stage: "inspection", error });
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary.state).toBe("failed");
+    expect(outcome.summary.completionRecorded).toBe(false);
+    expect(JSON.stringify(outcome)).not.toContain("PRIVATE_CONFIG");
+    expect(JSON.stringify(outcome)).not.toContain("synthetic-token");
+    expect(JSON.stringify(outcome)).not.toContain(root);
   });
 
   it("runs npm behind the egress proxy, records its tunnels and closes it", async () => {

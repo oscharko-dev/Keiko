@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e64fba7f58e60386c4f40d9abe3f54264045506e6b922fec1b79075a8e0e793c" as const;
+  "74d39f99747e4c85b2ba67178488023832ed87ddb7b2efe0d17558ebb0ae8f5e" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10131,6 +10131,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "mergedEventCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "nativeRetrySignalCount",
               type: "integer",
               dataClass: "count",
               required: false,

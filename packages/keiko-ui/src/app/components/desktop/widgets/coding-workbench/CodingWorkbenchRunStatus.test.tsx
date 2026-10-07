@@ -344,3 +344,39 @@ describe("CodingWorkbenchRunStatus", () => {
     expect(screen.queryByRole("timer")).toBeNull();
   });
 });
+
+it("displays native physical attempt and schedule, then clears on native clear and settlement", () => {
+  const retry: CodingWorkbenchRuntimeSseEvent = {
+    schemaVersion: "1",
+    cursor: "run-1:2",
+    sequence: 2,
+    occurredAt: NOW,
+    kind: "runtime-event",
+    runId: "run-1",
+    state: "running",
+    revision: 4,
+    eventKind: "native-retry-changed",
+    nativeRetry: { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" },
+  };
+  const state = runState(snapshot("running"), [...RUNNING.events, retry]);
+  const { rerender } = render(
+    <CodingWorkbenchRunStatus state={state} researchGrant={null} phase="model" />,
+  );
+  expect(screen.getByTestId("coding-runtime-native-retry")).toHaveTextContent(
+    "OpenCode attempt 2 scheduled for 2026-10-07T12:00:02.000Z",
+  );
+  const cleared = {
+    ...state,
+    events: [...state.events, { ...retry, nativeRetry: null, sequence: 3, cursor: "run-1:3" }],
+  };
+  rerender(<CodingWorkbenchRunStatus state={cleared} researchGrant={null} phase="model" />);
+  expect(screen.queryByTestId("coding-runtime-native-retry")).not.toBeInTheDocument();
+  rerender(
+    <CodingWorkbenchRunStatus
+      state={runState(snapshot("succeeded"), state.events)}
+      researchGrant={null}
+      phase={null}
+    />,
+  );
+  expect(screen.queryByTestId("coding-runtime-native-retry")).not.toBeInTheDocument();
+});

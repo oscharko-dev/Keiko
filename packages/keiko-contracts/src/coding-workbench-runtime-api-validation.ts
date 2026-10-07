@@ -2,6 +2,7 @@ import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
+  isCodingWorkbenchNativeRetry,
   type CodingWorkbenchValidationResult,
   type CodingWorkbenchVerificationSummary,
 } from "./coding-workbench.js";
@@ -95,7 +96,14 @@ export function sseEventKeys(kind: unknown): readonly string[] {
     "failureCode",
   ];
   return kind === "runtime-event"
-    ? [...common, "eventKind", "auxiliaryOutcome", "contentTrust", "verificationSummary"]
+    ? [
+        ...common,
+        "eventKind",
+        "auxiliaryOutcome",
+        "contentTrust",
+        "verificationSummary",
+        "nativeRetry",
+      ]
     : common;
 }
 
@@ -118,6 +126,7 @@ export function validateSseEventFields(
   validateSseEventKind(value, errors);
   validateSseOptionalEnums(value, errors);
   validateSseVerificationSummary(value, errors);
+  validateSseNativeRetry(value, errors);
 }
 
 export function isCodingWorkbenchVerificationSummary(
@@ -137,6 +146,16 @@ export function isCodingWorkbenchVerificationSummary(
     Number.isFinite(value.durationMs) &&
     value.durationMs >= 0
   );
+}
+
+function validateSseNativeRetry(value: Record<string, unknown>, errors: string[]): void {
+  if (value.kind === "runtime-event" && value.eventKind === "native-retry-changed") {
+    if (value.nativeRetry !== null && !isCodingWorkbenchNativeRetry(value.nativeRetry)) {
+      errors.push("nativeRetry must be canonical native retry facts or null");
+    }
+  } else if (value.nativeRetry !== undefined) {
+    errors.push("nativeRetry is only admissible on native-retry-changed");
+  }
 }
 
 function validateSseVerificationSummary(value: Record<string, unknown>, errors: string[]): void {

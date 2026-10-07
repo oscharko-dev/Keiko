@@ -6403,6 +6403,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "runtime-health",
           "task-submitted",
           "observation-streamed",
+          "native-retry-changed",
           "permission-requested",
           "diff-summarized",
           "verification-summarized",
@@ -6699,6 +6700,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       reasoningSignalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      nativeRetrySignalCount: {
         type: "integer",
         dataClass: "count",
         required: false,

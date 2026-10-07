@@ -29,6 +29,10 @@ import {
   type CodingSafeActivityToolPresentation,
   type CodingSafeActivityReasoning,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import {
+  isCodingWorkbenchNativeRetry,
+  type CodingWorkbenchNativeRetry,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   activityLogEvent,
@@ -167,6 +171,8 @@ export type CodingSafeActivitySignal =
       readonly messageId: string;
       readonly role: CodingSafeActivityMessageRole;
       readonly parentMessageId?: string | undefined;
+      /** Committed native metadata; the backend projects it separately without retaining bodies. */
+      readonly nativeRetry?: CodingWorkbenchNativeRetry;
     })
   | (SignalBase & {
       readonly kind: "text";
@@ -1333,7 +1339,9 @@ function validMessageSignal(
 ): boolean {
   return (
     safeId(signal.messageId) &&
-    (signal.parentMessageId === undefined || safeId(signal.parentMessageId))
+    (signal.parentMessageId === undefined || safeId(signal.parentMessageId)) &&
+    (signal.nativeRetry === undefined ||
+      (signal.role === "assistant" && isCodingWorkbenchNativeRetry(signal.nativeRetry)))
   );
 }
 
@@ -1421,7 +1429,7 @@ const COMMON_SIGNAL_KEYS = ["kind", "occurredAt", "signalId"] as const;
 
 /** Extra keys admitted per signal kind; anything else makes the signal structurally invalid. */
 const SIGNAL_KIND_KEYS: Readonly<Record<CodingSafeActivitySignal["kind"], readonly string[]>> = {
-  message: ["messageId", "role", "parentMessageId"],
+  message: ["messageId", "role", "parentMessageId", "nativeRetry"],
   text: ["messageId", "text"],
   reasoning: ["messageId", "text"],
   plan: ["anchorMessageId", "steps"],

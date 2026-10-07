@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
 import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
 import {
@@ -1356,5 +1356,71 @@ describe("body-free Workbench verifier metadata", () => {
         verificationSummary,
       }).ok,
     ).toBe(false);
+  });
+});
+
+describe("native OpenCode retry SSE facts", () => {
+  it("refuses inherited, accessor and symbol facts without invoking model-data getters", () => {
+    const getter = vi.fn((): number => 2);
+    const accessor = Object.defineProperty({ scheduledAt: "2026-10-07T12:00:02.000Z" }, "attempt", {
+      enumerable: true,
+      get: getter,
+    });
+    const inherited: unknown = Object.create({
+      attempt: 2,
+      scheduledAt: "2026-10-07T12:00:02.000Z",
+    });
+    const symbolic = {
+      attempt: 2,
+      scheduledAt: "2026-10-07T12:00:02.000Z",
+      [Symbol("PRIVATE")]: "PRIVATE",
+    };
+    for (const facts of [accessor, inherited, symbolic]) {
+      expect(validateCodingWorkbenchRuntimeSseEvent(event(facts)).ok).toBe(false);
+    }
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  function event(nativeRetry: unknown): Record<string, unknown> {
+    return {
+      schemaVersion: "1",
+      cursor: "run-1:1",
+      sequence: 1,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 3,
+      eventKind: "native-retry-changed",
+      nativeRetry,
+    };
+  }
+  it.each([null, { attempt: 2, scheduledAt: "2026-10-07T12:00:02.000Z" }])(
+    "admits native facts without inventing gateway retry counts",
+    (retry) => {
+      const input = event(retry);
+      expect(validateCodingWorkbenchRuntimeSseEvent(input)).toEqual({ ok: true, value: input });
+    },
+  );
+  it.each(["model-gateway-retrying", "observation-streamed", "verification-summarized"])(
+    "refuses native facts on a different event: %s",
+    (eventKind) => {
+      expect(validateCodingWorkbenchRuntimeSseEvent({ ...event(null), eventKind }).ok).toBe(false);
+    },
+  );
+  it("requires an explicit fact/clear and rejects nested private error content", () => {
+    expect(validateCodingWorkbenchRuntimeSseEvent(event(undefined)).ok).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent(
+        event({
+          attempt: 2,
+          scheduledAt: "2026-10-07T12:00:02.000Z",
+          error: "PRIVATE_ERROR",
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...event(null), kind: "status" }).ok).toBe(
+      false,
+    );
   });
 });

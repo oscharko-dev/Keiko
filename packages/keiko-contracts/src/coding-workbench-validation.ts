@@ -36,6 +36,7 @@ import {
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchValidationResult,
   isCodingWorkbenchModeWidening,
+  isCodingWorkbenchNativeRetry,
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
@@ -668,6 +669,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
   "runtime-health": runtimeEventAllowedKeys("runtimeSource", "modelSource", "health"),
   "task-submitted": runtimeEventAllowedKeys("taskRef", "requestedMode", "effectiveMode"),
   "observation-streamed": runtimeEventAllowedKeys("channel", "sequence", "byteCount", "truncated"),
+  "native-retry-changed": runtimeEventAllowedKeys("nativeRetry"),
   "permission-requested": runtimeEventAllowedKeys("permissionRequest"),
   "diff-summarized": runtimeEventAllowedKeys("fileCount", "addedLines", "deletedLines"),
   "verification-summarized": runtimeEventAllowedKeys(
@@ -1275,6 +1277,12 @@ function validateChildRunCompletedEventFields(
   validateRequiredSafeIntegerField(value, "childResultCount", "event", errors);
 }
 
+function validateNativeRetryEventFields(value: Record<string, unknown>, errors: string[]): void {
+  if (value.nativeRetry !== null && !isCodingWorkbenchNativeRetry(value.nativeRetry)) {
+    errors.push("event.nativeRetry must be canonical native retry facts or null");
+  }
+}
+
 const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   Record<
     CodingWorkbenchRuntimeEventKind,
@@ -1286,6 +1294,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "runtime-health": validateRuntimeHealthEventFields,
   "task-submitted": validateTaskSubmittedEventFields,
   "observation-streamed": validateObservationEventFields,
+  "native-retry-changed": validateNativeRetryEventFields,
   "permission-requested": validatePermissionRequestedEventFields,
   "diff-summarized": validateDiffSummarizedEventFields,
   "verification-summarized": validateVerificationSummarizedEventFields,

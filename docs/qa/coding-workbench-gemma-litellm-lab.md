@@ -253,7 +253,8 @@ their recursive-search semantics are preserved. Production-port integration pass
 tests; parent independently ran those suites together with the 150 native-context tests against
 an isolated candidate checkout (506 passed), plus 97 canonical-catalog checks and the real pinned
 native-request case. Scoped candidate TypeScript, ESLint, Prettier and diff checks passed.
-Actual current-head large-repository live qualification remains pending.
+The controlled deep-file journey on the published native-context/discovery head is recorded below;
+the complete final-head large-repository acceptance matrix remains pending.
 
 The existing named-command runner also revalidates at its actual spawn boundary. It accepts a
 centrally proven managed worktree without requiring a duplicate UI-store row, and refuses an
@@ -273,14 +274,52 @@ The prior replacement was 8,828 UTF-8 bytes; the observed native base plus 1,465
 2,197 bytes, 6,631 bytes lower for those fixed parts. This is a source/request byte comparison,
 not a Gemma tokenizer, latency or full-request-size result. Addendum SHA-256 is
 `02fc1740d3c17975e7a12359df76d99e6a58b92936ae8fb7f99dcc966e5327e6`.
-V1, tools, permissions and settlement are unchanged. Native-loop live qualification on the
-published correction remains pending; configured readiness digest/count facts do not claim that
-any particular provider received them.
+V1, tools, permissions and settlement are unchanged. Configured readiness digest/count facts do
+not claim that any particular provider received them.
+
+On the clean published execution checkout at
+`9fdb76a9e05217fcea0e52a2b7fb0adcf485fe11`, the controlled full-repository Gemma run
+`run-313726516039589922265145370454908943869` succeeded from 20:40:34 to 20:45:36 UTC.
+Normal Full-access UI admission preceded immediate browser closure; zero live bridges and no
+subsequent driver decisions remained. The requested exact test failed at 20:42:07, a single
+server-path callback repair applied at 20:43:11, and the same target passed at 20:43:20. Parent
+diff inspection preserved focus and both false → true → false assertions, with only the permitted
+tracked test changed. Eleven accepted model turns used 127,673 cumulative provider-reported
+prompt tokens and 5,321 completion tokens; this run does not establish a latency improvement.
+
+The model had first verified another target, which passed at 20:41:49. The edit correctly
+invalidated both earlier target results. Its first terminal turn had refreshed only the requested
+target, so the existing bounded verification continuation ran once at 20:43:32. Both targets then
+passed at 20:45:14 and 20:45:17 before success. This is truthful post-edit qualification and
+evidence of a still-active completion safeguard, not proof that the native coding loop alone
+satisfied the full interface contract. The sandbox has no remotes; its test edits remain outside
+the fix PR. The qualified checkout used a forced affected-package rebuild and fresh production
+UI build, avoiding copied incremental-build metadata masking changed source.
+
+The interface addendum now explicitly tells OpenCode that edits invalidate earlier verification
+and that every previously attempted target must pass after the final edit. Existing context and
+actual pinned-request assertions failed before this correction and passed after it. Both unchanged
+production multi-target completion controls also passed. No planner, retry executor, completion
+classifier or ledger rule changed; live model adherence to this refinement remains to be checked.
 
 F21 active turn failures now describe the observed cause without premature operator repair advice.
 The timeline claims an automatic retry only when the existing gateway retry fact confirms it;
 terminal failures retain the repair advice. Recovered and unrelated historical runs are controls.
 The complete live retry presentation and attempt-counter qualification remain pending.
+
+The next F21 increment forwards pinned native assistant retry facts through the existing history,
+runtime-event, SSE and status surfaces. Native physical attempts and scheduled UTC time remain
+separate from gateway retry facts; explicit native clears remove the active status. Raw native
+errors never leave the projection. It adds no retry executor or planning loop. The producer fixture
+is traced to OpenCode 2.0.10; 428 focused server/contracts and 67 UI tests passed. Live outage
+qualification remains pending.
+
+Five caught-failure paths now preserve technical causes through the existing body-free diagnostic
+ports. Missing files retain their normal silent fallback. A genuine adjacent regression showed
+that an unreadable project `.npmrc` metadata check could previously appear absent and admit an
+install; metadata faults now refuse it, while ordinary absence remains valid. Six failure-first
+controls and 275 focused tests passed. Nine obsolete legacy register entries were pruned without
+adding an exception or a new log operation.
 
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations

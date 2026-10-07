@@ -182,6 +182,7 @@ function createOpenCodeRun(
     run.minted.authorityRef.runId,
     safeActivityProjection,
     input.historyCapture,
+    run.onRuntimeEvent,
   );
   try {
     const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry);
@@ -303,14 +304,17 @@ function safeActivityController(
   runId: string,
   projection: CodingSafeActivityProjection,
   historyCapture: ProductionOpenCodeBackendInput["historyCapture"],
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]> {
   const terminal =
     boundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>();
   const knownCalls = boundedCorrelations<true>();
+  const retryObserver = nativeRetryObserver(runId, onRuntimeEvent);
   let armed = false;
   const ingest = (signal: CodingSafeActivitySignal): boolean => {
     if (!armed) return true;
     const accepted = projection.ingest(runId, signal);
+    if (accepted) retryObserver.observe(signal);
     if (accepted && signal.kind === "tool") {
       rememberKnownCall(runId, signal.callId, projection, knownCalls, terminal);
       schedulePendingTerminal(runId, signal.callId, projection, terminal, knownCalls);
@@ -324,6 +328,7 @@ function safeActivityController(
     },
     clear: (): void => {
       armed = false;
+      retryObserver.clear();
       clearCorrelations(terminal);
       clearCorrelations(knownCalls);
     },
@@ -333,18 +338,68 @@ function safeActivityController(
     },
     settleTool: (input): void => {
       if (!armed) return;
-      const signal = settledToolSignal(input);
-      if (signal === undefined) {
-        projection.recordDrop(runId, "validation-rejected");
-        return;
-      }
-      const { callId } = signal;
-      rememberTerminal(runId, callId, signal, projection, terminal, knownCalls);
-      if (knownCalls.values.has(callId)) {
-        schedulePendingTerminal(runId, callId, projection, terminal, knownCalls);
-      }
+      rememberSettledTool(runId, input, projection, terminal, knownCalls);
     },
   };
+}
+
+function rememberSettledTool(
+  runId: string,
+  input: Parameters<NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["settleTool"]>[0],
+  projection: CodingSafeActivityProjection,
+  terminal: BoundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>,
+  knownCalls: BoundedCorrelations<true>,
+): void {
+  const signal = settledToolSignal(input);
+  if (signal === undefined) {
+    projection.recordDrop(runId, "validation-rejected");
+    return;
+  }
+  const { callId } = signal;
+  rememberTerminal(runId, callId, signal, projection, terminal, knownCalls);
+  if (knownCalls.values.has(callId)) {
+    schedulePendingTerminal(runId, callId, projection, terminal, knownCalls);
+  }
+}
+
+function nativeRetryObserver(
+  runId: string,
+  onRuntimeEvent: ProductionRuntimeBackendInput["onRuntimeEvent"],
+): {
+  readonly observe: (signal: CodingSafeActivitySignal) => void;
+  readonly clear: () => void;
+} {
+  let current: { readonly messageId: string; readonly digest: string } | undefined;
+  let sequence = 0;
+  const observe = (signal: CodingSafeActivitySignal): void => {
+    if (signal.kind !== "message" || signal.role !== "assistant") return;
+    const nativeRetry = ownNativeRetryFact(signal.nativeRetry);
+    if (nativeRetry === null && current?.messageId !== signal.messageId) return;
+    const factDigest = codingRuntimeFactDigest([signal.messageId, nativeRetry]);
+    if (factDigest === current?.digest) return;
+    current =
+      nativeRetry === null ? undefined : { messageId: signal.messageId, digest: factDigest };
+    onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `event-runtime-status-${String(++sequence)}`,
+      runId,
+      occurredAt: new Date().toISOString(),
+      kind: "native-retry-changed",
+      nativeRetry,
+    });
+  };
+  return {
+    observe,
+    clear: (): void => {
+      current = undefined;
+    },
+  };
+}
+
+function ownNativeRetryFact(
+  fact: CodingWorkbenchRuntimeEvent["nativeRetry"],
+): NonNullable<CodingWorkbenchRuntimeEvent["nativeRetry"]> | null {
+  return fact === undefined || fact === null ? null : Object.freeze({ ...fact });
 }
 
 function settledToolSignal({

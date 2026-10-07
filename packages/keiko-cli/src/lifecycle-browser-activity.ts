@@ -56,6 +56,7 @@ type BrowserHandoffResult =
       readonly outcome: "refused";
       readonly attestationProvided: false;
       readonly reason: "unsafe-request" | "invalid-request" | "identity-mismatch";
+      readonly error?: unknown;
     }
   | {
       readonly outcome: "restart-required";
@@ -68,6 +69,7 @@ export function emitBrowserHandoff(
   sink: SecurityLogSink | undefined,
   result: BrowserHandoffResult,
 ): void {
+  const failureKind = "error" in result ? securityErrorKind(result.error) : undefined;
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
@@ -76,7 +78,7 @@ export function emitBrowserHandoff(
       {
         outcome: result.outcome,
         attestationProvided: result.attestationProvided,
-        ...(result.outcome === "failed" ? { failureKind: securityErrorKind(result.error) } : {}),
+        ...(failureKind === undefined ? {} : { failureKind }),
         ...("reason" in result ? { reason: result.reason } : {}),
       },
     ),

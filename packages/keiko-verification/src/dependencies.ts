@@ -561,7 +561,7 @@ export function planDependencyBootstrap(
     return { kind: "refused", reason: "manifest-unreadable", lockfile };
   }
   if (declaredDependencyCount(manifest) === 0) return { kind: "none" };
-  if (!projectNpmConfigApproved(root, fs)) {
+  if (!projectNpmConfigApproved(root, fs, onFailure)) {
     return { kind: "refused", reason: "project-npm-config", lockfile };
   }
   const refusal = sourceRefusal(root, manifest, fs);
@@ -576,12 +576,16 @@ export function planDependencyBootstrap(
   }
 }
 
-function projectNpmConfigApproved(root: string, fs: WorkspaceFs): boolean {
+function projectNpmConfigApproved(
+  root: string,
+  fs: WorkspaceFs,
+  onFailure?: DependencyBootstrapDeps["onFailure"],
+): boolean {
   const path = join(root, PROJECT_NPM_CONFIG);
-  const stat = statOrUndefined(fs, path);
-  if (stat === undefined) return true;
-  if (!stat.isFile || stat.isSymbolicLink || stat.size > 16_384) return false;
   try {
+    const stat = optionalInspectionStat(fs, path);
+    if (stat === undefined) return true;
+    if (!stat.isFile || stat.isSymbolicLink || stat.size > 16_384) return false;
     const read = fs.readFileUtf8SameDescriptor?.(path, 16_384, "reject", stat);
     if (read === undefined) return false;
     return read.rawText.split(/\r?\n/u).every((raw) => {
@@ -593,7 +597,8 @@ function projectNpmConfigApproved(root: string, fs: WorkspaceFs): boolean {
         SAFE_PROJECT_NPM_SETTINGS.has(line)
       );
     });
-  } catch {
+  } catch (error) {
+    reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
     return false;
   }
 }
@@ -678,7 +683,7 @@ function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): Run
     spawn: (command, args, options): ReturnType<SpawnFn> => {
       // Recheck after executable/cwd resolution, immediately before handing paths to npm.
       assertInstallDirectory(deps.workspace.root, deps.fs);
-      if (!projectNpmConfigApproved(deps.workspace.root, deps.fs)) {
+      if (!projectNpmConfigApproved(deps.workspace.root, deps.fs, deps.onFailure)) {
         throw new InstallInspectionError("DEPENDENCY_PROJECT_NPM_CONFIG_UNSAFE");
       }
       if (optionalInspectionStat(deps.fs, join(deps.workspace.root, "node_modules")) !== undefined)

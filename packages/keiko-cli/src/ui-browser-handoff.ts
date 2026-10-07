@@ -1,6 +1,6 @@
 import { CODING_APP_SESSION_LAUNCHER_SECRET_ENV } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { securityErrorKind, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { randomUUID } from "node:crypto";
 import {
   withActivityLogCorrelation,
@@ -33,15 +33,23 @@ export function createBrowserHandoffPoll(input: BrowserHandoffPollInput): () => 
     const secret = input.env[CODING_APP_SESSION_LAUNCHER_SECRET_ENV];
     if (busy || launchId === undefined || secret === undefined) return;
     try {
-      const request = takeBrowserOpenRequest(input.stateDir, input.pid, launchId);
+      let failure: unknown;
+      const request = takeBrowserOpenRequest(input.stateDir, input.pid, launchId, (error) => {
+        failure = error;
+      });
       if (request.state === "refused") {
-        if (refused !== request.reason)
+        const identity =
+          failure === undefined
+            ? request.reason
+            : `${request.reason}:${securityErrorKind(failure)}`;
+        if (refused !== identity)
           emitBrowserHandoff(handoffSink(input.sink), {
             outcome: "refused",
             attestationProvided: false,
             reason: request.reason,
+            ...(failure === undefined ? {} : { error: failure }),
           });
-        refused = request.reason;
+        refused = identity;
         return;
       }
       refused = undefined;
