@@ -398,6 +398,7 @@ function completedInstallCurrent(root: string, fs: WorkspaceFs): boolean {
 }
 
 type InstallInspectionCode =
+  | "DEPENDENCY_PROJECT_NPM_CONFIG_UNSAFE"
   | "DEPENDENCY_TREE_UNREADABLE"
   | "DEPENDENCY_TREE_LIMIT"
   | "DEPENDENCY_TREE_IDENTITY_UNAVAILABLE"
