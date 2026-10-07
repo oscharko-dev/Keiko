@@ -4821,6 +4821,31 @@ describe("consecutive edit refusals (F5, #3873)", () => {
     });
   });
 
+  // F26 (#3873 live qualification, T5): the live runtime stopped mid-turn reports `cancelled`, not
+  // the `failed` the escalation asked for; the run must still settle on its escalation.
+  it("settles an escalated run failed although the stopped runtime reports cancelled", async () => {
+    const { f, records } = await runningRun();
+    f.manager.stop.mockImplementation(() => Promise.resolve({ ok: true, status: "stopped" }));
+    f.manager.result.mockImplementation(() => ({
+      status: "cancelled",
+      exitCode: null,
+      output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
+      error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+    }));
+
+    observe(f, INVALID, REPAIRABLE_EDIT_REFUSAL_BOUND);
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edit-retries-exhausted",
+      });
+    });
+    expect(settledLine(records)).toMatchObject({
+      extra: { failureCode: "edit-retries-exhausted", failureBasis: "refusal-escalation" },
+    });
+  });
+
   it("ends the streak on an applied edit", async () => {
     const { f, records } = await runningRun();
 

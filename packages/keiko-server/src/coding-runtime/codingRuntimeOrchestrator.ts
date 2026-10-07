@@ -2869,6 +2869,11 @@ export class CodingRuntimeOrchestrator {
     this.settleStoppedTask(live, outcome, stopped, cause);
   }
 
+  // F26 (#3873 live qualification): an escalation is Keiko's own decision to end the run, so the
+  // stopped runtime's terminal result cannot contradict it — a runtime stopped mid-turn reports
+  // `cancelled`, and a run that demanded "recovery" for that lost its cause and blocked its
+  // repository. Only a runtime that did not stop needs an operator. A reported outcome, by
+  // contrast, must still agree with what the runtime recorded.
   private settleStoppedTask(
     live: CodingRuntimeSnapshot,
     outcome: CodingRuntimeTaskOutcome,
@@ -2876,7 +2881,9 @@ export class CodingRuntimeOrchestrator {
     cause: RunSettlementCause | undefined,
   ): void {
     const terminalResult = this.deps.manager.result(live.runId);
-    if (!stopped || terminalResult?.status !== outcome) {
+    const runtimeAgrees =
+      (cause !== undefined && isRefusalEscalation(cause)) || terminalResult?.status === outcome;
+    if (!stopped || !runtimeAgrees) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
