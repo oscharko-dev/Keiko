@@ -198,7 +198,14 @@ refusal as `not-found` only when a no-follow walk under the live root proves the
 missing component below real directories on the root's device. A path that exists, a link (a
 dangling one included), a file used as a directory, another device and an unusable root stay
 `denied`, and the always-on deny list (ADR-0005 D3) answers `denied` first, whether or not the path
-exists, so neither answer probes what the policy hides or what lies beyond a link. `not-found`
+exists, so neither answer probes what the policy hides or what lies beyond a link. The walk's
+closed verdict rides out with the read result and is written as `absence` on the
+`coding-runtime.workspace-read` line, set only when the helper answered `access-denied`: `absent`
+(the path is proved missing), `exists`, `link`, `not-directory`, `foreign-device`, `probe-failed`
+(a metadata probe failed for a reason other than ENOENT), `root-unusable` and `aborted` (the request
+was aborted or timed out, which discards an absence the walk reached). A creation refused `denied`
+can therefore be told apart in the log, one closed word and never the path or an error text
+(#3873 review). `not-found`
 grants nothing: the apply path re-validates containment, aliasing and the deny list and refuses to
 overwrite a file that appeared in between. Every
 touched path, both halves of a rename included, counts against the 50-file cap; an edited file may

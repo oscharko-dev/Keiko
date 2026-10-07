@@ -23,9 +23,17 @@ import type {
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 export interface CodingRuntimeTerminalFacts {
-  /** True when the run's most recent model-call admission was refused by its prompt allowance. */
+  /**
+   * True when the run's most recent model-call admission was refused by its prompt allowance: the
+   * authority's own, or the same `maxPromptTokens` counted by the run's CI repair
+   * (`prompt-budget-exhausted`). No other reason a CI-repair budget refuses for is the allowance.
+   */
   readonly promptAllowanceExhausted: (runId: string) => boolean;
-  /** True when the run's Authority Envelope has run out of time (`expiresAt` / `maxRuntimeMs`). */
+  /**
+   * True when the run's time limit has run out: its Authority Envelope's `expiresAt` / `maxRuntimeMs`,
+   * or the same `maxRuntimeMs` counted by the run's CI repair (`deadline-exhausted`) refused its most
+   * recent model call.
+   */
   readonly envelopeDurationExhausted: (runId: string) => boolean;
   /** The gateway's cause for the run's most recent failed model call no later answer superseded. */
   readonly lastModelCallFailure: (runId: string) => CodingWorkbenchTurnFailureCode | undefined;

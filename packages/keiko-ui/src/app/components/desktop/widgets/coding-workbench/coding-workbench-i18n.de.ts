@@ -1017,6 +1017,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.model-gateway-retrying": "Modell-Gateway nicht erreichbar, neuer Versuch",
   "codingWorkbench.event.model-gateway-recovered": "Modell-Gateway antwortet wieder",
+  "codingWorkbench.event.model-gateway-retry-stopped": "Wiederholung beim Modell-Gateway beendet",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Fehler: {failure}",
   "codingWorkbench.event.failure.edits-blocked":

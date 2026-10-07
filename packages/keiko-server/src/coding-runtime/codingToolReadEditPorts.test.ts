@@ -36,6 +36,7 @@ import type {
   SecureWorkspaceTextReadPort,
   SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
+import { WORKSPACE_PATH_ABSENCE_VERDICTS } from "./secureWorkspaceTextReadAbsence.js";
 
 const DIGEST = "a".repeat(64);
 const SENTINEL = "RAW_PATH_CONTENT_PATCH_CAPABILITY_SENTINEL";
@@ -204,6 +205,73 @@ describe("workspace read refusal codes", () => {
       await expect(readWith({ ok: false, reason })).resolves.toEqual({ status: "failed" });
     },
   );
+});
+
+// #3873 review (PR #3876): a creation refused `denied` could not be told apart in the log. The
+// secure read refines the helper's single `access-denied` into `not-found` or `denied` and says why
+// with the closed verdict of its walk, which the governed read writes on the `coding-runtime.
+// workspace-read` line it already writes: one closed word, never the path or an error text.
+describe("the walk's verdict on the workspace-read line", () => {
+  async function failedReadLine(
+    answer: SecureWorkspaceTextReadResult,
+  ): Promise<{ readonly event: ServerLogEvent | undefined; readonly result: unknown }> {
+    const binding = { ...liveDiscoveryBinding(), runId: "run-read-verdict" };
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve(answer) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => binding,
+      activityLog: { write: (event): void => void events.push(event) },
+      enforceProducerBinding: true,
+    });
+    const result = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-verdict",
+        idempotencyKey: "read-verdict-key",
+        relativePath: "build/out/private-name.md",
+      },
+      undefined,
+      { check: (): true => true, binding },
+    );
+    expect(events).toHaveLength(1);
+    return { event: events[0], result };
+  }
+
+  it.each(WORKSPACE_PATH_ABSENCE_VERDICTS)(
+    "writes the %s verdict of a refined denial on the failed read line, through the registered formatter",
+    async (absence) => {
+      const reason = absence === "absent" ? "not-found" : "denied";
+
+      const { event, result } = await failedReadLine({ ok: false, reason, absence });
+
+      expect(event).toMatchObject({
+        op: "coding-runtime.workspace-read",
+        correlationId: "run-read-verdict",
+        level: "warn",
+        extra: { state: "failed", purpose: "tool-result", reason, absence },
+      });
+      const persisted = expectActivityLogProof(
+        "coding-runtime.workspace-read.emitted-line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(persisted).toMatchObject({ state: "failed", reason, absence });
+      // The verdict is evidence for the operator, never for the model: it sees the refusal alone.
+      expect(result).toEqual({
+        status: "failed",
+        reasonCode: reason === "denied" ? "workspace-read-denied" : "workspace-read-not-found",
+      });
+      expect(JSON.stringify(event)).not.toContain("private-name");
+    },
+  );
+
+  it("writes no verdict for a failure the walk never ran for", async () => {
+    const { event } = await failedReadLine({ ok: false, reason: "process-failed" });
+
+    expect(event?.extra?.reason).toBe("process-failed");
+    expect(event?.extra).not.toHaveProperty("absence");
+  });
 });
 
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {

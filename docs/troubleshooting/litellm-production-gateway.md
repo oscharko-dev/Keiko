@@ -787,7 +787,8 @@ answering, for a few minutes. A Workbench run keeps working instead of failing: 
 reads "Running. Revision 4. Model gateway unavailable, retrying." while the gateway is being
 retried (a screen reader announces the same sentence), and returns to "Waiting for the model" once
 a call is answered again. With Run details open the timeline lists "Model gateway unavailable,
-retrying" and "Model gateway answered again".
+retrying" and "Model gateway answered again", and "Model gateway retry stopped" for a call the run
+cancelled while it was retried.
 
 **Root Cause**
 
@@ -835,9 +836,18 @@ attempt count, within seconds, with `GIT_DELIVERY_COMMIT_DRAFT_FAILED`.
 window ran out while it waited on an open breaker or a saturated probe slot, with
 `gateway.circuit.wait outcome=budget-refused`.
 
-The status line's phase is rebuilt from the run's `coding-sidecar.gateway.retry-surfaced` lines:
-`fact=retrying` is one per outage of a call, and `fact=recovered` follows the answer that ends it.
-A `retrying` fact that a retry began carries the failed `attempt` and the `retryPolicy`. One that a
+The status line's phase is rebuilt from the run's `coding-sidecar.gateway.retry-surfaced` lines.
+`fact=retrying` is one per outage of a call while it is the newest frame of the run: a later frame
+(a pause, a mode change, a tool event) hides it from the status line, and the call's next retry or
+wait publishes it again, so a second `retrying` line with a higher `attempt` is the same outage
+seen again. `fact=recovered` follows the answer that ends it. `fact=retry-stopped` closes a call the
+run cancelled while it was retried or held (a client that went away, a cut transport, the route
+deadline), which ends with neither an answer nor a turn-failure frame; without it the status line
+would keep naming the gateway while the next call generates. A call that failed for good needs none
+of these: its turn-failure frame follows. A `retrying` fact that a retry began carries the failed
+provider `attempt`, counted from 1 without the steered repair (the `gateway.retry.scheduled` line of
+the same retry counts the repair too: after an exhausted answer's repair, the retry after a 503 is
+`attempt=2` there and `attempt=1` here), and the `retryPolicy`. One that a
 wait began carries the `waitReason` (`provider-cooldown`, `circuit-cooldown` or `probe-saturated`,
 the `reason` of the `gateway.circuit.wait` line it joins on) and the `retryPolicy`, and no
 `attempt`: the call's admission was held by the circuit breaker or a provider cooldown before any
@@ -845,7 +855,13 @@ attempt of its own, as when a turn the runtime retried meets the breaker the ear
 wait the call's window could not hold at all writes `gateway.circuit.wait outcome=budget-refused`
 and no `retrying` fact. `published=false` with a `publicationReason` means the run's event replay
 refused the fact, so the status kept naming the model while the `gateway.retry.scheduled` and
-`gateway.circuit.wait` lines show the outage.
+`gateway.circuit.wait` lines show the outage; the call's next retry or wait tries again.
+
+A `gateway.retry.observer-failed` line (level `error`, `notice` naming the retry, wait or settlement
+it was told) means the code that listens to a call's retries threw. The call itself was not
+affected: it kept its result, and the throw is recorded here instead of replacing it. The line
+carries the Keiko-code `frames` and `causeChain` of the throw and no message; it is a defect of the
+listener, so include the support export when reporting it.
 
 Each of these retry and wait lines names the policy it ran under in `retryPolicy`. `outage-window`
 is a coding turn riding out the outage, so retries beyond the provider's `maxRetries` are expected.

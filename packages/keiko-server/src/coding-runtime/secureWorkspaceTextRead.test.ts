@@ -8,6 +8,7 @@ import {
   createSecureWorkspaceTextReadPort,
   type SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
+import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
 import {
@@ -45,6 +46,7 @@ function createPort(
   platform: { readonly os: string; readonly arch: string } = { os: "darwin", arch: "arm64" },
   resolveWorkspaceRoot: () => string | undefined | Promise<string | undefined> = () =>
     "/server-owned/workspace",
+  lstat?: WorkspacePathLstat,
 ): {
   readonly port: ReturnType<typeof createSecureWorkspaceTextReadPort>;
   readonly verify: ReturnType<typeof vi.fn>;
@@ -60,6 +62,7 @@ function createPort(
       artifactVerifier: { verify },
       processFactory,
       platform,
+      ...(lstat === undefined ? {} : { lstat }),
     }),
     verify,
     create,
@@ -342,8 +345,9 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
   function portOver(
     root: string,
     run: () => Promise<Uint8Array> = helperRefuses(),
+    lstat?: WorkspacePathLstat,
   ): ReturnType<typeof createPort> {
-    return createPort(run, { os: "darwin", arch: "arm64" }, () => root);
+    return createPort(run, { os: "darwin", arch: "arm64" }, () => root, lstat);
   }
 
   it.each([
@@ -357,6 +361,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
     await expect(port.readText({ relativePath })).resolves.toEqual({
       ok: false,
       reason: "not-found",
+      absence: "absent",
     });
     // The helper stays the first authority: it was asked, and its refusal was refined.
     expect(create).toHaveBeenCalledOnce();
@@ -370,6 +375,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
     await expect(port.readText({ relativePath: "src/present.ts" })).resolves.toEqual({
       ok: false,
       reason: "denied",
+      absence: "exists",
     });
   });
 
@@ -380,6 +386,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
     await expect(port.readText({ relativePath: "src" })).resolves.toEqual({
       ok: false,
       reason: "denied",
+      absence: "exists",
     });
   });
 
@@ -391,6 +398,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
     await expect(port.readText({ relativePath: "src/present.ts/nested.ts" })).resolves.toEqual({
       ok: false,
       reason: "denied",
+      absence: "not-directory",
     });
   });
 
@@ -406,6 +414,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
       await expect(port.readText({ relativePath })).resolves.toEqual({
         ok: false,
         reason: "denied",
+        absence: "link",
       });
     }
   });
@@ -421,9 +430,56 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
       await expect(port.readText({ relativePath: "src/alias.ts" })).resolves.toEqual({
         ok: false,
         reason: "denied",
+        absence: "link",
       });
     },
   );
+
+  // #3873 review (PR #3876): a denied creation could not be told apart in the log. A repository that
+  // keeps a bind-mounted `build/` directory under the workspace, or whose parent directory lost its
+  // search bit, was refused as `denied` exactly as a symlink was; the verdict names which it was. The
+  // probe is scripted here because a mount and a lost search bit cannot be made on a test machine.
+  describe("a denial the walk could not turn into not-found names why", () => {
+    const directory = (dev: bigint): Awaited<ReturnType<WorkspacePathLstat>> => ({
+      dev,
+      isDirectory: (): boolean => true,
+      isSymbolicLink: (): boolean => false,
+    });
+    const errno = (code: string): Error => Object.assign(new Error(code), { code });
+
+    it("names the other device a bind-mounted directory in the chain lives on", async () => {
+      const { root } = fixture();
+      const { port } = portOver(root, helperRefuses(), (path) =>
+        path === join(root, "build")
+          ? Promise.resolve(directory(2n))
+          : Promise.resolve(directory(1n)),
+      );
+
+      await expect(port.readText({ relativePath: "build/out/report.md" })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+        absence: "foreign-device",
+      });
+    });
+
+    it.each(["EACCES", "EIO"])(
+      "names a directory in the chain whose probe failed with %s, never the error",
+      async (code) => {
+        const { root } = fixture();
+        const { port } = portOver(root, helperRefuses(), (path) =>
+          path === join(root, "build")
+            ? Promise.reject(errno(code))
+            : Promise.resolve(directory(1n)),
+        );
+
+        const result = await port.readText({ relativePath: "build/out/report.md" });
+
+        expect(result).toEqual({ ok: false, reason: "denied", absence: "probe-failed" });
+        expect(JSON.stringify(result)).not.toContain(code);
+        expect(JSON.stringify(result)).not.toContain("build");
+      },
+    );
+  });
 
   it("denies, and never answers not-found, when the root is not a real directory", async () => {
     const { base, root } = fixture();
@@ -435,6 +491,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
       await expect(port.readText({ relativePath: "src/new.ts" })).resolves.toEqual({
         ok: false,
         reason: "denied",
+        absence: "root-unusable",
       });
     }
   });
@@ -471,11 +528,13 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
     await expect(port.readText({ relativePath: "src/shared.ts" })).resolves.toEqual({
       ok: false,
       reason: "denied",
+      absence: "exists",
     });
     root = second.root;
     await expect(port.readText({ relativePath: "src/shared.ts" })).resolves.toEqual({
       ok: false,
       reason: "not-found",
+      absence: "absent",
     });
   });
 
@@ -490,7 +549,7 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
 
     await expect(
       port.readText({ relativePath: "src/new.ts", signal: controller.signal }),
-    ).resolves.toEqual({ ok: false, reason: "denied" });
+    ).resolves.toEqual({ ok: false, reason: "denied", absence: "aborted" });
   });
 
   describe("the always-on deny list", () => {

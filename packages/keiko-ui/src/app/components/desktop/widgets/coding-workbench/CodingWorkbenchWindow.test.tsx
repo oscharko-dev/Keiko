@@ -1859,7 +1859,8 @@ describe("CodingWorkbenchWindow", () => {
   describe("a model gateway that is unavailable and being retried", () => {
     function gatewayFact(
       sequence: number,
-      eventKind: "model-gateway-retrying" | "model-gateway-recovered",
+      eventKind:
+        "model-gateway-retrying" | "model-gateway-recovered" | "model-gateway-retry-stopped",
     ): CodingWorkbenchRuntimeSseEvent {
       return {
         schemaVersion: "1",
@@ -1915,6 +1916,20 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
       expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         /^Running\. Revision 4\.$/u,
+      );
+    });
+
+    // A call the run cancelled while the gateway retried it ends with no answer; the status must
+    // not keep naming a gateway nobody retries any more while the next call generates.
+    it("waits for the model again once the retry of a cancelled call was stopped", (): void => {
+      renderRunning([
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-retry-stopped"),
+      ]);
+
+      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
+      expect(screen.getByTestId("coding-runtime-phase")).not.toHaveTextContent(
+        "Model gateway unavailable, retrying",
       );
     });
 

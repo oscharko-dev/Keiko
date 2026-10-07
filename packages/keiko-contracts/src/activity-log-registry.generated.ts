@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7ff87d148e6dff471194d2ca6daec40bd0287f176b7f894f5b4a24d682f37288" as const;
+  "4ecbe6444bfa06c2227de1d2b474d15e135ed964d73589e0c49a4880387fd7b7" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -11165,6 +11165,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "process-lifecycle",
           safeContextFields: [
             {
+              name: "absence",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
@@ -19231,7 +19237,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         start: [],
         state: ["gateway.retry.scheduled"],
         end: [],
-        failure: ["gateway.retry.budget-exhausted", "gateway.retry.exhausted"],
+        failure: [
+          "gateway.retry.budget-exhausted",
+          "gateway.retry.exhausted",
+          "gateway.retry.observer-failed",
+        ],
         loss: [],
       },
       causalEdges: [
@@ -19242,6 +19252,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         {
           op: "gateway.retry.exhausted",
           mode: "none",
+        },
+        {
+          op: "gateway.retry.observer-failed",
+          mode: "correlation",
         },
         {
           op: "gateway.retry.scheduled",
@@ -19395,6 +19409,54 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.retry.exhausted.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.retry.observer-failed",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "notice",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["gateway.retry.observer-failed.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -39955,6 +40017,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.reranker.setup.resolved": "model-gateway",
     "gateway.retry.budget-exhausted": "model-gateway",
     "gateway.retry.exhausted": "model-gateway",
+    "gateway.retry.observer-failed": "model-gateway",
     "gateway.retry.scheduled": "model-gateway",
     "gateway.route.rejected": "model-gateway",
     "gateway.setup.metadata.resolved": "model-gateway",

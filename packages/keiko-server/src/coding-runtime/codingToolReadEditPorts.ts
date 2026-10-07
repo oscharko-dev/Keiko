@@ -65,6 +65,10 @@ import {
   secureWorkspaceTextDigest,
   type SecureWorkspaceTextReadPort,
 } from "./secureWorkspaceTextRead.js";
+import {
+  WORKSPACE_PATH_ABSENCE_VERDICTS,
+  type WorkspacePathAbsence,
+} from "./secureWorkspaceTextReadAbsence.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 const MAX_READ_BYTES = 65_536;
@@ -357,6 +361,9 @@ type GovernedRead =
       readonly reason: WorkspaceReadFailureReason;
       readonly binding: RuntimeProducerBinding | undefined;
       readonly error?: unknown;
+      // The closed verdict of the secure read's walk, set only when the helper answered
+      // `access-denied` (#3873 review); the line it explains is written from here.
+      readonly absence?: WorkspacePathAbsence;
     };
 
 // The one governed read: preflight (abort, denied path, live workspace, producer binding, guard),
@@ -394,7 +401,14 @@ async function attemptGovernedRead(
   if (!preflight.ok) return { ok: false, reason: "preflight-refused", binding: initialBinding };
   const binding = preflight.binding;
   const result = await deps.secureWorkspaceTextRead.readText({ relativePath, signal });
-  if (!result.ok) return { ok: false, reason: result.reason, binding };
+  if (!result.ok) {
+    return {
+      ok: false,
+      reason: result.reason,
+      binding,
+      ...(result.absence === undefined ? {} : { absence: result.absence }),
+    };
+  }
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
     return { ok: false, reason: "postflight-refused", binding };
   }
@@ -414,7 +428,7 @@ function recordReadFailure(
   purpose: ReadPurpose,
 ): void {
   if (purpose === "edit-materialization" && read.reason === "not-found") {
-    recordMaterializationRead(deps, read.binding, relativePath, "absent");
+    recordMaterializationRead(deps, read.binding, relativePath, "absent", read.absence);
     return;
   }
   logFailedRead(deps, read, relativePath, purpose);
@@ -460,6 +474,7 @@ function recordMaterializationRead(
   binding: RuntimeProducerBinding | undefined,
   relativePath: string,
   state: "completed" | "absent",
+  absence?: WorkspacePathAbsence,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -469,6 +484,7 @@ function recordMaterializationRead(
         state,
         purpose: "edit-materialization",
         targetPathSha256: targetPathDigest(relativePath),
+        ...(absence === undefined ? {} : { absence }),
       },
     ),
   );
@@ -496,6 +512,17 @@ const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
   dataClass: "closed-enum",
   required: false,
   values: [...EDIT_READ_REASONS],
+} as const;
+
+// #3873 review (PR #3876): the closed verdict of the server's no-follow walk, set only when the native
+// helper answered `access-denied`, which it gives for a missing path, a link, a file used as a
+// directory, another device, an unprobeable directory and an unusable root alike. It is how a creation
+// refused `denied` is told apart in the log; one closed word, never the path or an error text.
+const CODING_RUNTIME_WORKSPACE_READ_ABSENCE_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [...WORKSPACE_PATH_ABSENCE_VERDICTS],
 } as const;
 
 const CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD = {
@@ -532,6 +559,7 @@ const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
     },
     purpose: CODING_RUNTIME_WORKSPACE_READ_PURPOSE_FIELD,
     reason: CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD,
+    absence: CODING_RUNTIME_WORKSPACE_READ_ABSENCE_FIELD,
     targetPathSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     startLine: { type: "integer", dataClass: "count", required: false },
     maxLines: { type: "integer", dataClass: "count", required: false },
@@ -836,6 +864,7 @@ function logFailedRead(
         state: "failed",
         purpose,
         reason,
+        ...(read.absence === undefined ? {} : { absence: read.absence }),
         targetPathSha256: targetPathDigest(relativePath),
         ...(error === undefined
           ? {}

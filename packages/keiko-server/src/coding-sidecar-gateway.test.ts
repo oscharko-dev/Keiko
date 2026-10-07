@@ -30,6 +30,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
   AuthenticationError,
+  CancelledError,
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
@@ -7964,11 +7965,12 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
       : [];
   }
 
-  // A streamed turn whose gateway call tells the observer what the real retry loop tells it.
+  // A streamed turn whose gateway call tells the observer what the real retry loop tells it. A step
+  // that is a function runs between the notices, as another frame of the run does in real time.
   function streamingDeps(
     runId: string,
     hub: CodingRuntimeEventHub,
-    notices: readonly GatewayRetryNotice[],
+    steps: readonly (GatewayRetryNotice | (() => void))[],
     orchestrator: UiHandlerDeps["codingRuntimeOrchestrator"] = runningOrchestrator,
     ending: "answer" | "failure" = "answer",
   ): UiHandlerDeps {
@@ -7980,7 +7982,10 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
         (): ((request: GatewayCallRequest) => AsyncIterable<GatewayStreamChunk>) =>
           async function* (request): AsyncGenerator<GatewayStreamChunk> {
             await Promise.resolve();
-            for (const notice of notices) request.retryObserver?.(notice);
+            for (const step of steps) {
+              if (typeof step === "function") step();
+              else request.retryObserver?.(step);
+            }
             if (ending === "failure") throw new TransportError("provider down");
             yield { type: "delta", token: "answer" };
             yield { type: "done", response: assistantResponse("azure-coding-model") };
@@ -8118,6 +8123,91 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
         attempt: 1,
         retryPolicy: "outage-window",
       });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // One retry, two numbers, on purpose (review thread 6pydYN), through the whole path: an answer that
+  // spent its output budget gets the gateway's one steered repair, and the retry that follows an
+  // overloaded provider after it is scheduled as attempt 2 on the gateway's own ladder, which counts
+  // the repair, while the line surfaced to the run names it as the retry that follows provider
+  // attempt 1. Both lines join on the run's correlation id, so the difference is read, not guessed.
+  it("numbers a retry by its provider attempt on the surfaced line, apart from the scheduled line's ladder", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const answers: readonly Response[] = [
+      new Response(
+        JSON.stringify({
+          id: "chatcmpl-exhausted",
+          object: "chat.completion",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "" }, finish_reason: "length" },
+          ],
+          usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      new Response("overloaded", { status: 503 }),
+      new Response(
+        JSON.stringify({
+          id: "chatcmpl-answered",
+          object: "chat.completion",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" },
+          ],
+          usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    ];
+    let providerCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        const answer = answers[providerCalls];
+        providerCalls += 1;
+        return Promise.resolve(answer ?? new Response("unexpected", { status: 500 }));
+      }),
+    );
+    try {
+      const deps = {
+        ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-retry-numbers" } })),
+        gatewayConfig: probeVerifiedGatewayConfig(
+          configValue(provider({ maxRetries: 3, retryBaseDelayMs: 1 }), capability()),
+        ),
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "repair, then ride out the overload" }],
+            tools: modelVisibleTools(),
+          }),
+          correlationId: "corr-retry-numbers",
+        },
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(providerCalls).toBe(3);
+      const scheduled = sink.events.filter((event) => event.op === "gateway.retry.scheduled");
+      expect(scheduled.map((line) => [line.extra?.reason, line.extra?.attempt])).toEqual([
+        ["output-exhausted-repair", 1],
+        ["retryable-error", 2],
+      ]);
+      const [retrying] = retrySurfaced(sink.events);
+      expect(retrying?.extra).toMatchObject({ fact: "retrying", attempt: 1 });
+      expect(scheduled.map((line) => line.correlationId)).toEqual([
+        "corr-retry-numbers",
+        "corr-retry-numbers",
+      ]);
+      expect(retrying?.correlationId).toBe("corr-retry-numbers");
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
@@ -8360,6 +8450,300 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
           ([entry]) => entry.source === "coding-sidecar-gateway.retry-observer",
         ),
       ).toHaveLength(1);
+    });
+  });
+
+  // PR #3876 review: the Workbench names the gateway phase only while the retrying fact is the NEWEST
+  // frame of the run's replay. A frame that follows the fact ends the phase on the client although the
+  // call keeps retrying, and a call that ended with neither an answer nor a failure frame of its own
+  // (the run cancelled it) left the fact standing while the model visibly generated again.
+  describe("a retrying fact the run's replay no longer shows", () => {
+    const FAILED = { kind: "settled", outcome: "failed" } as const;
+    const lineSummary = (events: readonly ServerLogEvent[]): readonly unknown[] =>
+      retrySurfaced(events).map((line) => [line.extra?.fact, line.extra?.attempt]);
+    // Another frame of the run, as a pause, a mode change or a research revoke publishes it.
+    const supersede =
+      (hub: CodingRuntimeEventHub, runId: string): (() => void) =>
+      (): void => {
+        hub.publish({ schemaVersion: "1", kind: "status", runId, state: "running", revision: 5 });
+      };
+
+    it("publishes the fact again once a later frame superseded it, and not while it is the newest", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const runId = "run-retry-superseded";
+      const deps = streamingDeps(runId, hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        supersede(hub, runId),
+        { ...SCHEDULED, attempt: 3 },
+        { ...SCHEDULED, attempt: 4 },
+        ANSWERED,
+      ]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("superseded"), deps);
+
+      expect(replayedFacts(hub, runId)).toEqual([
+        "model-gateway-retrying",
+        "status",
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(lineSummary(sink.events)).toEqual([
+        ["retrying", 1],
+        ["retrying", 3],
+        ["recovered", undefined],
+      ]);
+    });
+
+    it("publishes the fact again after the replay refused its first publication", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const publish = hub.publishModelGatewayFact.bind(hub);
+      vi.spyOn(hub, "publishModelGatewayFact")
+        .mockReturnValueOnce({ ok: false, reason: "capacity-pressure" })
+        .mockImplementation(publish);
+      const deps = streamingDeps("run-retry-refused", hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        ANSWERED,
+      ]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("refused first"), deps);
+
+      expect(replayedFacts(hub, "run-retry-refused")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(
+        retrySurfaced(sink.events).map((line) => [
+          line.extra?.fact,
+          line.extra?.published,
+          line.extra?.publicationReason,
+          line.extra?.attempt,
+        ]),
+      ).toEqual([
+        ["retrying", false, "capacity-pressure", 1],
+        ["retrying", true, "published", 2],
+        ["recovered", true, "published", undefined],
+      ]);
+    });
+
+    // A fact the replay never took has nothing to recover from: an answer must not publish a
+    // `recovered` frame that follows no `retrying` one.
+    it("publishes no recovery for a call whose retrying fact the replay refused every time", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      vi.spyOn(hub, "publishModelGatewayFact").mockReturnValue({
+        ok: false,
+        reason: "capacity-pressure",
+      });
+      const deps = streamingDeps("run-retry-never-shown", hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        ANSWERED,
+      ]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("never shown"), deps);
+
+      expect(replayedFacts(hub, "run-retry-never-shown")).toEqual([]);
+      expect(lineSummary(sink.events)).toEqual([
+        ["retrying", 1],
+        ["retrying", 2],
+      ]);
+    });
+
+    // The gateway's own end of a cancelled call: the observer hears the call fail, then the call
+    // throws. Buffered and streamed turns end the same way. `started` settles once the call waits
+    // for its cancellation, which is when a test may end it.
+    function cancellableDeps(
+      runId: string,
+      hub: CodingRuntimeEventHub,
+      announced: readonly GatewayRetryNotice[] = [SCHEDULED],
+    ): { readonly deps: UiHandlerDeps; readonly started: Promise<void> } {
+      let markStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const held = (request: GatewayCallRequest): Promise<unknown> =>
+        new Promise((_resolve, reject) => {
+          for (const notice of announced) request.retryObserver?.(notice);
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              request.retryObserver?.(FAILED);
+              reject(new CancelledError("request cancelled during retry backoff"));
+            },
+            { once: true },
+          );
+          markStarted();
+        });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId } }),
+          (): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => async (request) => {
+            await held(request);
+            return assistantResponse("azure-coding-model");
+          },
+          createOpenCodeGatewayReadinessRegistry(),
+          (): ((request: GatewayCallRequest) => AsyncIterable<GatewayStreamChunk>) =>
+            async function* (request): AsyncGenerator<GatewayStreamChunk> {
+              await held(request);
+              yield* [] as GatewayStreamChunk[];
+            },
+        ),
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      return { deps, started };
+    }
+
+    function cancellableContext(shape: "buffered" | "streamed"): RouteContext {
+      return shape === "streamed"
+        ? streamedContext("cancel the retry")
+        : authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "cancel the retry" }],
+            tools: modelVisibleTools(),
+          });
+    }
+
+    it.each(["buffered", "streamed"] as const)(
+      "closes the retrying fact of a %s call the run cancelled, so a later call adds nothing to it",
+      async (shape) => {
+        const sink = captureServerLog("info");
+        const hub = new CodingRuntimeEventHub();
+        const runId = `run-retry-cancelled-${shape}`;
+        const context = cancellableContext(shape);
+        const { deps, started } = cancellableDeps(runId, hub);
+        const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+        await started;
+        expect(replayedFacts(hub, runId)).toEqual(["model-gateway-retrying"]);
+
+        context.res.emit("close");
+        await pending;
+
+        expect(replayedFacts(hub, runId)).toEqual([
+          "model-gateway-retrying",
+          "model-gateway-retry-stopped",
+        ]);
+        expect(hub.modelGatewayRetrying(runId)).toBe(false);
+        const lines = retrySurfaced(sink.events);
+        expect(lines.map((line) => line.extra?.fact)).toEqual(["retrying", "retry-stopped"]);
+        expect(lines[1]?.extra).toMatchObject({
+          runId,
+          revision: 4,
+          state: "running",
+          published: true,
+          publicationReason: "published",
+        });
+        for (const absent of ["attempt", "waitReason", "retryPolicy"]) {
+          expect(lines[1]?.extra).not.toHaveProperty(absent);
+        }
+        expect(lines[1]?.correlationId).toBe(runId);
+        expect(
+          expectActivityLogProof(
+            "coding-sidecar.gateway.retry-surfaced.emitted-line",
+            formatActivityLogProofLine(lines[1] ?? {}),
+          ),
+        ).toMatchObject({ fact: "retry-stopped", published: true });
+
+        // The next call answers on its first attempt, as it will once the breaker admits again.
+        await handleCodingSidecarGatewayChatCompletions(
+          streamedContext("answers at once"),
+          streamingDeps(runId, hub, []),
+        );
+        expect(replayedFacts(hub, runId)).toEqual([
+          "model-gateway-retrying",
+          "model-gateway-retry-stopped",
+        ]);
+      },
+    );
+
+    it("closes the fact of a call cancelled while its admission waited, as it does a retried call", async () => {
+      const hub = new CodingRuntimeEventHub();
+      const runId = "run-wait-cancelled";
+      const context = cancellableContext("streamed");
+      const { deps, started } = cancellableDeps(runId, hub, [
+        { kind: "admission-wait", reason: "probe-saturated", retryPolicy: "outage-window" },
+      ]);
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await started;
+      expect(replayedFacts(hub, runId)).toEqual(["model-gateway-retrying"]);
+
+      context.res.emit("close");
+      await pending;
+
+      expect(replayedFacts(hub, runId)).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-retry-stopped",
+      ]);
+    });
+
+    it("publishes no closing fact for a cancelled call the Workbench was never told about", async () => {
+      const hub = new CodingRuntimeEventHub();
+      const sink = captureServerLog("info");
+      const context = cancellableContext("buffered");
+      const { deps, started } = cancellableDeps("run-quiet-cancel", hub, []);
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await started;
+
+      context.res.emit("close");
+      await pending;
+
+      expect(replayedFacts(hub, "run-quiet-cancel")).toEqual([]);
+      expect(retrySurfaced(sink.events)).toEqual([]);
+    });
+
+    // A call that failed for good leaves its turn-failure frame as the newest one: nothing is left
+    // open for the route to close.
+    it("closes nothing for a call that failed for good, whose turn-failure frame follows", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps(
+        "run-failed-for-good",
+        hub,
+        [SCHEDULED, FAILED],
+        undefined,
+        "failure",
+      );
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("give up"), deps);
+
+      expect(replayedFacts(hub, "run-failed-for-good")).toEqual([
+        "model-gateway-retrying",
+        "failure-redacted",
+      ]);
+      expect(lineSummary(sink.events)).toEqual([["retrying", 1]]);
+    });
+
+    it("records a closing fact the replay refused as a warning and never fails the call", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const runId = "run-retry-stop-refused";
+      const publish = hub.publishModelGatewayFact.bind(hub);
+      vi.spyOn(hub, "publishModelGatewayFact").mockImplementation(
+        (id, state, revision, eventKind) =>
+          eventKind === "model-gateway-retry-stopped"
+            ? { ok: false, reason: "capacity-pressure" }
+            : publish(id, state, revision, eventKind),
+      );
+      const context = cancellableContext("buffered");
+      const { deps, started } = cancellableDeps(runId, hub);
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await started;
+      expect(replayedFacts(hub, runId)).toEqual(["model-gateway-retrying"]);
+
+      context.res.emit("close");
+      await expect(pending).resolves.toMatchObject({ status: 503 });
+
+      const stopped = retrySurfaced(sink.events).at(-1);
+      expect(stopped).toMatchObject({ level: "warn", errorKind: "unavailable" });
+      expect(stopped?.extra).toMatchObject({
+        fact: "retry-stopped",
+        published: false,
+        publicationReason: "capacity-pressure",
+      });
     });
   });
 

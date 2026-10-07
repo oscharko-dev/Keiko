@@ -79,6 +79,7 @@ describe("activityBus", () => {
   it.each([
     ["model-gateway-retrying", "activity.event.modelGatewayRetrying"],
     ["model-gateway-recovered", "activity.event.modelGatewayRecovered"],
+    ["model-gateway-retry-stopped", "activity.event.modelGatewayRetryStopped"],
   ] as const)("projects the %s gateway fact as a step on its own label", (eventKind, labelKey) => {
     const event: CodingWorkbenchRuntimeSseEvent = {
       schemaVersion: "1",

@@ -51,6 +51,7 @@ import {
   type RetryAnnouncer,
   type RetryConfig,
   type RetryLogContext,
+  type RetryLogLabels,
   type RetryPolicy,
   type RetryRepairReason,
   type RetryResume,
@@ -190,7 +191,9 @@ export interface GatewayCallRequest extends GatewayRequest {
    * settles, so a caller that surfaces an outage to its operator (the coding sidecar route, behind
    * the Workbench's run status) knows the call is held by the gateway instead of silently waiting.
    * Counts and closed words only. The observer runs inside the retry loop and the admission wait
-   * and MUST NOT throw. Only the coding sidecar route sets it.
+   * and should not throw: it owns and logs its own failures. A throw that escapes it is absorbed
+   * and recorded on `gateway.retry.observer-failed`, and never changes what the call does or
+   * returns. Only the coding sidecar route sets it.
    */
   readonly retryObserver?: GatewayRetryObserver | undefined;
 }
@@ -672,9 +675,15 @@ function callRetryConfig(
 
 // The call's conversation with its observer (#3873 review): one per call, shared by its admission
 // waits and by every retry loop it runs, and none for a call that set no `retryObserver`, which
-// keeps its exact path.
-function callAnnouncer(request: GatewayCallRequest): RetryAnnouncer | undefined {
-  return request.retryObserver === undefined ? undefined : retryAnnouncer(request.retryObserver);
+// keeps its exact path. The labels are those of the call's retry lines, so an observer that throws
+// is recorded under the call's own correlation id.
+function callAnnouncer(
+  request: GatewayCallRequest,
+  labels: RetryLogLabels,
+): RetryAnnouncer | undefined {
+  return request.retryObserver === undefined
+    ? undefined
+    : retryAnnouncer(request.retryObserver, labels);
 }
 
 // The admission owns exactly one outcome; cancellations and local refusal release only its own
@@ -1315,20 +1324,24 @@ export class Gateway {
     );
   }
 
-  // What the retry loop labels its lines with, and the call's own ear on the loop: the call's
-  // announcer (#3873 review), which exists only for a request that set a `retryObserver` — the
-  // coding sidecar route alone.
+  // What the retry loop labels its lines with, and what the call's announcer labels the failure
+  // line of an observer that throws with (#3873 review).
+  private retryLabels(route: RoutedCall, ids: CallIds): RetryLogLabels {
+    return {
+      sink: this.log,
+      modelId: route.provider.modelId,
+      correlationId: ids.correlationId,
+    };
+  }
+
+  // The labels, and the call's own ear on the loop: the call's announcer (#3873 review), which
+  // exists only for a request that set a `retryObserver` — the coding sidecar route alone.
   private retryLogContext(
     route: RoutedCall,
     ids: CallIds,
     announcer: RetryAnnouncer | undefined,
   ): RetryLogContext {
-    return {
-      sink: this.log,
-      modelId: route.provider.modelId,
-      correlationId: ids.correlationId,
-      announcer,
-    };
+    return { ...this.retryLabels(route, ids), announcer };
   }
 
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
@@ -1345,7 +1358,7 @@ export class Gateway {
       originalRequest: request,
       promptAdmission: this.promptAdmission(route, ids),
       correlationId: ids.correlationId,
-      announcer: callAnnouncer(request),
+      announcer: callAnnouncer(request, this.retryLabels(route, ids)),
       state: { request, attemptNumber: 0, discarded: emptyDiscardedUsage() },
     };
     this.logCallStarted(ids, route, false, request, readsOverStream(route, adapter));
@@ -1643,7 +1656,7 @@ export class Gateway {
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
     const outageWindowMs = this.outageWindowMs(prepared);
-    const announcer = callAnnouncer(prepared);
+    const announcer = callAnnouncer(prepared, this.retryLabels(route, ids));
     this.logCallStarted(ids, route, true, prepared, adapter.callStream !== undefined);
     // The admission before the first attempt waits under the same window clip as the admission
     // of every retry (#3873): an open breaker cannot hold a streamed call past its outage window,

@@ -45,6 +45,7 @@ import type {
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
+  CodingWorkbenchGatewayEventKind,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchTurnFailureCode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -588,11 +589,13 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
 // #3873 review: while the gateway rides out a provider outage the turn waits silently, and the
 // Workbench's run status read "Waiting for the model" for the whole window. The first retry of an
 // unavailable provider, or the first wait of a call's admission behind the circuit breaker or a
-// provider cooldown, is published to the run's event replay as `model-gateway-retrying`, and the
-// answer that ends the outage as `model-gateway-recovered`; this line records each publication and
+// provider cooldown, is published to the run's event replay as `model-gateway-retrying` (again when
+// a later frame of the run superseded it while the call kept retrying, which ends the phase on the
+// client), the answer that ends the outage as `model-gateway-recovered`, and a call the run
+// cancelled before either as `model-gateway-retry-stopped`. This line records each publication and
 // whether it reached the replay, so the status the operator saw can be rebuilt from the log. Counts
-// and closed words only: the attempt that was retried and the policy it ran under, or the reason
-// the admission was held.
+// and closed words only: the provider attempt that was retried and the policy it ran under, or the
+// reason the admission was held.
 const CODING_SIDECAR_GATEWAY_RETRY_SURFACED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -609,16 +612,22 @@ const CODING_SIDECAR_GATEWAY_RETRY_SURFACED_OPERATION = defineActivityLogOperati
       required: true,
       values: ["running", "paused"],
     },
+    // `retry-stopped`: the call was retried or held and ended with neither an answer nor a
+    // turn-failure frame, because the run cancelled it (a client that went away, a transport that
+    // was cut, the route deadline); no answer recovered the outage and nothing is retrying it now.
     fact: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["retrying", "recovered"],
+      values: ["retrying", "recovered", "retry-stopped"],
     },
     // What the `retrying` fact followed, and the policy the call ran under; only on a `retrying`
-    // fact. A retry carries the failed provider `attempt` it followed. A call whose admission waited
-    // before any attempt of its own carries the `waitReason` that held it instead — the closed
-    // reason of the `gateway.circuit.wait` line it joins on — and no attempt.
+    // fact. A retry carries the failed PROVIDER `attempt` it followed, counted from 1: the call's
+    // steered repair is not a provider attempt and is not counted, so after a repair this is lower
+    // than the `attempt` of the `gateway.retry.scheduled` line of the same retry, which counts every
+    // attempt of the call and joins this line on the same correlation id. A call whose admission
+    // waited before any attempt of its own carries the `waitReason` that held it instead — the
+    // closed reason of the `gateway.circuit.wait` line it joins on — and no attempt.
     attempt: { type: "integer", dataClass: "count", required: false },
     waitReason: {
       type: "string",
@@ -2062,43 +2071,96 @@ function gatewayTurnFailurePublication(
 // The coding turn's ear on the gateway's outage (#3873 review): the first retry of an unavailable
 // provider, or the first wait of the call's admission behind the circuit breaker or a provider
 // cooldown (a call that follows no failed attempt of its own), is surfaced as
-// `model-gateway-retrying`, and the answer that ends the outage as `model-gateway-recovered`. One
-// frame per outage of a call, however many retries and waits it takes; a call that fails for good
-// surfaces nothing here, its turn-failure frame follows. The observer runs inside the gateway's
-// retry loop and admission wait and must not throw, so a failure is recorded, never raised.
-function gatewayRetryObserver(
+// `model-gateway-retrying`, and the answer that ends the outage as `model-gateway-recovered`.
+//
+// The Workbench reads the NEWEST frame of the run's replay, so the fact is one frame per outage only
+// while it stays the newest one: a later frame of the run (a pause, a mode change, a research
+// revoke) ends the phase on the client while the call keeps retrying, and the next retry or wait
+// publishes the fact again. A publication the replay refused is not a publication, so the next
+// notice tries again. A call that fails for good surfaces nothing of its own: its turn-failure
+// frame follows. A call that ends with neither an answer nor a failure frame (the run cancelled it:
+// a client that went away, a cut transport, the route deadline) would leave the fact standing as
+// the newest frame while the next call generates, so the route closes it with
+// `model-gateway-retry-stopped` when the call ends (`end`). The observer runs inside the gateway's
+// retry loop and admission wait, so a failure is recorded, never raised.
+interface GatewayRetryTrace {
+  /** Handed to the gateway call: hears the call's outage. */
+  readonly observer: GatewayRetryObserver;
+  /** The route is done with the call: closes the fact its answer or a failure frame did not. */
+  readonly end: () => void;
+}
+
+function gatewayRetryTrace(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
-): GatewayRetryObserver {
-  let retrying = false;
-  return (notice): void => {
-    try {
-      if (notice.kind === "settled") {
-        if (retrying && notice.outcome === "answered") {
-          surfaceGatewayRetry(ctx, deps, runId, "recovered");
-        }
-        retrying = false;
-        return;
+): GatewayRetryTrace {
+  // True from the moment this call's `retrying` fact reached the replay until its answer or its end
+  // closes it. A failed call stays open: its turn-failure frame, or `end`, decides what closes it.
+  let open = false;
+  const retryingShown = (): boolean =>
+    deps.codingRuntimeEventHub?.modelGatewayRetrying(runId) === true;
+  const hear = (notice: GatewayRetryNotice): void => {
+    if (notice.kind === "settled") {
+      if (open && notice.outcome === "answered") {
+        open = false;
+        surfaceGatewayRetry(ctx, deps, runId, "recovered");
       }
-      if (!retrying) surfaceGatewayRetry(ctx, deps, runId, "retrying", notice);
-      retrying = true;
-    } catch (error) {
-      emitServerDiagnostic(
-        deps.diagnostics,
-        serverDiagnosticFromError({
-          ...gatewayDiagnosticCorrelation(ctx, runId),
-          operation: CODING_SIDECAR_GATEWAY_ROUTE,
-          source: "coding-sidecar-gateway.retry-observer",
-          error,
-          redact: (message) => String(deps.redactor(message)),
-        }),
-      );
+      return;
     }
+    if (open && retryingShown()) return;
+    if (surfaceGatewayRetry(ctx, deps, runId, "retrying", notice)) open = true;
+  };
+  const finish = (): void => {
+    if (!open) return;
+    open = false;
+    if (retryingShown()) surfaceGatewayRetry(ctx, deps, runId, "retry-stopped");
+  };
+  return {
+    observer: (notice): void => {
+      runRetryTraceStep(ctx, deps, runId, () => {
+        hear(notice);
+      });
+    },
+    end: (): void => {
+      runRetryTraceStep(ctx, deps, runId, finish);
+    },
   };
 }
 
-type GatewayRetryFact = "retrying" | "recovered";
+// Runs one step of the trace; a failure of the step goes to the operator diagnostic and nowhere else.
+function runRetryTraceStep(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  step: () => void,
+): void {
+  try {
+    step();
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        ...gatewayDiagnosticCorrelation(ctx, runId),
+        operation: CODING_SIDECAR_GATEWAY_ROUTE,
+        source: "coding-sidecar-gateway.retry-observer",
+        error,
+        redact: (message) => String(deps.redactor(message)),
+      }),
+    );
+  }
+}
+
+type GatewayRetryFact = "retrying" | "recovered" | "retry-stopped";
+
+// The event kind each fact is published as.
+const GATEWAY_FACT_EVENT_KINDS: Readonly<
+  Record<GatewayRetryFact, CodingWorkbenchGatewayEventKind>
+> = {
+  retrying: "model-gateway-retrying",
+  recovered: "model-gateway-recovered",
+  "retry-stopped": "model-gateway-retry-stopped",
+};
 
 interface LiveRunSnapshot {
   readonly state: "running" | "paused";
@@ -2123,7 +2185,7 @@ function publishGatewayRetryFact(
     runId,
     run.state,
     run.revision,
-    fact === "retrying" ? "model-gateway-retrying" : "model-gateway-recovered",
+    GATEWAY_FACT_EVENT_KINDS[fact],
   );
   return publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");
 }
@@ -2144,16 +2206,18 @@ function gatewayRetryCauseFields(cause: GatewayRetryCause): {
     : { waitReason: cause.reason, retryPolicy: cause.retryPolicy };
 }
 
-// Publishes the fact to the run's event replay and records the publication.
+// Publishes the fact to the run's event replay and records the publication. True when the replay
+// took the frame; a run that has no status to show (not live) and a refused publication are both
+// false, so the caller never counts a fact the Workbench cannot see as shown.
 function surfaceGatewayRetry(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   fact: GatewayRetryFact,
   cause?: GatewayRetryCause,
-): void {
+): boolean {
   const run = liveRunSnapshot(deps, runId);
-  if (run === undefined) return;
+  if (run === undefined) return false;
   const publicationReason = publishGatewayRetryFact(deps, runId, run, fact);
   const published = publicationReason === "published";
   const event = activityLogEvent(
@@ -2176,6 +2240,7 @@ function surfaceGatewayRetry(
   );
   if (published) getServerLogger().info(event);
   else getServerLogger().warn(event);
+  return published;
 }
 
 function logGatewayTurnFailure(
@@ -3023,12 +3088,13 @@ async function dispatchGatewayChat(
   cancellation: GatewayRequestCancellation,
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
+  const retries = gatewayRetryTrace(ctx, deps, runId);
   const request = requestForGatewayDelivery(
     ctx,
     parsed,
     delivery,
     cancellation.signal,
-    gatewayRetryObserver(ctx, deps, runId),
+    retries.observer,
   );
   const dispatch = {
     deps,
@@ -3051,6 +3117,10 @@ async function dispatchGatewayChat(
     return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
     return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, delivery, bufferedStream);
+  } finally {
+    // After the answer, or the failure frame, has been settled: what is still the newest frame is
+    // a retrying fact nothing closed.
+    retries.end();
   }
 }
 

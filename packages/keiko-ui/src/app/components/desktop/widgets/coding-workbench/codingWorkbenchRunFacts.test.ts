@@ -76,10 +76,11 @@ function status(
 
 // #3873 review: during a provider outage the run's gateway retries for minutes and the status line
 // read "Waiting for the model" for the whole window. The gateway facts the sidecar route publishes
-// to the run's event replay — `model-gateway-retrying`, `model-gateway-recovered` — name the phase.
+// to the run's event replay — `model-gateway-retrying`, `model-gateway-recovered` and
+// `model-gateway-retry-stopped` — name the phase.
 function gatewayFact(
   sequence: number,
-  eventKind: "model-gateway-retrying" | "model-gateway-recovered",
+  eventKind: "model-gateway-retrying" | "model-gateway-recovered" | "model-gateway-retry-stopped",
   runId = "run-1",
 ): CodingWorkbenchRuntimeSseEvent {
   return {
@@ -166,6 +167,33 @@ describe("runPhase", () => {
         gatewayFact(2, "model-gateway-recovered"),
       ];
       expect(runPhase({ ...input, events })).toBe("model");
+    });
+
+    // A call the run cancelled while it was retried ends with no answer: the retry-stopped fact is
+    // what stops the status from naming a gateway nobody retries any more, while the model of the
+    // next call generates (PR #3876 review).
+    it("names the model again once the retry was stopped, and the gateway again if it resumes", () => {
+      const stopped = [
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-retry-stopped"),
+      ];
+      expect(runPhase({ ...input, events: stopped })).toBe("model");
+      expect(modelGatewayRetrying(stopped, "run-1")).toBe(false);
+
+      const resumed = [...stopped, gatewayFact(3, "model-gateway-retrying")];
+      expect(runPhase({ ...input, events: resumed })).toBe("gateway");
+    });
+
+    // The server publishes the retrying fact again when a frame that follows it ended the phase while
+    // the call kept retrying; the status follows it back.
+    it("names the gateway again when the retrying fact is published after a frame that ended it", () => {
+      const events = [
+        gatewayFact(1, "model-gateway-retrying"),
+        status(2, "running", STARTED),
+        gatewayFact(3, "model-gateway-retrying"),
+      ];
+      expect(runPhase({ ...input, events: events.slice(0, 2) })).toBe("model");
+      expect(runPhase({ ...input, events })).toBe("gateway");
     });
 
     // A lost recovery frame must not leave the status claiming an outage for good: any later event

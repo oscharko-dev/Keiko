@@ -275,10 +275,14 @@ flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-sto
 settlement the orchestrator reads, before it stops the runtime, the facts the owning layers hold:
 the runtime authority answers whether the run's most recent model-call admission was refused by the
 cumulative prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run
-state that admits no model call; a refusal by the run's CI-repair prompt budget, which counts the
-same `maxPromptTokens` over the repair and answers before the authority is asked, is recorded in the
-same place, so it names the limit as well) and whether the run's envelope ran out of time
-(`maxRuntimeMs` after minting or `expiresAt`, whichever comes first), and the control plane's event
+state that admits no model call; a refusal by the run's CI-repair budget answers before the
+authority is asked and is recorded in the same place with the closed reason the budget refused with,
+and only its own `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair,
+is the allowance: every other reason names no allowance, so a repair that spent its failed attempts
+or lost its authority never settles as an exhausted prompt allowance, which no setting could fix;
+#3873 review) and whether the run's time limit ran out (`maxRuntimeMs` after minting or `expiresAt`,
+whichever comes first, or the CI repair's own `deadline-exhausted`, which counts the same
+`maxRuntimeMs` over the repair), and the control plane's event
 hub keeps the closed cause the coding sidecar gateway reported for the run's most recent failed
 model call until a later call of the run is answered, with the gateway's own fact that the provider
 could not serve that call. In that order, the run settles `prompt-allowance-exhausted`,
@@ -574,45 +578,78 @@ sidecar gateway retries for its outage window (ADR-0003, default ten minutes), t
 silently, and the run status read "Waiting for the model" for the whole window — the same words as a
 slow generation. A second thread of the same review found the same silence before a call's first
 attempt, where it is the circuit breaker or a provider cooldown, not a failed attempt, that holds
-the call.
+the call. A third found that the fact was published once per call although the Workbench reads the
+newest frame of the replay: a later frame hid the outage while it went on, a call the run cancelled
+left the fact standing while the next call generated, and a publication the replay refused was never
+repeated.
 
-### D9 — The sidecar route publishes two body-free gateway facts to the run's event replay
+### D9 — The sidecar route publishes three body-free gateway facts to the run's event replay
 
 - **Where they come from.** `GatewayCallRequest.retryObserver` (ADR-0003) hears a call's outage: a
   failure that says the provider is unavailable (a timeout, a refused connection, a retryable 5xx, a
   rate limit) was met with a scheduled retry, the call's admission began to wait for the circuit
   breaker (open, or its half-open probe slot saturated) or for a cooldown the provider announced, or
   a call it heard settled. The coding sidecar route hands every model call such an observer. The
-  first retry or wait of a call is published as `model-gateway-retrying`, however many retries and
-  waits the outage takes; the answer that ends it as `model-gateway-recovered`. The wait matters on
-  its own because a call's first attempt follows no failed attempt: a turn the runtime retries
-  after an earlier call outlasted the window, or a run whose first turn starts during an outage,
-  queues behind the open breaker or another run's probe with no retry to announce. A call that
-  fails for good (its window refused the wait, or the run cancelled it) publishes no recovery: its
-  turn-failure frame (D3) follows. A wait that cannot fit the call's window never begins and is not
-  announced; that refusal is the turn failure alone. A steered repair or a schema correction
-  answers the model's own output, so it is never announced as a retry.
-- **What they are.** Two SSE-only runtime event kinds of their own (`CodingWorkbenchGatewayEventKind`),
-  not adapter events: the runtime never produces them. A frame carries no count, text, identifier,
-  failure code, outcome or trust marker, and the contract validator refuses any of those on it. They
-  are ordinary, evictable replay frames: never critical, never the run's last model-call failure, so
-  a retry is no failure and cannot demote or crowd out a real turn failure.
+  first retry or wait of a call is published as `model-gateway-retrying`; the answer that ends the
+  outage as `model-gateway-recovered`. The wait matters on its own because a call's first attempt
+  follows no failed attempt: a turn the runtime retries after an earlier call outlasted the window,
+  or a run whose first turn starts during an outage, queues behind the open breaker or another
+  run's probe with no retry to announce. A steered repair or a schema correction answers the
+  model's own output, so it is never announced as a retry. A wait that cannot fit the call's window
+  never begins and is not announced; that refusal is the turn failure alone.
+- **One frame per outage while it is the newest, and again when it is not.** The Workbench reads
+  the newest frame of the run (below), so the fact stays one frame per outage only while it is that
+  frame. A later frame of the run (a pause or resume, a mode change, a research revoke, a tool
+  event) ends the phase on the client while the call keeps retrying; the call's next retry or wait
+  then publishes `model-gateway-retrying` again, and the route asks the replay
+  (`CodingRuntimeEventHub.modelGatewayRetrying`) rather than remembering its own last publication.
+  A publication the replay refused (`published=false`) does not count as published: the call's next
+  notice tries again, and an answer that follows only refused facts publishes no recovery, because
+  there is nothing on the replay to recover from.
+- **A call that ends without an answer.** A call that fails for good (its window refused the wait,
+  or it exhausted its retries) publishes no closing fact of its own: its turn-failure frame (D3)
+  follows and is the newest frame. A call the run cancels while it is retried or held (the client
+  went away, the transport was cut, the route deadline ran out) ends with neither an answer nor a
+  turn-failure frame, so `model-gateway-recovered`, which says a call was answered, would be false
+  and silence would leave the fact standing while the next call generates. The route therefore
+  closes it: when the call ends, after its answer or failure frame has been settled, a call whose
+  fact is still the newest frame of the run publishes `model-gateway-retry-stopped`. The route
+  decides this when the call ends, not when the observer hears `settled failed`, because only then
+  is it known whether a failure frame followed. A run that is no longer live (stopping or settled)
+  has no status to show, so nothing is published for it and the gateway's own lines are the record.
+- **What they are.** Three SSE-only runtime event kinds of their own
+  (`CodingWorkbenchGatewayEventKind`), not adapter events: the runtime never produces them. A frame
+  carries no count, text, identifier, failure code, outcome or trust marker, and the contract
+  validator refuses any of those on it. They are ordinary, evictable replay frames: never critical,
+  never the run's last model-call failure, so a retry is no failure and cannot demote or crowd out a
+  real turn failure.
 - **What the Workbench does with them.** The newest event the Workbench holds for the run decides:
   while it is `model-gateway-retrying`, the run status names the phase "Model gateway unavailable,
-  retrying" instead of "Waiting for the model". The recovery fact, and any later event of the run
-  (a failed turn, a pause, a settlement), ends the phase, so a lost recovery frame cannot leave the
-  status claiming an outage for good. A decision the run waits for still takes precedence. This is
-  the one phase that joins the status sentence itself, which is the polite, atomic live region
-  (`role="status"`): a screen reader announces "Running. Revision 4. Model gateway unavailable,
-  retrying." where it had read only "Running" for the whole outage, and the status line shows the
-  phase once, not a second time beside the sentence. The other phases (waiting for the model,
-  running a tool, running a verifier, waiting for a decision) change with every step, so they stay
-  visible beside the sentence and are not announced.
+  retrying" instead of "Waiting for the model". The recovery fact, the retry-stopped fact ("Model
+  gateway retry stopped" in the run details) and any later event of the run (a failed turn, a
+  pause, a settlement) end the phase, so a lost closing frame cannot leave the status claiming an
+  outage for good. A decision the run waits for still takes precedence. This is the one phase that
+  joins the status sentence itself, which is the polite, atomic live region (`role="status"`): a
+  screen reader announces "Running. Revision 4. Model gateway unavailable, retrying." where it had
+  read only "Running" for the whole outage, and the status line shows the phase once, not a second
+  time beside the sentence. The other phases (waiting for the model, running a tool, running a
+  verifier, waiting for a decision) change with every step, so they stay visible beside the
+  sentence and are not announced.
 - **Evidence.** Each publication, refused or not, leaves one body-free
   `coding-sidecar.gateway.retry-surfaced` line under the run's correlation: the run revision and
-  state, the fact, what a `retrying` fact followed — the failed `attempt` of a retry, or the
-  `waitReason` that held the call's admission (`provider-cooldown`, `circuit-cooldown` or
-  `probe-saturated`, the reason of the `gateway.circuit.wait` line it joins on) — with the retry
-  policy the call ran under, and whether the replay took it (`published`, `publicationReason`). A
-  refused publication is a warning. The gateway's own `gateway.retry.scheduled` and
-  `gateway.circuit.wait` lines remain the record of every individual retry and wait.
+  state, the fact (`retrying`, `recovered` or `retry-stopped`), what a `retrying` fact followed —
+  the failed provider `attempt` of a retry, or the `waitReason` that held the call's admission
+  (`provider-cooldown`, `circuit-cooldown` or `probe-saturated`, the reason of the
+  `gateway.circuit.wait` line it joins on) — with the retry policy the call ran under, and whether
+  the replay took it (`published`, `publicationReason`). A refused publication is a warning. The
+  gateway's own `gateway.retry.scheduled` and `gateway.circuit.wait` lines remain the record of
+  every individual retry and wait.
+- **Two attempt numbers, on purpose.** The `attempt` of a `retry-surfaced` line (and of the
+  observer's notice it comes from) counts the failed provider attempt the retry follows, from 1; a
+  steered repair is not a provider attempt and is not counted. The `attempt` of the
+  `gateway.retry.scheduled` line of the same retry counts every attempt of the call, the repair
+  included. After an exhausted answer that was repaired and then met an unavailable provider, the
+  repair is scheduled as attempt 1 and never announced, and the retry after the 503 is scheduled as
+  attempt 2 and surfaced as the retry that follows provider attempt 1. Both lines carry the turn
+  request's correlation id, so the difference is read, not guessed; the numbering is pinned in
+  `gateway.coding-outage.test.ts` and, through the route, in `coding-sidecar-gateway.test.ts`.

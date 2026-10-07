@@ -30,6 +30,7 @@ import {
   createSecureWorkspaceTextReadPort,
   secureWorkspaceTextDigest,
 } from "./secureWorkspaceTextRead.js";
+import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
@@ -159,7 +160,7 @@ describe("file creation through the governed edit path (F27)", () => {
     readonly actions: EditorAgentAction[];
   }
 
-  function harness(root: string): Harness {
+  function harness(root: string, lstat?: WorkspacePathLstat): Harness {
     const events: ServerLogEvent[] = [];
     const actions: EditorAgentAction[] = [];
     const ports = createCodingToolReadEditPorts({
@@ -173,6 +174,7 @@ describe("file creation through the governed edit path (F27)", () => {
           }),
         },
         platform: { os: "darwin", arch: "arm64" },
+        ...(lstat === undefined ? {} : { lstat }),
       }),
       resolveRepositoryReadContext: () => liveBinding,
       editorAgentClient: {
@@ -269,7 +271,7 @@ describe("file creation through the governed edit path (F27)", () => {
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({
       correlationId: RUN_ID,
-      extra: { state: "absent", purpose: "edit-materialization" },
+      extra: { state: "absent", purpose: "edit-materialization", absence: "absent" },
     });
     expect(reads[0]?.errorKind).toBeUndefined();
     expect(reads[0]?.extra).not.toHaveProperty("reason");
@@ -279,7 +281,11 @@ describe("file creation through the governed edit path (F27)", () => {
       "coding-runtime.workspace-read.emitted-line",
       formatActivityLogProofLine(reads[0] ?? {}),
     );
-    expect(persisted).toMatchObject({ state: "absent", purpose: "edit-materialization" });
+    expect(persisted).toMatchObject({
+      state: "absent",
+      purpose: "edit-materialization",
+      absence: "absent",
+    });
     expect(persisted).not.toHaveProperty("reason");
   });
 
@@ -315,6 +321,8 @@ describe("file creation through the governed edit path (F27)", () => {
     expect(readFileSync(join(root, "src/main.ts"), "utf8")).toBe(EXISTING_TEXT);
     expect(existsSync(join(root, "src/cli.ts"))).toBe(false);
     expect(readLines(events).map((event) => event.extra?.state)).toEqual(["completed", "absent"]);
+    // Only the target the helper refused carries the walk's verdict: the source it read does not.
+    expect(readLines(events).map((event) => event.extra?.absence)).toEqual([undefined, "absent"]);
   });
 
   it("refuses to create over a file that has content, and reads it as present", async () => {
@@ -356,6 +364,9 @@ describe("file creation through the governed edit path (F27)", () => {
       "preflight-refused",
       "preflight-refused",
     ]);
+    // The deny list answers before any filesystem probe, so it carries no verdict that could tell
+    // whether the path exists.
+    for (const line of readLines(events)) expect(line.extra).not.toHaveProperty("absence");
   });
 
   it("refuses to create through a symlinked directory and never writes beyond the workspace", async () => {
@@ -375,8 +386,98 @@ describe("file creation through the governed edit path (F27)", () => {
     expect(readLines(events)[0]).toMatchObject({
       level: "warn",
       errorKind: "authority-denied",
-      extra: { state: "failed", purpose: "edit-materialization", reason: "denied" },
+      extra: {
+        state: "failed",
+        purpose: "edit-materialization",
+        reason: "denied",
+        absence: "link",
+      },
     });
+  });
+
+  // #3873 review (PR #3876): a repository that keeps a bind-mounted `build/` directory under the
+  // workspace, or a parent directory that lost its search bit, refused `build/out/report.md` three
+  // times as `replacement-read-failed` / `denied`, and the support export showed only `denied`: a
+  // reader could not tell either from the symlink case this path is designed to refuse. Neither a
+  // mount nor a lost search bit can be made on a test machine, so the walk's probe is scripted; the
+  // read, the wrapper, the governed read and the registered formatter are the real ones.
+  describe("a creation refused where the walk cannot prove the path absent", () => {
+    const CREATED = "build/out/report.md";
+    const directory = (dev: bigint): Awaited<ReturnType<WorkspacePathLstat>> => ({
+      dev,
+      isDirectory: (): boolean => true,
+      isSymbolicLink: (): boolean => false,
+    });
+
+    it("names the other device a bind-mounted build directory lives on", async () => {
+      const { root } = workspace();
+      const mounted: WorkspacePathLstat = (path) =>
+        Promise.resolve(directory(path === join(root, "build") ? 2n : 1n));
+      const { ports, events, actions } = harness(root, mounted);
+
+      await expect(edit(ports, creation(CREATED, NEW_TEXT))).resolves.toMatchObject({
+        status: "failed",
+        reasonCode: "EDIT_PREPARE_FAILED",
+        prepareCause: "replacement-read-failed",
+        readReason: "denied",
+      });
+
+      expect(actions).toHaveLength(0);
+      const persisted = expectActivityLogProof(
+        "coding-runtime.workspace-read.emitted-line",
+        formatActivityLogProofLine(readLines(events)[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({
+        state: "failed",
+        purpose: "edit-materialization",
+        reason: "denied",
+        absence: "foreign-device",
+      });
+      // One closed word: neither the path nor anything the probe reported reaches the line.
+      expect(JSON.stringify(events)).not.toContain("report.md");
+      expect(JSON.stringify(events)).not.toContain(root);
+    });
+
+    it("names a directory whose probe failed, without the error", async () => {
+      const { root } = workspace();
+      const unsearchable: WorkspacePathLstat = (path) =>
+        path === join(root, "build")
+          ? Promise.reject(Object.assign(new Error("EACCES: private detail"), { code: "EACCES" }))
+          : Promise.resolve(directory(1n));
+      const { ports, events } = harness(root, unsearchable);
+
+      await expect(edit(ports, creation(CREATED, NEW_TEXT))).resolves.toMatchObject({
+        status: "failed",
+        readReason: "denied",
+      });
+
+      expect(readLines(events)[0]).toMatchObject({
+        extra: { state: "failed", reason: "denied", absence: "probe-failed" },
+      });
+      expect(JSON.stringify(events)).not.toContain("EACCES");
+      expect(JSON.stringify(events)).not.toContain("private detail");
+    });
+  });
+
+  it("writes no verdict on a read of a file that is there, which the helper does not refuse", async () => {
+    const { root } = workspace();
+    const { ports, events } = harness(root);
+
+    await expect(
+      ports.repositoryRead.execute(
+        {
+          action: "read",
+          actionId: "read-2",
+          idempotencyKey: "read-2-key",
+          relativePath: "src/cli.ts",
+        },
+        undefined,
+        { check: (): true => true, binding: liveBinding },
+      ),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    expect(readLines(events)).toHaveLength(1);
+    expect(readLines(events)[0]?.extra).not.toHaveProperty("absence");
   });
 
   it("tells the model a path it asked to read is not there, not that it is denied", async () => {
@@ -399,7 +500,7 @@ describe("file creation through the governed edit path (F27)", () => {
     expect(readLines(events)[0]).toMatchObject({
       level: "warn",
       errorKind: "unavailable",
-      extra: { state: "failed", purpose: "tool-result", reason: "not-found" },
+      extra: { state: "failed", purpose: "tool-result", reason: "not-found", absence: "absent" },
     });
   });
 });

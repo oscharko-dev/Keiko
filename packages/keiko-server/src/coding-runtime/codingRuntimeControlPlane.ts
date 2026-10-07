@@ -97,14 +97,17 @@ export interface CodingRuntimeHost {
     { readonly read: (runId: string) => CodingRuntimeHostRunEffort | undefined } | undefined;
   /**
    * F9 (#3873): whether the run's most recent model-call admission was refused by its cumulative
-   * prompt allowance. Read when a failed task settles, so the run names the exhausted allowance
-   * instead of an internal error; absent, no failure is attributed to the allowance.
+   * prompt allowance, the authority's own or the same `maxPromptTokens` counted by the run's CI
+   * repair, and by no other reason a CI-repair budget refuses for. Read when a failed task settles,
+   * so the run names the exhausted allowance instead of an internal error; absent, no failure is
+   * attributed to the allowance.
    */
   readonly promptAllowanceExhausted?: ((runId: string) => boolean) | undefined;
   /**
-   * F9 (#3873): whether the run's Authority Envelope has run out of time. Read when a failed task
-   * settles, so a run that reached its envelope's end names it instead of an internal error; absent,
-   * no failure is attributed to the duration.
+   * F9 (#3873): whether the run's time limit has run out: its Authority Envelope's end, or the same
+   * `maxRuntimeMs` counted by the run's CI repair when that refused its most recent model call. Read
+   * when a failed task settles, so a run that reached its limit names it instead of an internal
+   * error; absent, no failure is attributed to the duration.
    */
   readonly envelopeDurationExhausted?: ((runId: string) => boolean) | undefined;
   readonly runtimeCapabilityAuthenticator?:

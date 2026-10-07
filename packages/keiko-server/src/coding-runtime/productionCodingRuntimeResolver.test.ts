@@ -777,8 +777,8 @@ describe("production coding runtime resolver", () => {
     vi.setSystemTime(fixture.nowMs());
     ciRepairBudgetOverride.current = {
       admitTool: () => undefined,
-      canChargePrompt: () => true,
-      chargePrompt: () => true,
+      canChargePrompt: () => ({ accepted: true }),
+      chargePrompt: () => ({ accepted: true }),
       observed: () => undefined,
     };
     const confirmations = confirmationFixture();

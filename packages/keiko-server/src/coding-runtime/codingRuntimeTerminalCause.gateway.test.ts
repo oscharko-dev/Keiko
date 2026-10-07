@@ -2,7 +2,9 @@
 // failure of a model call feeds the facts a failed run's settlement names its cause from — the
 // runtime authority's prompt allowance and the event hub's last failed-call cause — composed exactly
 // as production composes them. No OpenCode error text is read anywhere on this path.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type {
   GatewayConfig,
   GatewayStreamChunk,
@@ -36,8 +38,18 @@ import { resetCodingWorkbenchContextWindowProbesForTests } from "../gateway-read
 import type { RouteContext } from "../routes.js";
 import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { AT, createDraftRun, readySnapshot } from "../gitDelivery/ciObservationTest/_support.js";
 import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
-import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
+import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
+import type {
+  CiRepairBudgetBlockReason,
+  CiRepairBudgetContext,
+} from "./codingRuntimeCiRepairBudgetTypes.js";
+import {
+  CodingRuntimeCiRepairController,
+  type CiRepairExecutionBudget,
+} from "./codingRuntimeCiRepairController.js";
 import { codingRuntimeTerminalFacts } from "./codingRuntimeControlPlane.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import { classifyTerminalFailure } from "./codingRuntimeTerminalCause.js";
@@ -53,10 +65,68 @@ const NOW = new Date();
 const ROOT = "/managed/project/task-f9";
 const DIGEST = "a".repeat(64);
 
+const ledgers: DatabaseSync[] = [];
+
 afterEach(() => {
   resetGatewayInstanceCacheForTests();
   resetCodingWorkbenchContextWindowProbesForTests();
+  for (const ledger of ledgers.splice(0)) ledger.close();
 });
+
+/**
+ * The real CI-repair controller over a real ledger, with a repair under way and a clock the test
+ * moves: the budget a repair that ran past its runtime limit refuses a model call with, as
+ * production composes it, not a budget that answers what the test wants.
+ */
+function realRepairBudget(maxRuntimeMs: number): {
+  readonly controller: CodingRuntimeCiRepairController;
+  readonly clock: { now: number };
+} {
+  const db = new DatabaseSync(":memory:");
+  ledgers.push(db);
+  const snapshots = createDraftRun(db);
+  const readiness = createCodingRuntimeCiReadinessStore(db, snapshots);
+  const failed: ReadinessSnapshot = {
+    ...readySnapshot(),
+    state: "failed",
+    failureSignatureDigest: "b".repeat(64),
+    reason: "required-checks-failed",
+    requiredChecks: { total: 1, passed: 0, failed: 1, pending: 0, blocked: 0, unknown: 0 },
+  };
+  expect(readiness.complete(readiness.begin("run-1"), failed)).toBe(true);
+  const clock = { now: Date.parse(AT) };
+  const context: CiRepairBudgetContext = {
+    runId: "run-1",
+    remoteDigest: DIGEST,
+    prNumber: 17,
+    correlationId: "correlation-1",
+    stillAuthorized: () => true,
+    limits: { maxRuntimeMs, maxToolCalls: 20, maxPromptTokens: 1_000_000 },
+  };
+  const controller = new CodingRuntimeCiRepairController({
+    store: createCodingRuntimeCiRepairBudgetStore({
+      db,
+      snapshots,
+      now: () => clock.now,
+      activityLog: { write: (): void => undefined },
+    }),
+    readiness,
+    context: (): CiRepairBudgetContext => context,
+    now: (): number => clock.now,
+  });
+  // The first governed verification of the failed head begins the repair, whose clock then runs.
+  expect(
+    controller
+      .admitTool({
+        action: "verification",
+        verifierId: "test",
+        actionId: "verify-1",
+        idempotencyKey: "verify-1",
+      })
+      ?.check(),
+  ).toBe(true);
+  return { controller, clock };
+}
 
 function trustedContext(maxPromptTokens: number): CodingRuntimeTrustedContext {
   return {
@@ -494,29 +564,107 @@ describe("terminal model-call cause through the coding sidecar gateway route (F9
     });
   });
 
-  // The CI-repair run's own prompt budget refused the call before the authority was asked, so the
-  // authority never recorded a refusal and the run named no limit (F9's own cause).
-  it("names the prompt allowance a CI-repair budget refused the call with, not a failed model step", async () => {
-    const minted = mintedAuthority(200_000);
-    const hub = new CodingRuntimeEventHub();
-    const refusingBudget: CiRepairExecutionBudget = {
-      admitTool: () => undefined,
-      canChargePrompt: () => false,
-      chargePrompt: () => false,
-      observed: () => undefined,
-    };
+  // The CI-repair run's own budget refused the call before the authority was asked, so the authority
+  // never recorded a refusal and the run named no limit (F9's own cause). The budget's closed reason
+  // then decides which limit it names (#3873 review): every refusal was once recorded as the prompt
+  // allowance, so a repair that ran past its runtime limit sent the operator to a setting that cannot
+  // help.
+  describe("a call the run's CI-repair budget refused", () => {
+    async function refusedBy(reason: CiRepairBudgetBlockReason): Promise<{
+      readonly minted: ReturnType<typeof mintedAuthority>;
+      readonly hub: CodingRuntimeEventHub;
+    }> {
+      const minted = mintedAuthority(200_000);
+      const hub = new CodingRuntimeEventHub();
+      const refusingBudget: CiRepairExecutionBudget = {
+        admitTool: () => undefined,
+        canChargePrompt: () => ({ accepted: false, reason }),
+        chargePrompt: () => ({ accepted: false, reason }),
+        observed: () => undefined,
+      };
 
-    await expect(
-      callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
-        reservePromptWithCiRepair(minted.authority, () => refusingBudget, capability, promptTokens),
-      ),
-    ).resolves.toMatchObject({ status: 403 });
+      await expect(
+        callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
+          reservePromptWithCiRepair(
+            minted.authority,
+            () => refusingBudget,
+            capability,
+            promptTokens,
+          ),
+        ),
+      ).resolves.toMatchObject({ status: 403 });
+      expect(hub.lastModelCallFailure(RUN_ID)).toBe("turn-rejected");
+      return { minted, hub };
+    }
 
-    expect(hub.lastModelCallFailure(RUN_ID)).toBe("turn-rejected");
-    expect(terminalFailure(minted, hub)).toEqual({
-      failureCode: "prompt-allowance-exhausted",
-      basis: "prompt-allowance",
-      modelCallFailure: "turn-rejected",
+    it("names the prompt allowance the budget's own allowance refused the call with, not a failed model step", async () => {
+      const { minted, hub } = await refusedBy("prompt-budget-exhausted");
+
+      expect(terminalFailure(minted, hub)).toEqual({
+        failureCode: "prompt-allowance-exhausted",
+        basis: "prompt-allowance",
+        modelCallFailure: "turn-rejected",
+      });
     });
+
+    it("names the time limit a repair that ran past its runtime limit refused the call with, never the prompt allowance", async () => {
+      const { minted, hub } = await refusedBy("deadline-exhausted");
+
+      expect(minted.authority.promptAllowanceExhausted(RUN_ID)).toBe(false);
+      expect(terminalFailure(minted, hub)).toEqual({
+        failureCode: "envelope-duration-exhausted",
+        basis: "envelope-duration",
+        modelCallFailure: "turn-rejected",
+      });
+    });
+
+    // The reviewer's failure scenario, with no scripted answer anywhere on the path: a CI repair that
+    // runs past its runtime limit has its next model call refused by the real controller, through the
+    // real reservation and the real authority, and the run settles on what that limit is.
+    it("settles the time limit for a repair that really ran past its runtime limit, never the prompt allowance", async () => {
+      const minted = mintedAuthority(200_000);
+      const hub = new CodingRuntimeEventHub();
+      const { controller, clock } = realRepairBudget(100);
+
+      // Inside its limit the repair admits the call, so the route answers it.
+      await expect(
+        callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
+          reservePromptWithCiRepair(minted.authority, () => controller, capability, promptTokens),
+        ),
+      ).resolves.toMatchObject({ status: 200 });
+      clock.now += 100;
+      await expect(
+        callGateway(minted, hub, [answered()], "synthetic", (capability, promptTokens) =>
+          reservePromptWithCiRepair(minted.authority, () => controller, capability, promptTokens),
+        ),
+      ).resolves.toMatchObject({ status: 403 });
+
+      expect(minted.authority.promptAllowanceExhausted(RUN_ID)).toBe(false);
+      expect(terminalFailure(minted, hub)).toEqual({
+        failureCode: "envelope-duration-exhausted",
+        basis: "envelope-duration",
+        modelCallFailure: "turn-rejected",
+      });
+    });
+
+    it.each([
+      "attempt-budget-exhausted",
+      "authority-denied",
+      "storage-unavailable",
+      "storage-capacity",
+      "clock-drift",
+    ] as const)(
+      "names neither limit for a refusal for %s: the run settles on the failed model step it is",
+      async (reason) => {
+        const { minted, hub } = await refusedBy(reason);
+
+        expect(minted.authority.promptAllowanceExhausted(RUN_ID)).toBe(false);
+        expect(terminalFailure(minted, hub)).toEqual({
+          failureCode: "model-turn-failed",
+          basis: "model-call-failure",
+          modelCallFailure: "turn-rejected",
+        });
+      },
+    );
   });
 });

@@ -345,6 +345,7 @@ export const DE_MESSAGES = {
   "activity.event.failureRedacted": "Runtime-Fehler erfasst",
   "activity.event.modelGatewayRetrying": "Modell-Gateway nicht erreichbar, neuer Versuch",
   "activity.event.modelGatewayRecovered": "Modell-Gateway antwortet wieder",
+  "activity.event.modelGatewayRetryStopped": "Wiederholung beim Modell-Gateway beendet",
   "activity.kind.step": "Schritt",
   "activity.kind.approval": "Freigabe angefordert",
   "activity.kind.approved": "Freigegeben",

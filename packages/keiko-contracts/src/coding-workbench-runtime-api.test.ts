@@ -979,10 +979,11 @@ describe("Coding Workbench runtime API failure branches", () => {
       },
     );
 
-    it("lists exactly the two gateway facts, none of them an adapter event kind", () => {
+    it("lists exactly the three gateway facts, none of them an adapter event kind", () => {
       expect(CODING_WORKBENCH_GATEWAY_EVENT_KINDS).toEqual([
         "model-gateway-retrying",
         "model-gateway-recovered",
+        "model-gateway-retry-stopped",
       ]);
       for (const eventKind of CODING_WORKBENCH_GATEWAY_EVENT_KINDS) {
         expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).not.toContain(eventKind);
@@ -999,22 +1000,21 @@ describe("Coding Workbench runtime API failure branches", () => {
       ).toBe(false);
     });
 
-    it("carries nothing beside the kind: no failure code, outcome or trust marker", () => {
-      for (const extra of [
-        { failureCode: "provider-failed" },
-        { failureCode: "provider-unavailable" },
-        { auxiliaryOutcome: "unavailable" },
-        { contentTrust: "untrusted" },
-      ] as const) {
-        expect(
-          validateCodingWorkbenchRuntimeSseEvent({
-            ...fact,
-            eventKind: "model-gateway-retrying",
-            ...extra,
-          }),
-        ).toMatchObject({ ok: false });
-      }
-    });
+    it.each(CODING_WORKBENCH_GATEWAY_EVENT_KINDS)(
+      "carries nothing beside the kind %s: no failure code, outcome or trust marker",
+      (eventKind) => {
+        for (const extra of [
+          { failureCode: "provider-failed" },
+          { failureCode: "provider-unavailable" },
+          { auxiliaryOutcome: "unavailable" },
+          { contentTrust: "untrusted" },
+        ] as const) {
+          expect(
+            validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind, ...extra }),
+          ).toMatchObject({ ok: false });
+        }
+      },
+    );
 
     it("refuses an unknown gateway fact and an adapter event kind spelled as one", () => {
       for (const eventKind of ["model-gateway", "model-gateway-failed", "model-retrying"]) {

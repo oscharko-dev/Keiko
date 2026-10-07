@@ -597,13 +597,15 @@ F9; runs `run-65084062444586162471229658028402064666` and
 - `prompt-allowance` — the run's cumulative prompt allowance (`maxPromptTokens` of the Authority
   Envelope) refused its most recent model call. The gateway answered that call with
   `coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied` and a `turn-rejected` turn
-  failure. The same cause names a call the run's CI-repair prompt budget refused, which counts the
-  same `maxPromptTokens` over the repair. Failed model calls keep their reserved prompt estimate, so
-  a long provider outage spends the allowance too.
+  failure. The same cause names a call the run's CI-repair budget refused for its own
+  `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair; no other
+  reason of that budget does (see the last bullet). Failed model calls keep their reserved prompt
+  estimate, so a long provider outage spends the allowance too.
 - `envelope-duration` — the run's Authority Envelope ran out of time (`maxRuntimeMs` after minting,
   or its `expiresAt`). A model call in flight at that moment ends with
   `coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`; a call started
-  after it is refused.
+  after it is refused. The same cause names a call the run's CI-repair budget refused for its own
+  `deadline-exhausted`, which counts the same `maxRuntimeMs` over the repair.
 - `model-call-failure` — the coding sidecar gateway reported the run's most recent model call as
   failed, and no later call of the run was answered. `stream-incomplete` (a timeout, a refused or
   dropped connection, a stream that broke before the answer completed) settles
@@ -618,6 +620,14 @@ F9; runs `run-65084062444586162471229658028402064666` and
   configuration or egress refusal), settles `model-turn-failed`.
 - `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
   settles `runtime-failed`: the runtime crashed or failed internally.
+
+A CI repair's budget refuses a model call before the authority is asked, and a refusal names no limit
+of the run unless it is the repair's own prompt allowance or runtime limit (#3873 review): a repair
+out of failed attempts (`attempt-budget-exhausted`), a withdrawn authority (`authority-denied`), a
+failed or full store (`storage-unavailable`, `storage-capacity`), a binding or clock fault
+(`invalid-binding`, `clock-drift`) and the rest settle `model-turn-failed` with
+`modelCallFailure: turn-rejected`, never `prompt-allowance-exhausted`, because no allowance setting
+can lift them. The closed reason is on the `git.ci-repair.budget` line of the refused call.
 
 A run that settles `provider-unavailable` on a `provider-failed` call still shows "The model provider
 rejected this turn" on its last failed step: the per-turn wording names the gateway's answer, while
@@ -637,7 +647,15 @@ the run's own cause names the outage.
    (`promptSource` tells a provider-reported count from a kept estimate).
 3. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
    (`maxRuntimeMs` on `coding-runtime.authority.minted`, where the composition reports it).
-4. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
+   A CI repair whose own limit ran out while the envelope still had time settles the same cause;
+   the `git.ci-repair.budget` line of the next step then carries `reason: deadline-exhausted`.
+4. For a call the run's CI-repair budget refused, read the `git.ci-repair.budget` line with
+   `phase: prompt-admission` and `status: blocked` under the run's correlation: its `reason` is the
+   closed reason the budget refused with (`prompt-budget-exhausted`, `deadline-exhausted`,
+   `attempt-budget-exhausted`, `authority-denied`, `storage-unavailable`, ...) and
+   `requestedPromptTokenCount` the estimate it was asked about. A check that refused the call and a
+   charge that refused it after the authority admitted it write the same line.
+5. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
    names the cause (`failureCode`), whether the provider could not serve the call
    (`providerUnavailable`) and whether the runtime could retry it (`runtimeRetry`); a
    `gateway.retry.exhausted` or `gateway.circuit.wait outcome=budget-refused` under the same chat
@@ -653,7 +671,10 @@ the run's own cause names the outage.
 - `envelope-duration-exhausted`: start the task again as a new run, which gets a fresh time limit and
   the changes already in the task workspace, or split the task. Where slow models make tasks of this
   size routine, an operator lengthens the envelope duration before starting the server (see the
-  operator runbook).
+  operator runbook). When the `git.ci-repair.budget` line of the refused call says
+  `deadline-exhausted`, the limit that ran out is the repair's own: it is kept per pull request and
+  task, a new run inherits it and a longer setting does not extend it, so repair that pull request's
+  failing check by hand, or start the task for a new pull request.
 - `output-exhausted-repeated`: have the gateway declare a larger `max_output_tokens` for the model, or
   choose a model with a smaller reasoning share, then start the task again.
 - `provider-unavailable`: check the model gateway's and the model server's health, then start the
@@ -853,6 +874,10 @@ settles `failed` (ADR-0137 D3):
    (`refusal-escalation`) and `refusalReasonCode`.
 3. The `coding-runtime.edit.refused` lines before the escalation show each refused edit; for
    `EDIT_PREPARE_FAILED` their `prepareCause` names which preparation step refused.
+4. For `prepareCause` `replacement-read-failed` with `readReason` `denied`, the
+   `coding-runtime.workspace-read` line of that edit (same correlation, `state: failed`) carries the
+   walk's `absence` verdict, which tells a link, a mount, an unreadable directory and a path that is
+   already there apart; the resolution below reads it.
 
 **Resolution**
 
@@ -869,7 +894,20 @@ settles `failed` (ADR-0137 D3):
   file out of the task, or edit it yourself. A new file or a rename target that does not exist yet is
   not a failure: it reads as absent (`not-found`, the `absent` state on its
   `coding-runtime.workspace-read` line). Builds before F27 (#3876) refused it as `denied`, because
-  the native read helper cannot tell a missing path from a refused one. With `workspace-access-lost`,
+  the native read helper cannot tell a missing path from a refused one. A `denied` the server
+  refined from the helper's refusal carries the walk's closed verdict as `absence` on that
+  `coding-runtime.workspace-read` line (`failed` state, `purpose: edit-materialization`), which says
+  which of the possible causes it was (#3873 review): `exists` (the path is already there: read it
+  and edit it instead of creating it), `link` (a component of the path is a link, a dangling one at
+  the final component included: create the file at its real location), `not-directory` (a file is
+  used as a directory), `foreign-device` (a directory in the chain is another device, such as a bind
+  mount: create the file elsewhere or keep the task out of that mount), `probe-failed` (the server
+  could not inspect a directory in the chain, for example one without the search permission or an
+  I/O error: fix the directory's permissions or the disk), `root-unusable` (the task workspace's own
+  root is not a usable directory: start the task again) or `aborted` (the run was stopped or timed
+  out while the path was checked). The word never carries the path or the system's error text, and a
+  denial that carries no `absence` (the always-on deny list, `preflight-refused`) was decided before
+  the filesystem was touched. With `workspace-access-lost`,
   `guard-denied`, `binding-unavailable`, `editor-context-unavailable` or `lease-unavailable`, the
   run's workspace or authority no longer held while the edit was prepared: start the task again.
 - `edit-retries-exhausted`: the model could not produce an edit that applies, or kept alternating

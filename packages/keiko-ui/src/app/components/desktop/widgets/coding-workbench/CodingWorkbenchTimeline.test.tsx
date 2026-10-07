@@ -648,9 +648,10 @@ describe("CodingWorkbenchTimeline", () => {
   it("shows the model gateway facts as routine run details with their own titles", () => {
     const retrying = { ...event(2), eventKind: "model-gateway-retrying" as const };
     const recovered = { ...event(3), eventKind: "model-gateway-recovered" as const };
+    const stopped = { ...event(4), eventKind: "model-gateway-retry-stopped" as const };
     const { container } = render(
       <Timeline
-        events={[retrying, recovered]}
+        events={[retrying, recovered, stopped]}
         activity={activityLike(bareFeed())}
         questions={IDLE_QUESTIONS}
       />,
@@ -659,9 +660,10 @@ describe("CodingWorkbenchTimeline", () => {
     fireEvent.click(screen.getByText("Run details"));
 
     const rows = [...container.querySelectorAll('[data-timeline-kind="event"]')];
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Model gateway unavailable, retrying");
     expect(rows[1]).toHaveTextContent("Model gateway answered again");
+    expect(rows[2]).toHaveTextContent("Model gateway retry stopped");
     for (const row of rows) expect(row).toHaveAttribute("data-event-tone", "routine");
   });
 

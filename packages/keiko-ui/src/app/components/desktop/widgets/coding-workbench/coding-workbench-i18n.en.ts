@@ -983,6 +983,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.model-gateway-retrying": "Model gateway unavailable, retrying",
   "codingWorkbench.event.model-gateway-recovered": "Model gateway answered again",
+  "codingWorkbench.event.model-gateway-retry-stopped": "Model gateway retry stopped",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
   "codingWorkbench.event.failure.edits-blocked":

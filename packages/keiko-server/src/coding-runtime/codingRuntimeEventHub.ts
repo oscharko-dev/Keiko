@@ -227,9 +227,10 @@ export class CodingRuntimeEventHub {
 
   /**
    * Reports a content-free fact about the model gateway under the run's turn (#3873 review): it is
-   * retrying an unavailable provider, or got an answer again after doing so. Ordinary, evictable
-   * frames — never critical, and never the run's last model-call failure: a retry is no failure, and
-   * a turn that does fail is named by `publishTurnFailure`, whose frame follows these.
+   * retrying an unavailable provider, got an answer again after doing so, or stopped retrying a call
+   * the run cancelled. Ordinary, evictable frames — never critical, and never the run's last
+   * model-call failure: a retry is no failure, and a turn that does fail is named by
+   * `publishTurnFailure`, whose frame follows these.
    */
   publishModelGatewayFact(
     runId: string,
@@ -246,6 +247,18 @@ export class CodingRuntimeEventHub {
       revision,
       eventKind,
     });
+  }
+
+  /**
+   * Whether the newest frame the run's replay retains is the `model-gateway-retrying` fact, which is
+   * what the Workbench reads as "the gateway is being retried": it names that phase only while no
+   * later frame of the run exists. Any later frame — a pause, a mode change, a tool event, a failed
+   * turn, the answer — ends the phase on the client, so a publisher that is still retrying asks this
+   * before it publishes the fact again.
+   */
+  modelGatewayRetrying(runId: string): boolean {
+    const newest = this.runs.get(runId)?.events.at(-1)?.event;
+    return newest?.kind === "runtime-event" && newest.eventKind === "model-gateway-retrying";
   }
 
   /**

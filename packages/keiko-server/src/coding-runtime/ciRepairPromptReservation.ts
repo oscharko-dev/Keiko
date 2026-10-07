@@ -1,5 +1,6 @@
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type { CiRepairBudgetBlockReason } from "./codingRuntimeCiRepairBudgetTypes.js";
 
 type CiRepairReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]>;
 
@@ -23,9 +24,11 @@ type CiRepairReservation = ReturnType<CodingRuntimeAuthorityService["reserveProm
  *
  * #3873 review (PR #3876): that early return also bypassed the one place that records why a run's
  * last model call was refused — the authority's own admission record, which a failed run's
- * settlement reads to name its prompt allowance. A run whose CI-repair prompt budget refused its
- * call therefore settled `model-turn-failed` and named no limit. The refusal is now recorded where
- * the authority's own refusal is (`recordCiRepairPromptRefusal`), still without a reservation.
+ * settlement reads to name the limit that refused it. A run whose CI-repair budget refused its call
+ * therefore settled `model-turn-failed` and named no limit. The refusal is now recorded where the
+ * authority's own refusal is (`recordCiRepairPromptRefusal`), still without a reservation, and with
+ * the closed reason the budget refused with: it is the prompt allowance only when the budget's own
+ * allowance refused it, and the repair's runtime limit or any other reason must not read as one.
  */
 export function reservePromptWithCiRepair(
   authority: Pick<CodingRuntimeAuthorityService, "reservePromptTokens" | "authenticateCapability"> &
@@ -38,22 +41,23 @@ export function reservePromptWithCiRepair(
   if (authenticated.ok) {
     const runId = authenticated.binding.runId;
     const budget = budgetForRun(runId);
-    if (budget?.canChargePrompt(promptTokens) === false) {
-      return refusedByCiRepair(authority, runId);
-    }
+    const fits = budget?.canChargePrompt(promptTokens);
+    if (fits?.accepted === false) return refusedByCiRepair(authority, runId, fits.reason);
     const reservation = authority.reservePromptTokens(capability, promptTokens);
     if (!reservation.ok || budget === undefined) return reservation;
-    return budget.chargePrompt(promptTokens) ? reservation : refusedByCiRepair(authority, runId);
+    const charge = budget.chargePrompt(promptTokens);
+    return charge.accepted ? reservation : refusedByCiRepair(authority, runId, charge.reason);
   }
   return authority.reservePromptTokens(capability, promptTokens);
 }
 
-// The CI-repair budget is the run's prompt allowance counted over the repair: its refusal is the
-// authority's `authority-budget-exceeded`, and is recorded as one.
+// The call is refused as the authority refuses a prompt it cannot afford, and the closed reason the
+// CI-repair budget gave is recorded beside it for the run's terminal cause.
 function refusedByCiRepair(
   authority: Partial<Pick<CodingRuntimeAuthorityService, "recordCiRepairPromptRefusal">>,
   runId: string,
+  reason: CiRepairBudgetBlockReason,
 ): CiRepairReservation {
-  authority.recordCiRepairPromptRefusal?.(runId);
+  authority.recordCiRepairPromptRefusal?.(runId, reason);
   return { ok: false, reason: "authority-budget-exceeded" };
 }

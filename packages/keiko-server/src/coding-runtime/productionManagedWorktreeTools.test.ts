@@ -505,8 +505,8 @@ describe("production managed worktree tools", () => {
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
-        canChargePrompt: () => true,
-        chargePrompt: () => true,
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt: () => ({ accepted: true }),
         observed: vi.fn(),
       },
       runToReport: async () => {

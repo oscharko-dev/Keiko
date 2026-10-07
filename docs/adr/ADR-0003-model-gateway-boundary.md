@@ -151,10 +151,19 @@ announced, by a retry or by a wait, settles once when it ends (`settled`: `answe
 when its window refused it, it failed for good, or it was cancelled), after however many retries
 and waits it held; a call that was never announced stays silent. The retries of a steered repair
 or a schema correction answer the model's own output and are never announced as retries, though an
-admission wait of such a retry is announced like any other. The observer runs inside the retry loop
-and the admission wait and must not throw; it owns and logs its own failures. The route turns these
-notices into the two body-free gateway facts of ADR-0137 D9, which name the Workbench's run phase
-while a provider outage is ridden out.
+admission wait of such a retry is announced like any other. The `attempt` of a `scheduled` notice
+counts provider attempts only, so a steered repair is not counted; the `attempt` of the
+`gateway.retry.scheduled` line of the same retry counts every attempt of the call, the repair
+included, and the two differ on purpose after a repair (ADR-0137 D9). The observer runs inside the
+retry loop and the admission wait and should not throw; it owns and logs its own failures. Every
+notice is nevertheless told through one guard in the call's announcer, so a throw that escapes the
+observer can neither hang the call (the settlement runs ahead of the call's own resolve or reject),
+nor replace the call's result with the observer's error, nor leave the loop as an unhandled
+rejection, which the CLI's process guard treats as fatal. It is recorded, never swallowed:
+`gateway.retry.observer-failed` names the notice kind and carries the Keiko-code frames and cause
+classes of the throw under the call's correlation id, never the notice's content or the observer's
+message. The route turns these notices into the three body-free gateway facts of ADR-0137 D9, which
+name the Workbench's run phase while a provider outage is ridden out.
 
 ### D7 — Secret redaction at the boundary
 

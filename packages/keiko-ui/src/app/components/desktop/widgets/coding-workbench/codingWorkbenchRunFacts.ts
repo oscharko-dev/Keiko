@@ -59,8 +59,11 @@ function unsettledTool(input: CodingWorkbenchRunPhaseInput): string | undefined 
 /**
  * True while the run's model gateway is being retried: the newest event the Workbench holds for the
  * run is the `model-gateway-retrying` fact. The answer that ends an outage publishes
- * `model-gateway-recovered`, and any later event of the run — a failed turn, a pause, a settlement —
- * is newer still, so a lost recovery frame cannot leave the status claiming an outage for good.
+ * `model-gateway-recovered`, a call the run cancelled while it was retried publishes
+ * `model-gateway-retry-stopped`, and any later event of the run — a failed turn, a pause, a
+ * settlement — is newer still, so a lost closing frame cannot leave the status claiming an outage
+ * for good. The sidecar route publishes the retrying fact again when a later frame ended the phase
+ * while the call kept retrying, so the status follows the retry for as long as it lasts.
  */
 export function modelGatewayRetrying(
   events: readonly CodingWorkbenchRuntimeSseEvent[],

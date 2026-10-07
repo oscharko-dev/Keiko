@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
-import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type {
+  CiRepairExecutionBudget,
+  CiRepairPromptAdmission,
+} from "./codingRuntimeCiRepairController.js";
+import type { CiRepairBudgetBlockReason } from "./codingRuntimeCiRepairBudgetTypes.js";
 
 type Authority = Pick<
   CodingRuntimeAuthorityService,
@@ -10,10 +14,19 @@ type Authority = Pick<
 > &
   Partial<Pick<CodingRuntimeAuthorityService, "recordCiRepairPromptRefusal">>;
 
-function fakeBudget(chargePrompt: (promptTokens: number) => boolean): CiRepairExecutionBudget {
+const ADMITTED: CiRepairPromptAdmission = { accepted: true };
+
+function refusal(reason: CiRepairBudgetBlockReason): CiRepairPromptAdmission {
+  return { accepted: false, reason };
+}
+
+function fakeBudget(
+  canChargePrompt: (promptTokens: number) => CiRepairPromptAdmission,
+  chargePrompt: (promptTokens: number) => CiRepairPromptAdmission = canChargePrompt,
+): CiRepairExecutionBudget {
   return {
     admitTool: () => undefined,
-    canChargePrompt: chargePrompt,
+    canChargePrompt,
     chargePrompt,
     observed: () => undefined,
   };
@@ -50,7 +63,7 @@ describe("reservePromptWithCiRepair", () => {
         return { ok: true, runId: "run-1" };
       },
     };
-    const blockedBudget = fakeBudget(() => false);
+    const blockedBudget = fakeBudget(() => refusal("prompt-budget-exhausted"));
 
     const result = reservePromptWithCiRepair(authority, () => blockedBudget, "cap-1", 500);
 
@@ -81,10 +94,13 @@ describe("reservePromptWithCiRepair", () => {
       },
     };
     let chargedWith: number | undefined;
-    const admittingBudget = fakeBudget((promptTokens) => {
-      chargedWith = promptTokens;
-      return true;
-    });
+    const admittingBudget = fakeBudget(
+      () => ADMITTED,
+      (promptTokens) => {
+        chargedWith = promptTokens;
+        return ADMITTED;
+      },
+    );
 
     const result = reservePromptWithCiRepair(authority, () => admittingBudget, "cap-2", 500);
 
@@ -116,7 +132,10 @@ describe("reservePromptWithCiRepair", () => {
 
   // #3873 review (PR #3876): the early return that spares the real budget (b2-3) also skipped the
   // authority's record of why the run's last model call was refused, which a failed run's settlement
-  // reads to name its prompt allowance. The refusal is recorded where the authority's own is.
+  // reads to name the limit. The refusal is recorded where the authority's own is, with the closed
+  // reason the CI-repair budget gave: every refusal used to be recorded as the prompt allowance,
+  // whatever refused, so a repair that ran past its runtime limit named an allowance no setting of
+  // which could help.
   describe("the refusal a CI-repair budget answers", () => {
     const binding = (runId: string): ReturnType<Authority["authenticateCapability"]> => ({
       ok: true,
@@ -131,53 +150,80 @@ describe("reservePromptWithCiRepair", () => {
       },
     });
 
-    it("records the refusal for the run, still without reserving the real authority budget", () => {
-      const refusals: string[] = [];
-      let reservations = 0;
-      const authority: Authority = {
-        authenticateCapability: () => binding("run-refused"),
-        reservePromptTokens: () => {
-          reservations += 1;
-          return { ok: true, runId: "run-refused" };
-        },
-        recordCiRepairPromptRefusal: (runId): void => {
-          refusals.push(runId);
-        },
-      };
+    // Every closed reason the budget can refuse with, as a record the compiler keeps complete: a
+    // reason added to the vocabulary must be listed here before this file compiles.
+    const EVERY_REASON: Record<CiRepairBudgetBlockReason, true> = {
+      "authority-denied": true,
+      "invalid-binding": true,
+      "invalid-input": true,
+      "stale-revision": true,
+      "clock-drift": true,
+      "deadline-exhausted": true,
+      "tool-budget-exhausted": true,
+      "prompt-budget-exhausted": true,
+      "attempt-budget-exhausted": true,
+      "storage-capacity": true,
+      "attempt-active": true,
+      "attempt-replayed": true,
+      "attempt-missing": true,
+      "recovery-required": true,
+      "storage-unavailable": true,
+    };
+    const REASONS = Object.keys(EVERY_REASON) as CiRepairBudgetBlockReason[];
 
-      const result = reservePromptWithCiRepair(
-        authority,
-        () => fakeBudget(() => false),
-        "cap-refused",
-        500,
-      );
+    it.each(REASONS)(
+      "records the exact %s a check refused with for the run, still without reserving the real authority budget",
+      (reason) => {
+        const refusals: (readonly [string, CiRepairBudgetBlockReason])[] = [];
+        let reservations = 0;
+        const authority: Authority = {
+          authenticateCapability: () => binding("run-refused"),
+          reservePromptTokens: () => {
+            reservations += 1;
+            return { ok: true, runId: "run-refused" };
+          },
+          recordCiRepairPromptRefusal: (runId, recorded): void => {
+            refusals.push([runId, recorded]);
+          },
+        };
 
-      expect(result).toEqual({ ok: false, reason: "authority-budget-exceeded" });
-      expect(refusals).toEqual(["run-refused"]);
-      expect(reservations).toBe(0);
-    });
+        const result = reservePromptWithCiRepair(
+          authority,
+          () => fakeBudget(() => refusal(reason)),
+          "cap-refused",
+          500,
+        );
 
-    it("records the refusal of a charge the budget declines after the authority admitted the call", () => {
-      const refusals: string[] = [];
-      const authority: Authority = {
-        authenticateCapability: () => binding("run-declined"),
-        reservePromptTokens: () => ({ ok: true, runId: "run-declined" }),
-        recordCiRepairPromptRefusal: (runId): void => {
-          refusals.push(runId);
-        },
-      };
-      // The budget admitted the estimate, then refused the charge itself.
-      const budget: CiRepairExecutionBudget = {
-        ...fakeBudget(() => false),
-        canChargePrompt: () => true,
-      };
+        expect(result).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+        expect(refusals).toEqual([["run-refused", reason]]);
+        expect(reservations).toBe(0);
+      },
+    );
 
-      expect(reservePromptWithCiRepair(authority, () => budget, "cap-declined", 500)).toEqual({
-        ok: false,
-        reason: "authority-budget-exceeded",
-      });
-      expect(refusals).toEqual(["run-declined"]);
-    });
+    it.each(REASONS)(
+      "records the exact %s a charge refused with after the authority admitted the call",
+      (reason) => {
+        const refusals: (readonly [string, CiRepairBudgetBlockReason])[] = [];
+        const authority: Authority = {
+          authenticateCapability: () => binding("run-declined"),
+          reservePromptTokens: () => ({ ok: true, runId: "run-declined" }),
+          recordCiRepairPromptRefusal: (runId, recorded): void => {
+            refusals.push([runId, recorded]);
+          },
+        };
+        // The budget admitted the estimate, then refused the charge itself, for any reason.
+        const budget = fakeBudget(
+          () => ADMITTED,
+          () => refusal(reason),
+        );
+
+        expect(reservePromptWithCiRepair(authority, () => budget, "cap-declined", 500)).toEqual({
+          ok: false,
+          reason: "authority-budget-exceeded",
+        });
+        expect(refusals).toEqual([["run-declined", reason]]);
+      },
+    );
 
     it("records nothing for a call the budget admits or the authority itself refuses", () => {
       const refusals: string[] = [];
@@ -190,7 +236,8 @@ describe("reservePromptWithCiRepair", () => {
         recordCiRepairPromptRefusal: record,
       };
       expect(
-        reservePromptWithCiRepair(admitted, () => fakeBudget(() => true), "cap-admitted", 10).ok,
+        reservePromptWithCiRepair(admitted, () => fakeBudget(() => ADMITTED), "cap-admitted", 10)
+          .ok,
       ).toBe(true);
       expect(reservePromptWithCiRepair(admitted, () => undefined, "cap-admitted", 10).ok).toBe(
         true,
@@ -203,7 +250,7 @@ describe("reservePromptWithCiRepair", () => {
         recordCiRepairPromptRefusal: record,
       };
       expect(
-        reservePromptWithCiRepair(refusing, () => fakeBudget(() => true), "cap-authority", 10),
+        reservePromptWithCiRepair(refusing, () => fakeBudget(() => ADMITTED), "cap-authority", 10),
       ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
 
       // A capability that does not authenticate has no run to record anything for.
@@ -212,7 +259,12 @@ describe("reservePromptWithCiRepair", () => {
         reservePromptTokens: () => ({ ok: false, reason: "authority-expired" }),
         recordCiRepairPromptRefusal: record,
       };
-      reservePromptWithCiRepair(unauthenticated, () => fakeBudget(() => false), "cap-bad", 10);
+      reservePromptWithCiRepair(
+        unauthenticated,
+        () => fakeBudget(() => refusal("prompt-budget-exhausted")),
+        "cap-bad",
+        10,
+      );
 
       expect(refusals).toEqual([]);
     });
@@ -224,7 +276,12 @@ describe("reservePromptWithCiRepair", () => {
       reservePromptTokens: () => ({ ok: false, reason: "authority-expired" }),
     };
 
-    const result = reservePromptWithCiRepair(authority, () => fakeBudget(() => true), "cap-4", 10);
+    const result = reservePromptWithCiRepair(
+      authority,
+      () => fakeBudget(() => ADMITTED),
+      "cap-4",
+      10,
+    );
 
     expect(result).toEqual({ ok: false, reason: "authority-expired" });
   });

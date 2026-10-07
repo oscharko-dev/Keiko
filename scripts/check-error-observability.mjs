@@ -170,7 +170,7 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   ],
   [
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadAbsence.ts:probeComponent",
-    "A failed no-follow metadata probe leaves the path undecided, so the secure read keeps the helper's own denial: only ENOENT below real directories is read as absent, and every other failure is the answer given before this probe existed.",
+    "A failed no-follow metadata probe is returned as the closed failed component and reported as the probe-failed verdict, which the secure read hands to the governed read's coding-runtime.workspace-read line as `absence`: only ENOENT below real directories is read as absent, the helper's own denial stays the answer for every other failure, and the log says which kind of probe failure left it standing without the path or the error text.",
   ],
   [
     "packages/keiko-security/src/fs-hardening.ts:closeDirectoryGuards",

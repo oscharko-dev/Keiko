@@ -132,14 +132,24 @@ export type CodingWorkbenchRuntimeFailureCode =
  * the gateway met a failure that says the provider is unavailable — a timeout, a refused connection,
  * a retryable 5xx, a rate limit — with a retry, or holds a call at its admission behind the circuit
  * breaker or a provider cooldown before its first attempt, and keeps going for its outage window.
- * `model-gateway-recovered`: a call it had been retrying or holding was answered. SSE-only, like the
- * per-turn causes below, and never adapter events: the runtime does not produce them, the sidecar
- * gateway route does. They carry no count, text, identifier or failure code.
+ * `model-gateway-recovered`: a call it had been retrying or holding was answered.
+ * `model-gateway-retry-stopped`: a call it had been retrying or holding ended with no answer and no
+ * failure frame of its own, because the run cancelled it (the client went away, the transport was
+ * cut, the route deadline ran out), so the gateway is no longer retrying anything for that call —
+ * not an answer, which is what `recovered` says, and not a failure, which the turn-failure frame
+ * says. SSE-only, like the per-turn causes below, and never adapter events: the runtime does not
+ * produce them, the sidecar gateway route does. They carry no count, text, identifier or failure
+ * code.
  */
-export type CodingWorkbenchGatewayEventKind = "model-gateway-retrying" | "model-gateway-recovered";
+export type CodingWorkbenchGatewayEventKind =
+  "model-gateway-retrying" | "model-gateway-recovered" | "model-gateway-retry-stopped";
 
 export const CODING_WORKBENCH_GATEWAY_EVENT_KINDS: readonly CodingWorkbenchGatewayEventKind[] =
-  Object.freeze(["model-gateway-retrying", "model-gateway-recovered"] as const);
+  Object.freeze([
+    "model-gateway-retrying",
+    "model-gateway-recovered",
+    "model-gateway-retry-stopped",
+  ] as const);
 
 /** Redacted per-turn gateway causes. These are SSE-only, not durable run failure states. */
 export type CodingWorkbenchTurnFailureCode =

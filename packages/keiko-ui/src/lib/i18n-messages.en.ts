@@ -327,6 +327,7 @@ export const EN_MESSAGES = {
   "activity.event.failureRedacted": "Runtime failure recorded",
   "activity.event.modelGatewayRetrying": "Model gateway unavailable, retrying",
   "activity.event.modelGatewayRecovered": "Model gateway answered again",
+  "activity.event.modelGatewayRetryStopped": "Model gateway retry stopped",
   "activity.kind.step": "Step",
   "activity.kind.approval": "Approval requested",
   "activity.kind.approved": "Approved",

@@ -15,12 +15,15 @@ import {
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
   activityLogErrorKind,
+  GATEWAY_FAILURE_EVIDENCE_FIELDS,
+  gatewayFailureEvidence,
   logLevelEnabled,
   logModelId,
   logTimer,
@@ -191,6 +194,12 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
   emitter: "resilience.executeWithRetry",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    // The position, counted from 1, of the attempt that failed on the call's whole ladder of
+    // attempts: the provider attempts AND the call's one steered repair (`reason` says which kind of
+    // further attempt this line schedules). After a repair, the retry of the next provider failure
+    // is therefore scheduled as attempt 2, while the retry observer's notice and the
+    // `coding-sidecar.gateway.retry-surfaced` line built from it count provider attempts only and
+    // name that same retry as following attempt 1. The two numbers differ on purpose (#3873 review).
     attempt: { type: "integer", dataClass: "count", required: true },
     maxRetries: { type: "integer", dataClass: "count", required: true },
     delayMs: { type: "number", dataClass: "duration", required: true },
@@ -220,6 +229,36 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-retry"],
   proofIds: ["gateway.retry.scheduled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #3873 review: a call's retry observer is the caller's code, run inside the retry loop and the
+// admission wait. One that throws is absorbed where it is called, so the call keeps its own result
+// and the throw is never an unhandled rejection; this line is the record of it. It names the notice
+// the observer was told and carries the Keiko-code frames and cause classes of the throw, never the
+// notice's content, the observer's message or its identity.
+const GATEWAY_RETRY_OBSERVER_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.retry.observer-failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.reportObserverFailure",
+  fields: {
+    ...GATEWAY_FAILURE_EVIDENCE_FIELDS,
+    modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    notice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["scheduled", "admission-wait", "settled"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-retry"],
+  proofIds: ["gateway.retry.observer-failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -635,7 +674,11 @@ async function sleepWithCancellation(
 export type GatewayRetryNotice =
   | {
       readonly kind: "scheduled";
-      /** The failed provider attempt this retry follows, counted from 1. */
+      /**
+       * The failed provider attempt this retry follows, counted from 1. A steered repair is not a
+       * provider attempt and is not counted, so after one this is lower than the `attempt` of the
+       * `gateway.retry.scheduled` line of the same retry, which counts every attempt of the call.
+       */
       readonly attempt: number;
       readonly retryPolicy: RetryPolicy;
     }
@@ -661,10 +704,23 @@ export type GatewayRetryNotice =
     };
 
 /**
- * Runs inside the retry loop and the admission wait, synchronously, so it MUST NOT throw: it owns
- * and logs its own failures (the same contract as `GatewayDeps.onContextWindowReported`).
+ * Runs inside the retry loop and the admission wait, synchronously. It owns and logs its own
+ * failures (the same contract as `GatewayDeps.onContextWindowReported`), but a throw that escapes
+ * it is not trusted to be impossible: the call's announcer absorbs it where the observer is called,
+ * so the call keeps its own result, and records it on `gateway.retry.observer-failed`.
  */
 export type GatewayRetryObserver = (notice: GatewayRetryNotice) => void;
+
+/**
+ * What a call labels the lines of its retries and of its announcements with: the sink they are
+ * written to, the model they concern and the call's correlation id. Optional in full: an unwired
+ * caller keeps the exact behaviour it had before instrumentation, down to the allocation count.
+ */
+export interface RetryLogLabels {
+  readonly sink?: ModelGatewayLogSink | undefined;
+  readonly modelId?: string | undefined;
+  readonly correlationId?: string | undefined;
+}
 
 /**
  * One call's conversation with its observer (#3873 review): what the call does — a retry scheduled,
@@ -672,7 +728,8 @@ export type GatewayRetryObserver = (notice: GatewayRetryNotice) => void;
  * settlement when it ends. The call's admission waits and every retry loop it runs share the one
  * announcer, which is why a streamed call's first admission, ahead of its loop, settles with the
  * loop that follows it. A call whose caller did not ask to hear it has no announcer and takes its
- * exact path as before.
+ * exact path as before. An observer that throws never reaches the call: every notice is told
+ * through one guard that records the throw and carries on.
  */
 export interface RetryAnnouncer {
   /** A failure that says the provider is unavailable was met with a scheduled retry. */
@@ -683,41 +740,75 @@ export interface RetryAnnouncer {
   settled(outcome: "answered" | "failed"): void;
 }
 
-export function retryAnnouncer(observer: GatewayRetryObserver): RetryAnnouncer {
-  // Set before the observer is told, so an observer that broke its contract still leaves the call
-  // owed its settlement.
+export function retryAnnouncer(
+  observer: GatewayRetryObserver,
+  labels: RetryLogLabels = {},
+): RetryAnnouncer {
+  const sink = resolveLogSink(labels.sink);
+  // The one place the caller's observer is called. It is foreign code inside the retry loop and the
+  // admission wait, and a throw that left here would hang the call (the settlement runs ahead of the
+  // call's own resolve or reject), replace the call's result with the observer's error, or leave the
+  // loop as an unhandled rejection, which the CLI's process guard treats as fatal. It is recorded
+  // body-free, never swallowed.
+  const tell = (notice: GatewayRetryNotice): void => {
+    try {
+      observer(notice);
+    } catch (error) {
+      reportObserverFailure(sink, labels, notice.kind, error);
+    }
+  };
+  // Set before the observer is told: the call owes its settlement from the moment it announced
+  // anything, whatever the observer did with the notice.
   let owed = false;
   return {
     scheduled: (attempt, retryPolicy): void => {
       owed = true;
-      observer({ kind: "scheduled", attempt, retryPolicy });
+      tell({ kind: "scheduled", attempt, retryPolicy });
     },
     admissionWait: (reason, retryPolicy): void => {
       owed = true;
-      observer({ kind: "admission-wait", reason, retryPolicy });
+      tell({ kind: "admission-wait", reason, retryPolicy });
     },
     settled: (outcome): void => {
       if (!owed) return;
       owed = false;
-      observer({ kind: "settled", outcome });
+      tell({ kind: "settled", outcome });
     },
   };
 }
 
-// What the retry loop needs in order to LABEL its lines. Optional in full: an unwired caller
-// keeps the exact behaviour it had before instrumentation, down to the allocation count. The
-// announcer is the one member that is not a label: the caller's own ear on the call, set only by a
-// caller that surfaces an outage to its operator (the coding sidecar route) and shared with the
-// call's admission waits.
-export interface RetryLogContext {
-  readonly sink?: ModelGatewayLogSink | undefined;
-  readonly modelId?: string | undefined;
-  readonly correlationId?: string | undefined;
+// The failure line of an observer that threw. The sink is the call's isolated one and the event
+// builder never throws (an invalid value becomes a rejection the sink drops), so recording cannot
+// bring the failure back into the call it protects.
+function reportObserverFailure(
+  sink: ModelGatewayLogSink,
+  labels: RetryLogLabels,
+  notice: GatewayRetryNotice["kind"],
+  error: unknown,
+): void {
+  sink.write(
+    activityLogEvent(
+      GATEWAY_RETRY_OBSERVER_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: labels.correlationId ?? ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        errorKind: activityLogErrorKind(error),
+      },
+      { ...loggedRetryModel(labels), notice, ...gatewayFailureEvidence(sink, error) },
+    ),
+  );
+}
+
+// What the retry loop needs in order to LABEL its lines, and the call's announcer. The announcer is
+// the one member that is not a label: the caller's own ear on the call, set only by a caller that
+// surfaces an outage to its operator (the coding sidecar route) and shared with the call's
+// admission waits.
+export interface RetryLogContext extends RetryLogLabels {
   readonly announcer?: RetryAnnouncer | undefined;
 }
 
-function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string }> {
-  return context.modelId === undefined ? {} : { modelId: logModelId(context.modelId) };
+function loggedRetryModel(labels: RetryLogLabels): Readonly<{ modelId?: string }> {
+  return labels.modelId === undefined ? {} : { modelId: logModelId(labels.modelId) };
 }
 
 // The provider-specific detail that turns "a retry happened" into "the provider said 503" or

@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
-import { proveWorkspacePathAbsent } from "./secureWorkspaceTextReadAbsence.js";
+import {
+  proveWorkspacePathAbsent,
+  type WorkspacePathAbsence,
+  type WorkspacePathLstat,
+} from "./secureWorkspaceTextReadAbsence.js";
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES,
@@ -43,7 +47,18 @@ export type SecureWorkspaceTextReadFailure =
 
 export type SecureWorkspaceTextReadResult =
   | { readonly ok: true; readonly text: string }
-  | { readonly ok: false; readonly reason: SecureWorkspaceTextReadFailure };
+  | {
+      readonly ok: false;
+      readonly reason: SecureWorkspaceTextReadFailure;
+      /**
+       * Set only when the native helper answered `access-denied`: the closed verdict of the server's
+       * no-follow walk that decided between `not-found` and `denied` (`absent`, `exists`, `link`,
+       * `not-directory`, `foreign-device`, `probe-failed`, `root-unusable`, `aborted`). It is how a
+       * denial that was refined can be told apart in the log (#3873 review), and it never carries a
+       * path or an error text. Absent for every other failure, which the walk never ran for.
+       */
+      readonly absence?: WorkspacePathAbsence;
+    };
 
 export interface SecureWorkspaceTextReadPort {
   /**
@@ -100,6 +115,8 @@ export interface SecureWorkspaceTextReadDeps {
   readonly artifactVerifier: SecureWorkspaceTextReadArtifactVerifier;
   readonly processFactory: SecureWorkspaceTextReadProcessFactory;
   readonly platform?: SecureWorkspaceReadPlatform | undefined;
+  /** Test seam for the absence walk's metadata probe; production uses `node:fs/promises` `lstat`. */
+  readonly lstat?: WorkspacePathLstat | undefined;
 }
 
 export function createSecureWorkspaceTextReadPort(
@@ -167,7 +184,12 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       }
       const answer = decodeHelperResponse(response);
       if (answer.kind === "settled") return answer.result;
-      return await refinedAccessDenial(workspaceRoot, request.relativePath, signal);
+      return await refinedAccessDenial(
+        workspaceRoot,
+        request.relativePath,
+        signal,
+        this.deps.lstat,
+      );
     } finally {
       frame.fill(0);
     }
@@ -240,14 +262,25 @@ function mappedHelperResult(decoded: MappedHelperResponse): SecureWorkspaceTextR
  * Whatever it cannot decide stays the helper's `denied`, so a path that exists, a link, a file used as
  * a directory and an unusable root keep their denial. The deny list was applied before the helper
  * ran, so a denied path never gets here and the answer never tells whether it exists.
+ *
+ * The walk's closed verdict rides out with the result as `absence` (#3873 review): both answers came
+ * from the helper's single `access-denied`, and a denial that cannot be told from another in the log
+ * leaves an operator unable to say whether a creation was refused because the path was there, linked,
+ * on another device, unprobeable or aborted.
  */
 async function refinedAccessDenial(
   workspaceRoot: string,
   relativePath: string,
   signal: AbortSignal,
+  lstat: WorkspacePathLstat | undefined,
 ): Promise<SecureWorkspaceTextReadResult> {
-  const absence = await proveWorkspacePathAbsent({ root: workspaceRoot, relativePath, signal });
-  return { ok: false, reason: absence === "absent" ? "not-found" : "denied" };
+  const absence = await proveWorkspacePathAbsent({
+    root: workspaceRoot,
+    relativePath,
+    signal,
+    lstat,
+  });
+  return { ok: false, reason: absence === "absent" ? "not-found" : "denied", absence };
 }
 
 async function resolveLiveWorkspaceRoot(
