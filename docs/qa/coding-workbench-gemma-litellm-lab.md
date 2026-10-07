@@ -136,10 +136,10 @@ system prompt, and ended its user context with the exact accepted task. No JSON 
 or forced tool choice was attached. This rules out missing tools, a stale prompt or lost intent
 for that reproduction; it does not qualify the requested repair. The planning-only control,
 `run-217038353045240465244766117129178004827`, legitimately settled after one turn without
-tools, edits or verification. V2 guidance now explains that a response without a native tool call
+tools, edits or verification. The earlier V2 replacement guidance explained that a response without a native tool call
 ends the workflow and directs repository work to begin with the actual tool instead of a
-preliminary text-only progress update. Live qualification of that refinement remains pending;
-it is still guidance, not a semantic completion guarantee.
+preliminary text-only progress update. The subsequent controlled runs below qualify that historical refinement;
+it remains guidance, not a semantic completion guarantee.
 
 The next actual Full-access run, `run-273328284314866415890976198669812498840`,
 qualified the controlled repair with the UI driver (`wb-ui`, approvals `all`) on an isolated
@@ -242,9 +242,18 @@ wrapper and pass against the existing streaming walker. A bounded shared path-di
 supports keywords, root-relative globs and immediate directory listing with subtree pruning,
 canonical JSON entries and explicit coverage reasons. It retains the original root, ignore/deny
 rules, descriptor checks and caller cancellation/deadline; results remain limited to 100 entries
-and 64 KiB. The helper phase passed 251 targeted tests and scoped builds/lint/format. Workbench
-port/schema integration is the next increment: this helper-only phase does not yet repair the
-model-facing production call or complete live large-repository qualification.
+and 64 KiB. The helper phase passed 251 targeted tests and scoped builds/lint/format. The production
+Workbench discovery port now uses that existing streaming helper, preserves legacy path text and
+adds canonical entries and explicit coverage metadata through the governed facade and actual V2
+model-content codec. Aggregate read JSON stays within 64 KiB. Expired or cancelled execution
+cannot perform metadata detection; detection and traversal use the same existing execution
+control. Invalid scopes, unknown metadata, accessor/symbol payloads and revoked authority fail
+closed. Existing Chat repository/search controls passed 307 targeted tests; those consumers and
+their recursive-search semantics are preserved. Production-port integration passed 356 focused
+tests; parent independently ran those suites together with the 150 native-context tests against
+an isolated candidate checkout (506 passed), plus 97 canonical-catalog checks and the real pinned
+native-request case. Scoped candidate TypeScript, ESLint, Prettier and diff checks passed.
+Actual current-head large-repository live qualification remains pending.
 
 The existing named-command runner also revalidates at its actual spawn boundary. It accepts a
 centrally proven managed worktree without requiring a duplicate UI-store row, and refuses an
@@ -254,6 +263,19 @@ resolver failures preserve their redacted diagnostic causes/frames. Thirteen gen
 preceded the fixes, and all 68 runner/route tests passed, including a real linked-worktree control.
 Scoped TypeScript, ESLint and format checks passed. No new command aliases or native tools are
 advertised by this runner-only increment.
+
+The next native-context correction removes both V2 agent-system overrides and uses one additive
+native context hook. Failure-first configuration and generated-plugin tests, plus an actual
+OpenCode 2.0.10 request, establish that the old replacement omitted the native Build base while
+the correction preserves that base and appends the exact Keiko interface guidance. The pinned
+executable SHA-256 is `f2dfe9ad5851219a6bd97b2e3cd2081c0964b5f120530f578d3da3aefc5ccc5a`.
+The prior replacement was 8,828 UTF-8 bytes; the observed native base plus 1,465-byte addendum is
+2,197 bytes, 6,631 bytes lower for those fixed parts. This is a source/request byte comparison,
+not a Gemma tokenizer, latency or full-request-size result. Addendum SHA-256 is
+`02fc1740d3c17975e7a12359df76d99e6a58b92936ae8fb7f99dcc966e5327e6`.
+V1, tools, permissions and settlement are unchanged. Native-loop live qualification on the
+published correction remains pending; configured readiness digest/count facts do not claim that
+any particular provider received them.
 
 F21 active turn failures now describe the observed cause without premature operator repair advice.
 The timeline claims an automatic retry only when the existing gateway retry fact confirms it;

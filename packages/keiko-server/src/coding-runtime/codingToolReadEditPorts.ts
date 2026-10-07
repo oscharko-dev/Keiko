@@ -6,21 +6,28 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isCodingSafeActivityPresentationPath } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
+  type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import {
   detectWorkspaceAt,
-  discoverWithStatsAsync,
+  discoverWorkspacePaths,
+  executionControlledWorkspaceFs,
   isDenied,
-  type DiscoveryResult,
-  type DiscoveryStats,
+  PathDeniedError,
+  PathEscapeError,
+  RepoSearchInvalidQueryError,
+  StructuralExecutionStoppedError,
+  type WorkspacePathDiscoveryResult,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
   contentFreeErrorClass,
@@ -41,7 +48,12 @@ import {
   type EditPrepareCause,
   type MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
+import {
+  isExactEditorAgentChangeset,
+  codingToolDiscoveryText,
+  type CodingToolDiscoveryResult,
+  type CodingToolReadResult,
+} from "./codingToolIpc.js";
 import {
   changesetPayloadBytes,
   isReplacementChangeset,
@@ -218,54 +230,116 @@ async function executeDiscover(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" }
+  | { readonly status: "failed"; readonly reasonCode?: string }
 > {
   const preflight = discoveryPreflight(deps, signal, mutationGuard);
   if (!preflight.ok) return { status: "failed" };
   const binding = preflight.binding;
   const startedAtMs = Date.now();
   let reason: DiscoverySettlementReason = "authority-denied";
-  let stats: DiscoveryStats | undefined;
+  let discovered: WorkspacePathDiscoveryResult | undefined;
+  let read: CodingToolReadResult | undefined;
   let failure: unknown;
   try {
     const resolved = discoveryWorkspace(deps);
     if (resolved === undefined) return { status: "failed" };
-    const discovered = await discoverPaths(resolved, signal);
-    stats = discovered.stats;
-    const selected = discoveredPathText(discovered.files, request.query, request.maxResults);
+    discovered = await discoverPaths(resolved, request, signal, mutationGuard);
+    read = discoveryReadResult(discovered);
     if (!discoveryPostflight(deps, resolved.root, binding, signal, mutationGuard)) {
       reason = isAborted(signal) ? "cancelled" : "authority-denied";
       return { status: "failed" };
     }
     reason = "none";
-    return { status: "completed", read: discoveryReadResult(selected) };
+    return { status: "completed", read };
   } catch (error) {
     failure = error;
-    reason = isAborted(signal) ? "cancelled" : "inventory-failed";
+    reason = discoveryFailureReason(signal, error);
     emitDiscoveryFailureDiagnostic(deps.diagnostics, binding, error);
-    return { status: "failed" };
+    return discoveryRefusal(reason);
   } finally {
-    recordDiscoverySettlement(deps, binding, reason, startedAtMs, stats, failure);
+    recordDiscoverySettlement(
+      deps,
+      binding,
+      reason,
+      startedAtMs,
+      discovered,
+      reason === "none" ? read : undefined,
+      failure,
+    );
   }
 }
 
 function discoverPaths(
   resolved: DiscoveryWorkspace,
+  request: RepositoryDiscoverRequest,
   signal: AbortSignal | undefined,
-): Promise<DiscoveryResult> {
-  const workspace = detectWorkspaceAt(resolved.root, resolved.fs, {
-    scanSourceFilesForLanguages: false,
-  });
-  return discoverWithStatsAsync(
+  mutationGuard: CodingToolMutationGuard,
+): Promise<WorkspacePathDiscoveryResult> {
+  const nowMs = mutationGuard.executionBudget?.nowMs ?? Date.now;
+  const deadlineAtMs = Math.min(
+    nowMs() + DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+    mutationGuard.executionBudget?.deadlineAtMs ?? Infinity,
+  );
+  const control = { nowMs, deadlineAtMs, ...(signal === undefined ? {} : { signal }) };
+  const workspace = detectWorkspaceAt(
+    resolved.root,
+    executionControlledWorkspaceFs(resolved.fs ?? nodeWorkspaceFs, control),
+    {
+      scanSourceFilesForLanguages: false,
+    },
+  );
+  return discoverWorkspacePaths(
     workspace,
-    { maxDepth: 40, maxFiles: 20_000, applyGitignore: true },
+    {
+      mode: request.mode ?? "keywords",
+      directory: request.directory ?? "",
+      query: request.mode === "glob" ? request.query : request.query.trim(),
+      maxResults: request.maxResults,
+    },
+    control,
     resolved.fs,
-    { nowMs: Date.now, deadlineAtMs: Infinity, ...(signal === undefined ? {} : { signal }) },
-    { failOnReadError: true },
   );
 }
 
-type DiscoverySettlementReason = "none" | "cancelled" | "authority-denied" | "inventory-failed";
+type DiscoverySettlementReason =
+  | "none"
+  | "cancelled"
+  | "authority-denied"
+  | "inventory-failed"
+  | "timeout"
+  | "scope-denied"
+  | "invalid-request";
+
+export const WORKSPACE_DISCOVERY_REFUSAL_CODES = Object.freeze({
+  SCOPE_DENIED: "WORKSPACE_DISCOVERY_SCOPE_DENIED",
+  INVALID_REQUEST: "WORKSPACE_DISCOVERY_INVALID_REQUEST",
+  TIMEOUT: "WORKSPACE_DISCOVERY_TIMEOUT",
+});
+
+function discoveryFailureReason(
+  signal: AbortSignal | undefined,
+  error: unknown,
+): DiscoverySettlementReason {
+  if (isAborted(signal)) return "cancelled";
+  if (error instanceof StructuralExecutionStoppedError)
+    return error.reason === "timeout" ? "timeout" : "cancelled";
+  if (error instanceof PathDeniedError || error instanceof PathEscapeError) return "scope-denied";
+  if (error instanceof RepoSearchInvalidQueryError) return "invalid-request";
+  return "inventory-failed";
+}
+
+function discoveryRefusal(reason: DiscoverySettlementReason): {
+  readonly status: "failed";
+  readonly reasonCode?: string;
+} {
+  if (reason === "scope-denied")
+    return { status: "failed", reasonCode: WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED };
+  if (reason === "invalid-request")
+    return { status: "failed", reasonCode: WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST };
+  if (reason === "timeout")
+    return { status: "failed", reasonCode: WORKSPACE_DISCOVERY_REFUSAL_CODES.TIMEOUT };
+  return { status: "failed" };
+}
 
 const CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -285,7 +359,15 @@ const CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["none", "cancelled", "authority-denied", "inventory-failed"],
+      values: [
+        "none",
+        "cancelled",
+        "authority-denied",
+        "inventory-failed",
+        "timeout",
+        "scope-denied",
+        "invalid-request",
+      ],
     },
     cooperative: { type: "boolean", dataClass: "closed-enum", required: true },
     sourceLanguageScan: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -293,7 +375,7 @@ const CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["once-per-directory"],
+      values: ["once-per-directory", "retained-results-only"],
     },
     discovered: { type: "integer", dataClass: "count", required: false },
     denied: { type: "integer", dataClass: "count", required: false },
@@ -301,6 +383,26 @@ const CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION = defineActivityLogOperation(
     depthPruned: { type: "integer", dataClass: "count", required: false },
     maxFilesPruned: { type: "integer", dataClass: "count", required: false },
     unrepresentablePaths: { type: "integer", dataClass: "count", required: false },
+    directoriesDiscovered: { type: "integer", dataClass: "count", required: false },
+    directoriesPruned: { type: "integer", dataClass: "count", required: false },
+    ioErrors: { type: "integer", dataClass: "count", required: false },
+    returnedPathCount: { type: "integer", dataClass: "count", required: false },
+    matchedCount: { type: "integer", dataClass: "count", required: false },
+    coverageIncomplete: { type: "boolean", dataClass: "closed-enum", required: false },
+    truncationReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 6,
+      values: [
+        "result-limit",
+        "output-limit",
+        "directory-limit",
+        "io-error",
+        "time-limit",
+        "unrepresentable-path",
+      ],
+    },
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -330,11 +432,12 @@ function recordDiscoverySettlement(
   binding: RuntimeProducerBinding | undefined,
   reason: DiscoverySettlementReason,
   startedAtMs: number,
-  stats: DiscoveryStats | undefined,
+  discovered: WorkspacePathDiscoveryResult | undefined,
+  read: CodingToolReadResult | undefined,
   failure: unknown,
 ): void {
   const errorKind: ActivityLogErrorKind | undefined =
-    reason === "none" ? undefined : reason === "inventory-failed" ? "internal" : reason;
+    reason === "none" ? undefined : discoveryErrorKind(reason);
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION,
@@ -348,25 +451,38 @@ function recordDiscoverySettlement(
         reason,
         cooperative: true,
         sourceLanguageScan: false,
-        directorySortStrategy: "once-per-directory",
-        ...(stats === undefined
-          ? {}
-          : {
-              discovered: stats.discovered,
-              denied: stats.denied,
-              ignored: stats.ignored,
-              depthPruned: stats.depthPruned,
-              maxFilesPruned: stats.maxFilesPruned,
-              ...(stats.unrepresentablePaths === undefined
-                ? {}
-                : { unrepresentablePaths: stats.unrepresentablePaths }),
-            }),
+        directorySortStrategy: "retained-results-only",
+        ...discoverySettlementFacts(discovered, read),
         ...(failure === undefined
           ? {}
           : { frames: keikoStackFrames(failure), causeChain: causeChain(failure) }),
       },
     ),
   );
+}
+
+function discoveryErrorKind(
+  reason: Exclude<DiscoverySettlementReason, "none">,
+): ActivityLogErrorKind {
+  if (reason === "inventory-failed") return "internal";
+  if (reason === "invalid-request") return "validation-failed";
+  return reason === "scope-denied" ? "authority-denied" : reason;
+}
+
+function discoverySettlementFacts(
+  discovered: WorkspacePathDiscoveryResult | undefined,
+  read: CodingToolReadResult | undefined,
+): Partial<ActivityLogFields<typeof CODING_RUNTIME_WORKSPACE_DISCOVERY_OPERATION>> {
+  if (discovered === undefined) return {};
+  const { filesDiscovered, ...stats } = discovered.stats;
+  return {
+    discovered: filesDiscovered,
+    ...stats,
+    returnedPathCount: read?.returnedPathCount ?? 0,
+    matchedCount: discovered.matchedCount,
+    coverageIncomplete: read?.discovery?.coverageIncomplete ?? discovered.coverageIncomplete,
+    truncationReasons: read?.discovery?.truncationReasons ?? discovered.truncationReasons,
+  };
 }
 
 interface DiscoveryWorkspace {
@@ -404,62 +520,36 @@ function emitDiscoveryFailureDiagnostic(
   });
 }
 
-function discoveredPathText(
-  files: DiscoveryResult["files"],
-  query: string,
-  maxResults: number,
-): { readonly text: string; readonly returnedPathCount: number } {
-  const terms = discoveryTerms(query);
-  const selected: string[] = [];
-  let bytes = 0;
-  for (const { relativePath: path } of files) {
-    if (selected.length >= maxResults) break;
-    if (isDenied(path) || !matchesDiscoveryTerms(path, terms)) continue;
-    const lineBytes = Buffer.byteLength(`${path}\n`, "utf8");
-    if (bytes + lineBytes > MAX_READ_BYTES) break;
-    selected.push(path);
-    bytes += lineBytes;
-  }
-  return {
-    text: selected.length === 0 ? "" : `${selected.join("\n")}\n`,
-    returnedPathCount: selected.length,
-  };
-}
-
-function matchesDiscoveryTerms(path: string, terms: readonly string[]): boolean {
-  const candidate = path.toLowerCase();
-  for (const term of terms) {
-    if (!candidate.includes(term)) return false;
-  }
-  return true;
-}
-
-function discoveryTerms(query: string): readonly string[] {
-  if (query.trim() === "*") return [];
-  const terms: string[] = [];
-  for (const term of query.toLowerCase().split(/[\s/_.-]+/u)) {
-    if (term.length === 0) continue;
-    terms.push(term);
-    if (terms.length === 8) break;
-  }
-  return terms;
-}
-
-function discoveryReadResult({
-  text,
-  returnedPathCount,
-}: {
-  readonly text: string;
-  readonly returnedPathCount: number;
-}): CodingToolReadResult {
+function discoveryReadProjection(discovery: CodingToolDiscoveryResult): CodingToolReadResult {
+  const text = codingToolDiscoveryText(discovery.entries);
   const totalLines = text.length === 0 ? 0 : text.split("\n").length - 1;
   return {
     text,
     byteCount: Buffer.byteLength(text, "utf8"),
     digest: createHash("sha256").update(text, "utf8").digest("hex"),
     totalLines,
-    returnedPathCount,
+    returnedPathCount: discovery.entries.length,
+    discovery,
   };
+}
+
+function discoveryReadResult(result: WorkspacePathDiscoveryResult): CodingToolReadResult {
+  const entries = [...result.entries];
+  const truncationReasons = [...result.truncationReasons];
+  const project = (): CodingToolReadResult =>
+    discoveryReadProjection({
+      entries,
+      truncationReasons,
+      matchedCount: result.matchedCount,
+      coverageIncomplete: truncationReasons.length > 0,
+    });
+  let read = project();
+  while (Buffer.byteLength(JSON.stringify(read), "utf8") > MAX_READ_BYTES) {
+    entries.pop();
+    if (!truncationReasons.includes("output-limit")) truncationReasons.push("output-limit");
+    read = project();
+  }
+  return read;
 }
 
 async function executeRead(

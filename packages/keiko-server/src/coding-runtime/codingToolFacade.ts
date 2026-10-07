@@ -12,7 +12,12 @@ import {
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
-import { WORKSPACE_READ_REFUSAL_CODES } from "./codingToolReadEditPorts.js";
+import {
+  WORKSPACE_READ_REFUSAL_CODES,
+  WORKSPACE_DISCOVERY_REFUSAL_CODES,
+} from "./codingToolReadEditPorts.js";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import { WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
@@ -20,6 +25,8 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 import type {
   AuxiliaryCapabilityOutcomeV1,
   VerificationFailureLocation,
+  WorkspacePathDiscoveryEntry,
+  WorkspacePathDiscoveryTruncationReason,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
@@ -43,6 +50,7 @@ import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
   declaredCodingToolAction,
+  codingToolDiscoveryText,
   dependencyBootstrapFailureSummary,
   isPermissionObservation,
   parseCodingToolRequest,
@@ -50,6 +58,7 @@ import {
   type CodingToolActionRequest,
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
+  type CodingToolDiscoveryResult,
   type CodingToolResult,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
@@ -130,6 +139,7 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   // A read the port refused for the model's own request (#3615): named, so the model can act on it
   // and the catalog settles the call as a refusal instead of a handler fault.
   ...Object.values(WORKSPACE_READ_REFUSAL_CODES),
+  ...Object.values(WORKSPACE_DISCOVERY_REFUSAL_CODES),
   ...GOVERNED_VERIFICATION_REASON_CODES,
   // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
   // than restated for the same reason the two contract enums above are. A verification the runner
@@ -468,9 +478,16 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
     };
   }
   if (request.action === "skill" || request.action === "child-agent") return projected("failed");
-  const read = projectPayload(request, value.read);
+  return projectCompletedPayload(request, value.read);
+}
+
+function projectCompletedPayload(
+  request: CodingToolActionRequest,
+  value: unknown,
+): CodingToolResult {
+  const read = projectPayload(request, value);
   return read === undefined
-    ? projected(value.outcome)
+    ? projected(request.action === "discover" ? "failed" : "completed")
     : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
 }
 
@@ -1032,13 +1049,30 @@ function projectRead(value: unknown, maxPaths?: number): CodingToolReadResult | 
   if (facts === undefined) return undefined;
   const discovery = discoveryCountFacts(value, maxPaths);
   if (discovery === undefined) return undefined;
-  return {
+  const result = {
     text: value.text,
     byteCount: bytes.length,
     digest: value.digest,
     ...facts,
     ...discovery,
   };
+  return checkedDiscoveryReadProjection(result);
+}
+
+function checkedDiscoveryReadProjection(
+  read: CodingToolReadResult,
+): CodingToolReadResult | undefined {
+  if (read.discovery === undefined) return read;
+  return validDiscoveryReadProjection(read) ? read : undefined;
+}
+
+function validDiscoveryReadProjection(read: CodingToolReadResult): boolean {
+  return (
+    read.discovery !== undefined &&
+    read.text === codingToolDiscoveryText(read.discovery.entries) &&
+    read.totalLines === (read.text.length === 0 ? 0 : read.text.split("\n").length - 1) &&
+    Buffer.byteLength(JSON.stringify(read), "utf8") <= CODING_TOOL_MAX_READ_BYTES
+  );
 }
 
 function discoveryCountFacts(
@@ -1047,11 +1081,118 @@ function discoveryCountFacts(
 ):
   | {
       readonly returnedPathCount?: number;
+      readonly discovery?: CodingToolDiscoveryResult;
     }
   | undefined {
   const count = value.returnedPathCount;
-  if (maxPaths === undefined || count === undefined) return {};
-  return boundedLineCount(count, 0) && count <= maxPaths ? { returnedPathCount: count } : undefined;
+  const discovery = value.discovery;
+  if (maxPaths === undefined || count === undefined)
+    return discovery === undefined ? {} : undefined;
+  if (!boundedLineCount(count, 0) || count > maxPaths) return undefined;
+  if (discovery === undefined) return { returnedPathCount: count };
+  return isDiscoveryResult(discovery, count)
+    ? { returnedPathCount: count, discovery: capturedDiscoveryResult(discovery) }
+    : undefined;
+}
+
+function isDiscoveryEntry(value: unknown): value is WorkspacePathDiscoveryEntry {
+  return (
+    plainDiscoveryRecord(value, ["relativePath", "kind", "sizeBytes"]) &&
+    isValidScopePath(value.relativePath, { mustBeRelative: true }) &&
+    typeof value.relativePath === "string" &&
+    !isDenied(value.relativePath) &&
+    (value.kind === "file" || value.kind === "directory") &&
+    boundedLineCount(value.sizeBytes, 0)
+  );
+}
+
+function plainDiscoveryRecord(
+  value: unknown,
+  keys: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Reflect.ownKeys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry)
+  );
+}
+
+function isDiscoveryReason(value: unknown): value is WorkspacePathDiscoveryTruncationReason {
+  return WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS.some((reason) => reason === value);
+}
+
+function isDiscoveryEntries(
+  value: unknown,
+  count: number,
+): value is readonly WorkspacePathDiscoveryEntry[] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== count ||
+    !plainDenseArray(value) ||
+    !value.every(isDiscoveryEntry)
+  )
+    return false;
+  const entries: readonly WorkspacePathDiscoveryEntry[] = value;
+  return new Set(entries.map((entry) => entry.relativePath)).size === count;
+}
+
+function plainDenseArray(value: readonly unknown[]): boolean {
+  return (
+    Object.getPrototypeOf(value) === Array.prototype &&
+    Reflect.ownKeys(value).length === value.length + 1 &&
+    Object.keys(value).every((key, index) => key === String(index)) &&
+    Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry)
+  );
+}
+
+function isDiscoveryReasons(
+  value: unknown,
+): value is readonly WorkspacePathDiscoveryTruncationReason[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS.length &&
+    plainDenseArray(value) &&
+    value.every(isDiscoveryReason) &&
+    new Set(value).size === value.length
+  );
+}
+
+function isDiscoveryResult(value: unknown, count: number): value is CodingToolDiscoveryResult {
+  if (
+    !plainDiscoveryRecord(value, [
+      "entries",
+      "matchedCount",
+      "coverageIncomplete",
+      "truncationReasons",
+    ])
+  )
+    return false;
+  if (!isDiscoveryEntries(value.entries, count) || !isDiscoveryReasons(value.truncationReasons))
+    return false;
+  if (
+    !boundedLineCount(value.matchedCount, count) ||
+    value.coverageIncomplete !== value.truncationReasons.length > 0
+  )
+    return false;
+  return value.matchedCount === count
+    ? !value.truncationReasons.includes("result-limit")
+    : value.truncationReasons.includes("result-limit") ||
+        value.truncationReasons.includes("output-limit");
+}
+
+function capturedDiscoveryResult(value: CodingToolDiscoveryResult): CodingToolDiscoveryResult {
+  return {
+    entries: value.entries.map(({ relativePath, kind, sizeBytes }) => ({
+      relativePath,
+      kind,
+      sizeBytes,
+    })),
+    matchedCount: value.matchedCount,
+    coverageIncomplete: value.coverageIncomplete,
+    truncationReasons: [...value.truncationReasons],
+  };
 }
 
 function readWindowFacts(

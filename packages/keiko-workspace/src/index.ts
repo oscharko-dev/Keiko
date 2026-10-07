@@ -89,7 +89,11 @@ export {
 } from "./discovery.js";
 
 export { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
-export { type StructuralExecutionControl } from "./structuralExecution.js";
+export {
+  executionControlledWorkspaceFs,
+  StructuralExecutionStoppedError,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
 
 export { lexicalRetrievalStrategy, type RankedFile, type RetrievalStrategy } from "./retrieval.js";
 

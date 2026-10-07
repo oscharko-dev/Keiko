@@ -19,6 +19,10 @@ import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { GOVERNED_TOOL_MODEL_CONTENT_SOURCE } from "./governedToolModelContent.js";
 import {
+  createGeneratedOpenCodeNativeContextPlugin,
+  OPENCODE_NATIVE_CONTEXT_FACTS,
+} from "./opencodeNativeContext.js";
+import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
   runtimeMaxDurationMs,
 } from "./productionRuntimeWorkspaceAuthority.js";
@@ -137,6 +141,9 @@ const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
       values: ["conversation-text"],
     },
     configDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Configured V2 guidance, never a claim about provider receipt or model execution.
+    nativeContextSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    nativeContextUtf8Bytes: { type: "integer", dataClass: "count", required: false },
     dependencyInstallPolicy: {
       type: "string",
       dataClass: "closed-enum",
@@ -276,6 +283,7 @@ export interface OpenCodeRuntimeAdapterPorts {
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
+    readonly nativeContextConfigured?: true | undefined;
     readonly verifyTargetAttestation: () => Promise<boolean>;
     readonly materialize: (bundle: GeneratedOpenCodeBundle) => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
@@ -773,6 +781,9 @@ function recordReadinessPhase(
               dependencyInstallPolicy: "offline",
               planningMode: "conversation-text",
               configDigest: ports.readiness.configDigest,
+              ...(ports.readiness.nativeContextConfigured === true
+                ? OPENCODE_NATIVE_CONTEXT_FACTS
+                : {}),
               ...(ports.contextGeometry === undefined
                 ? {}
                 : {
@@ -1200,12 +1211,15 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
 
 /** V2 loads governed tools through plugin transforms instead of V1 tool files. */
 export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, string>> {
-  return Object.fromEntries(
-    OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
-      name,
-      toolSource(action, schemas, name, "v2"),
-    ]),
-  );
+  return {
+    ...Object.fromEntries(
+      OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
+        name,
+        toolSource(action, schemas, name, "v2"),
+      ]),
+    ),
+    keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
+  };
 }
 
 // #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are

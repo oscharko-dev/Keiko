@@ -38,6 +38,17 @@ model source. Stop, takeover, and recovery requests contain only a request id an
 validation rejects every additional field. Raw task intent is transient model input and is absent
 from durable runtime state, events, failures, and evidence.
 
+The pinned OpenCode 2.0.10 V2 launch configuration does not override `agents.build.system` or
+`agents.compaction.system`. OpenCode owns the Build prompt, model optimizers, planning, native
+iteration and compaction. One generated plugin uses the supported `session.hook("context")` to
+append a separate text part with the Keiko tool/authority interface, truthful verification results
+and repository-instruction framing. It leaves native system parts, messages and tools intact; it
+adds no planner, tool selector or execution loop. The existing readiness operation records only
+the configured addendum's SHA-256 and UTF-8 byte count at config materialization. `configDigest`
+still identifies the configuration JSON; these configured facts do not claim provider receipt.
+An actual request through the pinned executable separately proves native base guidance plus the
+exact additive part. Legacy V1 retains its existing prompt/configuration contract.
+
 Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
 local app session and the selected checkout's existing GitHub reader grant admit preview reads.
 The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot
@@ -204,15 +215,16 @@ The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, 
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
 
-The V2 build prompt begins repository implementation or verification work with the next actual
-governed tool. It explains that preliminary text-only progress ends the native workflow; brief
-progress may accompany a native call. A text-only native terminal turn is not
-semantic proof that requested work happened (live qualification F29, #3873). Planning-only tasks
-and read-only answers remain valid without invented edits or verification. This prompt guidance
-does not introduce a keyword classifier or execute model prose. The existing post-edit and
-per-target verification continuation remains the deterministic completion safeguard where the
-run has observed required verification; final qualification must independently prove the requested
-read/edit/test journey. The admitted launch configuration digest identifies the prompt used.
+The additive V2 interface guidance requires requested implementation to use actual edits and
+verification, inspect observed failures and verify the repair without weakening assertions.
+OpenCode owns that coding loop. A text-only native terminal turn is not semantic proof that
+requested work happened (live qualification F29, #3873). Planning-only tasks and read-only answers
+remain valid without invented edits or verification. This guidance does not introduce a keyword
+classifier or execute model prose. The existing post-edit and per-target verification continuation
+currently remains a bounded completion safeguard where the run has observed required verification;
+its removal requires native-loop qualification with truthful settlement preserved. Final
+qualification must independently prove the requested read/edit/test journey. The configured
+addendum digest identifies Keiko's guidance separately from the launch configuration digest.
 
 **A run whose edits keep being refused settles instead of looping** (F5 of the live Gemma
 qualification, #3873). A run whose workspace had no connected Workbench logged eleven

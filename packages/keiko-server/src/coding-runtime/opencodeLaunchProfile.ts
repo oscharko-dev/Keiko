@@ -80,10 +80,6 @@ Delivering your work, when granted: keiko_git_status and keiko_git_diff read the
 
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 
-export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
-  "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
-  "1. Act on the accepted task: OpenCode ends the workflow when an assistant response has no native tool call. For repository implementation or verification work, begin with the next actual governed tool call and continue the read/edit/verify cycle; do not send a preliminary text-only acknowledgement, plan or progress update. You may accompany a native tool call with brief progress text. Reserve a text-only response for completed work or an accurately explained blocker. Return only a plan when the accepted task asks solely for planning; read-only questions may finish once you have enough evidence to answer them.",
-);
 export type OpenCodeLaunchProfileResult =
   | {
       readonly ok: true;
@@ -319,10 +315,6 @@ export function createFixedOpenCodeV2Config(
     snapshots: false,
     model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    agents: {
-      build: { system: OPENCODE_GOVERNED_V2_SYSTEM_PROMPT },
-      compaction: { system: OPENCODE_GOVERNED_COMPACTION_PROMPT },
-    },
     providers: fixedOpenCodeV2Provider(contextGeometry),
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },

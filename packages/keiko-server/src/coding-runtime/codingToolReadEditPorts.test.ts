@@ -18,6 +18,8 @@ import {
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
+import type { WorkspaceFs, WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace";
 
 import {
   expectActivityLogProof,
@@ -30,6 +32,7 @@ import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingT
 import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
+  WORKSPACE_DISCOVERY_REFUSAL_CODES,
 } from "./codingToolReadEditPorts.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import type {
@@ -69,6 +72,310 @@ function liveDiscoveryBinding(): {
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   };
 }
+
+function streamingDiscoveryFixture(files: Readonly<Record<string, string>>): {
+  readonly ports: ReturnType<typeof createCodingToolReadEditPorts>;
+  readonly fs: WorkspaceFs;
+  readonly events: readonly ServerLogEvent[];
+} {
+  const root = "/streaming-discovery-fixture";
+  const fs = memFs(root, { "package.json": '{"name":"fixture"}', ...files });
+  const events: ServerLogEvent[] = [];
+  return {
+    fs,
+    events,
+    ports: createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveWorkspaceRootAccess: () => ({ kind: "ordinary", canonicalRoot: root, fs }),
+      activityLog: { write: (event): void => void events.push(event) },
+    }),
+  };
+}
+
+function discoverySourceFiles(prefix: string, count: number): Record<string, string> {
+  return Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [`${prefix}/file-${String(index)}.ts`, "source"]),
+  );
+}
+
+describe("production Coding Workbench discovery completeness", () => {
+  const request = {
+    action: "discover",
+    actionId: "discover-target",
+    idempotencyKey: "discover-target-key",
+    query: "target",
+    maxResults: 10,
+  } as const;
+  const cases = [
+    [
+      "late file after 20k entries",
+      "z/target.ts",
+      {
+        ...discoverySourceFiles("a", 10_000),
+        ...discoverySourceFiles("b", 10_000),
+        "z/target.ts": "target",
+      },
+    ],
+    [
+      "file below 41 directories",
+      `${Array.from({ length: 41 }, () => "deep").join("/")}/target.ts`,
+      { [`${Array.from({ length: 41 }, () => "deep").join("/")}/target.ts`]: "target" },
+    ],
+    [
+      "file inside a 10k-overflow directory",
+      "wide/target.ts",
+      { ...discoverySourceFiles("wide", 10_001), "wide/target.ts": "target" },
+    ],
+  ] as const;
+
+  it.each(cases)(
+    "returns the actual %s through the production port",
+    async (_name, path, files) => {
+      const { ports } = streamingDiscoveryFixture(files);
+      const result = await ports.repositoryDiscover.execute(request, undefined, {
+        check: () => true,
+      });
+      expect(result).toMatchObject({
+        status: "completed",
+        read: { text: `${path}\n`, returnedPathCount: 1 },
+      });
+    },
+  );
+});
+
+describe("production Coding Workbench scoped streaming discovery", () => {
+  const request = {
+    action: "discover",
+    actionId: "discover-scoped",
+    idempotencyKey: "discover-scoped-key",
+    query: "target",
+    maxResults: 10,
+  } as const;
+
+  it("passes scoped glob discovery through without traversing unrelated siblings", async () => {
+    const { ports, fs, events } = streamingDiscoveryFixture({
+      "packages/ui/deep/target.ts": "source",
+      "packages/other/target.ts": "other",
+    });
+    const iterate = vi.spyOn(fs, "iterateDirectory");
+    const result = await ports.repositoryDiscover.execute(
+      { ...request, mode: "glob", directory: "packages/ui", query: "packages/**/target.*" },
+      undefined,
+      { check: () => true },
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 1,
+        text: "packages/ui/deep/target.ts\n",
+        discovery: {
+          entries: [{ relativePath: "packages/ui/deep/target.ts", kind: "file", sizeBytes: 6 }],
+          matchedCount: 1,
+          coverageIncomplete: false,
+          truncationReasons: [],
+        },
+      },
+    });
+    expect(iterate.mock.calls.map(([path]) => path)).toEqual([
+      "/streaming-discovery-fixture/packages/ui",
+      "/streaming-discovery-fixture/packages/ui/deep",
+    ]);
+    expect(events.at(-1)?.extra).toMatchObject({
+      discovered: 1,
+      returnedPathCount: 1,
+      coverageIncomplete: false,
+      directorySortStrategy: "retained-results-only",
+    });
+    expect(JSON.stringify(events)).not.toContain("packages/ui");
+  });
+
+  it("returns immediate directory entries with their actual kinds", async () => {
+    const { ports } = streamingDiscoveryFixture({
+      "src/target.ts": "source",
+      "src/deep/target.ts": "deep",
+    });
+    const result = await ports.repositoryDiscover.execute(
+      { ...request, mode: "directory", directory: "src", query: "*" },
+      undefined,
+      { check: () => true },
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 2,
+        totalLines: 2,
+        discovery: {
+          entries: [
+            { relativePath: "src/deep", kind: "directory", sizeBytes: 0 },
+            { relativePath: "src/target.ts", kind: "file", sizeBytes: 6 },
+          ],
+          matchedCount: 2,
+          coverageIncomplete: false,
+        },
+      },
+    });
+  });
+
+  it.each(["../outside", "node_modules"])(
+    "refuses unsafe directory %s with a closed reason",
+    async (directory) => {
+      const { ports, events } = streamingDiscoveryFixture({ "node_modules/target.ts": "source" });
+      const result = await ports.repositoryDiscover.execute({ ...request, directory }, undefined, {
+        check: () => true,
+      });
+      expect(result).toEqual({
+        status: "failed",
+        reasonCode:
+          directory === "../outside"
+            ? WORKSPACE_DISCOVERY_REFUSAL_CODES.INVALID_REQUEST
+            : WORKSPACE_DISCOVERY_REFUSAL_CODES.SCOPE_DENIED,
+      });
+      expect(events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason: directory === "../outside" ? "invalid-request" : "scope-denied",
+      });
+      expect(JSON.stringify(events)).not.toContain(directory);
+    },
+  );
+
+  it("bounds metadata and legacy text together without overstating returned item count", async () => {
+    const prefix = Array.from({ length: 16 }, () => "a".repeat(200)).join("/");
+    const { ports, events } = streamingDiscoveryFixture(
+      Object.fromEntries(
+        Array.from({ length: 30 }, (_, index) => [
+          `${prefix}/target-${String(index)}.ts`,
+          "source",
+        ]),
+      ),
+    );
+    const result = await ports.repositoryDiscover.execute(
+      { ...request, maxResults: 100 },
+      undefined,
+      { check: () => true },
+    );
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed" || result.read === undefined || !("discovery" in result.read))
+      throw new Error("Expected bounded discovery result");
+    const read = result.read;
+    expect(Buffer.byteLength(JSON.stringify(read), "utf8")).toBeLessThanOrEqual(65_536);
+    expect(read.returnedPathCount).toBe(read.discovery?.entries.length);
+    expect(read.returnedPathCount).toBeLessThan(30);
+    expect(read.discovery).toMatchObject({
+      matchedCount: 30,
+      coverageIncomplete: true,
+      truncationReasons: ["output-limit"],
+    });
+    expect(events.at(-1)?.extra).toMatchObject({
+      matchedCount: 30,
+      returnedPathCount: read.returnedPathCount,
+      coverageIncomplete: true,
+      truncationReasons: ["output-limit"],
+    });
+  });
+
+  it("stops a blocked directory iterator at the server-owned execution deadline", async () => {
+    const { ports, fs, events } = streamingDiscoveryFixture({ "target.ts": "source" });
+    const iterate = fs.iterateDirectory;
+    let release: () => void = () => undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fs.iterateDirectory = async function* (path): AsyncIterable<WorkspaceDirEntry> {
+      yield* iterate?.call(fs, path) ?? [];
+      await blocked;
+    };
+    const result = await ports.repositoryDiscover.execute(request, undefined, {
+      check: () => true,
+      executionBudget: { nowMs: Date.now, deadlineAtMs: Date.now() + 250 },
+    });
+    release();
+    expect(result).toMatchObject({
+      status: "completed",
+      read: { discovery: { coverageIncomplete: true, truncationReasons: ["time-limit"] } },
+    });
+    expect(events.at(-1)?.extra).toMatchObject({
+      coverageIncomplete: true,
+      truncationReasons: ["time-limit"],
+    });
+  });
+
+  it("performs no metadata IO when the server-owned execution deadline already expired", async () => {
+    const { ports, fs, events } = streamingDiscoveryFixture({ "target.ts": "source" });
+    const realPath = vi.spyOn(fs, "realPath");
+    const stat = vi.spyOn(fs, "stat");
+    const read = vi.spyOn(fs, "readFileUtf8SameDescriptor");
+    const result = await ports.repositoryDiscover.execute(request, undefined, {
+      check: () => true,
+      executionBudget: { nowMs: Date.now, deadlineAtMs: Date.now() - 1 },
+    });
+    expect(realPath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: "failed", reasonCode: "WORKSPACE_DISCOVERY_TIMEOUT" });
+    const line = formatActivityLogProofLine(events.at(-1) ?? {});
+    expectActivityLogProof("coding-runtime.workspace-discovery.emitted-line", line);
+    expect(JSON.parse(line)).toMatchObject({
+      state: "failed",
+      reason: "timeout",
+      errorKind: "timeout",
+    });
+    expect(line).not.toContain("target.ts");
+  });
+
+  it.each(["timeout", "cancelled"] as const)(
+    "stops metadata detection immediately after %s is observed",
+    async (reason) => {
+      const { ports, fs, events } = streamingDiscoveryFixture({ "target.ts": "source" });
+      const realPath = fs.realPath;
+      const controller = new AbortController();
+      let now = 1;
+      const resolve = vi.spyOn(fs, "realPath").mockImplementation((path) => {
+        const result = realPath.call(fs, path);
+        if (reason === "timeout") now = 3;
+        else controller.abort();
+        return result;
+      });
+      const stat = vi.spyOn(fs, "stat");
+      const read = vi.spyOn(fs, "readFileUtf8SameDescriptor");
+      const result = await ports.repositoryDiscover.execute(request, controller.signal, {
+        check: () => true,
+        executionBudget: { nowMs: () => now, deadlineAtMs: 2 },
+      });
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(stat).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        reason === "timeout"
+          ? { status: "failed", reasonCode: "WORKSPACE_DISCOVERY_TIMEOUT" }
+          : { status: "failed" },
+      );
+      expect(events.at(-1)?.extra).toMatchObject({ state: "failed", reason });
+    },
+  );
+
+  it("does not claim paths were returned after scheduled authority revocation", async () => {
+    const { ports, events } = streamingDiscoveryFixture(discoverySourceFiles("src", 96));
+    let authorized = true;
+    const revoked = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        authorized = false;
+        resolve();
+      });
+    });
+    const result = await ports.repositoryDiscover.execute({ ...request, query: "*" }, undefined, {
+      check: () => authorized,
+    });
+    await revoked;
+    expect(result).toEqual({ status: "failed" });
+    expect(events.at(-1)?.extra).toMatchObject({
+      state: "failed",
+      reason: "authority-denied",
+      returnedPathCount: 0,
+    });
+  });
+});
 
 function changeset(): EditorAgentChangeset {
   return {

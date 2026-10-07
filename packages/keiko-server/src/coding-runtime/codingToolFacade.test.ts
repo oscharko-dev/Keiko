@@ -28,6 +28,12 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { codingToolDiscoveryText } from "./codingToolIpc.js";
+import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
+import { createCodingToolGovernedDelegate } from "./codingToolGovernedDelegate.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
+import { decodeGovernedToolModelContent } from "./governedToolModelContent.js";
+import { ScriptedGovernedTools } from "./opencodeFunctionalHarness/_governedTools.js";
 import { VERIFIED_COMMIT_BLOCKING_PATHS_MAX } from "../gitDelivery/verifiedCommitTypes.js";
 
 const capability = "capability-1-opaque-runtime-secret";
@@ -95,6 +101,184 @@ function facade(admitted = true): MutableFacadePorts {
     },
   };
 }
+
+function discoveryFacadeFixture(files: Readonly<Record<string, string>>): CodingToolFacade {
+  const root = "/discovery-model-content-fixture";
+  const fs = memFs(root, { "package.json": '{"name":"fixture"}', ...files });
+  const activityLog = createBufferedServerLogSink();
+  const ports = createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: { readText: vi.fn() },
+    editorAgentClient: { action: vi.fn() },
+    resolveEditorActionContext: vi.fn(),
+    resolveWorkspaceRootAccess: () => ({ kind: "ordinary", canonicalRoot: root, fs }),
+    activityLog,
+  });
+  const unused = {
+    execute: (): Promise<{ readonly status: "failed" }> => Promise.resolve({ status: "failed" }),
+  };
+  return createCodingToolFacade({
+    authority: facade().authority,
+    delegate: createCodingToolGovernedDelegate(
+      {
+        ...ports,
+        repositorySearch: unused,
+        commandRunner: unused,
+        verificationRunner: unused,
+        gitAuthority: unused,
+        deliveryAuthority: unused,
+        connectorAuthority: unused,
+        egressAuthority: unused,
+      },
+      undefined,
+      activityLog,
+    ),
+  });
+}
+
+function generatedDiscoveryTools(subject: CodingToolFacade): ScriptedGovernedTools {
+  return new ScriptedGovernedTools({
+    env: {
+      KEIKO_CODING_MODE: "supervised-coding",
+      KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/api/coding-sidecar/tool",
+      KEIKO_TOOL_FACADE_CAPABILITY: capability,
+      KEIKO_CODING_RUN_ID: "run-discovery-content",
+    },
+    pluginVersion: "v2",
+    sessionId: "ses_discoverycontent",
+    broadcast: (): void => undefined,
+    fetch: async (_input, init): Promise<Response> => {
+      const body = init?.body;
+      if (typeof body !== "string") throw new TypeError("Expected generated IPC JSON body");
+      return new Response(JSON.stringify(await subject.execute({ body, capability })), {
+        status: 200,
+      });
+    },
+  });
+}
+
+describe("canonical discovery metadata projection", () => {
+  const entry = { relativePath: "src/target.ts", kind: "file", sizeBytes: 6 } as const;
+  const discovery = {
+    entries: [entry],
+    matchedCount: 1,
+    coverageIncomplete: false,
+    truncationReasons: [],
+  };
+
+  async function projectedDiscovery(change: Readonly<Record<string, unknown>>): Promise<unknown> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        read: {
+          text: codingToolDiscoveryText(discovery.entries),
+          byteCount: 14,
+          digest: "b".repeat(64),
+          totalLines: 1,
+          returnedPathCount: 1,
+          discovery,
+          ...change,
+        },
+      }),
+    );
+    return createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "discover", query: "target", maxResults: 10 }),
+      capability,
+    });
+  }
+
+  it("passes truthful partial coverage and canonical entries to the model", async () => {
+    expect(
+      await projectedDiscovery({
+        discovery: { ...discovery, coverageIncomplete: true, truncationReasons: ["io-error"] },
+      }),
+    ).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 1,
+        discovery: { ...discovery, coverageIncomplete: true, truncationReasons: ["io-error"] },
+      },
+    });
+  });
+
+  it.each([
+    { discovery: { ...discovery, matchedCount: 0 } },
+    { discovery: { ...discovery, coverageIncomplete: true } },
+    { discovery: { ...discovery, truncationReasons: ["future-reason"], coverageIncomplete: true } },
+    { discovery: { ...discovery, entries: [{ ...entry, relativePath: "../outside" }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, relativePath: ".env" }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, kind: "symlink" }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, sizeBytes: -1 }] } },
+    { discovery: { ...discovery, entries: [{ ...entry, extra: "unknown" }] } },
+    { discovery: { ...discovery, extra: "unknown" } },
+    { returnedPathCount: 2 },
+    { returnedPathCount: undefined },
+    { totalLines: 2 },
+    { text: "other.ts\n" },
+  ])("refuses inconsistent or unadmitted discovery metadata: %j", async (change) => {
+    expect(await projectedDiscovery(change)).toMatchObject({ status: "failed" });
+  });
+
+  it("refuses sparse metadata arrays instead of admitting an unverified entry", async () => {
+    const entries: unknown[] = [];
+    entries.length = 1;
+    expect(await projectedDiscovery({ discovery: { ...discovery, entries } })).toMatchObject({
+      status: "failed",
+    });
+  });
+
+  it("refuses accessor metadata before reading or projecting its fields", async () => {
+    const path = vi.fn(() => entry.relativePath);
+    const accessor = { ...entry };
+    Object.defineProperty(accessor, "relativePath", { enumerable: true, get: path });
+    expect(
+      await projectedDiscovery({ discovery: { ...discovery, entries: [accessor] } }),
+    ).toMatchObject({ status: "failed" });
+    expect(path).not.toHaveBeenCalled();
+  });
+
+  it("refuses symbol metadata instead of silently dropping undeclared fields", async () => {
+    expect(
+      await projectedDiscovery({
+        discovery: { ...discovery, [Symbol("undeclared")]: "unexpected" },
+      }),
+    ).toMatchObject({ status: "failed" });
+  });
+
+  it("preserves the actual producer result through the generated V2 tool and model-content codec", async () => {
+    const subject = discoveryFacadeFixture({
+      "line\nfilename-target.ts": "source",
+      "second-target.ts": "source",
+    });
+    const expected = await subject.execute({
+      body: requestBody({ action: "discover", query: "target", maxResults: 1 }),
+      capability,
+    });
+    const content = await generatedDiscoveryTools(subject).execute(
+      {
+        id: "call_discovery_content",
+        name: "keiko_workspace_discover",
+        args: { query: "target", maxResults: 1 },
+      },
+      new AbortController().signal,
+    );
+    expect(decodeGovernedToolModelContent(content)).toEqual(expected);
+    expect(expected).toMatchObject({
+      status: "completed",
+      read: {
+        returnedPathCount: 1,
+        totalLines: 2,
+        discovery: {
+          entries: [{ relativePath: "line\nfilename-target.ts", kind: "file", sizeBytes: 6 }],
+          matchedCount: 2,
+          coverageIncomplete: true,
+          truncationReasons: ["result-limit"],
+        },
+      },
+    });
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(262_144);
+  });
+});
 
 describe("CodingToolFacade", () => {
   it("admits an exact edit request before making exactly one governed delegate call", async () => {

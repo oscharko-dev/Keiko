@@ -185,6 +185,35 @@ describe("coding tool IPC repository discovery", () => {
       parseCodingToolRequest(JSON.stringify({ ...discover, workspaceRoot: "/private" }), 262_144),
     ).toBeUndefined();
   });
+
+  it.each([
+    { mode: "keywords", directory: "packages/ui" },
+    { mode: "glob", directory: "packages/ui", query: "packages/**/use*.tsx" },
+    { mode: "directory", directory: "", query: "*" },
+    { directory: "packages/ui" },
+  ])("admits a contained optional discovery scope: %j", (scope) => {
+    const request = { ...discover, ...scope };
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+  });
+
+  it.each([
+    { mode: null },
+    { mode: "unsupported" },
+    { directory: null },
+    { directory: "../outside" },
+    { directory: "/outside" },
+    { directory: "packages\\ui" },
+    { mode: "glob", query: "../*.ts" },
+    { mode: "glob", query: "x\n*.ts" },
+    { mode: "glob", query: "*".repeat(201) },
+    { mode: "directory", query: "target" },
+    { deadlineAtMs: 1 },
+    { applyGitignore: false },
+  ])("refuses unsupported or widened discovery scope: %j", (scope) => {
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...discover, ...scope }), 262_144),
+    ).toBeUndefined();
+  });
 });
 
 describe("coding tool IPC repository search (#3386 H1)", () => {

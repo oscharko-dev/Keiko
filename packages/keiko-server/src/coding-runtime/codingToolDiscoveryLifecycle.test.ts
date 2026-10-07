@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/runtime/workspace";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -134,10 +136,20 @@ describe("Coding Workbench cooperative discovery", () => {
       reason: "none",
       cooperative: true,
       sourceLanguageScan: false,
-      directorySortStrategy: "once-per-directory",
+      directorySortStrategy: "retained-results-only",
       discovered: SOURCE_COUNT + 1,
+      returnedPathCount: SOURCE_COUNT + 1,
+      matchedCount: SOURCE_COUNT + 1,
+      coverageIncomplete: false,
+      truncationReasons: [],
     });
     expect(line).not.toContain("source-000.tsx");
+    const event = events.at(-1);
+    expect(
+      event === undefined
+        ? undefined
+        : activityLogEventRegistration(event)?.fields.truncationReasons,
+    ).toMatchObject({ values: WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS });
   });
 
   it("discards a completed inventory after scheduled authority revocation", async () => {

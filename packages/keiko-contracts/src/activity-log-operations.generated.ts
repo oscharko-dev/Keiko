@@ -7474,6 +7474,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      nativeContextSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      nativeContextUtf8Bytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       dependencyInstallPolicy: {
         type: "string",
         dataClass: "closed-enum",
@@ -9765,7 +9776,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["none", "cancelled", "authority-denied", "inventory-failed"],
+        values: [
+          "none",
+          "cancelled",
+          "authority-denied",
+          "inventory-failed",
+          "timeout",
+          "scope-denied",
+          "invalid-request",
+        ],
       },
       cooperative: {
         type: "boolean",
@@ -9781,7 +9800,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["once-per-directory"],
+        values: ["once-per-directory", "retained-results-only"],
       },
       discovered: {
         type: "integer",
@@ -9812,6 +9831,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      directoriesDiscovered: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      directoriesPruned: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      ioErrors: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      returnedPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      matchedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      coverageIncomplete: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      truncationReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 6,
+        values: [
+          "result-limit",
+          "output-limit",
+          "directory-limit",
+          "io-error",
+          "time-limit",
+          "unrepresentable-path",
+        ],
       },
       frames: {
         type: "string-array",

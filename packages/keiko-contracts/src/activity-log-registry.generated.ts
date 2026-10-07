@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8e7e4c401cf06f54aa88f67461d5e18c683eee08462b90ecdabe9c88157dbd27" as const;
+  "e64fba7f58e60386c4f40d9abe3f54264045506e6b922fec1b79075a8e0e793c" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8400,6 +8400,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "nativeContextSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "nativeContextUtf8Bytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "phase",
               type: "string",
               dataClass: "closed-enum",
@@ -11413,6 +11425,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "coverageIncomplete",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "denied",
               type: "integer",
               dataClass: "count",
@@ -11420,6 +11438,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "depthPruned",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "directoriesDiscovered",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "directoriesPruned",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -11449,6 +11479,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "ioErrors",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "matchedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "maxFilesPruned",
               type: "integer",
               dataClass: "count",
@@ -11461,6 +11503,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "returnedPathCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "sourceLanguageScan",
               type: "boolean",
               dataClass: "closed-enum",
@@ -11471,6 +11519,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "truncationReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "unrepresentablePaths",

@@ -46,6 +46,7 @@ import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import { OPENCODE_NATIVE_CONTEXT_ADDENDUM } from "./opencodeNativeContext.js";
 import { CODING_TOOL_MAX_BODY_BYTES, type CodingToolResult } from "./codingToolIpc.js";
 import {
   createOpenCodeRuntimeComposition,
@@ -1196,6 +1197,45 @@ function requestMessageCount(summary: string): number | undefined {
 }
 
 describe("[functional-only] real staged OpenCode runtime", () => {
+  it.skipIf(!FUNCTIONAL_ENABLED)(
+    "retains the native system prompt and appends the governed interface context",
+    async () => {
+      const task = "Explain the available interfaces without editing files or running commands.";
+      const repository =
+        "<repository-instructions 0123456789ab>\nPreserve the fixture conventions.\n</repository-instructions 0123456789ab>";
+      const harness = await createNativeCompactionHarness(() =>
+        Promise.resolve({ ...normalResponse(), content: "The read-only explanation is complete." }),
+      );
+      try {
+        await startNativeCompactionHarness(harness);
+        await expect(harness.runtime.runPort.submitTask(RUN_ID, task, repository)).resolves.toBe(
+          true,
+        );
+        await expect(
+          harness.runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(20_000)),
+        ).resolves.toBe(true);
+        const request = harness.gateway.requests.find((item) => requestContainsText(item, task));
+        expect(request).toBeDefined();
+        const system = request?.messages
+          .filter((message) => message.role === "system")
+          .map((message) => message.content)
+          .join("\n");
+        expect(
+          system?.includes("You are an AI agent running in OpenCode, a coding agent harness."),
+        ).toBe(true);
+        expect(system?.includes(OPENCODE_NATIVE_CONTEXT_ADDENDUM)).toBe(true);
+        expect(system?.includes("Governed workflow, in order")).toBe(false);
+        expect(request?.messages.some((message) => message.content.includes(repository))).toBe(
+          true,
+        );
+        expect(harness.productiveActions).toEqual([]);
+      } finally {
+        await closeNativeCompactionHarness(harness);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it.skipIf(!FUNCTIONAL_ENABLED)(
     "decodes a 513-message overflow, compacts natively, and completes the retry",
     async () => {

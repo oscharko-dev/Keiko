@@ -957,6 +957,7 @@ function readinessV2Ports(
       attestationDigest: run.verification.protocolHandshakeDigest,
     },
     configDigest: run.configDigest,
+    nativeContextConfigured: true,
     verifyTargetAttestation: (): Promise<boolean> => Promise.resolve(true),
     materialize: (): Promise<boolean> => Promise.resolve(configMaterialized(run.runRoot)),
     startupLine: (): Promise<string> => {

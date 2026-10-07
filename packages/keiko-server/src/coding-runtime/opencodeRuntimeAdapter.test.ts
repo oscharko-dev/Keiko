@@ -21,6 +21,7 @@ import {
 } from "./productionRuntimeWorkspaceAuthority.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import { ScriptedGovernedTools } from "./opencodeFunctionalHarness/_governedTools.js";
+import { OPENCODE_NATIVE_CONTEXT_FACTS } from "./opencodeNativeContext.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
@@ -158,6 +159,7 @@ interface OpenCodeRuntimeAdapterPorts {
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
+    readonly nativeContextConfigured?: true;
     readonly verifyTargetAttestation: () => Promise<boolean>;
     readonly materialize: (bundle: GeneratedOpenCodeBundle) => Promise<boolean>;
     readonly startupLine: () => Promise<string>;
@@ -573,6 +575,39 @@ describe("generated V2 governed ask", () => {
 });
 
 describe("OpenCode runtime adapter readiness", () => {
+  it("records configured native guidance facts only for the explicit V2 composition", async () => {
+    const harness = readinessPorts();
+    const events: ServerLogEvent[] = [];
+    const ports = {
+      ...harness.ports,
+      activityLog: {
+        write: (entry: ServerLogEvent): void => {
+          events.push(entry);
+        },
+      },
+      correlationId: "run-native-context",
+      readiness: { ...harness.ports.readiness, nativeContextConfigured: true as const },
+    };
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(ports);
+    try {
+      expect(await adapter.start()).toMatchObject({ ok: true });
+      const event = events.find(
+        (item) =>
+          item.op === "coding-runtime.readiness.phase" &&
+          item.extra?.phase === "config-materialization",
+      );
+      const proof = expectActivityLogProof(
+        "coding-runtime.readiness.phase.emitted-line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(proof).toMatchObject(OPENCODE_NATIVE_CONTEXT_FACTS);
+      expect(proof.configDigest).toBe(DIGEST);
+      expect(JSON.stringify(proof)).not.toMatch(/repository-instructions|Keiko interface/);
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("records the entered phase while the real readiness operation is still pending", async () => {
     const harness = readinessPorts();
     const events: ServerLogEvent[] = [];
@@ -644,6 +679,8 @@ describe("OpenCode runtime adapter readiness", () => {
         compactionAuto: true,
         compactionPrune: true,
       });
+      expect(readinessPhaseProof).not.toHaveProperty("nativeContextSha256");
+      expect(readinessPhaseProof).not.toHaveProperty("nativeContextUtf8Bytes");
     } finally {
       resolvePending?.({ done: true, value: undefined });
       await starting;

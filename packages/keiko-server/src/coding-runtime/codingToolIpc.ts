@@ -6,10 +6,16 @@ import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtim
 import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
 import {
   captureCodingRepositoryRequest,
+  isValidCodingRepositoryGlob,
   type CodingRepositoryRequest,
   type CodingRepositoryResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { isUtf8 } from "node:buffer";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  WORKSPACE_PATH_DISCOVERY_LIMITS,
+  WORKSPACE_PATH_DISCOVERY_MODES,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace";
 
 import type {
   AuxiliaryCapabilityOutcomeV1,
@@ -22,6 +28,9 @@ import type {
   VerifiedCommitResult,
   CodingRuntimeGitResult,
   SkillDiscoveryResultV1,
+  WorkspacePathDiscoveryMode,
+  WorkspacePathDiscoveryResult,
+  WorkspacePathDiscoveryEntry,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import {
@@ -38,7 +47,7 @@ export const CODING_TOOL_READ_MAX_START_LINE = 1_000_000;
 /** Largest read-window height; bounds the model-visible schema too. */
 export const CODING_TOOL_READ_MAX_WINDOW_LINES = 5_000;
 /** Largest model-visible repository-path discovery result. */
-export const CODING_TOOL_DISCOVER_MAX_RESULTS = 100;
+export const CODING_TOOL_DISCOVER_MAX_RESULTS = WORKSPACE_PATH_DISCOVERY_LIMITS.maxResults;
 export const CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS = 8;
 export const CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS = 1_024;
 /**
@@ -163,6 +172,8 @@ export type CodingToolActionRequest =
       readonly action: "discover";
       readonly query: string;
       readonly maxResults: number;
+      readonly mode?: WorkspacePathDiscoveryMode;
+      readonly directory?: string;
     })
   | (CodingToolRequestIdentity & {
       readonly action: "search";
@@ -342,8 +353,21 @@ export interface CodingToolReadResult extends CodingToolEgressReadResult {
   readonly totalLines: number;
   /** Discovery only: the actual selected item count, independent of serialized text lines. */
   readonly returnedPathCount?: number;
+  /** Discovery-only canonical entries and coverage; model-facing, never Activity Log data. */
+  readonly discovery?: CodingToolDiscoveryResult;
   /** 1-based first line after the window; absent when the window reached the end of the file. */
   readonly nextStartLine?: number;
+}
+
+export type CodingToolDiscoveryResult = Pick<
+  WorkspacePathDiscoveryResult,
+  "entries" | "matchedCount" | "coverageIncomplete" | "truncationReasons"
+>;
+
+/** One legacy discovery text projection; canonical entries disambiguate embedded newlines. */
+export function codingToolDiscoveryText(entries: readonly WorkspacePathDiscoveryEntry[]): string {
+  const paths = entries.map((entry) => entry.relativePath);
+  return paths.length === 0 ? "" : `${paths.join("\n")}\n`;
 }
 
 export interface CodingToolEvidence {
@@ -455,17 +479,57 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
 
 function discoverRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
+  const scope = optionalDiscoverScope(value);
   return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "query", "maxResults"]) &&
-    boundedString(value.query, 256) &&
+    scope !== undefined &&
+    hasAllowedKeys(value, [
+      "action",
+      "actionId",
+      "idempotencyKey",
+      "query",
+      "maxResults",
+      "mode",
+      "directory",
+    ]) &&
+    validDiscoverQuery(value.query, scope.mode) &&
     positiveBoundedInteger(value.maxResults, CODING_TOOL_DISCOVER_MAX_RESULTS)
     ? {
         ...identity,
         action: "discover",
         query: value.query,
         maxResults: value.maxResults,
+        ...scope,
       }
     : undefined;
+}
+
+function optionalDiscoverScope(
+  value: Record<string, unknown>,
+): { readonly mode?: WorkspacePathDiscoveryMode; readonly directory?: string } | undefined {
+  const mode = WORKSPACE_PATH_DISCOVERY_MODES.find(
+    (candidate) => candidate === (value.mode ?? "keywords"),
+  );
+  if (mode === undefined || (Object.hasOwn(value, "mode") && value.mode === null)) return undefined;
+  const directory = value.directory;
+  if (
+    Object.hasOwn(value, "directory") &&
+    !(directory === "" || isValidScopePath(directory, { mustBeRelative: true }))
+  )
+    return undefined;
+  return {
+    ...(Object.hasOwn(value, "mode") ? { mode } : {}),
+    ...(typeof directory === "string" ? { directory } : {}),
+  };
+}
+
+function validDiscoverQuery(
+  query: unknown,
+  mode: WorkspacePathDiscoveryMode | undefined,
+): query is string {
+  if (!boundedString(query, WORKSPACE_PATH_DISCOVERY_LIMITS.queryChars)) return false;
+  if (mode === "directory") return query === "*";
+  if (mode === "glob") return isValidCodingRepositoryGlob(query);
+  return query.trim().length > 0;
 }
 
 // Every field-shape and numeric limit lives in the contract's own `captureCodingRepositoryRequest`
