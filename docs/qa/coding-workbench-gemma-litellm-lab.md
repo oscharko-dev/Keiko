@@ -319,6 +319,27 @@ from 21:07:42 to 21:09:17 UTC with three accepted turns, two workspace reads and
 one-shot reservation is retained; the driver observation is being corrected before a distinct
 interruption case. No task resubmission or process cleanup was used to manufacture a pass.
 
+A distinct graceful interruption on the same clean `9fdb76a9e052` runtime admitted
+`run-195072778248542484304401290097576452951` once. An authenticated STARTING revision 1
+snapshot, five milliseconds old, preceded one SIGTERM to the bound BFF. Four tracked descendants
+exited and the run settled CANCELLED revision 3 before the single restart. Both repository guards
+actually returned 409 LOCK_CONTENTION during startup. The private driver's native Fetch readiness
+check mistakenly called the boolean `Response.ok` as a function and timed out; its failed receipt
+is preserved. A separate observation of the same restarted server and retained run proved health
+200, both selection guards 200, identical repository fingerprints and the matching canonical
+shutdown/settlement evidence. That supplement admitted no task, sent no signal, restarted nothing
+and acknowledged no recovery. This qualifies that graceful Darwin case without concealing the
+driver failure; abrupt interruption and the final-head matrix remain separate obligations.
+
+The following controlled abrupt case demonstrated a real remaining process-lifetime defect:
+`run-173686678768406320719633414790552282810` was accepted once on the same runtime and observed
+at STARTING revision 1 before one SIGKILL to its bound BFF. One of two tracked descendants remained
+alive with the same captured identity after the 30-second observation window. The driver correctly
+refused any restart or recovery acknowledgement; no model turn or workspace edit occurred. A
+separate root-owned cleanup later terminated only that exact survivor, preserving failed
+qualification. The pinned native OpenCode `serve --stdio` stdin-EOF lifetime lease is the proposed
+repair; it is not yet production-qualified. No second watchdog or supervisor is proposed.
+
 F21 active turn failures now describe the observed cause without premature operator repair advice.
 The timeline claims an automatic retry only when the existing gateway retry fact confirms it;
 terminal failures retain the repair advice. Recovered and unrelated historical runs are controls.
