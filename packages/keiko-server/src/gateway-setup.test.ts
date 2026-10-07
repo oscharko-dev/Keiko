@@ -12183,7 +12183,10 @@ describe("selected metadata responsiveness", () => {
       contextWindow: 32_768,
       maxOutputTokens: 4_096,
     });
-    expect(fetcher).toHaveBeenCalledOnce();
+    const metadataCalls = fetcher.mock.calls.filter(([url]) =>
+      fetchInputUrl(url).endsWith("/model/info"),
+    );
+    expect(metadataCalls).toHaveLength(1);
     const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
     expect(event?.extra).toMatchObject({
       outcome: "available",

@@ -220,7 +220,15 @@ function runOutageLifecycle(harness: OutageHarness, command: "start" | "stop" | 
       harness.stateDir,
       ...(command === "stop"
         ? []
-        : ["--port", String(harness.port), "--host", "127.0.0.1", "--start-timeout", "60"]),
+        : [
+            "--no-open",
+            "--port",
+            String(harness.port),
+            "--host",
+            "127.0.0.1",
+            "--start-timeout",
+            "60",
+          ]),
       ...(command === "stop" || command === "restart" ? ["--stop-timeout", "20"] : []),
     ],
     {
@@ -1937,6 +1945,14 @@ test("@real-bff-outage preserves accepted update progress and reconnects to dura
     await expect(updateWindow.getByText("Reconnecting to the local Keiko backend.")).toHaveCount(0);
 
     const records = serverLogRecords(harness.stateDir);
+    const browserHandoffs = records.filter(
+      (record) => record.op === "cli.lifecycle.browser-handoff",
+    );
+    expect(browserHandoffs).toHaveLength(2);
+    expect(browserHandoffs).toEqual([
+      expect.objectContaining({ outcome: "headless", attestationProvided: false }),
+      expect.objectContaining({ outcome: "headless", attestationProvided: false }),
+    ]);
     expect(
       records.find(
         (record) =>
