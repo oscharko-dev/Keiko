@@ -69,7 +69,10 @@ limits and add newly discovered chat models with conservative capabilities. Exis
 policy, and configured models are retained. A bounded serial queue verifies missing or expired
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks retry after their one-minute
-cooldown. Disabled Coding and subscription sources never initiate these tool checks.
+cooldown. Catalog retries retain a connection-bound deadline across readiness refinements, so a
+successful probe cannot trigger immediate repeated discovery during a catalog outage. Successful
+discovery is reused until the connection changes. Disabled Coding and subscription sources never
+initiate these tool checks.
 Disposal aborts active requests, clears retries, and unsubscribes
 the configuration listener.
 At most two probes run concurrently per configuration holder, including across replacements;

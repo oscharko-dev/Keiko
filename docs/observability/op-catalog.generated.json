@@ -88909,7 +88909,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-startup.ts:49",
+      "site": "packages/keiko-server/src/gateway-startup.ts:51",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

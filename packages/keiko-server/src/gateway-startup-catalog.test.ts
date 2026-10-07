@@ -17,6 +17,7 @@ afterEach(async (): Promise<void> => {
   for (const deps of compositions.splice(0)) await deps.dispose?.();
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   resetCodingWorkbenchContextWindowProbesForTests();
 });
 
@@ -90,6 +91,25 @@ function stubReadyChat(): void {
     ),
   );
 }
+
+it("retries a failed startup catalog in the background and stops rediscovering after recovery", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const discovery = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError("Synthetic catalog transport failure."))
+    .mockResolvedValue(discoveredCatalog());
+  const deps = startupDeps(discovery);
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(discovery).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(discovery).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(discovery).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(300_000);
+  expect(discovery).toHaveBeenCalledTimes(2);
+});
 
 it("discards an old catalog when the connection changes while discovery is in flight", async () => {
   stubReadyChat();

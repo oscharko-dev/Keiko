@@ -12,6 +12,8 @@ import {
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
 
+const STARTUP_RETRY_DELAY_MS = WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1;
+
 export function createGatewayStartupChecks(deps: UiHandlerDeps): {
   readonly start: (correlationId?: string) => void;
   readonly stop: () => Promise<void>;
@@ -27,7 +29,7 @@ export function createGatewayStartupChecks(deps: UiHandlerDeps): {
 
 class GatewayStartupChecks {
   private readonly controller = new AbortController();
-  private readonly discovered = new Set<string>();
+  private readonly discovered = new Map<string, number>();
   private readonly tasks = new Set<Promise<void>>();
   private retry: ReturnType<typeof setTimeout> | undefined;
   private startedGeneration = -1;
@@ -95,7 +97,7 @@ class GatewayStartupChecks {
     this.retry = setTimeout(() => {
       this.startedGeneration = -1;
       this.start(correlationId);
-    }, WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1);
+    }, STARTUP_RETRY_DELAY_MS);
     this.retry.unref();
   }
 }
@@ -103,7 +105,7 @@ class GatewayStartupChecks {
 async function refreshCatalogs(
   deps: UiHandlerDeps,
   signal: AbortSignal,
-  discovered: Set<string>,
+  discovered: Map<string, number>,
   correlationId: string,
 ): Promise<boolean> {
   const config = deps.gatewayConfig?.current();
@@ -111,10 +113,15 @@ async function refreshCatalogs(
   let retry = false;
   for (const provider of liteLlmDiscoveryConnections(config)) {
     const key = toolCallingConfigurationFingerprint(provider);
-    if (discovered.has(key) || signal.aborted) continue;
-    discovered.add(key);
+    if (signal.aborted) continue;
+    const retryAt = discovered.get(key);
+    if (retryAt !== undefined && retryAt > Date.now()) {
+      retry ||= Number.isFinite(retryAt);
+      continue;
+    }
+    discovered.set(key, Infinity);
     if (!(await refreshLiteLlmGatewayCatalog(deps, provider, signal, correlationId))) {
-      discovered.delete(key);
+      discovered.set(key, Date.now() + STARTUP_RETRY_DELAY_MS);
       retry = true;
     }
   }
