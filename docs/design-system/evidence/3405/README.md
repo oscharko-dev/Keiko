@@ -1,8 +1,13 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-10-05 from PR #3687 head
-`8b8f92e7dabcb3ae5b62f52cce6d2aa6149ef798` after shared UI API and localization changes made the
-previous source hashes stale. No updater behavior changed. All eight Chromium checks passed in an
+The current repair evidence was regenerated on 2026-10-07 from PR #3876 head
+`1fbaf9a83890375150faf9137a9d5b80c2711a43` after two localization keys for the Coding Workbench's
+gateway-retry activity labels (`activity.event.modelGatewayRetrying`, `activity.event.modelGatewayRecovered`)
+changed `i18n-messages.de.ts` and `i18n-messages.en.ts`, two of the eight bound sources. No updater
+behavior changed. All eight Chromium checks passed on the macOS arm64 checkout on Node 24.21.0,
+including the real-BFF outage journey, and the evidence freshness gate passed. The previous
+regeneration (2026-10-05, PR #3687 head `8b8f92e7dabcb3ae5b62f52cce6d2aa6149ef798`) followed shared UI API and
+localization changes that made the earlier source hashes stale. No updater behavior changed. All eight Chromium checks passed in an
 isolated Linux/amd64 checkout on Node 24.18.0, including the real-BFF outage journey. The unchanged
 producer refreshed all 17 tracked artifacts, and the evidence freshness gate passed. The eight
 source and four harness hashes match the current checkout. The tests prove the startup notice yields only while a visible, foreground **ready**

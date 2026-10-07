@@ -151,8 +151,9 @@ function append(part: LivePart, delta: string, bound: number): boolean {
 // Half of a surrogate pair is no character: it waits for its other half, which the next delta may
 // bring, instead of reaching the timeline as a replacement character.
 function withoutDanglingSurrogate(text: string): string {
-  const last = text.charCodeAt(text.length - 1);
-  return last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
+  // A lone high surrogate at the end has no pair to combine with, so its code point is itself.
+  const last = text.codePointAt(text.length - 1);
+  return last !== undefined && last >= 0xd800 && last <= 0xdbff ? text.slice(0, -1) : text;
 }
 
 class LiveTextOverlay implements OpenCodeV2LiveText {
@@ -209,10 +210,8 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
 
   // A set iterates in insertion order, so the first key it yields is the oldest spent part.
   private forgetOldestRetired(): void {
-    for (const oldest of this.retired) {
-      this.retired.delete(oldest);
-      return;
-    }
+    const oldest = this.retired.values().next();
+    if (!oldest.done) this.retired.delete(oldest.value);
   }
 
   private start(key: string): void {
