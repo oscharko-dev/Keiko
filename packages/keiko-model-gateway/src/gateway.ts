@@ -1936,19 +1936,20 @@ export class Gateway {
   // first chunk (#3873 review) — the one steered repair of an exhausted or empty answer, a schema
   // correction after a catalog rejection, or a provider retry under the call's policy, the outage
   // window included. The caller then sees a further reasoning passage; no answer text or tool call
-  // is ever duplicated.
-  private async *streamFrom(state: PreparedStream): AsyncGenerator<GatewayStreamChunk> {
-    let opened = await this.openRetriedStream(state);
+  // is ever duplicated. Each resumed passage is one more delegation level, opened only after the
+  // previous level closed its stream; the call's retry budget bounds how many there are.
+  private async *streamFrom(
+    state: PreparedStream,
+    failedAttempt?: Error,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const opened = await this.openRetriedStream(state, failedAttempt);
+    let resumable: Error | undefined;
     try {
-      for (;;) {
-        const failure = yield* this.deliverUntilCommitted(state, opened);
-        if (failure === undefined) return;
-        await opened.iterator.return(undefined);
-        opened = await this.openRetriedStream(state, failure);
-      }
+      resumable = yield* this.deliverUntilCommitted(state, opened);
     } finally {
       await opened.iterator.return(undefined);
     }
+    if (resumable !== undefined) yield* this.streamFrom(state, resumable);
   }
 
   // Delivers an opened stream. Returns the failure of a stream that delivered nothing but reasoning
