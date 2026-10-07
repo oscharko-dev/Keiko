@@ -476,7 +476,19 @@ function capabilityLine(report: GatewayReadinessReport): string {
 
 function probeLine(probe: GatewayReadinessProbeResult): string {
   const warning = probe.warning === undefined ? "" : ` Warning: ${probe.warning}`;
-  return `- ${probe.name}: ${probe.status} (${probe.latencyMs.toString()} ms) ${probe.evidence}${warning}`;
+  const model = probe.modelId === undefined ? "" : ` Probe model: ${probe.modelId}.`;
+  return `- ${probe.name}: ${probe.status} (${probe.latencyMs.toString()} ms) ${probe.evidence}${model}${warning}`;
+}
+
+function retrievalEmbeddingLines(report: GatewayReadinessReport): readonly string[] {
+  const capabilities = report.verifiedCapabilities;
+  if (capabilities.embedding !== true) return [];
+  if (capabilities.embeddingModelId === undefined) {
+    return ["Retrieval embedding: passed (model identity unavailable in this report)"];
+  }
+  const dimensions = capabilities.embeddingDimensions;
+  const shape = dimensions === undefined ? "" : ` (${dimensions.toString()} dimensions)`;
+  return [`Retrieval embedding model: ${capabilities.embeddingModelId}${shape}`];
 }
 
 export function formatGatewayReadinessReport(report: GatewayReadinessReport): string {
@@ -486,6 +498,7 @@ export function formatGatewayReadinessReport(report: GatewayReadinessReport): st
     `Checked at: ${report.checkedAt}`,
     `Overall status: ${report.overallStatus}`,
     `Verified capabilities: ${capabilityLine(report)}`,
+    ...retrievalEmbeddingLines(report),
     "",
     "Probes:",
     ...report.probes.map(probeLine),

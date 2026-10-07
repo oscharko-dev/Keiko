@@ -2214,6 +2214,8 @@ export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
 
 export interface GatewayReadinessProbeResult {
   readonly name: GatewayReadinessProbeName;
+  /** An independent retrieval probe names its own route, not the report's chat model. */
+  readonly modelId?: string | undefined;
   readonly status: GatewayReadinessProbeStatus;
   readonly latencyMs: number;
   readonly evidence: string;
@@ -2232,7 +2234,10 @@ export interface GatewayReadinessVerifiedCapabilities {
   readonly imageInput?: boolean | undefined;
   readonly documentInput?: boolean | undefined;
   readonly embedding?: boolean | undefined;
+  /** The configured retrieval model actually probed; embedding fields describe this route. */
+  readonly embeddingModelId?: string | undefined;
   readonly embeddingDimensions?: number | undefined;
+  /** Norm after the production embedding adapter's normalization, not the provider's raw norm. */
   readonly embeddingNorm?: number | undefined;
   readonly reranker?: boolean | undefined;
   readonly testedContextTokens?: number | undefined;

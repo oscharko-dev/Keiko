@@ -11,6 +11,50 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
+
+it("attributes embedding verification to the configured retrieval model in the copied report", () => {
+  const report: GatewayReadinessReport = {
+    modelId: "chat-fixture",
+    checkedAt: "2026-10-07T00:00:00Z",
+    overallStatus: "ready",
+    probes: [
+      {
+        name: "embedding",
+        modelId: "embedding-fixture",
+        status: "passed",
+        latencyMs: 277,
+        evidence:
+          "Configured retrieval embedding endpoint returned 1024 dimensions with L2 norm 1.0000.",
+      },
+    ],
+    verifiedCapabilities: {
+      embedding: true,
+      embeddingModelId: "embedding-fixture",
+      embeddingDimensions: 1024,
+      embeddingNorm: 1,
+    },
+  };
+  const copied = formatGatewayReadinessReport(report);
+  expect(copied).toContain("Model: chat-fixture");
+  expect(copied).toContain("Retrieval embedding model: embedding-fixture (1024 dimensions)");
+  expect(copied).toContain("Probe model: embedding-fixture");
+});
+
+it("does not attribute an older embedding report with missing identity to its chat model", () => {
+  const report: GatewayReadinessReport = {
+    modelId: "chat-fixture",
+    checkedAt: "2026-10-07T00:00:00Z",
+    overallStatus: "ready",
+    probes: [],
+    verifiedCapabilities: { embedding: true, embeddingDimensions: 1024 },
+  };
+  expect(formatGatewayReadinessReport(report)).toContain(
+    "Retrieval embedding: passed (model identity unavailable in this report)",
+  );
+  expect(formatGatewayReadinessReport(report)).not.toContain(
+    "Retrieval embedding model: chat-fixture",
+  );
+});
 import {
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   consumePendingGatewaySetup,

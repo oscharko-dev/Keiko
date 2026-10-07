@@ -1,5 +1,6 @@
 import {
   requestGatewayReadinessChatCompletion,
+  readGatewayReadinessChatCompletionResponse,
   type EnvSource,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -8,7 +9,6 @@ import {
   type ModelProviderConfig,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-model-gateway";
-import { readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
@@ -175,6 +175,16 @@ export function probeUsage(
   };
 }
 
+function toolProbeStreams(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  spend: GatewayProbeSpendContext | undefined,
+): boolean {
+  const capability =
+    spend?.capability ?? config.capabilities?.find((entry) => entry.id === provider.modelId);
+  return capability?.streaming === true;
+}
+
 async function executeGatewayToolCallingProbe(
   config: GatewayConfig,
   provider: ModelProviderConfig,
@@ -189,6 +199,7 @@ async function executeGatewayToolCallingProbe(
       config,
       provider,
       body: toolCallingBody(),
+      stream: toolProbeStreams(config, provider, spend),
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
@@ -208,7 +219,10 @@ async function executeGatewayToolCallingProbe(
   }
   let payload: unknown;
   try {
-    payload = await readJsonCapped(response, MAX_PROVIDER_RESPONSE_BYTES);
+    payload = await readGatewayReadinessChatCompletionResponse(
+      response,
+      MAX_PROVIDER_RESPONSE_BYTES,
+    );
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);
     throw error;

@@ -44,9 +44,23 @@ customer route before the first long task.
 The readiness embedding probe selects the configured retrieval model through
 `selectConfiguredModel({ kind: "embedding" })`, independently of the report's chat-model id.
 The customer's 1,024-dimensional, unit-norm result therefore proves an available embedding route,
-not that Gemma itself produced embeddings. It proves vector shape and nonzero norm, not semantic
-retrieval quality. Streaming and forced tool calling are currently separate readiness probes;
-their individual success does not prove streamed tool-call parsing or a complete tool/result cycle.
+not that Gemma itself produced embeddings. The reported norm is measured after Keiko's embedding
+adapter normalizes the vector. It proves vector shape and nonzero norm, not semantic retrieval
+quality. The customer's report checked streaming and forced tool calling separately; those
+individual results do not prove streamed tool-call parsing or a complete tool/result cycle.
+The current probe now requests tool calls over the configured response path and reuses the exact
+production stream assembler, in one successful request. Fragmented native arguments and final
+usage are checked; invalid arguments remain unsupported. JSON fallback from a proxy is accepted
+just as in production, without claiming incremental streaming. The report now identifies the
+configured embedding route separately, including in the copied Settings report and body-free
+completion evidence. Live requalification of the strengthened probe remains pending.
+
+Targeted verification of the readiness/report increment: streamed fragmented calls and three
+invalid-argument cases failed before repair; embedding attribution and its body-free identity
+failed in server/report regressions before repair. Afterward, 211 tests across six server/gateway
+suites, 58 Settings tests and 97 catalog checks passed. Scoped server and UI type checks, ESLint,
+formatting and registry generation passed. The assembled package smoke and final Linux UI bundle
+evidence remain part of closeout.
 
 The current-helper small-task run `run-146041115310732789142352533186727803180` exposed that gap:
 one answer serialized a model tool invocation as assistant text, no governed tool executed, and

@@ -235,6 +235,8 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
     inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
+    embeddingModelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    embeddingDimensions: { type: "integer", dataClass: "count", required: false },
   },
   diagnosticWhen: [{ field: "overallStatus", values: ["partial", "failed"] }],
   causal: "correlation",
@@ -595,9 +597,24 @@ function logReadinessCompleted(
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
         inconclusiveProbeCount: inconclusiveProbeCount(report),
+        ...retrievalProbeEvidence(report),
       },
     ),
   );
+}
+
+function retrievalProbeEvidence(report: GatewayReadinessReport): {
+  readonly embeddingModelIdDigest?: string;
+  readonly embeddingDimensions?: number;
+} {
+  const modelId = report.probes.find((probe) => probe.name === "embedding")?.modelId;
+  const dimensions = report.verifiedCapabilities.embeddingDimensions;
+  return {
+    ...(modelId === undefined
+      ? {}
+      : { embeddingModelIdDigest: modelIdEvidence(modelId).modelIdDigest }),
+    ...(dimensions === undefined ? {} : { embeddingDimensions: dimensions }),
+  };
 }
 
 // One run's start line: the Coding Workbench's automatic run keeps its own operation, and a run
@@ -759,17 +776,42 @@ function roundedNorm(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
-// eslint-disable-next-line max-lines-per-function
 async function probeEmbedding(
   deps: UiHandlerDeps,
   config: GatewayConfig,
   correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
-  const start = Date.now();
   const provider = chooseEmbeddingProvider(config);
   if (provider === undefined) {
     return skipped("embedding", "No embedding-capable provider is configured.");
   }
+  return {
+    ...(await probeConfiguredEmbedding(deps, config, provider, correlationId)),
+    modelId: provider.modelId,
+  };
+}
+
+function embeddingVectorResult(vector: Float32Array, start: number): GatewayReadinessProbeResult {
+  const dimensions = vector.length;
+  const norm = roundedNorm(vectorL2Norm(vector));
+  const passed = dimensions > 0 && norm > 0;
+  return result(
+    "embedding",
+    passed ? "passed" : "failed",
+    start,
+    passed
+      ? `Configured retrieval embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)} after Keiko normalization.`
+      : "Configured retrieval embedding endpoint returned an empty or zero-norm vector.",
+  );
+}
+
+async function probeConfiguredEmbedding(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  correlationId: string,
+): Promise<GatewayReadinessProbeResult> {
+  const start = Date.now();
   const spend = probeSpendContext(deps, config, provider, correlationId);
   let reservation: ReturnType<typeof reserveGatewayProbeSpend>;
   try {
@@ -797,17 +839,7 @@ async function probeEmbedding(
         `Embedding endpoint could not be verified (${embeddingFailureDetail(outcome)}).`,
       );
     }
-    const dimensions = outcome.value.vector.length;
-    const norm = roundedNorm(vectorL2Norm(outcome.value.vector));
-    const passed = dimensions > 0 && norm > 0;
-    return result(
-      "embedding",
-      passed ? "passed" : "failed",
-      start,
-      passed
-        ? `Embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)}.`
-        : "Embedding endpoint returned an empty or zero-norm vector.",
-    );
+    return embeddingVectorResult(outcome.value.vector, start);
   } catch (probeError) {
     settleGatewayProbeSpend(reservation, undefined);
     return probeFailure(
@@ -1206,7 +1238,7 @@ async function probeToolCalling(
       "tool_calling",
       "passed",
       start,
-      "OpenAI-compatible tool call returned the expected function name.",
+      "Native tool call returned the expected function and schema-valid arguments on the configured response path.",
     );
   }
   if (status === "transient") {
@@ -1726,10 +1758,11 @@ function verifiedCapabilities(
     VERIFIED_CAPABILITY_PROBES.map(([key, probe]) => [key, passed.has(probe) || undefined]),
   ) as Omit<
     GatewayReadinessReport["verifiedCapabilities"],
-    "testedContextTokens" | "embeddingDimensions" | "embeddingNorm"
+    "testedContextTokens" | "embeddingModelId" | "embeddingDimensions" | "embeddingNorm"
   >;
   return {
     ...verified,
+    embeddingModelId: embedding?.modelId,
     embeddingDimensions,
     embeddingNorm,
     testedContextTokens,

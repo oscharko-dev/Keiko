@@ -116,6 +116,24 @@ Coding Workbench surfaces. It is neither replaced by nor inferred from the per-f
 signals answer different questions: whether the configured gateway answered, and which model fields
 were specifically observed.
 
+The forced tool-call readiness request follows the model's configured production response path:
+streaming models are requested with streaming enabled, buffered models without it. Readiness uses
+the production gateway assembler for fragmented native tool calls and final usage, checks the
+expected function and exact probe arguments, and retains the existing strict-stream compatibility
+fallbacks. A successful ordinary check needs one model request, not separate buffered and streamed
+tool probes. A proxy returning a complete JSON answer to a streamed request remains the same
+supported fallback as in productive calls; it is not evidence of incremental streaming. Historical
+tool-call proofs retain their original timestamp and scope; changing the probe implementation does
+not silently refresh them or claim a tool/result-cycle proof.
+
+Embedding verification describes the independently selected configured retrieval model, not the
+report's selected chat model. Each executed embedding probe carries its own `modelId`, and a
+successful result includes `embeddingModelId` with dimensions and the norm after Keiko's existing
+adapter normalization. These fields are report evidence and never add embedding capability to a
+chat model or select a new route. The copied report names that retrieval model, and older reports
+without its identity say so. The settings completion operation records only its model-id digest
+and measured dimensions. A nonzero vector proves endpoint shape, not semantic search quality.
+
 ### D5 — An admitted coding run judges the tool-calling proof as of its admission
 
 A forced tool-call proof (`toolCallingVerification`, probe `gateway-tool-calling-v1`) expires 24

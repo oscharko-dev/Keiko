@@ -1434,6 +1434,21 @@ function streamedPayload(acc: StreamAccumulator): Record<string, unknown> {
   };
 }
 
+/** Readiness uses the production stream assembler, including fragmented calls and final usage. */
+export async function readGatewayReadinessChatCompletionResponse(
+  response: Response,
+  maxResponseBytes: number,
+): Promise<unknown> {
+  if (answeredWholeBody(response)) return readJsonCapped(response, maxResponseBytes);
+  const acc = newStreamAccumulator();
+  for await (const chunk of readSseStream(response, maxResponseBytes)) {
+    applyChunkMetadata(chunk, acc);
+    acc.content += deltaFromChunk(chunk) ?? "";
+    acc.reasoning += reasoningFromChunk(chunk) ?? "";
+  }
+  return streamedPayload(acc);
+}
+
 // An endpoint that answers a streamed request with the whole body at once (a proxy route that
 // ignores `stream`) is read as the whole answer it is.
 function answeredWholeBody(response: Response): boolean {

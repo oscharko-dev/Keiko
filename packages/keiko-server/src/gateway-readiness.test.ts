@@ -809,7 +809,46 @@ describe("gateway readiness route", () => {
 
     expect("status" in report).toBe(false);
     expect(requestBodyAt(fetchImpl, 1)).toMatchObject({ model: "text-embedding-3-large" });
+    if ("status" in report) throw new TypeError("Expected a readiness report.");
+    expect(report.modelId).toBe("test-chat-model");
+    expect(report.verifiedCapabilities).toMatchObject({
+      embedding: true,
+      embeddingModelId: "text-embedding-3-large",
+      embeddingDimensions: 2,
+    });
+    const embeddingProbe = report.probes.find((probe) => probe.name === "embedding");
+    expect(embeddingProbe?.modelId).toBe("text-embedding-3-large");
+    expect(embeddingProbe?.evidence).toContain("Configured retrieval embedding endpoint");
     deps.store.close();
+  });
+
+  it("records independent embedding identity and normalized dimensions without raw model ids", async () => {
+    const events: ServerLogEvent[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(gatewayConfig(), fetchImpl),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+    try {
+      await runGatewayReadiness(
+        { options: { probes: ["embedding"] } },
+        deps,
+        "embedding-proof",
+        "settings",
+      );
+      const completed = events.find((event) => event.op === "gateway.readiness.completed");
+      expect(completed?.extra).toMatchObject({
+        embeddingModelIdDigest: modelIdEvidence("text-embedding-3-small").modelIdDigest,
+        embeddingDimensions: 2,
+      });
+      expect(JSON.stringify(completed)).not.toContain("text-embedding-3-small");
+      expect(JSON.stringify(completed)).not.toContain("secret-token");
+    } finally {
+      deps.store.close();
+    }
   });
 
   it("checks the optional reranker when requested", async () => {
@@ -1158,7 +1197,12 @@ describe("gateway readiness route", () => {
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(sseResponse("stream-ok"))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "tools unavailable" } }, 400))
-      .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}'))) as typeof fetch;
+      .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}')))
+      .mockResolvedValueOnce(jsonResponse(embeddingPayload()))
+      // The streaming tool probe retries a strict rejection without stream_options once.
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: "tools unavailable" } }, 400),
+      ) as typeof fetch;
     const deps: UiHandlerDeps = {
       ...depsWith(config, fetchImpl),
       gatewayConfig: {
