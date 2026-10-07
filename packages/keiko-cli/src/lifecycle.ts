@@ -11,6 +11,7 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   resolveWindowsPowerShellExecutable,
   securityErrorKind,
+  bindSecurityLogCorrelation,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import {
@@ -167,6 +168,7 @@ export interface LifecycleCliDeps {
 }
 
 interface LifecycleRuntimeDeps {
+  readonly correlationId: string;
   readonly spawnFn: SpawnFn;
   readonly healthProbe: HealthProbeFn;
   readonly sleep: SleepFn;
@@ -744,13 +746,19 @@ function keepAlreadyRunningUi(
   if (record.launchId === undefined || !verify(record.pid, record.launchId)) {
     io.out("Run `keiko restart` to open an authenticated browser for this older launch.\n");
     emitBrowserHandoff(deps.securityLogSink, {
-      outcome: "failed",
+      outcome: "restart-required",
       attestationProvided: false,
-      error: new TypeError("Launch identity unavailable"),
+      reason: record.launchId === undefined ? "launch-id-missing" : "identity-unverified",
     });
     return;
   }
-  writeBrowserOpenRequest(options.stateDir, record.pid, record.launchId);
+  writeBrowserOpenRequest(
+    options.stateDir,
+    record.pid,
+    record.launchId,
+    deps.correlationId,
+    options.host === "localhost" ? "localhost" : "127.0.0.1",
+  );
   emitBrowserHandoff(deps.securityLogSink, { outcome: "delegated", attestationProvided: false });
 }
 
@@ -1017,10 +1025,12 @@ function runtimeDeps(
   deps: LifecycleCliDeps,
   env: EnvSource,
   securityLogSink: SecurityLogSink | undefined,
+  correlationId: string,
 ): LifecycleRuntimeDeps {
   const fetchImpl = deps.fetchImpl;
   const platform = deps.platform?.() ?? process.platform;
   return {
+    correlationId,
     spawnFn: deps.spawnFn ?? spawn,
     healthProbe:
       fetchImpl === undefined
@@ -1094,10 +1104,12 @@ export async function runLifecycleCli(
   }
 
   const options = outcome.value;
+  const correlationId = randomUUID();
   writeInstallLayoutOverrideEvidence(deps.securityLogSinkFactory?.(options.stateDir), env);
   const securityLogSink =
-    deps.securityLogSink ?? createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory);
-  const fullDeps = runtimeDeps(deps, env, securityLogSink);
+    bindSecurityLogCorrelation(deps.securityLogSink, correlationId) ??
+    createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory, correlationId);
+  const fullDeps = runtimeDeps(deps, env, securityLogSink, correlationId);
 
   const handlers: Readonly<Record<LifecycleCommand, () => Promise<number>>> = {
     start: () => cmdStart(options, io, env, fullDeps, cwd),

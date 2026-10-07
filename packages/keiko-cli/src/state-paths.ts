@@ -31,6 +31,7 @@ import {
   isSupportReportFileName,
   isActivityLogOwnedFileName,
   parseSupportIncidentFileName,
+  isActivityLogCorrelationId,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
@@ -227,10 +228,14 @@ export interface PidRecord {
 }
 
 export function writeExclusivePidFile(path: string, pid: number, launchId?: string): void {
+  writeExclusiveStateFile(path, encodePidFile(pid, launchId));
+}
+
+function writeExclusiveStateFile(path: string, contents: string): void {
   const fd = createExclusivePidFileSlot(path);
   try {
     assertRegularSingleLinkFile(fd, path);
-    writeSync(fd, encodePidFile(pid, launchId), null, "utf8");
+    writeSync(fd, contents, null, "utf8");
   } finally {
     closeSync(fd);
   }
@@ -250,16 +255,119 @@ export function writeShutdownRequest(stateDir: string, pid: number, launchId?: s
 }
 
 /** The running launcher opens the browser itself; this request never contains a secret. */
-export function writeBrowserOpenRequest(stateDir: string, pid: number, launchId: string): void {
-  writeExclusivePidFile(join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE), pid, launchId);
+export function writeBrowserOpenRequest(
+  stateDir: string,
+  pid: number,
+  launchId: string,
+  correlationId?: string,
+  host?: "127.0.0.1" | "localhost",
+): void {
+  if (
+    !isKeikoUiLaunchId(launchId) ||
+    (correlationId !== undefined && !isActivityLogCorrelationId(correlationId))
+  ) {
+    throw new TypeError("Browser request identity is invalid.");
+  }
+  writeExclusiveStateFile(
+    join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE),
+    `${encodePidFile(pid, launchId)}${correlationId ?? ""}\n${host ?? ""}\n`,
+  );
 }
 
-export function takeBrowserOpenRequest(stateDir: string, pid: number, launchId: string): boolean {
+export type BrowserOpenRequestOutcome =
+  | { readonly state: "absent" }
+  | {
+      readonly state: "refused";
+      readonly reason: "unsafe-request" | "invalid-request" | "identity-mismatch";
+    }
+  | {
+      readonly state: "accepted";
+      readonly correlationId?: string;
+      readonly host?: "127.0.0.1" | "localhost";
+    };
+
+export function takeBrowserOpenRequest(
+  stateDir: string,
+  pid: number,
+  launchId: string,
+): BrowserOpenRequestOutcome {
   const path = join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE);
-  const record = readPidRecord(path, true);
-  if (record?.pid !== pid || record.launchId !== launchId) return false;
+  const record = readBrowserRequest(path, pid, launchId);
+  if (record.state !== "accepted") return record;
   rmSync(path, { force: true });
-  return true;
+  return record;
+}
+
+function readBrowserRequest(
+  path: string,
+  pid: number,
+  launchId: string,
+): BrowserOpenRequestOutcome {
+  let fd: number;
+  try {
+    fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
+  } catch (error) {
+    return isFsCode(error, "ENOENT")
+      ? { state: "absent" }
+      : { state: "refused", reason: "unsafe-request" };
+  }
+  try {
+    assertRegularSingleLinkFile(fd, path);
+    if (!isOwnerPrivateDescriptor(fd)) return { state: "refused", reason: "unsafe-request" };
+    const buffer = Buffer.alloc(256);
+    const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytes === 0 || bytes === buffer.length)
+      return { state: "refused", reason: "invalid-request" };
+    return parseBrowserRequest(buffer.subarray(0, bytes).toString("utf8"), pid, launchId);
+  } catch {
+    return { state: "refused", reason: "unsafe-request" };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function parseBrowserRequest(
+  raw: string,
+  pid: number,
+  launchId: string,
+): BrowserOpenRequestOutcome {
+  const lines = raw.split("\n");
+  const record = parsePidRecord(raw);
+  const metadata = browserRequestMetadata(lines);
+  if (metadata === undefined || record?.launchId === undefined) {
+    return { state: "refused", reason: "invalid-request" };
+  }
+  if (record.pid !== pid || record.launchId !== launchId)
+    return { state: "refused", reason: "identity-mismatch" };
+  return {
+    state: "accepted",
+    ...metadata,
+  };
+}
+
+function browserRequestMetadata(lines: readonly string[]):
+  | {
+      readonly correlationId?: string;
+      readonly host?: "127.0.0.1" | "localhost";
+    }
+  | undefined {
+  const correlationId = optionalRequestValue(lines[2]);
+  const host = optionalRequestValue(lines[3]);
+  if (
+    lines.length > 5 ||
+    optionalRequestValue(lines[4]) !== undefined ||
+    (correlationId !== undefined && !isActivityLogCorrelationId(correlationId))
+  )
+    return undefined;
+  if (host !== undefined && host !== "127.0.0.1" && host !== "localhost") return undefined;
+  return {
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(host === undefined ? {} : { host }),
+  };
+}
+
+function optionalRequestValue(value: string | undefined): string | undefined {
+  return value === "" ? undefined : value;
 }
 
 export function peekShutdownRequest(stateDir: string, pid: number, launchId?: string): boolean {

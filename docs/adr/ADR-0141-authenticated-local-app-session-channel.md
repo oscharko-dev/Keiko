@@ -275,8 +275,13 @@ assumption is load-bearing and why the native shell's direct injection remains t
 posture. The Keiko Native shell replaces this hop with direct cookie injection and retires the
 residual risk. Another start against a running BFF writes an owner-private, single-use
 `ui.browser-open` request bound to its PID and launch identity. The running trusted launcher
-consumes that request and opens a fresh fragment attestation itself using its process-private
-secret. The requesting process receives no secret or attestation, and no HTTP caller gains a
+consumes that request and opens a fresh fragment attestation using its process-private secret.
+It also receives the requesting CLI correlation and validated loopback hostname. It mints a fresh
+child correlation whose parent is that request; the hostname preserves the customer's cookie
+origin while the listener remains bound to loopback. Unsafe, malformed or mismatched requests
+produce one closed refusal per uninterrupted refusal reason. A healthy older launch without a
+verified launch identity reports `restart-required`, not a fabricated process fault.
+The requesting process receives no secret or attestation, and no HTTP caller gains a
 session-minting path. Unsafe or mismatched requests fail closed. Older launches without this
 channel require a restart.
 
@@ -286,7 +291,8 @@ project working directory, state directory, and gateway configuration environmen
 Platform browser openers receive only the allowlisted OS session environment. The launcher secret,
 launch identity, and provider credentials never enter the browser process tree.
 
-`cli.lifecycle.browser-handoff` records the headless/requested/delegated/failed outcome and whether the hand-off
+`cli.lifecycle.browser-handoff` records the headless/requested/delegated/failed/refused/restart-required
+outcome and whether the hand-off
 carried an attestation, without recording the URL, fragment, cookies, or secret.
 
 ### F4 — Contract promotion (the scheduled D12 batching)

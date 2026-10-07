@@ -148,6 +148,36 @@ it("asks the running launch to open a fresh paired browser without restarting it
   expect(fixture.spawned).toHaveLength(1);
   expect(fixture.openExternal).not.toHaveBeenCalled();
   expect(existsSync(join(fixture.root, ".keiko", "ui.browser-open"))).toBe(true);
+  const delegated = [...fixture.events]
+    .reverse()
+    .find((event) => event.extra?.outcome === "delegated");
+  expect(readFileSync(join(fixture.root, ".keiko", "ui.browser-open"), "utf8")).toContain(
+    String(delegated?.correlationId),
+  );
+  expectActivityLogProof(
+    "cli.lifecycle.browser-handoff.outcome",
+    formatActivityLogProofLine(delegated ?? {}),
+  );
+  const poll = createBrowserHandoffPoll({
+    stateDir: join(fixture.root, ".keiko"),
+    pid: 424_242,
+    env: fixture.spawned[0]?.env ?? {},
+    baseUrl: "http://127.0.0.1:1983",
+    io,
+    sink: { write: (event): void => void fixture.events.push(event) },
+    openExternal: fixture.openExternal,
+  });
+  poll();
+  await vi.waitFor(() => {
+    expect(fixture.openExternal).toHaveBeenCalledTimes(1);
+  });
+  const opened = [...fixture.events]
+    .reverse()
+    .find((event) => event.extra?.outcome === "requested");
+  const line = formatActivityLogProofLine(opened ?? {});
+  expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+  expect(JSON.parse(line)).toMatchObject({ parentCorrelationId: delegated?.correlationId });
+  expect(opened?.correlationId).not.toBe(delegated?.correlationId);
 });
 
 it("the running launcher consumes only a private request for its own launch and mints a fresh attestation", async () => {
@@ -162,12 +192,14 @@ it("the running launcher consumes only a private request for its own launch and 
     env,
     baseUrl: "http://127.0.0.1:1983",
     io,
-    sink: undefined,
+    sink: { write: (event): void => void fixture.events.push(event) },
     openExternal: fixture.openExternal,
   });
   writeBrowserOpenRequest(stateDir, 1, launchId);
   poll();
+  poll();
   expect(fixture.openExternal).not.toHaveBeenCalled();
+  expect(fixture.events.filter((event) => event.extra?.outcome === "refused")).toHaveLength(1);
   writeBrowserOpenRequest(stateDir, 424_242, launchId);
   if (process.getuid !== undefined) {
     chmodSync(join(stateDir, "ui.browser-open"), 0o644);
@@ -192,6 +224,14 @@ it("the running launcher consumes only a private request for its own launch and 
     ),
   );
   expect(existsSync(join(stateDir, "ui.browser-open"))).toBe(false);
+  const requested = [...fixture.events]
+    .reverse()
+    .find((event) => event.extra?.outcome === "requested");
+  expect(requested?.correlationId).toBeDefined();
+  expectActivityLogProof(
+    "cli.lifecycle.browser-handoff.outcome",
+    formatActivityLogProofLine(requested ?? {}),
+  );
   poll();
   expect(fixture.openExternal).toHaveBeenCalledTimes(1);
 });
@@ -208,6 +248,23 @@ function expectHandoff(
   expect(line).not.toContain("keiko-app-session");
   expect(line).not.toContain("gateway.json");
 }
+
+it("records a legacy healthy launch as requiring restart without manufacturing a fault", async () => {
+  const fixture = launchFixture();
+  await runLifecycleCli("start", ["--no-open"], io, {}, fixture.deps);
+  fixture.events.length = 0;
+  writeFileSync(join(fixture.root, ".keiko", "ui.pid"), "424242\n");
+  expect(await runLifecycleCli("start", [], io, {}, fixture.deps)).toBe(0);
+  const event = fixture.events.find((entry) => entry.op === "cli.lifecycle.browser-handoff");
+  const line = formatActivityLogProofLine(event ?? {});
+  expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+  expect(JSON.parse(line)).toMatchObject({
+    outcome: "restart-required",
+    reason: "launch-id-missing",
+    level: "info",
+  });
+  expect(event?.errorKind).toBeUndefined();
+});
 
 it("records a rejected browser opener without losing a healthy server or disclosing secrets", async () => {
   const fixture = launchFixture();

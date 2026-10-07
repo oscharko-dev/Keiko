@@ -164,6 +164,7 @@ describe("parseUiArgs", () => {
   it("accepts --host 127.0.0.1 and localhost", () => {
     expect(parseUiArgs(["--host", "127.0.0.1"])).not.toBeNull();
     expect(parseUiArgs(["--host", "localhost"])).not.toBeNull();
+    expect(parseUiArgs(["--host", "localhost"])).toMatchObject({ host: "localhost" });
   });
 
   it("rejects a non-loopback --host", () => {

@@ -2079,7 +2079,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["requested", "delegated", "headless", "failed"],
+        values: ["requested", "delegated", "headless", "failed", "refused", "restart-required"],
       },
       attestationProvided: {
         type: "boolean",
@@ -2092,6 +2092,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "unsafe-request",
+          "invalid-request",
+          "identity-mismatch",
+          "launch-id-missing",
+          "identity-unverified",
+        ],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -2102,7 +2114,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     diagnosticWhen: [
       {
         field: "outcome",
-        values: ["failed"],
+        values: ["failed", "refused"],
       },
     ],
   },

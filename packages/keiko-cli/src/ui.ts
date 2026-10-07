@@ -233,6 +233,7 @@ binds 127.0.0.1 only and serves the packaged UI assets (built with \`npm run bui
 
 export interface UiCliArgs {
   readonly port: number;
+  readonly host?: "127.0.0.1" | "localhost";
   readonly evidenceDir: string | undefined;
   readonly config: string | undefined;
   readonly uiDbPath: string | undefined;
@@ -446,7 +447,18 @@ export function parseUiArgs(args: readonly string[]): UiParseResult {
   if (port === null) {
     return null;
   }
-  return { port, evidenceDir: evidenceRaw, config: configRaw, uiDbPath: uiDbRaw };
+  return {
+    port,
+    ...browserHost(hostRaw),
+    evidenceDir: evidenceRaw,
+    config: configRaw,
+    uiDbPath: uiDbRaw,
+  };
+}
+
+function browserHost(host: string | undefined): Pick<UiCliArgs, "host"> {
+  if (host === undefined) return {};
+  return { host: host === "localhost" ? "localhost" : "127.0.0.1" };
 }
 
 function defaultStaticRoot(cwd: string): string {
@@ -1570,7 +1582,7 @@ async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promi
       stateDir,
       pid: process.pid,
       env: options.runtimeEnv,
-      baseUrl: `http://${UI_HOST}:${String(parsed.port)}`,
+      baseUrl: `http://${parsed.host ?? UI_HOST}:${String(parsed.port)}`,
       io,
       sink:
         activityLog === undefined

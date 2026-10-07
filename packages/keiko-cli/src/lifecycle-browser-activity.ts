@@ -20,15 +20,27 @@ const BROWSER_HANDOFF_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["requested", "delegated", "headless", "failed"],
+      values: ["requested", "delegated", "headless", "failed", "refused", "restart-required"],
     },
     attestationProvided: { type: "boolean", dataClass: "closed-enum", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "unsafe-request",
+        "invalid-request",
+        "identity-mismatch",
+        "launch-id-missing",
+        "identity-unverified",
+      ],
+    },
   },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
-  diagnosticWhen: [{ field: "outcome", values: ["failed"] }],
+  diagnosticWhen: [{ field: "outcome", values: ["failed", "refused"] }],
   failureClasses: ["browser-handoff"],
   proofIds: ["cli.lifecycle.browser-handoff.outcome"],
   releaseImpact: "patch",
@@ -39,7 +51,17 @@ type BrowserHandoffResult =
       readonly outcome: "requested" | "delegated" | "headless";
       readonly attestationProvided: boolean;
     }
-  | { readonly outcome: "failed"; readonly attestationProvided: boolean; readonly error: unknown };
+  | { readonly outcome: "failed"; readonly attestationProvided: boolean; readonly error: unknown }
+  | {
+      readonly outcome: "refused";
+      readonly attestationProvided: false;
+      readonly reason: "unsafe-request" | "invalid-request" | "identity-mismatch";
+    }
+  | {
+      readonly outcome: "restart-required";
+      readonly attestationProvided: false;
+      readonly reason: "launch-id-missing" | "identity-unverified";
+    };
 
 /** Record the launcher decision without retaining the boot URL, attestation, or process secret. */
 export function emitBrowserHandoff(
@@ -55,6 +77,7 @@ export function emitBrowserHandoff(
         outcome: result.outcome,
         attestationProvided: result.attestationProvided,
         ...(result.outcome === "failed" ? { failureKind: securityErrorKind(result.error) } : {}),
+        ...("reason" in result ? { reason: result.reason } : {}),
       },
     ),
   );
