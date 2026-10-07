@@ -74,8 +74,14 @@ export interface OpenCodeV2HttpClient {
 }
 
 export function parseOpenCodeV2ChildEndpoint(output: string): string | undefined {
-  const match = /^server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\n$/u.exec(output);
-  const port = Number(match?.[1]);
+  if (output.length > 1024) return undefined;
+  // Both forms are emitted by the pinned native CLI. A single closed URL record carries no body.
+  const match =
+    /^(?:server listening on |\{"url":")http:\/\/127\.0\.0\.1:([1-9]\d{0,4})(?:"\})?\n$/u.exec(
+      output,
+    );
+  if (match === null || output.startsWith("{") !== output.endsWith('"}\n')) return undefined;
+  const port = Number(match[1]);
   return Number.isSafeInteger(port) && port <= 65_535
     ? `http://127.0.0.1:${String(port)}`
     : undefined;

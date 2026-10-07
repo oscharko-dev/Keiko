@@ -89,6 +89,14 @@ wrapped command, recording the attestation on `CommandResult`. No second spawnin
 that request neither boundary are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
 
+For an actual Darwin Seatbelt execution-root `npm` or `npx` run, that same boundary sets the
+server-owned `npm_config_script_shell=/bin/sh`. npm extends `PATH` with caller and ancestor bin
+directories; an inaccessible foreign bin directory can make its bare `sh` lookup fail even
+though the system shell is already admitted. Binding that existing executable preserves the
+original `PATH`, workspace bin resolution, the outer `shell: false` spawn and all filesystem and
+network rules. Ambient shell overrides are not accepted. Other commands and backends retain
+their existing environment policy.
+
 D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
 is still one command to the consumer, while the package-private launcher owns only the inseparable
 namespace peer, anonymous descriptor relay, and target-child lifecycle needed to enforce that plan.

@@ -336,7 +336,11 @@ export interface OpenCodeLifecyclePrepareRequest {
 }
 
 export type OpenCodeLifecyclePrepareResult =
-  | { readonly ok: true; readonly env?: Readonly<Record<string, string>> | undefined }
+  | {
+      readonly ok: true;
+      readonly env?: Readonly<Record<string, string>> | undefined;
+      readonly parentLifetime?: "stdin-eof" | undefined;
+    }
   | { readonly ok: false; readonly reason: string };
 
 export interface OpenCodeLifecycleMonitorRequest {
@@ -647,6 +651,7 @@ const FIXED_OPENCODE_ARGS = Object.freeze([
   "--port",
   "0",
 ] as const);
+const FIXED_OPENCODE_STDIN_ARGS = Object.freeze([...FIXED_OPENCODE_ARGS, "--stdio"]);
 const FIXED_CODEX_ARGS = Object.freeze([] as const);
 const CODEX_STATE_DIRECTORY = "coding-runtime/codex";
 const INHERITED_EGRESS_ENV_NAMES = [
@@ -1083,6 +1088,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     portable: ResolvedPortableRuntime | undefined,
     args: readonly string[],
     lifecycleAdapter?: OpenCodeLifecycleAdapter,
+    parentLifetime?: "stdin-eof",
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
     const cancelled = cancellationFailure(request, this.deps);
     if (cancelled !== undefined) return this.recordLaunchFailure(request, cancelled);
@@ -1096,9 +1102,10 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     );
     if (!proof.ok)
       return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
-    const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
-    );
+    const launched = this.deps.supervisor.spawnOwnedTree({
+      ...supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
+      ...(parentLifetime === undefined ? {} : { parentLifetime }),
+    });
     if (!launched.ok) {
       return this.recordLaunchFailure(
         request,
@@ -1136,13 +1143,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       portable.verification,
     );
     if (!prepared.ok) return this.recordLaunchFailure(request, prepared);
+    const parentLifetime =
+      this.deps.supervisor.supportsStdinLifetime === true ? prepared.parentLifetime : undefined;
     return await this.spawnRuntime(
       request,
       executablePath,
       prepared.env,
       portable,
-      FIXED_OPENCODE_ARGS,
+      parentLifetime === undefined ? FIXED_OPENCODE_ARGS : FIXED_OPENCODE_STDIN_ARGS,
       adapter,
+      parentLifetime,
     );
   }
 
@@ -2056,7 +2066,14 @@ async function prepareOpenCodeLaunch(
   executablePath: string,
   env: Record<string, string>,
   verification: PortableSidecarRuntimeVerification,
-): Promise<{ readonly ok: true; readonly env: Record<string, string> } | FailureResult> {
+): Promise<
+  | {
+      readonly ok: true;
+      readonly env: Record<string, string>;
+      readonly parentLifetime?: "stdin-eof";
+    }
+  | FailureResult
+> {
   if (adapter.prepare === undefined) return { ok: true, env };
   try {
     const result = await adapter.prepare({
@@ -2068,7 +2085,11 @@ async function prepareOpenCodeLaunch(
       timeoutMs: request.startTimeoutMs,
     });
     if (!result.ok) return failure("protocol-schema-mismatch", false);
-    return { ok: true, env: mergePreparedOpenCodeEnv(env, result.env) };
+    return {
+      ok: true,
+      env: mergePreparedOpenCodeEnv(env, result.env),
+      ...(result.parentLifetime === "stdin-eof" ? { parentLifetime: result.parentLifetime } : {}),
+    };
   } catch {
     return failure(request.signal?.aborted === true ? "start-aborted" : "start-timeout", true);
   }

@@ -284,6 +284,127 @@ describe("dev-lane runtime process backend", () => {
     expect(spawns).toBe(0);
   });
 
+  it("retains the leased stdin through the existing owned tree and records its lifetime", () => {
+    const fixture = stageFixture();
+    const stdin = new PassThrough();
+    const child = { ...fakeChild(4711), stdin };
+    const spawned: Parameters<DevLaneRuntimeSpawn>[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      spawnRuntime: (...args) => {
+        spawned.push(args);
+        return child;
+      },
+    });
+    const tree = backend.spawnOwnedTree({
+      ...launchRequest(fixture),
+      args: ["serve", "--stdio"],
+      parentLifetime: "stdin-eof",
+    });
+    expect(backend.supportsStdinLifetime).toBe(true);
+    expect(spawned[0]?.[2]).toMatchObject({ parentLifetime: "stdin-eof" });
+    expect(stdin.destroyed).toBe(false);
+    expect(stdin.writableEnded).toBe(false);
+    expect(tree).not.toHaveProperty("stdin");
+    const event = activityLog.events.find((record) => record.op === "runtime.confinement.spawned");
+    if (event === undefined) throw new Error("expected native lifetime evidence");
+    expect(
+      expectActivityLogProof(
+        "runtime.confinement.spawned.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ parentLifetime: "stdin-eof", correlationId: "run-2475" });
+    child.settle(0);
+  });
+
+  it.each(["missing", "ended", "destroyed", "non-writable"] as const)(
+    "refuses a requested stdin lease with a %s pipe and terminates the unowned child",
+    (state) => {
+      const fixture = stageFixture();
+      const stdin = new PassThrough();
+      if (state === "ended") stdin.end();
+      if (state === "destroyed") stdin.destroy();
+      if (state === "non-writable") Object.defineProperty(stdin, "writable", { value: false });
+      const child = { ...fakeChild(4711), ...(state === "missing" ? {} : { stdin }) };
+      const kills: NodeJS.Signals[] = [];
+      const activityLog = createBufferedServerLogSink();
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        activityLog,
+        spawnRuntime: () => child,
+        killProcessGroup: (_pid, signal) => {
+          kills.push(signal);
+        },
+      });
+      expect(() =>
+        backend.spawnOwnedTree({
+          ...launchRequest(fixture),
+          args: ["serve", "--stdio"],
+          parentLifetime: "stdin-eof",
+        }),
+      ).toThrow("runtime-stdin-lifetime-unavailable");
+      expect(kills).toEqual(["SIGKILL"]);
+      expect(activityLog.events.some((event) => event.op === "runtime.confinement.spawned")).toBe(
+        false,
+      );
+      expect(activityLog.events[0]?.extra).toMatchObject({ launchPhase: "tree-ownership" });
+    },
+  );
+
+  it("records stdin port errors without pretending that the live child was reaped", async () => {
+    const fixture = stageFixture();
+    const stdin = new PassThrough();
+    const child = { ...fakeChild(4711), stdin };
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      spawnRuntime: () => child,
+    });
+    const tree = backend.spawnOwnedTree({
+      ...launchRequest(fixture),
+      args: ["serve", "--stdio"],
+      parentLifetime: "stdin-eof",
+    });
+    expect(() => stdin.emit("error", new Error("test-only-pipe-error"))).not.toThrow();
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
+    const failure = activityLog.events.find((record) => record.op === "runtime.confinement.failed");
+    expect(failure).toMatchObject({ correlationId: "run-2475", errorKind: "internal" });
+    expect(Array.isArray(failure?.extra?.frames)).toBe(true);
+    expect(Array.isArray(failure?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(failure)).not.toContain("test-only-pipe-error");
+    child.settle(0);
+  });
+
+  it("leaves Linux on its existing lifetime and refuses an unqualified stdin lease", () => {
+    const fixture = stageFixture();
+    const spawnRuntime = vi.fn(() => fakeChild(4711, true));
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: LINUX_IDENTITY,
+      platform: "linux",
+      runtimeRoot: fixture.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      spawnRuntime,
+    });
+    expect(backend.supportsStdinLifetime).toBeUndefined();
+    expect(() =>
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        args: ["serve", "--stdio"],
+        parentLifetime: "stdin-eof",
+      }),
+    ).toThrow("runtime-stdin-lifetime-unavailable");
+    expect(spawnRuntime).not.toHaveBeenCalled();
+  });
+
   it("spawns a detached child from inside the runtime root and reports its exit", async () => {
     const fixture = stageFixture();
     const spawned: {

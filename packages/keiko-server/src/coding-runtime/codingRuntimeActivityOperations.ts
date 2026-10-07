@@ -260,6 +260,12 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       required: true,
       values: ["namespace-inherited", "runtime-and-attested-git-only"],
     },
+    parentLifetime: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["stdin-eof"],
+    },
     childExecutableDigest: {
       type: "string",
       dataClass: "digest",

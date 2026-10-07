@@ -356,6 +356,11 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly stdinLifetime?: {
+    readonly supports: true;
+    readonly launches: RuntimeSupervisorLaunchRequest[];
+    readonly pipe: PassThrough;
+  };
   readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
@@ -459,6 +464,25 @@ function optionalToolResultCorrelation(control: StartBridgeControl | undefined):
     : { toolResultCorrelationId: control.toolResultCorrelationId };
 }
 
+function fixtureStdinOwnership(control: StartBridgeControl | undefined): {
+  readonly supportsStdinLifetime?: true;
+  readonly stdin?: PassThrough;
+} {
+  return control?.stdinLifetime === undefined
+    ? {}
+    : { supportsStdinLifetime: true, stdin: control.stdinLifetime.pipe };
+}
+
+function fixtureStartupLine(
+  request: RuntimeSupervisorLaunchRequest,
+  control: StartBridgeControl | undefined,
+): string {
+  control?.stdinLifetime?.launches.push(request);
+  return control?.stdinLifetime === undefined
+    ? "server listening on http://127.0.0.1:43123\n"
+    : '{"url":"http://127.0.0.1:43123"}\n';
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -476,12 +500,14 @@ async function startBridgeFixture(
   const supervisor = createRuntimeProcessSupervisor({
     backend: {
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
-      spawnOwnedTree: (): RuntimeProcessTree => {
-        stdout.end("server listening on http://127.0.0.1:43123\n");
+      ...fixtureStdinOwnership(control),
+      spawnOwnedTree: (request): RuntimeProcessTree => {
+        stdout.end(fixtureStartupLine(request, control));
         return {
           treeId: "tool-bridge-tree",
           stdout,
           stderr,
+          ...fixtureStdinOwnership(control),
           onTreeExit: (): void => undefined,
         };
       },
@@ -703,6 +729,28 @@ async function startBridgeFixture(
     },
   };
 }
+
+it("selects native stdin ownership only after the production V2 prepare and keeps it open", async () => {
+  const pipe = new PassThrough();
+  const launches: RuntimeSupervisorLaunchRequest[] = [];
+  const fixture = await startBridgeFixture(
+    {
+      execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+    },
+    undefined,
+    { stdinLifetime: { supports: true, launches, pipe } },
+  );
+  try {
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.parentLifetime).toBe("stdin-eof");
+    expect(launches[0]?.args).toContain("--stdio");
+    expect(pipe.writableEnded).toBe(false);
+    expect(pipe.destroyed).toBe(false);
+  } finally {
+    await fixture.stop();
+    pipe.destroy();
+  }
+});
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
   return turnHistory("succeeded");

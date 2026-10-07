@@ -133,7 +133,13 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     `;
     try {
       const result = await runCommand(
-        { command: "node", args: ["-e", code, denied], signal: controller().signal },
+        {
+          command: "node",
+          args: ["-e", code, denied],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
         confinedDeps(),
       );
       const facts: unknown = JSON.parse(result.stdout);
@@ -182,7 +188,13 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       const code =
         'const s=require("node:net").connect(Number(process.argv[1]),"127.0.0.1");s.once("connect",()=>{s.end();process.exitCode=7});s.once("error",e=>{process.stdout.write(e.code);s.destroy()})';
       const result = await runCommand(
-        { command: "node", args: ["-e", code, String(address.port)], signal: controller().signal },
+        {
+          command: "node",
+          args: ["-e", code, String(address.port)],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
         confinedDeps(),
       );
       expect(result.exitCode).toBe(0);
@@ -200,7 +212,13 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     const cleanup = vi.fn();
     await expect(
       runCommand(
-        { command: "node", args: ["-e", "process.exit(0)"], signal: controller().signal },
+        {
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
         {
           ...confinedDeps(),
           home: { make: (): string => root, cleanup },
@@ -210,6 +228,108 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     expect(cleanup).not.toHaveBeenCalled();
     expect(existsSync(root)).toBe(true);
   });
+
+  it("runs npm scripts with foreign caller bins without changing their workspace PATH", async () => {
+    const caller = mkdtempSync(join(tmpdir(), "keiko-npm-caller-"));
+    const callerBin = join(caller, "node_modules", ".bin");
+    const workspaceBin = join(root, "node_modules", ".bin");
+    mkdirSync(callerBin, { recursive: true });
+    mkdirSync(workspaceBin, { recursive: true });
+    const task = join(workspaceBin, "owned-task");
+    writeFileSync(task, '#!/bin/sh\nprintf "owned-task-passed"\n');
+    chmodSync(task, 0o755);
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)" && owned-task' } }),
+    );
+    const path = `${callerBin}:${process.env.PATH ?? ""}`;
+    const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
+    try {
+      const result = await runCommand(
+        {
+          command: "npm",
+          args: ["run", "typecheck"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          commandRules: [{ executable: "npm", allowedSubcommands: ["run"] }],
+          processEnv: { PATH: path, npm_config_script_shell: "/unrelated/caller-shell" },
+          spawn: (...args) => {
+            calls.push(args);
+            return nodeSpawnFn(...args);
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("owned-task-passed");
+      expect(calls[0]?.[2]).toMatchObject({ shell: false, env: { PATH: path } });
+      expect(result.attestation).toMatchObject({
+        backend: "seatbelt",
+        filesystemEnforced: true,
+        networkEnforced: true,
+      });
+    } finally {
+      rmSync(caller, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runCommand — the confined npm script shell", () => {
+  const cases = [
+    { command: "npm", platform: "darwin", backend: "seatbelt", scoped: true, pin: true },
+    { command: "npx", platform: "darwin", backend: "seatbelt", scoped: true, pin: true },
+    { command: "node", platform: "darwin", backend: "seatbelt", scoped: true, pin: false },
+    { command: "npm", platform: "darwin", backend: "seatbelt", scoped: false, pin: false },
+    { command: "npm", platform: "linux", backend: "bubblewrap", scoped: true, pin: false },
+    { command: "npm", platform: "darwin", backend: "none", scoped: false, pin: false },
+    { command: "npm", platform: "win32", backend: "none", scoped: false, pin: false },
+  ] as const;
+
+  it.each(cases)(
+    "uses the actual $platform/$backend/$command route (scoped=$scoped)",
+    async (row) => {
+      const spawn = recordingSpawn();
+      const path = process.env.PATH ?? "";
+      const pending = runCommand(
+        {
+          command: row.command,
+          args: ["--version"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...fakeDeps(spawn.fn, { PATH: path, npm_config_script_shell: "/caller/shell" }),
+          commandRules: [{ executable: row.command }],
+          resolveExecutable: (command) => `/abs/${command}`,
+          killWindowsTree: () => "succeeded",
+          platform: row.platform,
+          policy: {
+            ...DEFAULT_SANDBOX_POLICY,
+            network: row.backend === "none" ? "inherit" : "none",
+            filesystem: row.scoped ? "execution-root" : "inherit",
+          },
+          sandboxAvailability: {
+            seatbelt: row.backend === "seatbelt",
+            bubblewrap: row.backend === "bubblewrap",
+            unshare: false,
+            docker: false,
+            podman: false,
+          },
+        },
+      );
+      spawn.child.emit("close", 0, null);
+      const result = await pending;
+      expect(result.attestation?.backend).toBe(row.backend === "none" ? undefined : row.backend);
+      expect(spawn.calls()[0]?.options).toMatchObject({ shell: false, env: { PATH: path } });
+      expect(spawn.calls()[0]?.options.env.npm_config_script_shell).toBe(
+        row.pin ? "/bin/sh" : undefined,
+      );
+    },
+  );
 });
 
 interface HomeRecorder {

@@ -259,9 +259,10 @@ function testSupervisor(
   timer: RuntimeSupervisorTimer = {
     setTimer: (callback, delayMs): ReturnType<typeof setTimeout> => setTimeout(callback, delayMs),
   },
+  supportsStdinLifetime?: true,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
-    backend: new TestRuntimeProcessBackend(spawn, timer, TEST_QUALIFICATION),
+    backend: new TestRuntimeProcessBackend(spawn, timer, TEST_QUALIFICATION, supportsStdinLifetime),
     qualifications: [TEST_QUALIFICATION],
     planSandbox: testSandboxPlanner,
   });
@@ -336,6 +337,7 @@ class TestRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly spawn: CodingRuntimeSpawnFn,
     private readonly timer: RuntimeSupervisorTimer,
     qualification: RuntimeQualificationIdentity,
+    public readonly supportsStdinLifetime?: true,
   ) {
     this.identity = {
       platform: qualification.platform,
@@ -3963,6 +3965,43 @@ describe("coding runtime manager", () => {
     };
 
     await expect(manager.start(request)).resolves.toMatchObject({ ok: true });
+    expect(spawnedArgs).not.toContain("--caller-supplied-open-code-argument");
+  });
+
+  it.each([
+    { producer: true, backend: true, expected: true },
+    { producer: true, backend: false, expected: false },
+    { producer: false, backend: true, expected: false },
+  ])("uses the native stdin lease only when producer and backend agree: %j", async (control) => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    let spawnedArgs: readonly string[] | undefined;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(
+        (_, args) => {
+          spawnedArgs = args;
+          return child.handle;
+        },
+        undefined,
+        control.backend ? true : undefined,
+      ),
+      openCodeLifecycleAdapter: {
+        prepare: () =>
+          Promise.resolve({
+            ok: true as const,
+            ...(control.producer ? { parentLifetime: "stdin-eof" as const } : {}),
+          }),
+        handshake: () => Promise.resolve({ ok: true }),
+      },
+    });
+    await expect(
+      manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        args: ["--caller-supplied-open-code-argument"],
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(spawnedArgs?.includes("--stdio")).toBe(control.expected);
     expect(spawnedArgs).not.toContain("--caller-supplied-open-code-argument");
   });
 

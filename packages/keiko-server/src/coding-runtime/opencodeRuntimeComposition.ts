@@ -803,6 +803,7 @@ async function materializePrepare(
   );
   return {
     ok: true,
+    parentLifetime: "stdin-eof",
     env: {
       ...profile.env,
       KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,

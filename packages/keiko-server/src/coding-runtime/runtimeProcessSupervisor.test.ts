@@ -94,6 +94,37 @@ function backend(
 }
 
 describe("runtime process supervisor", () => {
+  it("refuses a stdin lifetime request when the selected backend does not own that pipe", () => {
+    const request = { ...launchRequest("darwin"), parentLifetime: "stdin-eof" as const };
+    const fake = backend(true, request.qualification);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+      planSandbox: enforcingSandbox,
+    });
+    expect(supervisor.spawnOwnedTree(request)).toEqual({
+      ok: false,
+      failureCode: "runtime-unqualified",
+    });
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
+  it("propagates only the selected backend's server-owned stdin lifetime capability", () => {
+    const request = { ...launchRequest("darwin"), parentLifetime: "stdin-eof" as const };
+    const fake = backend(true, request.qualification);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: { ...fake.value, supportsStdinLifetime: true as const },
+      qualifications: [request.qualification],
+      planSandbox: enforcingSandbox,
+    });
+    expect(supervisor.supportsStdinLifetime).toBe(true);
+    expect(supervisor.spawnOwnedTree(request)).toMatchObject({ ok: true });
+    expect(fake.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ parentLifetime: "stdin-eof" }),
+      expect.anything(),
+    );
+  });
+
   it("performs zero spawn without an exact release qualification", () => {
     const fake = backend(true);
     const supervisor = createRuntimeProcessSupervisor({ backend: fake.value });

@@ -1554,6 +1554,25 @@ function writeBoundedInput(ctx: ExecContext): void {
   }
 }
 
+function commandEnvironment(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  target: SpawnTarget,
+): Record<string, string> {
+  const env = buildChildEnv(deps.processEnv, deps.policy);
+  if (
+    target.attestation?.platform === "darwin" &&
+    target.attestation.backend === "seatbelt" &&
+    target.attestation.filesystemEnforced &&
+    (input.command === "npm" || input.command === "npx")
+  ) {
+    // npm's bare shell lookup can hit an unreadable caller bin directory in PATH. The system
+    // shell is already admitted by the execution-root profile; bind its exact executable.
+    env.npm_config_script_shell = "/bin/sh";
+  }
+  return env;
+}
+
 // Runs an allowlisted command. Rejects with CommandDeniedError (before spawn) for a denied
 // command or a workspace-escaping cwd (PathEscapeError), CommandTimeoutError on timeout, and
 // CommandCancelledError on abort; otherwise resolves a redacted, byte-capped CommandResult. All
@@ -1565,7 +1584,7 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const executable = resolveExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
-    const env = buildChildEnv(deps.processEnv, deps.policy);
+    const env = commandEnvironment(input, deps, target);
     const reservation = reserveWindowsTermination(input, deps);
     let state: RunState;
     try {

@@ -26574,6 +26574,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["namespace-inherited", "runtime-and-attested-git-only"],
       },
+      parentLifetime: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["stdin-eof"],
+      },
       childExecutableDigest: {
         type: "string",
         dataClass: "digest",

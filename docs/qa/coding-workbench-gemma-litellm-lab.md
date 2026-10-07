@@ -337,8 +337,25 @@ at STARTING revision 1 before one SIGKILL to its bound BFF. One of two tracked d
 alive with the same captured identity after the 30-second observation window. The driver correctly
 refused any restart or recovery acknowledgement; no model turn or workspace edit occurred. A
 separate root-owned cleanup later terminated only that exact survivor, preserving failed
-qualification. The pinned native OpenCode `serve --stdio` stdin-EOF lifetime lease is the proposed
-repair; it is not yet production-qualified. No second watchdog or supervisor is proposed.
+qualification. The repair uses the pinned native OpenCode `serve --stdio` stdin-EOF lifetime lease
+through the existing V2 producer and shared Darwin application-sandbox process owner. A targeted real-binary
+control proves that the authenticated native HTTP service remains alive while the pipe is held
+and exits after EOF. The complete abrupt-interruption case still needs qualification on the
+published repaired head. No second watchdog or supervisor was added; the failed baseline remains
+failed, and other process backends are not qualified by inference.
+
+The independent targeted matrix also reproduced an actual npm-workspace verification failure:
+the same command and executable bytes passed from the direct parent environment but exited 255
+with npm's extended caller `PATH`. Inside the unchanged execution-root Seatbelt profile, bare
+`sh` failed with `EPERM`, while `/bin/sh` passed. The existing command boundary now binds npm's
+internal script shell only for actual confined Darwin npm/npx routes. A failure-first real npm
+consumer then passed, including a workspace-owned bin command. `PATH`, the outer `shell: false`
+spawn and all filesystem/network boundaries are preserved. Existing enforcement attestation and
+`editor.verification.execute` lifecycle evidence retain the route and outcome. Independent strict
+affected-graph and source/test typechecking, scoped lint/format, 131 execution tests and 327 server
+tests passed; two pre-existing optional native-artifact cases were not enabled. The original
+failed matrix and its closed diagnostic controls remain preserved. Chat search controls are
+unchanged, and no global gate or complete final-head qualification is claimed.
 
 F21 active turn failures now describe the observed cause without premature operator repair advice.
 The timeline claims an automatic retry only when the existing gateway retry fact confirms it;
@@ -377,6 +394,20 @@ packet/log composition; it does not qualify native release containment. Generate
 match their producer. Production native workspace tools remain denied: a sensitive/private-state
 permission and IO boundary, the original toolchain and gateway/media compatibility still require
 qualification. Keiko Chat repository and recursive search are preserved.
+
+The supported original-host boundary was independently exercised in a private Node 24.21.0
+prototype using integrity-locked official OpenCode 2.0.10 modules and matching Effect companions.
+Without the IO decoration, controlled private/sensitive reads and a swapped instruction file
+reached native output; the failure-first control refused that result. The corrected original
+registry retained Read's schema, paging and nested instructions while refusing those reads.
+An original HTTP/SSE task with a local synthetic provider performed six native reads across
+seven turns, observed three expected refusals and the exact session-bound success event, and
+closed its owned listeners and native scope. No protected contents reached the provider; three
+foreign metadata fetch attempts were intercepted before network IO. This qualifies the supported
+service replacement boundary only. Current coding authority integration, metadata, directories,
+media, other native tools and a separately attested external host payload remain open. npm
+integrity proves the published modules, not their source-commit build provenance. No production
+host or additional native tool was activated.
 
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations

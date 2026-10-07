@@ -492,6 +492,17 @@ waits for the interruption's teardown result and never dispatches the initial ta
 terminal state. An unproven teardown or a late live host remains `recovery-required`; cancellation
 does not substitute for process-tree exit proof (F25, #3873).
 
+The pinned OpenCode V2 Darwin application-sandbox backend also uses the native `serve --stdio`
+stdin-EOF lifetime lease. The verified V2 preparation producer and the existing process backend
+must both support it before the manager selects that fixed launch form. The supervisor refuses an
+unsupported lease marker, and the backend refuses a missing or closed writable pipe before it
+accepts tree ownership. Keiko retains the pipe for the complete runtime lifetime; handshake,
+tool dispatch and adapter disposal never end it. OpenCode keeps its authenticated HTTP service
+and closes its native server scope when the owner's pipe reaches EOF. Readiness accepts only the
+native closed loopback URL record or the existing ordinary-serve line. The existing body-free
+confinement-spawn record identifies the selected lifetime form. This does not extend authority,
+replace explicit tree reap, or qualify the sealed helper and other platforms by inference.
+
 An acknowledged recovery row remains visible until a replacement starts, but no longer blocks
 workspace selection when the runtime manager reports `stopped`. Workspace activation uses that
 specific predicate rather than treating every retained recovery row as a running process. The

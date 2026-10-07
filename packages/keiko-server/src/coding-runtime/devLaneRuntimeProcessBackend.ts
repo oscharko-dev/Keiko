@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, type StdioOptions } from "node:child_process";
 import { dirname } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import {
   copyRuntimeGatewayConfinement,
   currentPlatform,
@@ -67,6 +67,8 @@ export interface DevLaneRuntimeChildProcess {
   readonly pid: number | undefined;
   readonly stdout: Readable;
   readonly stderr: Readable;
+  /** Retained by this existing process owner solely as OpenCode's native lifetime lease. */
+  readonly stdin?: Writable | undefined;
   readonly launcherDiagnostics?: Readable | undefined;
   /** Synchronous exit fact (Node sets exitCode/signalCode before the async exit event fires). */
   settled(): boolean;
@@ -84,6 +86,7 @@ export type DevLaneRuntimeSpawn = (
     readonly detached: true;
     readonly launcherDiagnostics: boolean;
     readonly shell: false;
+    readonly parentLifetime?: "stdin-eof" | undefined;
   },
 ) => DevLaneRuntimeChildProcess;
 
@@ -153,12 +156,18 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly resolveGitExecutable: () => AttestedDarwinGitExecutable,
   ) {}
 
+  public get supportsStdinLifetime(): true | undefined {
+    return this.identity.platform === "darwin" && this.platform === "darwin" ? true : undefined;
+  }
+
   public spawnOwnedTree(
     request: RuntimeSupervisorLaunchRequest,
     sandbox?: PreparedRuntimeSandboxLaunch,
   ): RuntimeProcessTree {
     let launchPhase: DevLaneLaunchPhase = "gateway-policy";
     try {
+      if (request.parentLifetime !== undefined && this.supportsStdinLifetime !== true)
+        throw new TypeError("runtime-stdin-lifetime-unavailable");
       return sandbox === undefined || this.gatewayConfinement !== undefined
         ? this.spawnConfinedTree(request, (phase) => {
             launchPhase = phase;
@@ -189,16 +198,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       detached: true,
       launcherDiagnostics: linuxGatewayLauncherBackend(sandbox.attestation.backend),
       shell: false,
+      ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
-    setLaunchPhase("launcher-diagnostics");
-    attachOrTerminateLinuxGatewayDiagnostics(
-      child,
-      this.activityLog,
-      request.runId,
-      sandbox.attestation.backend,
-      this.killProcessGroup,
-    );
-    setLaunchPhase("tree-ownership");
+    this.attachLaunchPorts(child, request, sandbox.attestation.backend, setLaunchPhase);
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
       recordChildConfinementFailure(this.activityLog, request.runId, child, error);
     });
@@ -236,22 +238,16 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       detached: true,
       launcherDiagnostics: linuxGatewayLauncherBackend(decision.attestation.backend),
       shell: false,
+      ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
-    setLaunchPhase("launcher-diagnostics");
-    attachOrTerminateLinuxGatewayDiagnostics(
-      child,
-      this.activityLog,
-      request.runId,
-      decision.attestation.backend,
-      this.killProcessGroup,
-    );
-    setLaunchPhase("tree-ownership");
+    this.attachLaunchPorts(child, request, decision.attestation.backend, setLaunchPhase);
     recordRuntimeGatewayConfinementSpawned(
       this.activityLog,
       request.runId,
       recordedConfinementBackend(decision.attestation.backend),
       policy,
       gitExecutable,
+      request.parentLifetime,
     );
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
       recordChildConfinementFailure(this.activityLog, request.runId, child, error);
@@ -265,6 +261,25 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
   ): AttestedDarwinGitExecutable | undefined {
     setLaunchPhase("git-attestation");
     return platformGitExecutable(this.identity, this.resolveGitExecutable);
+  }
+
+  private attachLaunchPorts(
+    child: DevLaneRuntimeChildProcess,
+    request: RuntimeSupervisorLaunchRequest,
+    backend: string,
+    setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
+  ): void {
+    setLaunchPhase("tree-ownership");
+    assertStdinLifetime(child, request.parentLifetime, this.killProcessGroup);
+    setLaunchPhase("launcher-diagnostics");
+    attachOrTerminateLinuxGatewayDiagnostics(
+      child,
+      this.activityLog,
+      request.runId,
+      backend,
+      this.killProcessGroup,
+    );
+    setLaunchPhase("tree-ownership");
   }
 
   public signalTree(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void {
@@ -537,6 +552,19 @@ function terminateUnownedChild(
   }
 }
 
+function assertStdinLifetime(
+  child: DevLaneRuntimeChildProcess,
+  parentLifetime: "stdin-eof" | undefined,
+  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
+): void {
+  if (parentLifetime === undefined) return;
+  const stdin = child.stdin;
+  if (stdin instanceof Writable && stdin.writable && !stdin.destroyed && !stdin.writableEnded)
+    return;
+  terminateUnownedChild(child, killProcessGroup);
+  throw new TypeError("runtime-stdin-lifetime-unavailable");
+}
+
 function ownTree(
   treeId: string,
   child: DevLaneRuntimeChildProcess,
@@ -563,12 +591,14 @@ function ownTree(
     tree.exits.clear();
   };
   child.onExit(settle);
-  child.onError((error) => {
+  const onError = (error: unknown): void => {
     recordError(error);
     // Node also emits `error` for failed kill/send operations on a live process. Only a failed
     // spawn with no PID, or the child's actual settled state, proves there is no process left.
     if (child.pid === undefined || child.settled()) settle(null);
-  });
+  };
+  child.onError(onError);
+  child.stdin?.once("error", onError);
   return tree;
 }
 
@@ -587,9 +617,7 @@ function spawnDevLaneChild(
     },
     detached: true,
     shell: false,
-    stdio: options.launcherDiagnostics
-      ? ["ignore", "pipe", "pipe", "pipe"]
-      : ["ignore", "pipe", "pipe"],
+    stdio: devLaneStdio(options),
   });
   if (child.stdout === null || child.stderr === null)
     throw new TypeError("dev-lane-runtime-pipes-unavailable");
@@ -602,6 +630,7 @@ function spawnDevLaneChild(
     pid: child.pid,
     stdout: child.stdout,
     stderr: child.stderr,
+    ...(child.stdin instanceof Writable ? { stdin: child.stdin } : {}),
     ...(launcherDiagnostics instanceof Readable ? { launcherDiagnostics } : {}),
     settled: (): boolean => child.exitCode !== null || child.signalCode !== null,
     kill: (signal): boolean => child.kill(signal),
@@ -612,6 +641,11 @@ function spawnDevLaneChild(
       child.once("error", listener);
     },
   };
+}
+
+function devLaneStdio(options: Parameters<DevLaneRuntimeSpawn>[2]): StdioOptions {
+  const stdin = options.parentLifetime === "stdin-eof" ? "pipe" : "ignore";
+  return options.launcherDiagnostics ? [stdin, "pipe", "pipe", "pipe"] : [stdin, "pipe", "pipe"];
 }
 
 /** Negative-pid kill targets the whole POSIX process group led by the spawned child. */

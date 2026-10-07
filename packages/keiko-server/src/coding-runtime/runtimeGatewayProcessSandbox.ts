@@ -55,6 +55,7 @@ export function recordRuntimeGatewayConfinementSpawned(
   backend: "bubblewrap" | "unshare" | "seatbelt",
   policy: RuntimeGatewayConfinement,
   git: AttestedDarwinGitExecutable | undefined,
+  parentLifetime?: "stdin-eof",
 ): void {
   sink.write(
     activityLogEvent(
@@ -68,6 +69,7 @@ export function recordRuntimeGatewayConfinementSpawned(
         modelProfileDigest: policy.modelProfileDigest,
         treeBindingId: policy.treeBindingId,
         profile: policy.profile,
+        ...(parentLifetime === undefined ? {} : { parentLifetime }),
         childExecutablePolicy:
           git === undefined ? "namespace-inherited" : "runtime-and-attested-git-only",
         ...(git === undefined ? {} : { childExecutableDigest: git.sha256 }),
