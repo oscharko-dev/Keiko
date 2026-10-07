@@ -112,6 +112,8 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import type { ServerLogSink } from "./observability/index.js";
+import { logAutomaticCatalog } from "./gateway-startup-activity.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
   classifyFigmaTransportError,
@@ -332,9 +334,10 @@ function logSetupMetadataOutcome(
   trace: SetupDiscoveryTrace,
   startedAt: number,
   correlationId: string | undefined,
+  sink: ServerLogSink = processServerLogSink(),
 ): void {
   const failure = input.outcome === "available" ? undefined : input.failure;
-  processServerLogSink().write(
+  sink.write(
     activityLogEvent(
       GATEWAY_SETUP_METADATA_OPERATION,
       {
@@ -2176,18 +2179,55 @@ export function liteLlmDiscoveryConnections(config: GatewayConfig): readonly Mod
   );
 }
 
+interface StartupCatalogResult {
+  readonly succeeded: boolean;
+  readonly retryable: boolean;
+}
+type StartupCatalogRecorder = (
+  outcome: "applied" | "unchanged" | "stale" | "cancelled" | "failed",
+  updatedModelCount: number,
+  retryable: boolean,
+  errorKind?: ActivityLogErrorKind,
+) => void;
+const CONCLUSIVE_CATALOG_HTTP_STATUSES: ReadonlySet<number> = new Set([400, 404]);
+
+function startupCatalogLogger(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  config: GatewayConfig,
+  correlationId: string,
+  startedAt: number,
+): StartupCatalogRecorder {
+  const fingerprint = toolCallingConfigurationFingerprint(provider);
+  const configuredModelCount = config.providers.filter(
+    (candidate) => toolCallingConfigurationFingerprint(candidate) === fingerprint,
+  ).length;
+  return (outcome, updatedModelCount, retryable, errorKind): void => {
+    logAutomaticCatalog(deps, {
+      correlationId,
+      outcome,
+      configuredModelCount,
+      updatedModelCount,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      retryable,
+      ...(errorKind === undefined ? {} : { errorKind }),
+    });
+  };
+}
+
 export async function refreshLiteLlmGatewayCatalog(
   deps: UiHandlerDeps,
   provider: ModelProviderConfig,
   signal: AbortSignal,
   correlationId: string,
-): Promise<boolean> {
+): Promise<StartupCatalogResult> {
   const holder = deps.gatewayConfig;
   const config = holder?.current();
-  if (config === undefined || holder === undefined) return false;
+  if (config === undefined || holder === undefined) return { succeeded: false, retryable: false };
   const generation = holder.generation();
   const trace = createSetupDiscoveryTrace();
   const startedAt = Date.now();
+  const log = startupCatalogLogger(deps, provider, config, correlationId, startedAt);
   try {
     const result = await discoverConfiguredGatewayCatalog(
       deps,
@@ -2198,23 +2238,67 @@ export async function refreshLiteLlmGatewayCatalog(
       correlationId,
     );
     signal.throwIfAborted();
-    if (holder.generation() !== generation) return false;
-    const current = holder.current();
-    if (current === undefined) return false;
-    const updated = refreshedLiteLlmCatalog(current, provider, normalizeDiscoveryResult(result));
-    if (updated !== current) holder.refine?.(updated, correlationId);
-    logSetupMetadataOutcome({ outcome: "available" }, trace, startedAt, correlationId);
-    return true;
-  } catch (cause) {
-    const outcome = metadataFailureOutcome(cause, signal);
+    const outcome = applyStartupCatalog(holder, generation, provider, result, correlationId, log);
     logSetupMetadataOutcome(
-      { outcome, failure: discoveryFailureDetail(cause, outcome === "cancelled") },
+      { outcome: "available" },
       trace,
       startedAt,
       correlationId,
+      deps.activityLog,
     );
-    return false;
+    return outcome;
+  } catch (cause) {
+    const outcome = metadataFailureOutcome(cause, signal);
+    const failure = discoveryFailureDetail(cause, outcome === "cancelled");
+    logSetupMetadataOutcome(
+      { outcome, failure },
+      trace,
+      startedAt,
+      correlationId,
+      deps.activityLog,
+    );
+    const retryable = catalogFailureRetryable(outcome, failure);
+    log(outcome === "cancelled" ? "cancelled" : "failed", 0, retryable, failure.errorKind);
+    return { succeeded: false, retryable };
   }
+}
+
+function catalogFailureRetryable(outcome: string, failure: SetupMetadataFailure): boolean {
+  return (
+    outcome !== "cancelled" &&
+    failure.errorKind !== "permission-denied" &&
+    failure.errorKind !== "validation-failed" &&
+    !CONCLUSIVE_CATALOG_HTTP_STATUSES.has(failure.evidence.httpStatus ?? 0)
+  );
+}
+
+function applyStartupCatalog(
+  holder: RuntimeGatewayConfig,
+  generation: number,
+  provider: ModelProviderConfig,
+  result: GatewayModelDiscoveryOutput,
+  correlationId: string,
+  log: StartupCatalogRecorder,
+): StartupCatalogResult {
+  if (holder.generation() !== generation) {
+    log("stale", 0, true);
+    return { succeeded: false, retryable: true };
+  }
+  const current = holder.current();
+  if (current === undefined) {
+    log("stale", 0, false);
+    return { succeeded: false, retryable: false };
+  }
+  const updated = refreshedLiteLlmCatalog(current, provider, normalizeDiscoveryResult(result));
+  if (updated !== current) holder.refine?.(updated, correlationId);
+  const before = new Map(
+    listConfiguredCapabilities(current).map((model) => [model.id, model.contextWindow]),
+  );
+  const count = listConfiguredCapabilities(updated).filter(
+    (model) => model.contextWindow !== before.get(model.id),
+  ).length;
+  log(updated === current ? "unchanged" : "applied", count, false);
+  return { succeeded: true, retryable: false };
 }
 
 function discoverConfiguredGatewayCatalog(

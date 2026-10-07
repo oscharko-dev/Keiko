@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "875726c154fe8196e972ff44adbe575353f9444b06ab99f2d08c580e4857ef70"
+    "catalogDigest": "9287f363aedbccb62794c904a63f67d242e62e3a1f1ed3316630fa113680d94b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 528,
-    "proofCount": 535,
-    "resolvedProofCount": 535,
+    "operationCount": 529,
+    "proofCount": 536,
+    "resolvedProofCount": 536,
     "failureClassCount": 340,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -191,6 +191,7 @@
         "embedding.scalar-ladder.deadline-expired",
         "embedding.scalar-ladder.item-completed",
         "embedding.scalar-ladder.item-failed",
+        "gateway.catalog.automatic.completed",
         "gateway.chat.completed",
         "gateway.chat.failed",
         "gateway.chat.started",
@@ -1652,6 +1653,9 @@
       "packages/keiko-model-gateway/src/openai-embedding-adapter.logging.test.ts"
     ],
     "evidence.retention.line": ["packages/keiko-server/src/evidence-retention-log.test.ts"],
+    "gateway.catalog.automatic.completed.line": [
+      "packages/keiko-server/src/gateway-startup-catalog.test.ts"
+    ],
     "gateway.chat.completed.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],

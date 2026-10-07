@@ -103,15 +103,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: ["gateway.setup.metadata.resolved"],
-      end: [],
+      end: ["gateway.catalog.automatic.completed"],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["gateway.setup.metadata.resolved"],
+    requiredCausalOperations: [
+      "gateway.catalog.automatic.completed",
+      "gateway.setup.metadata.resolved",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["gateway.setup.metadata.resolved"],
+    requiredProofOperations: [
+      "gateway.catalog.automatic.completed",
+      "gateway.setup.metadata.resolved",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["gateway.setup.metadata.resolved"],
+    requiredResourceOperations: [
+      "gateway.catalog.automatic.completed",
+      "gateway.setup.metadata.resolved",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

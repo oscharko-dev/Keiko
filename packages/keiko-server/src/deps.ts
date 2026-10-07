@@ -5129,7 +5129,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     egress: args.egress,
     redactor: args.liveRedactor,
     diagnostics: args.options.diagnostics,
-    activityLog: processServerLogSink(),
+    activityLog: args.options.activityLog ?? processServerLogSink(),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,

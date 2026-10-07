@@ -76,7 +76,10 @@ existing monotonic window-adoption rule, preserving declared ceilings and concur
 Existing connections, policy, and configured models are retained. A bounded serial queue verifies missing or expired
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks retry after their one-minute
-cooldown. Catalog retries retain a connection-bound deadline across readiness refinements, so a
+cooldown, with exponential startup backoff capped at five minutes. Rejected credentials and
+conclusive invalid catalog responses stop discovery until the connection changes. Startup catalog
+completion records the applied, unchanged, stale, cancelled or failed disposition and configured
+and changed-model counts under a fresh correlation linked to the triggering request. Catalog retries retain a connection-bound deadline across readiness refinements, so a
 successful probe cannot trigger immediate repeated discovery during a catalog outage. Successful
 discovery is reused until the connection changes. Disabled Coding and subscription sources never
 initiate these tool checks.

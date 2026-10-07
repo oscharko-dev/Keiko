@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "875726c154fe8196e972ff44adbe575353f9444b06ab99f2d08c580e4857ef70" as const;
+  "9287f363aedbccb62794c904a63f67d242e62e3a1f1ed3316630fa113680d94b" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -19671,24 +19671,76 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "gateway-setup-metadata",
       requirementContract: "gateway-setup-metadata",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["state"],
+      lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
         state: ["gateway.setup.metadata.resolved"],
-        end: [],
+        end: ["gateway.catalog.automatic.completed"],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "gateway.catalog.automatic.completed",
+          mode: "correlation",
+        },
         {
           op: "gateway.setup.metadata.resolved",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["gateway.setup.metadata.resolved"],
+      resourceSignals: ["gateway.catalog.automatic.completed", "gateway.setup.metadata.resolved"],
       replayReferences: [],
       operations: [
+        {
+          op: "gateway.catalog.automatic.completed",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "configuredModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "elapsedMs",
+              type: "integer",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "retryable",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "updatedModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.catalog.automatic.completed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "gateway.setup.metadata.resolved",
           owner: "keiko-server",
@@ -40047,6 +40099,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "embedding.scalar-ladder.item-completed": "model-gateway",
     "embedding.scalar-ladder.item-failed": "model-gateway",
     "evidence.retention": "runtime-packages",
+    "gateway.catalog.automatic.completed": "model-gateway",
     "gateway.chat.completed": "model-gateway",
     "gateway.chat.failed": "model-gateway",
     "gateway.chat.started": "model-gateway",

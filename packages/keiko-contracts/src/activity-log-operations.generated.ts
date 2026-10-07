@@ -13894,6 +13894,64 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.catalog.automatic.completed",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-startup-activity.logAutomaticCatalog",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["applied", "unchanged", "stale", "cancelled", "failed"],
+      },
+      configuredModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      updatedModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      elapsedMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+      retryable: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-setup-metadata"],
+    proofIds: ["gateway.catalog.automatic.completed.line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["failed"],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.chat.completed",
     category: "gateway",
     owner: "keiko-model-gateway",

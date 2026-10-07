@@ -10,6 +10,7 @@ import {
   initializeLiteLlmCodingReadiness,
   isLiteLlmCodingReadinessPending,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
+  withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
 
 const STARTUP_RETRY_DELAY_MS = WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1;
@@ -33,16 +34,19 @@ class GatewayStartupChecks {
   private readonly tasks = new Set<Promise<void>>();
   private retry: ReturnType<typeof setTimeout> | undefined;
   private startedGeneration = -1;
+  private retryAttempt = 0;
 
   public constructor(private readonly deps: UiHandlerDeps) {}
 
-  public start(correlationId = newCorrelationId()): void {
+  public start(parentCorrelationId?: string): void {
+    const correlationId = newCorrelationId();
+    const observedDeps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
     const holder = this.deps.gatewayConfig;
     if (this.controller.signal.aborted || holder?.current() === undefined) return;
     if (this.startedGeneration === holder.generation()) return;
     this.startedGeneration = holder.generation();
-    initializeConfiguredConversationReadiness(this.deps, correlationId);
-    const task = this.run(correlationId)
+    initializeConfiguredConversationReadiness(observedDeps, correlationId);
+    const task = this.run(observedDeps, correlationId, parentCorrelationId)
       .catch((error: unknown): void => {
         emitServerDiagnostic(
           this.deps.diagnostics,
@@ -67,38 +71,53 @@ class GatewayStartupChecks {
     await Promise.allSettled(this.tasks);
   }
 
-  private async run(correlationId: string): Promise<void> {
+  private async run(
+    deps: UiHandlerDeps,
+    correlationId: string,
+    parentCorrelationId: string | undefined,
+  ): Promise<void> {
     const retryCatalog = await refreshCatalogs(
-      this.deps,
+      deps,
       this.controller.signal,
       this.discovered,
       correlationId,
+      this.retryDelay(),
     );
     if (this.controller.signal.aborted) return;
-    initializeConfiguredConversationReadiness(this.deps, correlationId);
+    initializeConfiguredConversationReadiness(deps, correlationId);
     const source =
-      this.deps.codingSidecarGatewayModelSourceResolver?.() ??
-      this.deps.codingSidecarGatewayModelSource ??
+      deps.codingSidecarGatewayModelSourceResolver?.() ??
+      deps.codingSidecarGatewayModelSource ??
       "keiko-model-gateway";
-    const coding =
-      source === "keiko-model-gateway" && !codingSidecarDisabledByPolicy(this.deps.env);
+    const coding = source === "keiko-model-gateway" && !codingSidecarDisabledByPolicy(deps.env);
     if (coding)
       await initializeLiteLlmCodingReadiness(
-        cancellableConversationProbeDeps(this.deps, this.controller.signal),
+        cancellableConversationProbeDeps(deps, this.controller.signal),
         correlationId,
       );
-    if (retryCatalog || (coding && isLiteLlmCodingReadinessPending(this.deps)))
-      this.scheduleRetry(correlationId);
+    if (retryCatalog || (coding && isLiteLlmCodingReadinessPending(deps))) {
+      this.scheduleRetry(parentCorrelationId);
+    } else {
+      this.retryAttempt = 0;
+      clearTimeout(this.retry);
+      this.retry = undefined;
+    }
   }
 
-  private scheduleRetry(correlationId: string): void {
+  private scheduleRetry(parentCorrelationId: string | undefined): void {
     if (this.controller.signal.aborted) return;
-    clearTimeout(this.retry);
+    if (this.retry !== undefined) return;
+    const delay = this.retryDelay();
+    this.retryAttempt += 1;
     this.retry = setTimeout(() => {
+      this.retry = undefined;
       this.startedGeneration = -1;
-      this.start(correlationId);
-    }, STARTUP_RETRY_DELAY_MS);
+      this.start(parentCorrelationId);
+    }, delay);
     this.retry.unref();
+  }
+  private retryDelay(): number {
+    return Math.min(STARTUP_RETRY_DELAY_MS * 2 ** Math.min(this.retryAttempt, 3), 300_001);
   }
 }
 
@@ -107,23 +126,37 @@ async function refreshCatalogs(
   signal: AbortSignal,
   discovered: Map<string, number>,
   correlationId: string,
+  retryDelayMs: number,
 ): Promise<boolean> {
   const config = deps.gatewayConfig?.current();
   if (config === undefined) return false;
   let retry = false;
-  for (const provider of liteLlmDiscoveryConnections(config)) {
+  const connections = liteLlmDiscoveryConnections(config);
+  pruneCatalogConnections(discovered, connections);
+  for (const provider of connections) {
     const key = toolCallingConfigurationFingerprint(provider);
     if (signal.aborted) continue;
     const retryAt = discovered.get(key);
-    if (retryAt !== undefined && retryAt > Date.now()) {
+    if (retryAt !== undefined && (retryAt === 0 || retryAt > Date.now())) {
       retry ||= Number.isFinite(retryAt);
       continue;
     }
-    discovered.set(key, Infinity);
-    if (!(await refreshLiteLlmGatewayCatalog(deps, provider, signal, correlationId))) {
-      discovered.set(key, Date.now() + STARTUP_RETRY_DELAY_MS);
+    discovered.set(key, 0);
+    const result = await refreshLiteLlmGatewayCatalog(deps, provider, signal, correlationId);
+    if (result.retryable) {
+      discovered.set(key, Date.now() + retryDelayMs);
       retry = true;
+    } else {
+      discovered.set(key, Infinity);
     }
   }
   return retry;
+}
+
+function pruneCatalogConnections(
+  discovered: Map<string, number>,
+  connections: readonly Parameters<typeof toolCallingConfigurationFingerprint>[0][],
+): void {
+  const active = new Set(connections.map(toolCallingConfigurationFingerprint));
+  for (const key of discovered.keys()) if (!active.has(key)) discovered.delete(key);
 }

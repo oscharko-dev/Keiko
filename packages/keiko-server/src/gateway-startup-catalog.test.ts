@@ -10,6 +10,11 @@ import {
   initializeLiteLlmCodingReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import type { ServerLogEvent } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 
 const compositions: UiHandlerDeps[] = [];
@@ -47,6 +52,7 @@ function startupConfig(contextWindow = 64_000): ReturnType<typeof parseGatewayCo
 
 function startupDeps(
   discovery: NonNullable<Parameters<typeof buildUiHandlerDeps>[0]["gatewayModelDiscovery"]>,
+  events?: ServerLogEvent[],
 ): UiHandlerDeps {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-startup-catalog-"));
   directories.push(dir);
@@ -56,6 +62,15 @@ function startupDeps(
     uiDbPath: join(dir, "ui.db"),
     evidenceDir: join(dir, "evidence"),
     gatewayModelDiscovery: discovery,
+    ...(events === undefined
+      ? {}
+      : {
+          activityLog: {
+            write: (event: ServerLogEvent): void => {
+              events.push(event);
+            },
+          },
+        }),
   });
   compositions.push(deps);
   return deps;
@@ -316,4 +331,64 @@ it("reproves an unready LiteLLM model when its successful proof became stale", a
   await initializeLiteLlmCodingReadiness(deps, "corr-stale-proof-recovery");
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
   expect(toolCalls).toBe(2);
+});
+
+it("records the startup catalog disposition and counts under a child correlation", async () => {
+  stubReadyChat();
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(
+    () =>
+      Promise.resolve({
+        ...discoveredCatalog(),
+        modelMetadata: { "chat-model": { contextWindow: 32_000 } },
+      }),
+    events,
+  );
+  deps.gatewayConfig?.set(startupConfig(), true, "corr-catalog-owner");
+  await vi.waitFor(() => {
+    expect(events.some((event) => event.op === "gateway.catalog.automatic.completed")).toBe(true);
+  });
+  const completion = events.find((event) => event.op === "gateway.catalog.automatic.completed");
+  if (completion === undefined) throw new TypeError("Expected catalog completion.");
+  expectActivityLogProof(
+    "gateway.catalog.automatic.completed.line",
+    formatActivityLogProofLine(completion),
+  );
+  expect(completion.correlationId).toEqual(expect.any(String));
+  expect(completion.correlationId).not.toBe("corr-catalog-owner");
+  expect(JSON.parse(formatActivityLogProofLine(completion)) as unknown).toMatchObject({
+    outcome: "applied",
+    configuredModelCount: 1,
+    updatedModelCount: 1,
+    parentCorrelationId: "corr-catalog-owner",
+  });
+  expect(JSON.stringify(completion)).not.toContain("throwaway-key");
+  expect(JSON.stringify(completion)).not.toContain("provider.example.invalid");
+});
+
+it("backs off repeated catalog failures instead of issuing discovery every minute", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const discovery = vi.fn().mockRejectedValue(new Error("Synthetic transport outage."));
+  const deps = startupDeps(discovery);
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(discovery).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(discovery).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(discovery).toHaveBeenCalledTimes(2);
+});
+
+it("does not automatically rediscover a catalog that rejects the configured credential", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const discovery = vi
+    .fn()
+    .mockRejectedValue(Object.assign(new Error("Synthetic refusal."), { httpStatus: 401 }));
+  const deps = startupDeps(discovery);
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(discovery).toHaveBeenCalledOnce();
 });
