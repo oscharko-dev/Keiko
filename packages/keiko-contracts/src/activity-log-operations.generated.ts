@@ -10274,6 +10274,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      offeredToolCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       droppedReasoningMessageCount: {
         type: "integer",
         dataClass: "count",

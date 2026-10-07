@@ -283,6 +283,7 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // remains after the prompt — the value an output-exhausted turn has to be read against.
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: true },
+    offeredToolCount: { type: "integer", dataClass: "count", required: false },
     // #3873 (F23): how many prior assistant messages carried nothing but the reasoning of a turn that
     // already ran and were dropped before the gateway request was built, so the estimate above and
     // `inputMessageCount` describe what is actually sent upstream. A count; the reasoning is never
@@ -4537,6 +4538,7 @@ function logValidatedRequestBounds(
         estimatedPromptTokens,
         maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
         inputMessageCount: request.messages.length,
+        offeredToolCount: request.tools?.length ?? 0,
         droppedReasoningMessageCount: request.droppedReasoningMessageCount,
         completeness: "complete",
         loss: "none",

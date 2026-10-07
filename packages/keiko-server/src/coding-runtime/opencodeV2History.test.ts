@@ -5,6 +5,8 @@ import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/kei
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import { createOpenCodeReconciler } from "./opencodeReconciler.js";
+import { recordCompactionActivity } from "./opencodeRuntimeAdapter.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -840,5 +842,121 @@ describe("OpenCode V2 live streamed text", () => {
 
       expect(projectionLines(activityLog)[0]).not.toHaveProperty("mergedEventCount");
     });
+  });
+});
+
+// OpenCode 2.0.10 session-message.ts CompactionRunning/Completed/Failed; no V1 overflow field.
+function nativeCompaction(status: string, recent = "", reason = "auto"): Record<string, unknown> {
+  const base = {
+    id: "msg_PRIVATE_COMPACTION_ID",
+    type: "compaction",
+    time: { created: 2 },
+    status,
+    reason,
+  };
+  return status === "failed"
+    ? { ...base, error: { type: "PRIVATE_ERROR_TYPE", message: "PRIVATE_ERROR_BODY", status: 503 } }
+    : { ...base, summary: "PRIVATE_COMPACTION_SUMMARY", recent };
+}
+
+describe("OpenCode V2 actual compaction history", () => {
+  it("records admitted native lifecycle metadata once without inventing overflow or exposing content", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection();
+    const reconciler = createOpenCodeReconciler();
+    let checkpoint: number | undefined;
+    for (const message of [
+      nativeCompaction("running"),
+      nativeCompaction("running", "[User]: PRIVATE_RECENT_BODY /private/raw-path"),
+      nativeCompaction("completed", "[User]: PRIVATE_RECENT_BODY /private/raw-path"),
+    ]) {
+      const events = projection.project("ses_compaction", [message], checkpoint);
+      for (let replay = 0; replay < 2; replay += 1) {
+        const applied = reconciler.ingest(events);
+        if (!applied.ok) throw new Error("expected admitted compaction observations");
+        recordCompactionActivity(
+          { activityLog: sink, correlationId: "run-v2-compaction" },
+          applied.projections,
+        );
+      }
+      checkpoint = reconciler.checkpoints().ses_compaction;
+      expect(
+        projection.project(
+          "ses_compaction",
+          [{ ...message, summary: "PRIVATE_UPDATED_SUMMARY" }],
+          checkpoint,
+        ),
+      ).toEqual([]);
+    }
+    const lines = sink.events.filter((line) => line.op === "coding-runtime.compaction");
+    expect(lines.map((line) => line.extra?.event)).toEqual([
+      "started",
+      "tail-retained",
+      "completed",
+    ]);
+    expect(new Set(lines.map((line) => line.extra?.compactionIdSha256)).size).toBe(1);
+    for (const line of lines) {
+      expectActivityLogProof(
+        "coding-runtime.compaction.emitted-line",
+        formatActivityLogProofLine(line),
+      );
+      expect(line.extra).not.toHaveProperty("overflow");
+      expect(line.extra).not.toHaveProperty("tailStartIdSha256");
+    }
+    expect(JSON.stringify(lines)).not.toMatch(/PRIVATE_|summary|recentID/);
+  });
+
+  it("records failed compaction without exposing error text or turning it into task settlement", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project("ses_compaction", [nativeCompaction("failed")], undefined);
+    const compaction = events.find((event) => event.compaction !== undefined);
+    expect(compaction).toMatchObject({
+      kind: "observation",
+      compaction: { event: "failed", finishReason: "error" },
+    });
+    const reconciler = createOpenCodeReconciler();
+    const applied = reconciler.ingest(events);
+    if (!applied.ok) throw new Error("expected admitted compaction failure observation");
+    recordCompactionActivity(
+      { activityLog: sink, correlationId: "run-v2-compaction" },
+      applied.projections,
+    );
+    const failure = sink.events.find((line) => line.op === "coding-runtime.compaction");
+    expect(failure).toMatchObject({
+      errorKind: "internal",
+      extra: {
+        event: "failed",
+        compactionErrorKind: "OpenCodeCompactionFailure",
+        finishReason: "error",
+      },
+    });
+    expect(JSON.stringify(sink.events)).not.toMatch(/PRIVATE_/);
+    expect(
+      events.some((event) => event.kind === "terminal" || event.kind === "terminal-failure"),
+    ).toBe(false);
+  });
+
+  it.each([
+    { status: "unknown" },
+    { reason: "unknown" },
+    { summary: undefined },
+    { recent: undefined },
+    { recent: 42 },
+    { status: "failed", error: undefined },
+    { status: "failed", error: { type: "failure" } },
+    {
+      status: "failed",
+      error: { type: "failure", message: "PRIVATE_ERROR", stdout: "PRIVATE_BODY" },
+    },
+  ])("rejects unknown or partial native compaction shapes %j", (invalid) => {
+    const projection = createOpenCodeV2HistoryProjection();
+    expect(() =>
+      projection.project(
+        "ses_compaction",
+        [{ ...nativeCompaction(invalid.status === "failed" ? "failed" : "running"), ...invalid }],
+        undefined,
+      ),
+    ).toThrow("opencode-v2-history-invalid");
   });
 });

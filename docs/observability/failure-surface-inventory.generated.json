@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3f7619a4cac3d9851df953f4702023a6d0b83ab39168a1268587f413088c9e75"
+    "catalogDigest": "17b018850bd436804968a353a76ea071218107beccf7c3e04bcaecac36da78a4"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1297,7 +1297,9 @@
       "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.test.ts"
     ],
     "coding-runtime.compaction.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeRuntime.real.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
     "coding-runtime.context-usage.observed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.test.ts"

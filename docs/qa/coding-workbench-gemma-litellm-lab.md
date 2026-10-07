@@ -141,6 +141,36 @@ ends the workflow and directs repository work to begin with the actual tool inst
 preliminary text-only progress update. Live qualification of that refinement remains pending;
 it is still guidance, not a semantic completion guarantee.
 
+The next actual Full-access run, `run-273328284314866415890976198669812498840`,
+qualified the controlled repair with the UI driver (`wb-ui`, approvals `all`) on an isolated
+clean execution checkout at
+`3b6c1a3e95147d4447a99a6bc5b8409df2b05ceb` with the approved one-MiB development helper.
+From 18:45:08 to 18:47:01 UTC it executed six accepted model turns: bounded file discovery, the
+initial exact-file test failure, two workspace reads for diagnosis, one replacement edit, and the
+same exact-file test passing before success. Both target bindings recorded SHA-256
+`84e44146825b35ee6da22d23d4c391db8829297838725832338c5a3dbe574b1b`. Verification took
+5,072 ms before and 4,665 ms after; the model used 62,217 cumulative prompt tokens and 1,131
+completion tokens. The only repair changed the seeded callback to retain the next controlled
+state; focus and both false → true → false assertions remain intact. The full repository sandbox
+has no remotes and its changes never entered this PR. This is one successful controlled task,
+not the complete final-head, all-mode or customer-vLLM qualification.
+
+Native V2 compaction now reaches the existing registered operation through strict history
+projection. Identifier hashes, closed phases and tail-presence survive; summary/tail/error content
+and unavailable overflow/tail-start ID do not. Unit checks passed 134 tests; one actual pinned
+OpenCode 2.0.10 case proved tail-retained → completed for one compaction, followed by a separate
+bounded failed overflow recovery, no productive actions and a failed terminal result. Its fake
+provider now emits actual text deltas and recognizes the pinned native summary prompt. This
+provides trustworthy evidence; the historical 12.6-minute delay remains open.
+
+Optional native-package release preparation uses the existing builder and compiled admission
+pins. Actual ARM64/Intel 1.1.4 tarballs and independent receipts verify file inventory, modes and
+packed body hashes without extraction, even when a tarball and its receipt are rehashed together.
+The helper source binding remains `4013c892f0bce15a17454b28b033e67b69cc88a2`, not a
+fabricated latest build. Seventy-one targeted packaging tests passed. Public dependency pins stay
+1.1.3; native publication, atomic dependency/lockfile update and final installation qualification
+remain pending in the release runbook.
+
 F19 now carries the actual verifier kind, result, step counts and measured duration through the
 validated runtime event and retained SSE frame into the expanded timeline. Counts describe
 verifier steps, not individual test assertions; unsuccessful includes failed, denied, timed-out,

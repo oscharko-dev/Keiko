@@ -131,6 +131,20 @@ positive decimal integers from 1 to 480), from which both `budget.maxRuntimeMs` 
 derive. An invalid value fails the composition closed; neither setting can alter an existing
 envelope or reset its usage, and a run that exhausts either bound still fails closed at its next
 delegation. Native context compaction changes subsequent request size, not cumulative accounting.
+
+The pinned V2 runtime's admitted compaction history projects running, retained-tail, completed, and
+failed facts onto the existing `coding-runtime.compaction` Activity Log operation. Native compaction
+identifiers are hashed; summary text, retained-tail content, model/provider state, and error bodies
+never enter that operational projection. V2's `recent` is serialized content, not a message ID:
+only its presence determines the retained-tail boolean, and its unavailable start-ID digest is
+omitted. Lifecycle metadata, rather than streaming summary text, drives deduplication. V2 does not
+report the V1 overflow boolean: its absence means unavailable and must
+never be recorded as `false`. Unknown or partial native compaction shapes fail closed. Compaction
+failure remains an observation; native execution settlement owns task completion, so an answer or
+summary cannot bypass pending tools or verification repair. Automatic compaction configuration and
+execution ordering remain native-runtime concerns; the historical post-answer delay remains open
+until a reproducible native qualification identifies the cause.
+
 The allowance is the only default per-run token bound: a Model Gateway spend ceiling is enforced
 only where an operator configures one. It therefore counts every prompt the provider processed for
 a turn: the turn's own prompt and, when the gateway discarded attempts on the way to its answer (a
@@ -187,8 +201,9 @@ The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, 
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
 
-The V2 build prompt treats a short plan as progress toward implementation or verification, followed
-by the next actual governed tool in the same response. A text-only native terminal turn is not
+The V2 build prompt begins repository implementation or verification work with the next actual
+governed tool. It explains that preliminary text-only progress ends the native workflow; brief
+progress may accompany a native call. A text-only native terminal turn is not
 semantic proof that requested work happened (live qualification F29, #3873). Planning-only tasks
 and read-only answers remain valid without invented edits or verification. This prompt guidance
 does not introduce a keyword classifier or execute model prose. The existing post-edit and

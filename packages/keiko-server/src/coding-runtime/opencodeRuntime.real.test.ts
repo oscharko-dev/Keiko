@@ -19,6 +19,12 @@ import type { Readable } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 import {
@@ -567,7 +573,9 @@ async function createGatewayHarness(
           // Establish the same streaming response lifecycle a real provider does before a
           // scripted final response is deliberately held for the native abort proof.
           yield { type: "delta", token: "" };
-          yield { type: "done", response: await script(request, callIndex) };
+          const response = await script(request, callIndex);
+          if (response.content !== "") yield { type: "delta", token: response.content };
+          yield { type: "done", response };
         },
       }),
     runtimeCapabilityAuthenticator: {
@@ -1008,9 +1016,18 @@ function nativeCompactionResponseScript(state: NativeCompactionState): GatewayRe
     if (requestContainsTitleGeneration(request)) {
       return Promise.resolve({ ...normalResponse(), content: "Compaction proof" });
     }
-    if (request.toolCatalog === undefined) {
+    // The bridge may advertise tools even when the native V2 compactor asks for a summary.
+    if (
+      requestContainsText(
+        request,
+        "You MUST summarize the conversation above into a structured summary",
+      )
+    ) {
       state.compactionMessageCounts.push(request.messages.length);
-      return Promise.resolve({ ...normalResponse(), content: "Retained verified task state." });
+      return Promise.resolve({
+        ...normalResponse(),
+        content: "## Objective\n- Retained verified task state.",
+      });
     }
     if (state.compactionMessageCounts.length > 0) {
       state.recoveryMessageCounts.push(request.messages.length);
@@ -1034,6 +1051,7 @@ interface NativeCompactionHarness {
   readonly toolFacade: ToolFacadeHarness;
   readonly backend: DirectChildRuntimeBackend;
   readonly productiveActions: string[];
+  readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
 }
 
 interface NativeContextGeometry {
@@ -1063,6 +1081,7 @@ async function createNativeCompactionHarness(
   );
   const toolFacade = await createToolFacadeHarness();
   const productiveActions: string[] = [];
+  const activityLog = createBufferedServerLogSink();
   const backend = new DirectChildRuntimeBackend(functionalPlatform().qualification);
   const runtime = createOpenCodeRuntimeComposition({
     portable,
@@ -1076,6 +1095,7 @@ async function createNativeCompactionHarness(
     toolFacade: functionalToolFacade(productiveActions, []),
     governedEventSink: { execute: () => Promise.resolve("applied") },
     gatewayReadiness: gateway.readiness,
+    activityLog,
     fetch: globalThis.fetch,
     supervisor: createRuntimeProcessSupervisor({
       backend,
@@ -1097,7 +1117,41 @@ async function createNativeCompactionHarness(
     toolFacade,
     backend,
     productiveActions,
+    activityLog,
   };
+}
+
+function expectNativeCompactionActivity(harness: NativeCompactionHarness): void {
+  const events = harness.activityLog.events.filter(
+    (event) => event.op === "coding-runtime.compaction",
+  );
+  expect(events.length).toBeGreaterThan(0);
+  const records = events.map((event) =>
+    expectActivityLogProof(
+      "coding-runtime.compaction.emitted-line",
+      formatActivityLogProofLine(event),
+    ),
+  );
+  expect(records.map((record) => record.event)).toEqual(["tail-retained", "completed", "failed"]);
+  expect(records[0]?.compactionIdSha256).toBe(records[1]?.compactionIdSha256);
+  expect(records[2]?.compactionIdSha256).not.toBe(records[0]?.compactionIdSha256);
+  expect(new Set(records.map((record) => record.compactionIdSha256)).size).toBe(2);
+  for (const record of records) {
+    expect(record).not.toHaveProperty("overflow");
+    expect(record).not.toHaveProperty("tailStartIdSha256");
+    expect(record.compactionIdSha256).toMatch(/^[0-9a-f]{64}$/u);
+  }
+  expect(
+    new Set(records.map((record) => `${String(record.compactionIdSha256)}:${String(record.event)}`))
+      .size,
+  ).toBe(records.length);
+  expect(records[2]).toMatchObject({
+    compactionErrorKind: "OpenCodeCompactionFailure",
+    finishReason: "error",
+  });
+  expect(JSON.stringify(records)).not.toMatch(
+    /Retained verified task state|Exercise bounded|summary|recent/,
+  );
 }
 
 async function startNativeCompactionHarness(harness: NativeCompactionHarness): Promise<void> {
@@ -1234,15 +1288,15 @@ describe("[functional-only] real staged OpenCode runtime", () => {
           return count === undefined ? [] : [count];
         });
         expect(Math.max(...messageCounts)).toBeLessThanOrEqual(512);
+        // V2 compacts before its productive request, then permits only one overflow recovery.
         expect(
           harness.gateway.responses().filter((response) => response.endsWith(" 400")),
-        ).toHaveLength(3);
-        expect(state.compactionMessageCounts).toEqual([3]);
+        ).toHaveLength(1);
+        expectNativeCompactionActivity(harness);
+        expect(state.compactionMessageCounts).toHaveLength(1);
         expect(state.recoveryMessageCounts).toEqual([]);
         expect(state.rounds).toBe(0);
-        const databasePath = join(harness.runRoot, "state", "opencode.db");
-        expect(runtimeDatabasePartTypes(databasePath)).toContain("compaction");
-        expect(runtimeDatabaseProjection(databasePath)).toContain("ContextOverflowError");
+        expect(harness.productiveActions).toEqual([]);
         expect(terminal).toBe(false);
       } finally {
         await closeNativeCompactionHarness(harness);

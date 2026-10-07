@@ -10,7 +10,10 @@ import {
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
-import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type {
+  OpenCodeCompactionActivity,
+  OpenCodeReconciliationEvent,
+} from "./opencodeReconciler.js";
 import {
   createOpenCodeV2LiveText,
   type LiveTextKind,
@@ -104,6 +107,7 @@ interface Candidate {
   readonly key: string;
   readonly digest: string;
   readonly kind: OpenCodeReconciliationEvent["kind"];
+  readonly compaction?: OpenCodeCompactionActivity;
   readonly signal?: CodingSafeActivitySignal | undefined;
   readonly emptyText?: true;
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
@@ -481,6 +485,102 @@ function assistantPartCandidates(
   return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
 }
 
+const NATIVE_COMPACTION_COMMON_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
+// Exact pinned V2 variants. Summary/error bodies are checked only for shape, never projected.
+const NATIVE_COMPACTION_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  running: [...NATIVE_COMPACTION_COMMON_FIELDS, "summary", "recent"],
+  completed: [
+    ...NATIVE_COMPACTION_COMMON_FIELDS,
+    "summary",
+    "recent",
+    "model",
+    "providerState",
+    "providerContext",
+    "cost",
+    "tokens",
+  ],
+  failed: [...NATIVE_COMPACTION_COMMON_FIELDS, "error", "cost", "tokens"],
+};
+
+function assertNativeCompactionShape(message: Readonly<Record<string, unknown>>): void {
+  const allowed =
+    typeof message.status === "string" ? NATIVE_COMPACTION_FIELDS[message.status] : undefined;
+  if (
+    allowed === undefined ||
+    (message.reason !== "auto" && message.reason !== "manual") ||
+    Object.keys(message).some((key) => !allowed.includes(key))
+  ) {
+    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
+  }
+}
+
+function nativeCompactionRecent(message: Readonly<Record<string, unknown>>): string {
+  const recent = message.recent;
+  if (typeof message.summary !== "string" || typeof recent !== "string") {
+    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
+  }
+  return recent;
+}
+
+function validNativeCompactionErrorStatus(status: unknown): boolean {
+  return (
+    status === undefined ||
+    (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599)
+  );
+}
+
+function assertNativeCompactionError(message: Readonly<Record<string, unknown>>): void {
+  const error = record(message.error);
+  if (
+    error === undefined ||
+    typeof error.type !== "string" ||
+    typeof error.message !== "string" ||
+    !validNativeCompactionErrorStatus(error.status) ||
+    Object.keys(error).some((key) => !["type", "message", "status"].includes(key))
+  ) {
+    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
+  }
+}
+
+function nativeCompactionActivity(
+  message: Readonly<Record<string, unknown>>,
+  id: string,
+): OpenCodeCompactionActivity {
+  assertNativeCompactionShape(message);
+  const compactionIdSha256 = createHash("sha256").update(id, "utf8").digest("hex");
+  if (message.status === "failed") {
+    assertNativeCompactionError(message);
+    return {
+      event: "failed",
+      compactionIdSha256,
+      errorKind: "OpenCodeCompactionFailure",
+      finishReason: "error",
+    };
+  }
+  const recent = nativeCompactionRecent(message);
+  if (message.status === "completed") return { event: "completed", compactionIdSha256 };
+  const auto = message.reason === "auto";
+  if (recent === "") return { event: "started", compactionIdSha256, auto, retainedTail: false };
+  return {
+    event: "tail-retained",
+    compactionIdSha256,
+    auto,
+    retainedTail: true,
+  };
+}
+
+function nativeCompactionCandidate(
+  message: Readonly<Record<string, unknown>>,
+  id: string,
+): Candidate {
+  const compaction = nativeCompactionActivity(message, id);
+  // Compaction failure is an observation; only native execution settlement ends the task.
+  return {
+    ...candidate(`${id}:compaction:${compaction.event}`, "observation", compaction),
+    compaction,
+  };
+}
+
 function messageCandidates(
   message: Readonly<Record<string, unknown>>,
   parentMessageId: string | undefined,
@@ -504,6 +604,7 @@ function messageCandidates(
       textCandidate(id, 0, visibleUserText(message), occurredAt),
     ];
   }
+  if (message.type === "compaction") return [nativeCompactionCandidate(message, id)];
   if (message.type === "idle") {
     return [
       candidate(
@@ -568,7 +669,14 @@ function makePending(
     if (previous?.digest === item.digest) continue;
     const sequence = checkpoint + events.length + 1;
     const id = `evt_${item.digest.slice(0, 32)}`;
-    const event = { id, aggregateId: sessionId, sequence, digest: item.digest, kind: item.kind };
+    const event = {
+      id,
+      aggregateId: sessionId,
+      sequence,
+      digest: item.digest,
+      kind: item.kind,
+      ...(item.compaction === undefined ? {} : { compaction: item.compaction }),
+    };
     events.push(event);
     const text = candidateText(item);
     nextKnown.set(item.key, {

@@ -3987,6 +3987,7 @@ describe("coding-sidecar gateway", () => {
     expect(validated?.extra).toMatchObject({
       maxRequestBytes: 1_048_576,
       inputMessageCount: 1,
+      offeredToolCount: 0,
       completeness: "complete",
       loss: "none",
     });
@@ -7759,6 +7760,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(
       expectActivityLogProof(
