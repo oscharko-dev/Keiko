@@ -118,12 +118,14 @@ npm run dev:start
 
 Every coding run attaches the task workspace's own `AGENTS.md` (exact name, workspace root only,
 never a parent directory or a symlink) to the model's initial turn as bounded, labelled, untrusted
-context, so the model knows the repository's conventions and verification commands from its first
+context, so the model knows the repository's conventions and verification guidance from its first
 turn (ADR-0137 D1). The file is read through the same secure read helper `keiko_workspace_read`
-uses, and the model receives the window that read would answer for the first 800 lines, cut at a
-line boundary to 32,768 bytes and to the turn's remaining prompt budget (a cut file ends with one
-explicit truncation line naming the total line count), framed as repository-authored instructions
-that grant no authority and cannot change the tool rules or the autonomy mode.
+uses, only while the run's own workspace is the active one, and the model receives the window that
+read would answer for the first 800 lines, cut at a line boundary to 16,384 bytes and to the turn's
+remaining prompt budget (a cut file ends with one explicit truncation line naming the total line
+count), inside a nonce-framed `repository-instructions` block that grants no authority and cannot
+change the tool rules or the autonomy mode. The block is re-sent with every turn; the context line
+records its estimated tokens.
 
 - The loader is on by default. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables it
   before the server starts; `true` is the default. Any other explicit value fails composition

@@ -148,10 +148,12 @@ text gets the same one repair (`reason=empty-answer-repair`, a second empty answ
 
 A run's initial turn carries the task workspace's own `AGENTS.md` (workspace root only, exact name,
 no symlink) as bounded, labelled, untrusted context beside the project memory: the window
-`keiko_workspace_read` would answer for the first 800 lines, cut at a line boundary to 32,768 bytes
+`keiko_workspace_read` would answer for the first 800 lines, cut at a line boundary to 16,384 bytes
 and to the turn's remaining prompt budget, with one explicit truncation line when cut, read through
-the same secure read helper, and framed so it grants no authority and cannot change the tool rules
-or the autonomy mode (ADR-0137 D1). It is on by default; an operator sets
+the same secure read helper only while the run's own workspace is the active one (a workspace
+switch while the run starts records `refused`, `workspace-unavailable`), and nonce-framed so it
+grants no authority, cannot close its frame early, and cannot be forged by an issue body or memory
+(ADR-0137 D1). It is on by default; an operator sets
 `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` before starting the server to disable it, and
 any other explicit value fails closed at composition. The existing
 `coding-runtime.repository-instructions.context` activity event records the outcome per run

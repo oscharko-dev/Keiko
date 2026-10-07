@@ -55,6 +55,28 @@ export function secureWorkspaceTextDigest(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+/**
+ * The secure read answered only while the run's exact workspace is the one the port resolves to,
+ * checked before AND after the read (#3873 review). The port resolves its root at read time from the
+ * global active pointer, so an operator who switches the active workspace mid-run must never hand a
+ * run another workspace's file. `isRunWorkspace` is the caller's own exact-workspace check; a read
+ * it refuses answers with the caller's closed `refusal`. One bracket for every run-scoped read
+ * through the host port: the auxiliary ports and the repository-instructions loader.
+ */
+export function exactWorkspaceRead(
+  port: SecureWorkspaceTextReadPort,
+  isRunWorkspace: () => boolean,
+  refusal: SecureWorkspaceTextReadFailure,
+): SecureWorkspaceTextReadPort {
+  return {
+    readText: async (request): Promise<SecureWorkspaceTextReadResult> => {
+      if (!isRunWorkspace()) return { ok: false, reason: refusal };
+      const result = await port.readText(request);
+      return isRunWorkspace() ? result : { ok: false, reason: refusal };
+    },
+  };
+}
+
 export interface SecureWorkspaceTextReadDeps {
   /** Resolves the current active binding for every admitted read. */
   readonly resolveWorkspaceRoot: () => string | undefined | Promise<string | undefined>;

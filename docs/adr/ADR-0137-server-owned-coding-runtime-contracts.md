@@ -64,13 +64,23 @@ raw context stays absent from runtime snapshots, generated runtime configuration
 The same server-only `initialContext` field also carries the repository's own working instructions
 (2026-10-06). For every run the server reads exactly `AGENTS.md` at the task workspace root — no
 other file, no parent directory, no symlink — through the same secure workspace read helper that
-answers `keiko_workspace_read`, never a second filesystem path. The model receives the window that
-read would answer for the file's first 800 lines, cut at a line boundary to 32,768 bytes and to the
-bytes the turn still has under the sidecar prompt ceiling; a cut file ends with one explicit line
-naming the total line count. It is framed as repository-authored, untrusted instructions that the
-model follows for conventions and verification commands and that grant no authority: they cannot
-change the governed tool rules, the Authority Envelope or the autonomy mode, and when the human
-intent and the other context parts already fill the prompt ceiling the instructions yield first. The
+answers `keiko_workspace_read`, never a second filesystem path. That helper resolves its root from
+the global active pointer, so the read is bracketed by the run's own exact-workspace check before
+and after it (`exactWorkspaceRead`, shared with the auxiliary ports): a workspace switch while the
+run starts is recorded as `refused` with `workspace-unavailable` and never attaches another
+repository's file (#3873 review). The model receives the window that read would answer for the
+file's first 800 lines, cut at a line boundary to 16,384 bytes and to the bytes the turn still has
+under the sidecar prompt ceiling; a cut file ends with one explicit line naming the total line
+count. The block rides in the first message and is re-sent with every turn, so the context line
+records its estimated tokens, its per-turn cost against the run's prompt allowance. It is framed as
+repository-authored, untrusted instructions — conventions and style, and verification guidance that
+only selects among the vetted verifiers — that grant no authority: they cannot change the governed
+tool rules, the Authority Envelope or the autonomy mode, and when the human intent and the other
+context parts already fill the prompt ceiling the instructions yield first. The frame is Keiko's: an
+opening and a closing `repository-instructions` tag carrying one nonce drawn after the text exists
+and checked against it, so the file cannot close its frame early, and the tag is neutralized in
+every other part of the first message (issue, project memory, history), so no other text can forge
+the block; the governed system prompt identifies the block by that framing, not by a heading. The
 loader is on by default; `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables it and any
 other explicit value fails composition closed. The body-free
 `coding-runtime.repository-instructions.context` event records the outcome under the run's

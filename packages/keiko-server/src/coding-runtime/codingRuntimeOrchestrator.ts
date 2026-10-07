@@ -98,7 +98,10 @@ import {
   composeCodingRuntimeInitialContext,
   renderCodingRuntimeProjectMemoryContext,
 } from "./codingRuntimeProjectMemory.js";
-import { repositoryInstructionsContentBudget } from "./codingRuntimeRepositoryInstructions.js";
+import {
+  repositoryInstructionsContentBudget,
+  withoutRepositoryInstructionsTags,
+} from "./codingRuntimeRepositoryInstructions.js";
 import {
   CodingRuntimeEditRefusalStreaks,
   EDIT_REFUSAL_REASON_CODES,
@@ -3556,13 +3559,29 @@ export class CodingRuntimeOrchestrator {
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
     const historyContext = this.deps.history?.initialContext(runId);
     // The repository's own AGENTS.md leads the context so its conventions frame the task; it is
-    // loaded last so it can yield to the parts above under the sidecar prompt ceiling.
-    const otherParts = [issueContext, memoryContext, historyContext];
+    // loaded last so it can yield to the parts above under the sidecar prompt ceiling. No other
+    // part can forge its frame: their `<repository-instructions` lookalikes are neutralized (#3873
+    // review), and the file is read only while this run's workspace is still the active one.
+    const otherParts = [issueContext, memoryContext, historyContext].map((part) =>
+      part === undefined ? undefined : withoutRepositoryInstructionsTags(part),
+    );
     const repositoryInstructions = await this.deps.repositoryInstructions?.loadForRun({
       runId,
       contentByteBudget: repositoryInstructionsContentBudget(request.taskIntent, otherParts),
+      isRunWorkspace: (): boolean => this.isRunWorkspace(active),
     });
     return composeCodingRuntimeInitialContext([repositoryInstructions, ...otherParts]);
+  }
+
+  // Whether the workspace the global active pointer resolves to — the root every secure host read
+  // follows — is still the one this run started on (#3873 review). An identity proof that cannot
+  // run throws, and the reader records it as a refusal.
+  private isRunWorkspace(run: ActiveWorkspaceView): boolean {
+    const current = this.deps.workspaceLifecycle.getActive();
+    return (
+      current?.binding.workspaceId === run.binding.workspaceId &&
+      current.binding.activeRoot === run.binding.activeRoot
+    );
   }
 
   private async projectMemoryInitialContext(

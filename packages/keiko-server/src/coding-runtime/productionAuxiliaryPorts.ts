@@ -34,7 +34,7 @@ import {
 } from "./readOnlyChildOrchestrator.js";
 import type { ResearchGrantRegistry, ResolvedResearchGrant } from "./researchGrantRegistry.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
-import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import {
   OPENCODE_SKILL_PROFILE,
   type SkillCatalog,
@@ -154,13 +154,11 @@ type WorkspaceBoundReadInput = Pick<
 function workspaceAuthorityCheckedRead(
   input: WorkspaceBoundReadInput,
 ): SecureWorkspaceTextReadPort {
-  return {
-    readText: async (request): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
-      if (!hasExactWorkspaceAccess(input)) return { ok: false, reason: "denied" };
-      const result = await input.secureWorkspaceTextRead.readText(request);
-      return hasExactWorkspaceAccess(input) ? result : { ok: false, reason: "denied" };
-    },
-  };
+  return exactWorkspaceRead(
+    input.secureWorkspaceTextRead,
+    (): boolean => hasExactWorkspaceAccess(input),
+    "denied",
+  );
 }
 
 /** Whether the run's exact managed workspace is still the one its root access resolves to. */

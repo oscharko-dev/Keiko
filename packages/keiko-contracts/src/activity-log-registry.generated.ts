@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5000d2ddf69838a25109a600b5741d724c7cf29ab583d0c4e0d3a17010da096e" as const;
+  "96257c5f2ef748ae165c6415a8d097df309755c4d07f3065294f8a3e0e1bb486" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8235,6 +8235,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "contentSha256",
               type: "string",
               dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "estimatedTokens",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
