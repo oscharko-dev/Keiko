@@ -189,7 +189,18 @@ an edited file, and a touched path missing from `files` or `selectedFiles` are r
 the existing `INVALID_EDITS`/`PRECONDITION_REQUIRED` codes before any editor action exists; a
 supplied `selectedFiles` must therefore cover every touched path, never select half a rename. The
 materialization reads are the same governed workspace reads the model's own `keiko_workspace_read`
-uses, logged with their purpose, and its preconditions use the digest those reads report. Every
+uses, logged with their purpose, and its preconditions use the digest those reads report. A created
+file and a rename target are paths that are not there, and the read answers that as `not-found`
+(recorded as the `absent` state of the read line). The native secure-read helper has no such
+status and answers every path it cannot open `access-denied`, so until 2026-10-07 (F27, #3876) every
+creation and every rename target was refused as `denied`. The secure read now settles the helper's
+refusal as `not-found` only when a no-follow walk under the live root proves the path absent: a
+missing component below real directories on the root's device. A path that exists, a link (a
+dangling one included), a file used as a directory, another device and an unusable root stay
+`denied`, and the always-on deny list (ADR-0005 D3) answers `denied` first, whether or not the path
+exists, so neither answer probes what the policy hides or what lies beyond a link. `not-found`
+grants nothing: the apply path re-validates containment, aliasing and the deny list and refuses to
+overwrite a file that appeared in between. Every
 touched path, both halves of a rename included, counts against the 50-file cap; an edited file may
 not grow past the governed read ceiling, projected from the match count before any result is built;
 the rendered changeset is held to the 65,536-byte cap; and the run's `maxPatchBytes` is charged

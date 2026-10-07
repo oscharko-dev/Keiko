@@ -117,9 +117,9 @@ const REPOSITORY_INSTRUCTIONS_ERROR_KINDS: Readonly<
 };
 
 // The native helper answers a missing root file, an unreadable one and a symlink alike with
-// `access-denied` (it never reports ENOENT separately), so for this one fixed path `denied` is the
-// production shape of "there is no AGENTS.md to read". Both are `absent` at level info; the closed
-// reason keeps the helper's actual answer reconstructable. Every other answer is a refusal.
+// `access-denied`; the secure read settles it as `not-found` when it proves the path absent (F27,
+// #3876) and keeps `denied` for an unreadable or symlinked one. Both are `absent` at info level;
+// the closed reason keeps the actual answer reconstructable. Every other answer is a refusal.
 const ABSENT_REASONS: ReadonlySet<SecureWorkspaceTextReadFailure> =
   new Set<SecureWorkspaceTextReadFailure>(["not-found", "denied"]);
 

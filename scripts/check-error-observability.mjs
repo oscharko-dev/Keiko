@@ -169,6 +169,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed no-follow path probe is the fail-closed false result of this filesystem trust-boundary predicate.",
   ],
   [
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadAbsence.ts:probeComponent",
+    "A failed no-follow metadata probe leaves the path undecided, so the secure read keeps the helper's own denial: only ENOENT below real directories is read as absent, and every other failure is the answer given before this probe existed.",
+  ],
+  [
     "packages/keiko-security/src/fs-hardening.ts:closeDirectoryGuards",
     "Individual close failures are aggregated and propagated as one closed safe-file error.",
   ],

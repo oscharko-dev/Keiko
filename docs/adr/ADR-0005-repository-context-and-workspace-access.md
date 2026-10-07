@@ -189,7 +189,12 @@ Filtering has two independent tiers:
    caches (`.cache`, `.next`, `.turbo`), VCS (`.git`), logs (`*.log`), and OS cruft (`.DS_Store`).
    A denied path is never discovered and never read, regardless of `.gitignore`. The single
    documented exception is `.env.example`. The check matches any path segment, so a denied
-   directory denies everything beneath it.
+   directory denies everything beneath it. The secure workspace text read applies the same tier
+   itself, not only through its callers: the native helper has no policy and opens any file it can,
+   so a denied path answers `denied` before the filesystem or the helper is touched, whether or not
+   the path exists (2026-10-07, F27, #3876). A consumer that passes a model-chosen path straight
+   through, such as the read-only child, therefore cannot read a denied file, and the answer cannot
+   be used to probe for one.
 
 2. **`compileIgnore` / `isIgnored` — best-effort noise reduction.** A DOCUMENTED, bounded subset
    of `.gitignore`: blank/comment lines, plain `name`, directory `dir/`, extension `*.ext`,

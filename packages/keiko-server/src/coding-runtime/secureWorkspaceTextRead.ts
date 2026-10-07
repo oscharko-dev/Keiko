@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
+
+import { isDenied } from "@oscharko-dev/keiko-workspace";
+
+import { proveWorkspacePathAbsent } from "./secureWorkspaceTextReadAbsence.js";
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
   encodeSecureWorkspaceReadRequest,
+  type SecureWorkspaceReadClosedStatus,
+  type SecureWorkspaceReadHelperResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 import {
   resolveSecureWorkspaceReadArtifact,
@@ -40,6 +46,16 @@ export type SecureWorkspaceTextReadResult =
   | { readonly ok: false; readonly reason: SecureWorkspaceTextReadFailure };
 
 export interface SecureWorkspaceTextReadPort {
+  /**
+   * The text of one workspace-relative file, or the closed reason it could not be read.
+   *
+   * `denied` is a path the always-on deny list refuses (answered whether or not it exists), a path
+   * that is not a valid workspace-relative one, or one the secure read refused and that the server
+   * could not prove absent: it exists, or a link, a file used as a directory, another device or an
+   * unusable root is in the way. `not-found` means exactly one thing: a no-follow walk under the
+   * live root proved the path absent after the helper refused it (F27, #3876). It is the precondition
+   * of a file creation and of a rename target, and it never reaches past a link.
+   */
   readText(request: {
     readonly relativePath: string;
     readonly signal?: AbortSignal | undefined;
@@ -101,7 +117,13 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     readonly relativePath: string;
     readonly signal?: AbortSignal | undefined;
   }): Promise<SecureWorkspaceTextReadResult> {
-    if (!isNormalizedRelativePath(request.relativePath)) return { ok: false, reason: "denied" };
+    // The always-on deny list (ADR-0005 D3) is the wrapper's own, not only its callers': the helper
+    // has no policy and reads a `.env` it can open, and the read-only child passes the model's path
+    // straight through. A denied path answers `denied` before anything touches the filesystem, so
+    // it is the same answer whether or not the path exists and cannot be used to probe for it.
+    if (!isNormalizedRelativePath(request.relativePath) || isDenied(request.relativePath)) {
+      return { ok: false, reason: "denied" };
+    }
     if (request.signal?.aborted === true) return { ok: false, reason: "cancelled" };
     const platform = this.deps.platform ?? { os: process.platform, arch: process.arch };
     if (secureWorkspaceReadTargetFor(platform) === undefined)
@@ -143,7 +165,9 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       } catch (error) {
         return processRunFailure(error, signal, request.signal);
       }
-      return decodeHelperResponse(response);
+      const answer = decodeHelperResponse(response);
+      if (answer.kind === "settled") return answer.result;
+      return await refinedAccessDenial(workspaceRoot, request.relativePath, signal);
     } finally {
       frame.fill(0);
     }
@@ -166,17 +190,64 @@ function processRunFailure(
   return { ok: false, reason: callerCancelled(callerSignal) ? "cancelled" : "timeout" };
 }
 
-function decodeHelperResponse(response: Uint8Array): SecureWorkspaceTextReadResult {
+// What the helper said, with the one answer that is not yet a result kept apart: `access-denied` is
+// the helper's single word for every path it could not open, so it is refined below, never mapped.
+type HelperAnswer =
+  | { readonly kind: "settled"; readonly result: SecureWorkspaceTextReadResult }
+  | { readonly kind: "access-denied" };
+
+type MappedHelperStatus = Exclude<SecureWorkspaceReadClosedStatus, "access-denied">;
+
+type MappedHelperResponse =
+  { readonly status: "ok"; readonly bytes: Uint8Array } | { readonly status: MappedHelperStatus };
+
+function isMappedResponse(
+  decoded: SecureWorkspaceReadHelperResponse,
+): decoded is MappedHelperResponse {
+  return decoded.status !== "access-denied";
+}
+
+function decodeHelperResponse(response: Uint8Array): HelperAnswer {
   try {
     const decoded = decodeSecureWorkspaceReadResponse(response);
-    if (decoded.status !== "ok") return { ok: false, reason: helperFailure(decoded.status) };
-    const text = decodeSecureWorkspaceText(decoded.bytes);
-    return text.ok ? { ok: true, text: text.text } : { ok: false, reason: text.reason };
+    return isMappedResponse(decoded)
+      ? { kind: "settled", result: mappedHelperResult(decoded) }
+      : { kind: "access-denied" };
   } catch {
-    return { ok: false, reason: "protocol-invalid" };
+    return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
   } finally {
     response.fill(0);
   }
+}
+
+function mappedHelperResult(decoded: MappedHelperResponse): SecureWorkspaceTextReadResult {
+  if (decoded.status !== "ok") return { ok: false, reason: helperFailure(decoded.status) };
+  const text = decodeSecureWorkspaceText(decoded.bytes);
+  return text.ok ? { ok: true, text: text.text } : { ok: false, reason: text.reason };
+}
+
+/**
+ * Settles the helper's `access-denied` as `not-found` when the server can prove the path absent, and
+ * as `denied` otherwise (F27, #3876).
+ *
+ * The helper answers `access-denied` for every path it cannot open and has no not-found status, so a
+ * path that was never there came back `denied` and a file could not be created through the
+ * replacement form. The helper is neither changed nor skipped: it is asked first, every other status
+ * keeps its own mapping (an `invalid-path` stays `denied` whatever the filesystem holds), and only its
+ * `access-denied` is refined. The refinement is the no-follow walk of `proveWorkspacePathAbsent`
+ * under the same live root the helper was given: it never follows a link, never leaves the root's
+ * device, and answers `not-found` only on a missing component below a chain of real directories.
+ * Whatever it cannot decide stays the helper's `denied`, so a path that exists, a link, a file used as
+ * a directory and an unusable root keep their denial. The deny list was applied before the helper
+ * ran, so a denied path never gets here and the answer never tells whether it exists.
+ */
+async function refinedAccessDenial(
+  workspaceRoot: string,
+  relativePath: string,
+  signal: AbortSignal,
+): Promise<SecureWorkspaceTextReadResult> {
+  const absence = await proveWorkspacePathAbsent({ root: workspaceRoot, relativePath, signal });
+  return { ok: false, reason: absence === "absent" ? "not-found" : "denied" };
 }
 
 async function resolveLiveWorkspaceRoot(
@@ -194,19 +265,14 @@ function callerCancelled(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-function helperFailure(
-  status: Exclude<
-    import("./secureWorkspaceTextReadProtocol.js").SecureWorkspaceReadHelperResponse["status"],
-    "ok"
-  >,
-): SecureWorkspaceTextReadFailure {
+// `access-denied` is not here: it is refined by `refinedAccessDenial`, never mapped.
+function helperFailure(status: MappedHelperStatus): SecureWorkspaceTextReadFailure {
   switch (status) {
     case "malformed-request":
       return "protocol-invalid";
     case "unsupported-platform":
       return "unsupported-platform";
     case "invalid-path":
-    case "access-denied":
       return "denied";
     case "not-regular":
       return "not-text";

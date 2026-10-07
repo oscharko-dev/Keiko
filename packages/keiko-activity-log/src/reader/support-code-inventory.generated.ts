@@ -1144,6 +1144,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/coding-runtime/runtimeCapabilityStore",
   "keiko-server/coding-runtime/runtimeProcessSupervisor",
   "keiko-server/coding-runtime/secureWorkspaceTextRead",
+  "keiko-server/coding-runtime/secureWorkspaceTextReadAbsence",
   "keiko-server/coding-runtime/secureWorkspaceTextReadArtifact",
   "keiko-server/coding-runtime/secureWorkspaceTextReadNodeProcess",
   "keiko-server/coding-runtime/secureWorkspaceTextReadPlatformNode",

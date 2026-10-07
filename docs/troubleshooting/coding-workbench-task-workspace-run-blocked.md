@@ -864,10 +864,14 @@ settles `failed` (ADR-0137 D3):
   not change. Adjust the task, or start it in a workspace where the path is permitted.
 - `edits-blocked` with `EDIT_PREPARE_FAILED`: read `prepareCause` and `readReason`. With
   `replacement-read-failed`, a file the edit names cannot be read as text (`not-text`, `too-large`),
-  is protected (`denied`, `preflight-refused`) or its workspace did not answer: leave that file out of
-  the task, or edit it yourself. With `workspace-access-lost`, `guard-denied`, `binding-unavailable`,
-  `editor-context-unavailable` or `lease-unavailable`, the run's workspace or authority no longer
-  held while the edit was prepared: start the task again.
+  is protected (`preflight-refused`, or `denied` when the path is denied by policy or its chain holds
+  a link, a file used as a directory or another device) or its workspace did not answer: leave that
+  file out of the task, or edit it yourself. A new file or a rename target that does not exist yet is
+  not a failure: it reads as absent (`not-found`, the `absent` state on its
+  `coding-runtime.workspace-read` line). Builds before F27 (#3876) refused it as `denied`, because
+  the native read helper cannot tell a missing path from a refused one. With `workspace-access-lost`,
+  `guard-denied`, `binding-unavailable`, `editor-context-unavailable` or `lease-unavailable`, the
+  run's workspace or authority no longer held while the edit was prepared: start the task again.
 - `edit-retries-exhausted`: the model could not produce an edit that applies, or kept alternating
   between edits that do not apply and stale re-reads. Start the task again, rephrase or split it, or
   choose another model.
