@@ -59,6 +59,7 @@ import {
   notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
+import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -1719,36 +1720,98 @@ type GatewayModelRefreshResult =
   | { readonly kind: "failure"; readonly message: string };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
-let gatewayModelRefreshTimer: ReturnType<typeof setInterval> | undefined;
+let gatewayModelRefreshPoller: ReturnType<typeof createVisibilityPoller> | undefined;
+let backgroundGatewayReadInflight = false;
+let backgroundGatewayNextReadAt = 0;
+let backgroundGatewayFailureCount = 0;
+let backgroundGatewayFastUntil = 0;
 let backgroundGatewayModelSnapshot: string | undefined;
 
-// Readiness is completed by the BFF after browser bootstrap. This reads only the local projection;
-// it never starts a provider probe or clears a usable model selection while checking for updates.
+// Read only the BFF projection; provider verification belongs to server startup checks.
 function refreshGatewayModelsInBackground(): void {
+  if (backgroundGatewayReadInflight || document.visibilityState === "hidden") return;
   const generation = gatewayModelRefreshGeneration;
-  void fetchModels().then(
-    ({ models }): void => {
-      if (generation !== gatewayModelRefreshGeneration) return;
-      invalidateSharedBootstrap();
-      publishGatewayModelRefresh({ kind: "success", models });
-      const snapshot = JSON.stringify(models);
-      if (snapshot !== backgroundGatewayModelSnapshot) {
-        backgroundGatewayModelSnapshot = snapshot;
-        notifyGatewayModelCatalogUpdated();
-      }
-    },
-    (error: unknown): void => {
-      reportClientDiagnostic(
-        `Background model catalog refresh failed (${clientErrorSummary(error)}).`,
-        {
-          correlationId: correlationIdOf(error),
-          kind: "boundary",
-          errorKind: bffRequestErrorKind(error),
-          errorEvidence: clientErrorEvidence(error),
-        },
-      );
+  const correlationId = newClientCorrelationId();
+  backgroundGatewayReadInflight = true;
+  void fetchModels(correlationId)
+    .then(
+      ({ models }): void => {
+        if (generation !== gatewayModelRefreshGeneration) return;
+        adoptBackgroundGatewayModels(models);
+      },
+      (error: unknown): void => {
+        if (generation === gatewayModelRefreshGeneration) {
+          reportBackgroundGatewayFailure(error, correlationId);
+        }
+      },
+    )
+    .finally(() => {
+      backgroundGatewayReadInflight = false;
+    });
+}
+
+function adoptBackgroundGatewayModels(models: readonly ModelCapability[]): void {
+  const snapshot = JSON.stringify(models);
+  const changed = snapshot !== backgroundGatewayModelSnapshot;
+  backgroundGatewayFailureCount = 0;
+  const pending = models.some(
+    (model) =>
+      model.kind === "chat" &&
+      (model.conversationReady === false ||
+        (model.toolCalling === false && model.toolCallingVerification?.status !== "unsupported")),
+  );
+  const fast = changed || (pending && Date.now() < backgroundGatewayFastUntil);
+  backgroundGatewayNextReadAt = Date.now() + (fast ? 5_000 : 60_000);
+  invalidateSharedBootstrap();
+  publishGatewayModelRefresh({ kind: "success", models });
+  if (changed) {
+    backgroundGatewayModelSnapshot = snapshot;
+    notifyGatewayModelCatalogUpdated();
+  }
+}
+
+function reportBackgroundGatewayFailure(error: unknown, correlationId: string): void {
+  backgroundGatewayFailureCount += 1;
+  backgroundGatewayNextReadAt =
+    Date.now() + Math.min(5_000 * 2 ** Math.min(backgroundGatewayFailureCount - 1, 4), 60_000);
+  if (backgroundGatewayFailureCount !== 1) return;
+  reportClientDiagnostic(
+    `Background model catalog refresh failed (${clientErrorSummary(error)}).`,
+    {
+      correlationId: correlationIdOf(error) ?? correlationId,
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
     },
   );
+}
+
+function pollGatewayModels(): void {
+  if (Date.now() >= backgroundGatewayNextReadAt) refreshGatewayModelsInBackground();
+}
+
+function resumeGatewayModelReads(): void {
+  backgroundGatewayNextReadAt = 0;
+  gatewayModelRefreshPoller?.sync();
+}
+
+function startGatewayModelReads(): void {
+  backgroundGatewayNextReadAt = 0;
+  backgroundGatewayFastUntil = Date.now() + 120_000;
+  backgroundGatewayFailureCount = 0;
+  backgroundGatewayModelSnapshot = undefined;
+  gatewayModelRefreshPoller = createVisibilityPoller(pollGatewayModels, 5_000);
+  gatewayModelRefreshPoller.start();
+  window.addEventListener("focus", resumeGatewayModelReads);
+  document.addEventListener("visibilitychange", resumeGatewayModelReads);
+}
+
+function stopGatewayModelReads(): void {
+  gatewayModelRefreshGeneration += 1;
+  gatewayModelRefreshPoller?.stop();
+  gatewayModelRefreshPoller = undefined;
+  window.removeEventListener("focus", resumeGatewayModelReads);
+  document.removeEventListener("visibilitychange", resumeGatewayModelReads);
 }
 
 function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
@@ -1785,16 +1848,13 @@ function subscribeGatewayModelRefresh(
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
-    window.addEventListener("focus", refreshGatewayModelsInBackground);
-    gatewayModelRefreshTimer = setInterval(refreshGatewayModelsInBackground, 5_000);
+    startGatewayModelReads();
   }
   gatewayModelRefreshSubscribers.add(subscriber);
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
-      clearInterval(gatewayModelRefreshTimer);
-      gatewayModelRefreshTimer = undefined;
-      window.removeEventListener("focus", refreshGatewayModelsInBackground);
+      stopGatewayModelReads();
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
       window.removeEventListener(
         GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,

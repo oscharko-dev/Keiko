@@ -470,6 +470,58 @@ describe("useChatSession bootstrap", () => {
     vi.useRealTimers();
   });
 
+  it("pauses background model reads while hidden and catches up when visible", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    const calls = vi.mocked(fetchModels).mock.calls.length;
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetchModels).toHaveBeenCalledTimes(calls);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(fetchModels).toHaveBeenCalledTimes(calls + 1);
+    unmount();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("backs off failed background reads and reports one correlated failure per streak", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    const calls = vi.mocked(fetchModels).mock.calls.length;
+    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic transport outage."));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetchModels).toHaveBeenCalledTimes(calls + 3);
+    expect(diagnostic).toHaveBeenCalledOnce();
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.stringContaining("Background model catalog refresh failed (TypeError)"),
+      expect.objectContaining({ kind: "other", correlationId: expect.any(String) }),
+    );
+    expect(diagnostic.mock.calls[0]?.[1].correlationId).toBe(
+      vi.mocked(fetchModels).mock.calls[calls]?.[0],
+    );
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic second outage."));
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(diagnostic).toHaveBeenCalledTimes(2);
+    unmount();
+    resetClientDiagnosticWriter();
+    vi.useRealTimers();
+  });
+
   it("honors a child window binding immediately after bootstrap", async () => {
     const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
     const boundChat = chat({ id: "chat-bound", updatedAt: 10 });

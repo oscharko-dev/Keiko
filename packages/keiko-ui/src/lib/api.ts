@@ -549,11 +549,16 @@ export function resetModelRequestCache(): void {
   modelsRequest = undefined;
 }
 
-export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
+export async function fetchModels(correlationId?: string): Promise<{ models: ModelCapability[] }> {
   if (modelsRequest === undefined) {
-    const pending = fetchJson<{ models: ModelCapability[] }>("/api/models", {
-      cache: "no-store",
-    }).finally(() => {
+    const pending = fetchJson<{ models: ModelCapability[] }>(
+      "/api/models",
+      {
+        cache: "no-store",
+      },
+      undefined,
+      correlationId,
+    ).finally(() => {
       if (modelsRequest === pending) modelsRequest = undefined;
     });
     modelsRequest = pending;

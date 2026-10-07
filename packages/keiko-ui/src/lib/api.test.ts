@@ -2187,6 +2187,19 @@ describe("fetchModels", () => {
     );
   });
 
+  it("carries the background read correlation id to the BFF", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ models: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchModels("corr-background-models");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Keiko-Correlation-Id": "corr-background-models" }),
+        cache: "no-store",
+      }),
+    );
+  });
+
   it("reads background readiness changes without visiting Settings", async () => {
     const fetchMock = vi
       .fn()

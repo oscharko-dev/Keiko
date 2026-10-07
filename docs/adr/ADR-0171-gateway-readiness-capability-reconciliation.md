@@ -58,8 +58,13 @@ timestamp. Concurrent requests join that probe, a failed one refreshes the coold
 malformed observation timestamp never triggers it, so a dead gateway costs at most one bounded probe
 per model per cooldown. This restores the 1.1.11 behavior that 1.1.13 removed together with the
 per-question checks: without it one conclusive answer at startup left the model not-ready until a
-restart or a Settings change. The browser refreshes the local catalog every five seconds while
-model consumers are mounted, without clearing a usable selection during background reads. Only
+restart or a Settings change. Visible model consumers read the local catalog every five seconds
+while startup readiness is settling (a two-minute fast window), then every minute for an unchanged
+catalog. Hidden tabs pause and catch up immediately on visibility or focus. Failed reads back off
+from five seconds to one minute and report one correlated transport failure per outage streak.
+A configured human selection remains remembered and unsendable while unready, then restores on
+recovery; an actual removal still permits the existing fallback. Background reads do not clear a
+usable selection. Only
 in-flight requests are cached; settled model responses cannot conceal subsequent readiness results.
 Changed background catalogs notify the existing window bus, so an already open Coding Workbench
 refreshes its source and runtime posture without requiring Settings. This notification adopts the
