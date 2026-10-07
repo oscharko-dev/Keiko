@@ -57,8 +57,9 @@ mkdir -p "$KEIKO_LAB_REPO" && cp -R tests/fixtures/coding-workbench-lab/ledger-l
 ```
 
 **3. Run one task through the real UI.** The driver pairs a headless Chromium, selects the repository,
-the model and the Run authority, starts the task, then approves permissions and the package-script
-trust pause until the run settles. The last line names the run (`----- run run-<digits> -----`).
+the model and the Run authority, starts the task, then approves permissions, applies the change
+reviews of Ask for approval (`--approve none` rejects them) and allows the package-script trust
+pause until the run settles. The last line names the run (`----- run run-<digits> -----`).
 
 ```bash
 node scripts/testing/coding-workbench-lab/wb-ui.mjs --list-tasks

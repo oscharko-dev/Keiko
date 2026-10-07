@@ -604,15 +604,18 @@ function applyEdit(
   return replaceIn(file, content, edit);
 }
 
-// The tool contract asks for `oldString` byte for byte, so the exact text is matched first; only an
-// `oldString` with no exact occurrence falls back to a line-ending-insensitive match, with every
+// The tool contract asks for `oldString` byte for byte. An `oldString` that carries a carriage return
+// was copied with its bytes, so its exact occurrences are matched first: such a match never becomes
+// "not found" over a trailing carriage return, nor ambiguous through normalization. Every other
+// `oldString`, and one whose bytes occur nowhere, is matched line-ending-insensitively, with every
 // "\r\n" of the file and both strings read as "\n", because a model may read a CRLF file's lines
-// without their carriage returns and a file with mixed endings must still match (#3873 review). A
-// byte-exact match therefore never becomes "not found" over a trailing carriage return, nor
-// ambiguous through normalization. Every line the replacement leaves unchanged keeps its own ending;
-// a line it changes or adds takes the replaced line's ending or the file's majority ending.
+// without their carriage returns and a file with mixed endings must still match. An `oldString`
+// without a carriage return therefore counts its CRLF copies as well as its LF copies: `replaceAll`
+// reaches every one, and a single edit with several copies is refused as ambiguous instead of
+// silently taking the LF one (#3873 review). Every line the replacement leaves unchanged keeps its
+// own ending; a line it changes or adds takes the replaced line's ending or the file's majority one.
 function replaceIn(file: string, content: string, edit: CodingToolReplacementEdit): ApplyOutcome {
-  const exact = occurrencesOf(content, edit.oldString);
+  const exact = edit.oldString.includes("\r") ? occurrencesOf(content, edit.oldString) : [];
   const normalized =
     exact.length > 0 ? { text: content, collapsed: [] } : normalizeLineEndings(content);
   const needle = exact.length > 0 ? edit.oldString : edit.oldString.replaceAll("\r\n", "\n");

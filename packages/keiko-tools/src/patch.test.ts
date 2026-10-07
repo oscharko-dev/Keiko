@@ -449,6 +449,40 @@ describe("validatePatch — rejections", () => {
     expect(v.normalizedDiff).toContain("--- /dev/null");
   });
 
+  // #3873 review: a present EMPTY file has exactly one anchor for a pure insertion, its start, so
+  // the engine fills it; a file with any content, even a single blank line, has none and the same
+  // insertion stays refused there instead of landing at line 1.
+  it("anchors a pure insertion into a present empty file at the file's start", () => {
+    write("pkg/__init__.py", "");
+    const diff = "--- a/pkg/__init__.py\n+++ b/pkg/__init__.py\n@@ -0,0 +1,1 @@\n+export {};\n";
+
+    const v = validatePatch(info, diff);
+    const result = applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+
+    expect(v.ok).toBe(true);
+    expect(v.files[0]?.kind).toBe("modify");
+    expect(v.normalizedDiff).toContain("@@ -1,0 +1,1 @@");
+    expect(result.changedFiles).toEqual(["pkg/__init__.py"]);
+    expect(read("pkg/__init__.py")).toBe("export {};\n");
+  });
+
+  it.each([
+    ["content", "one\n"],
+    ["a single blank line", "\n"],
+  ])("keeps a pure insertion into a present file with %s refused as unanchored", (_, body) => {
+    write("src/x.txt", body);
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -0,0 +1,1 @@\n+zero\n";
+
+    const v = validatePatch(info, diff);
+
+    expect(v.ok).toBe(false);
+    expect(v.reasons).toEqual([
+      { code: "malformed", message: "modify hunk has no unique anchor", path: "src/x.txt" },
+    ]);
+    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow();
+    expect(read("src/x.txt")).toBe(body);
+  });
+
   it("normalizes stale hunk counts but still requires matching context", () => {
     write("src/x.txt", "one\ntwo\n");
     const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,99 +1,99 @@\n one\n-two\n+TWO\n";

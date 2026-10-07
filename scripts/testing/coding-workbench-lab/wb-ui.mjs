@@ -158,7 +158,22 @@ async function decidePermission(page, runId, snapshot, approve) {
   log("approval via API:", decision, response.status());
 }
 
-/** The two operator gates of a run: the package-script trust pause and a permission request. */
+/**
+ * The change review of Ask for approval: the run stays `running` while an edit waits in the
+ * Workbench's change review, so the panel, not the run snapshot, is the signal. A decided review
+ * disables its buttons until it settles, so one review is never decided twice.
+ */
+async function decideChangeReview(page, approve) {
+  const panel = page.locator('section[aria-labelledby="changeset-review-title"]');
+  if (!(await panel.isVisible().catch(() => false))) return;
+  const name = approve === "all" ? "Apply change" : "Reject change";
+  const button = panel.getByRole("button", { name, exact: true });
+  if (!(await button.isEnabled().catch(() => false))) return;
+  log("change review via UI:", name);
+  await button.click();
+}
+
+/** The operator gates of a run: the package-script trust pause, a permission, a change review. */
 async function answerGates(page, runId, snapshot, { approve, decided }) {
   if (approve === "ask") return;
   if (snapshot.state === "paused" && approve === "all") {
@@ -170,6 +185,7 @@ async function answerGates(page, runId, snapshot, { approve, decided }) {
     decided.add(pending.requestId);
     await decidePermission(page, runId, snapshot, approve);
   }
+  if (snapshot.state === "running") await decideChangeReview(page, approve);
 }
 
 async function watchRun(page, runId, { approve, deadline, shots }) {

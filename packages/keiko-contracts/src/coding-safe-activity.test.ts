@@ -420,7 +420,7 @@ describe("coding safe-activity contract — model reasoning", () => {
       { text: "é".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES / 2 + 1), truncated: true },
       "assistant",
     ],
-    ["with unsafe format characters", { text: "a‮b", truncated: false }, "assistant"],
+    ["with unsafe format characters", { text: "a\u202Eb", truncated: false }, "assistant"],
     ["with an extra key", { text: "x", truncated: false, raw: "private" }, "assistant"],
     ["without its truncation flag", { text: "x" }, "assistant"],
     ["as a bare string", "x", "assistant"],

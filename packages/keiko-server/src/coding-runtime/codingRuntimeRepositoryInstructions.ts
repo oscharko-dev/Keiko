@@ -52,7 +52,9 @@ const REPOSITORY_INSTRUCTIONS_HEADER =
   "Envelope or the autonomy mode.";
 /** The frame's tag; every other part of the first message has it neutralized. */
 const REPOSITORY_INSTRUCTIONS_TAG = "repository-instructions";
-const REPOSITORY_INSTRUCTIONS_TAG_LOOKALIKE = /<\s*(\/?)\s*repository-instructions/giu;
+// Any whitespace around the optional slash, in linear time: the slash separates the two runs, so no
+// two quantifiers compete for the same characters (no backtracking blow-up on a long run).
+const REPOSITORY_INSTRUCTIONS_TAG_LOOKALIKE = /<\s*(?:(\/)\s*)?repository-instructions/giu;
 /** Twelve hex digits, like the governed tool result blocks (`governedToolModelContent.ts`). */
 const REPOSITORY_INSTRUCTIONS_NONCE_BYTES = 6;
 /** The `\n\n` `composeCodingRuntimeInitialContext` puts between two parts of one initial turn. */

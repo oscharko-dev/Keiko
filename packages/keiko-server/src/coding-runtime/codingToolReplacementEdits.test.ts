@@ -978,6 +978,35 @@ describe("materializeReplacementChangeset byte-exact matching", () => {
     expect(applied(files, result)).toEqual({ "a.ts": "A\r\nB\na\nb\n" });
   });
 
+  // #3873 review: an oldString without a carriage return is what a model reads from either copy, so
+  // an LF copy elsewhere in the file must not hide a CRLF copy from replaceAll or from ambiguity.
+  it("counts the CRLF copies of an oldString without carriage returns", async () => {
+    const files = { "a.ts": "foo\nbar\nmid\r\nfoo\r\nbar\r\nend\r\n" };
+
+    const all = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        { file: "a.ts", oldString: "foo\nbar", newString: "baz", replaceAll: true },
+      ]),
+      undefined,
+    );
+    const single = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        { file: "a.ts", oldString: "foo\nbar", newString: "baz", replaceAll: false },
+      ]),
+      undefined,
+    );
+
+    expect(applied(files, all)).toEqual({ "a.ts": "baz\nmid\r\nbaz\r\nend\r\n" });
+    expect(single).toMatchObject({
+      status: "refused",
+      reasonCode: "INVALID_EDITS",
+      refusal: "old-string-ambiguous",
+      message: "oldString matches 2 places in a.ts; add surrounding lines or set replaceAll.",
+    });
+  });
+
   it("keeps the ending of every line an insertion leaves unchanged", async () => {
     const files = { "a.ts": "one\r\ntwo\nthree\r\n" };
 

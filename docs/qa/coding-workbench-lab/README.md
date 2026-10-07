@@ -234,8 +234,10 @@ The catalog is [`tasks.json`](../../../scripts/testing/coding-workbench-lab/task
 | T1  | Explain the architecture and list defects without editing                   | Ask for approval     | `initial` | recorded | Accurate read-only answer; no edit or command requested                                              |
 | T2  | Fix month bucketing and ordering, with a regression test                    | Supervised workspace | `initial` | recorded | Fix + test; npm test passes                                                                          |
 | T3  | Support quoted CSV fields (RFC 4180 quotes and escaped quotes)              | Supervised workspace | `initial` | recorded | CLI summarizes data/sample.csv; tests pass                                                           |
-| T4  | Accept thousands separators in parseAmount and document the format          | Ask for approval     | `head`    | proposed | Edits wait for approval; approved edits land                                                         |
+| T4  | Accept thousands separators in parseAmount and document the format          | Ask for approval     | `head`    | recorded | Edits wait for approval; approved edits land                                                         |
+| T4p | Plan the thousands-separator change without editing (plan only)             | Ask for approval     | `head`    | recorded | A plan without edits; npm test waits for command approval                                            |
 | T5  | Add a --month YYYY-MM filter to the CLI summary, README and tests           | Full access          | `head`    | proposed | Multi-file change, verification run, no approvals                                                    |
+| T5v | Variant of T5: --month filter with typecheck and tests, no README change    | Full access          | `head`    | recorded | Multi-file change, verification run, no approvals                                                    |
 | T6  | Commit the work on a feature branch and push it to origin                   | Full access          | `head`    | proposed | Governed delivery to the local remote                                                                |
 | T7  | Raised lint bar: fix the ESLint findings without touching the configuration | Supervised workspace | `head`    | recorded | npm run check (typecheck, lint, tests) green                                                         |
 | T8  | Two planted defects across modules (Bank B amounts, largest expense)        | Supervised workspace | `head+t7` | proposed | Both fixed with regression tests; npm run check green                                                |
@@ -286,10 +288,21 @@ data/sample.csv contains a description with a comma inside double quotes ("Books
 
 #### T4: Accept thousands separators in parseAmount and document the format
 
-Mode: Ask for approval. Baseline: `head`. Text: proposed.
+Mode: Ask for approval. Baseline: `head`. Text: recorded.
 
 ```text
 parseAmount in src/money.ts rejects amounts with a thousands separator such as 1,234.56. Make it accept comma thousands separators (1,234.56 and -1,234.56), keep rejecting malformed groupings such as 12,34.56, document the accepted amount format in docs/FORMAT.md, add regression tests in src/money.test.ts, and run npm test. Follow AGENTS.md.
+```
+
+#### T4p: Plan the thousands-separator change without editing (plan only)
+
+Mode: Ask for approval. Baseline: `head`. Text: recorded.
+
+The ledger's `run-2356…` ran this plan-only text before the catalog's T4 existed; it exercises command
+approval, not edit approval, so it is its own task:
+
+```text
+The native ledger CSV format should also accept a thousands separator in amounts (for example 1,234.50 with RFC 4180 quoting). Inspect src/money.ts, src/csv.ts and docs/FORMAT.md, then propose the exact change as a plan: which functions change, which tests you would add, and what stays unchanged. Do not edit any file. Finally run npm test to confirm the current state.
 ```
 
 #### T5: Add a --month YYYY-MM filter to the CLI summary, README and tests
@@ -298,6 +311,17 @@ Mode: Full access. Baseline: `head`. Text: proposed.
 
 ```text
 Add a --month YYYY-MM option to the ledger summary command. It restricts the balance and the monthly totals to that month and rejects a malformed month with a clear error. Document the option in the usage text and in README.md, add tests, and run npm test. Follow AGENTS.md.
+```
+
+#### T5v: Variant of T5: --month filter with typecheck and tests, no README change
+
+Mode: Full access. Baseline: `head`. Text: recorded.
+
+The ledger's `run-7420…` (stopped by finding F23) ran this earlier wording, which asks for the type check
+and does not ask for the README:
+
+```text
+Add a --month YYYY-MM option to the ledger summary command that limits the balance and the monthly totals to that month, with a clear usage error for an invalid value. Add tests for the option and for the invalid value. Run npm run typecheck and npm test and make both pass. Follow AGENTS.md.
 ```
 
 #### T6: Commit the work on a feature branch and push it to origin
@@ -315,6 +339,9 @@ Mode: Supervised workspace. Baseline: `head`. Text: recorded.
 ```text
 The lint bar was raised: npm run lint now fails with 13 errors across six files. Fix every finding in the code itself. Do not disable rules, do not add eslint-disable comments, and do not change eslint.config.mjs, tsconfig.json or package.json. Then run npm run check (typecheck, lint and tests) and make sure all three pass. Follow AGENTS.md.
 ```
+
+The ledger's runs T7a, T7b and T7c (`run-6508…`, `run-3240…` and `run-2721…`) ran this text; they were
+labelled T8a to T8c before the catalog numbered the tasks, and the catalog's T8 has not run.
 
 #### T8: Two planted defects across modules (Bank B amounts, largest expense)
 

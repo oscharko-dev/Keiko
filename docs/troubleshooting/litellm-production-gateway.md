@@ -188,11 +188,14 @@ the call's budget could not hold a repair. None of these lines carries the model
   LiteLLM model info (`max_output_tokens`) so discovery carries it; the coding turn then reserves it.
 - Check the time arithmetic before raising allowances further: a whole-body (non-streaming) attempt is
   bounded by the ten-minute buffered floor, so at 20 tokens per second about 12k tokens fit one
-  attempt; a streamed read is bounded by the call budget instead. That is why a coding turn that
-  does not stream (`codingStreaming: "off"`, or a capability without streaming) keeps the shared
-  8k reserve rather than the 16k coding reserve: a runaway answer then ends as an exhausted answer
-  that gets the steered repair, not as a timeout the breaker counts. Declare `max_output_tokens`
-  only as high as one buffered attempt can produce.
+  attempt; a streamed read is bounded by the call budget instead. The reserve follows the transport,
+  not the sidecar's own streaming switch. Only a model whose capability does not stream
+  (`streaming: false`) meets the whole-body bound and keeps the shared 8k reserve rather than the
+  16k coding reserve: a runaway answer then ends as an exhausted answer that gets the steered repair,
+  not as a timeout the breaker counts. `codingStreaming: "off"` on a streaming-capable model only
+  stops forwarding the answer live: Keiko still reads the provider's stream under the silence floor,
+  so that turn keeps the 16k coding reserve. Declare `max_output_tokens` only as high as one
+  buffered attempt of a non-streaming model can produce.
 
 ---
 

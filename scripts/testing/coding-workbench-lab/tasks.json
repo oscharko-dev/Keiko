@@ -40,9 +40,18 @@
     "title": "Accept thousands separators in parseAmount and document the format",
     "mode": "Ask for approval",
     "baseline": "head",
-    "textStatus": "proposed",
+    "textStatus": "recorded",
     "text": "parseAmount in src/money.ts rejects amounts with a thousands separator such as 1,234.56. Make it accept comma thousands separators (1,234.56 and -1,234.56), keep rejecting malformed groupings such as 12,34.56, document the accepted amount format in docs/FORMAT.md, add regression tests in src/money.test.ts, and run npm test. Follow AGENTS.md.",
     "expected": "Edits wait for approval; approved edits land"
+  },
+  {
+    "id": "T4p",
+    "title": "Plan the thousands-separator change without editing (plan only)",
+    "mode": "Ask for approval",
+    "baseline": "head",
+    "textStatus": "recorded",
+    "text": "The native ledger CSV format should also accept a thousands separator in amounts (for example 1,234.50 with RFC 4180 quoting). Inspect src/money.ts, src/csv.ts and docs/FORMAT.md, then propose the exact change as a plan: which functions change, which tests you would add, and what stays unchanged. Do not edit any file. Finally run npm test to confirm the current state.",
+    "expected": "A plan without edits; npm test waits for command approval"
   },
   {
     "id": "T5",
@@ -51,6 +60,15 @@
     "baseline": "head",
     "textStatus": "proposed",
     "text": "Add a --month YYYY-MM option to the ledger summary command. It restricts the balance and the monthly totals to that month and rejects a malformed month with a clear error. Document the option in the usage text and in README.md, add tests, and run npm test. Follow AGENTS.md.",
+    "expected": "Multi-file change, verification run, no approvals"
+  },
+  {
+    "id": "T5v",
+    "title": "Variant of T5: --month filter with typecheck and tests, no README change",
+    "mode": "Full access",
+    "baseline": "head",
+    "textStatus": "recorded",
+    "text": "Add a --month YYYY-MM option to the ledger summary command that limits the balance and the monthly totals to that month, with a clear usage error for an invalid value. Add tests for the option and for the invalid value. Run npm run typecheck and npm test and make both pass. Follow AGENTS.md.",
     "expected": "Multi-file change, verification run, no approvals"
   },
   {

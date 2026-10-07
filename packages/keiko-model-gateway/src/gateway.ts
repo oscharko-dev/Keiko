@@ -1896,14 +1896,7 @@ export class Gateway {
     state: PreparedStream,
     failedAttempt?: Error,
   ): Promise<OpenedStream> {
-    const {
-      adapter,
-      prepared: request,
-      route,
-      ids,
-      admission: initialAdmission,
-      promptAdmission,
-    } = state;
+    const { prepared: request, route, ids, admission: initialAdmission } = state;
     const budget = streamStartupBudget(state, this.clock.now());
     let admission = initialAdmission;
     const resume = streamResume(state, failedAttempt);
@@ -1924,16 +1917,7 @@ export class Gateway {
           admission = allowed.admission;
           remainingMs = allowed.remainingMs;
         }
-        return this.openStreamAttempt(
-          adapter,
-          current,
-          route,
-          ids,
-          remainingMs,
-          admission,
-          promptAdmission,
-          state.attempts.schemaRepair,
-        );
+        return this.openStreamAttempt(state, current, remainingMs, admission);
       },
       // A catalog rejection is retried only with its schema correction, never replayed as it was.
       streamStartupRetryConfig(state, () => admission, budget),
@@ -1989,30 +1973,21 @@ export class Gateway {
     }
   }
 
+  // One streamed attempt of the call (`state`: its route, ids, adapter, prompt admission and the
+  // schema correction the attempt carries) for `request`, under what is left of its budget.
   private async openStreamAttempt(
-    adapter: ProviderAdapter,
+    state: PreparedStream,
     request: GatewayCallRequest,
-    route: RoutedCall,
-    ids: CallIds,
     remainingMs: number | undefined,
     admission: CircuitBreakerAdmission,
-    promptAdmission: GatewayPromptAdmission,
-    schemaRepair?: GatewayToolCatalogError["repair"],
   ): Promise<{ first: GatewayStreamChunk; iterator: AsyncGenerator<GatewayStreamChunk> }> {
-    const bounds = chatStreamBounds(route.provider);
+    const bounds = chatStreamBounds(state.route.provider);
     const budgetMs = Math.min(bounds.budgetMs, remainingMs ?? bounds.budgetMs);
     const iterator = this.reservedStreamAttempt(
-      adapter,
+      state,
       request,
-      route,
-      ids,
-      {
-        budgetMs,
-        silenceMs: Math.min(bounds.silenceMs, budgetMs),
-      },
+      { budgetMs, silenceMs: Math.min(bounds.silenceMs, budgetMs) },
       admission,
-      promptAdmission,
-      schemaRepair,
     );
     try {
       let first = await iterator.next();
@@ -2028,15 +2003,13 @@ export class Gateway {
   }
 
   private async *reservedStreamAttempt(
-    adapter: ProviderAdapter,
+    state: PreparedStream,
     request: GatewayCallRequest,
-    route: RoutedCall,
-    ids: CallIds,
     bounds: StreamReadBounds,
     admission: CircuitBreakerAdmission,
-    promptAdmission: GatewayPromptAdmission,
-    schemaRepair?: GatewayToolCatalogError["repair"],
   ): AsyncGenerator<GatewayStreamChunk> {
+    const { adapter, route, ids, promptAdmission } = state;
+    const schemaRepair = state.attempts.schemaRepair;
     let reservation: GatewaySpendReservation | undefined;
     let admitted = false;
     let usage: UsageMetadata | undefined;

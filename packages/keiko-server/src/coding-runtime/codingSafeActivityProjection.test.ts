@@ -1528,7 +1528,7 @@ describe("model reasoning in the live feed", () => {
 
   it("drops reasoning that a format-character redactor empties", () => {
     const projection = assistantTurn();
-    expect(projection.ingest(RUN_ID, reasoning("msg_answer", "‮⁦"))).toBe(false);
+    expect(projection.ingest(RUN_ID, reasoning("msg_answer", "\u202E\u2066"))).toBe(false);
     expect(projected(projection)).not.toHaveProperty("reasoning");
   });
 });
