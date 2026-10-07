@@ -1,4 +1,5 @@
 import type {
+  ActivityLogErrorKind,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeFailureCode,
 } from "@oscharko-dev/keiko-contracts";
@@ -83,12 +84,84 @@ export interface CodingToolFacadePorts {
 }
 
 /**
+ * Why the edit port refused an edit before the editor route saw it (`EDIT_PREPARE_FAILED`): one
+ * closed word per preparation step. The model-facing code stays `EDIT_PREPARE_FAILED` for every one
+ * of them; the cause is what tells a refusal the model can repair from one it cannot (F5, #3873
+ * review), and `coding-runtime.edit.refused` records it beside the code.
+ */
+export const EDIT_PREPARE_CAUSES = [
+  "workspace-access-lost",
+  "cancelled",
+  "guard-denied",
+  "changeset-invalid",
+  "binding-unavailable",
+  "editor-context-unavailable",
+  "lease-unavailable",
+  // #3873: the governed read a replacement edit is materialized against did not answer.
+  "replacement-read-failed",
+] as const;
+export type EditPrepareCause = (typeof EDIT_PREPARE_CAUSES)[number];
+
+/**
+ * Why the governed read a replacement edit is materialized against did not answer: the secure read's
+ * own closed reasons plus the refusals of the governed read path that serves it. The edit port names
+ * the type (`GovernedWorkspaceReadFailure`); this is its runtime vocabulary, so the refusal line, the
+ * facade and the run's refusal escalation all admit exactly these words.
+ */
+export const EDIT_READ_REASONS = [
+  "unsupported-platform",
+  "workspace-unavailable",
+  "artifact-unverified",
+  "busy",
+  "cancelled",
+  "timeout",
+  "process-failed",
+  "protocol-invalid",
+  "denied",
+  "not-found",
+  "not-text",
+  "too-large",
+  "unstable",
+  "exception",
+  "postflight-refused",
+  "preflight-refused",
+  "response-too-large",
+] as const;
+export type EditReadReason = (typeof EDIT_READ_REASONS)[number];
+
+/**
+ * The error class `coding-runtime.edit.refused` records for each preparation cause. The run's refusal
+ * escalation classifies the same refusal with the same table, so the refusal lines, the escalation
+ * and the settlement name one failure alike.
+ */
+export const EDIT_PREPARE_ERROR_KINDS: Readonly<Record<EditPrepareCause, ActivityLogErrorKind>> = {
+  "workspace-access-lost": "authority-denied",
+  cancelled: "cancelled",
+  "guard-denied": "authority-denied",
+  "changeset-invalid": "validation-failed",
+  "binding-unavailable": "authority-denied",
+  "editor-context-unavailable": "unavailable",
+  "lease-unavailable": "conflict",
+  "replacement-read-failed": "unavailable",
+};
+
+/**
  * What one answered governed edit says, as the model received it (F5, #3873): applied, or refused
  * under the closed reason code the facade forwarded (`UNCLASSIFIED` when it forwarded none). A human
- * decision, a cancellation, a busy or a malformed call is neither and is not reported. Body-free.
+ * decision, a cancellation, a busy or a malformed call is neither and is not reported. A refusal
+ * the edit port raised while preparing the edit (`EDIT_PREPARE_FAILED`) also carries the closed
+ * preparation cause and, for a failed materialization read, the closed reason of that read: they
+ * decide whether the model can repair the refusal, which its code alone cannot say. The model never
+ * receives either. Body-free: closed words only, never a path, a message or read text.
  */
 export type CodingToolEditOutcome =
-  { readonly kind: "applied" } | { readonly kind: "refused"; readonly reasonCode: string };
+  | { readonly kind: "applied" }
+  | {
+      readonly kind: "refused";
+      readonly reasonCode: string;
+      readonly prepareCause?: EditPrepareCause | undefined;
+      readonly readReason?: EditReadReason | undefined;
+    };
 
 /** The run-scoped form the run's orchestration receives an edit outcome in (F5, #3873). */
 export type CodingRuntimeEditOutcomeObserver = (

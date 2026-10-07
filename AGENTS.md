@@ -644,8 +644,12 @@ records `contentBytes`, `reasoningBytes` and `reasoningTokens` beside `outputByt
 forwarded to the coding runtime, `reasoningWithheld` for a buffered answer delivered without its
 oversized reasoning, and on an `output-limit` turn the bound that ended it (`limit`: `answer`,
 `reasoning`); and `coding-runtime.history-projection` the `reasoningSignalCount` a history read
-prepared for the timeline. The reasoning text never enters the Activity Log, a support export, run
-evidence or Coding History.
+prepared for the timeline. OpenCode persists a streamed text or reasoning part only empty and then
+complete, so the timeline grows from the runtime's delta events: the same line counts, since its
+previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
+(`liveDroppedCount`), the parts whose complete text did not extend what was shown
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
 `answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it

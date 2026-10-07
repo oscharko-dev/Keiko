@@ -56,13 +56,17 @@ import {
   GOVERNED_ASK_DECLINED_REASON_CODE,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
-import type {
-  CodingToolAdmission,
-  CodingToolEditOutcome,
-  CodingToolFacade,
-  CodingToolFacadeInput,
-  CodingToolFacadeOptions,
-  CodingToolFacadePorts,
+import {
+  EDIT_PREPARE_CAUSES,
+  EDIT_READ_REASONS,
+  type CodingToolAdmission,
+  type CodingToolEditOutcome,
+  type CodingToolFacade,
+  type CodingToolFacadeInput,
+  type CodingToolFacadeOptions,
+  type CodingToolFacadePorts,
+  type EditPrepareCause,
+  type EditReadReason,
 } from "./codingToolFacadePorts.js";
 import {
   VERIFICATION_RUNNER_ERROR_CODES,
@@ -316,7 +320,9 @@ function observeEditResult(
  * An answered edit's outcome: applied, or refused under the closed code the model was given — the
  * `reasonCode` the result exposes, else its governed-delegate evidence code, which carries the same
  * closed vocabulary (`projectEditFailure`). A refusal whose code the facade withheld reads as
- * `UNCLASSIFIED`; a human decision, cancellation or busy answer is not an outcome to count.
+ * `UNCLASSIFIED`; a human decision, cancellation or busy answer is not an outcome to count. An
+ * `EDIT_PREPARE_FAILED` refusal also reports the closed cause the edit port gave it, which the model
+ * never sees (`EDIT_REFUSAL_CAUSES`).
  */
 function codingToolEditOutcome(result: CodingToolResult): CodingToolEditOutcome | undefined {
   if (result.status === "completed") return { kind: "applied" };
@@ -326,6 +332,7 @@ function codingToolEditOutcome(result: CodingToolResult): CodingToolEditOutcome 
   return {
     kind: "refused",
     reasonCode: code === undefined || code === "failed" ? "UNCLASSIFIED" : code,
+    ...EDIT_REFUSAL_CAUSES.get(result),
   };
 }
 
@@ -899,9 +906,44 @@ function projectEditFailure(
       ? reasonCode
       : undefined;
   const base = projected("failed", safeReasonCode, safeReasonCode === "ci-observation-required");
-  return safeReasonCode === undefined
-    ? base
-    : { ...base, ...editFailureCoaching(safeReasonCode, value.message) };
+  if (safeReasonCode === undefined) return base;
+  const result = { ...base, ...editFailureCoaching(safeReasonCode, value.message) };
+  const cause = safeReasonCode === "EDIT_PREPARE_FAILED" ? editRefusalCause(value) : undefined;
+  if (cause !== undefined) EDIT_REFUSAL_CAUSES.set(result, cause);
+  return result;
+}
+
+// The closed cause the edit port gave an `EDIT_PREPARE_FAILED` refusal (which preparation step
+// refused, and why a materialization read failed) rides BESIDE the model-facing result, keyed by the
+// result object, never in it: `JSON.stringify(result)` is what the model receives, and the run's
+// refusal bound is the only reader (`codingToolEditOutcome`). Every route that answers an edit
+// hands back the object `project` built — the admitted delegate and the catalog bridge alike — so
+// the key survives both. A word outside the closed vocabularies is dropped, and the refusal then
+// reads as the code alone, exactly as before.
+const EDIT_REFUSAL_CAUSES = new WeakMap<CodingToolResult, EditRefusalCause>();
+const EDIT_PREPARE_CAUSE_SET: ReadonlySet<unknown> = new Set(EDIT_PREPARE_CAUSES);
+const EDIT_READ_REASON_SET: ReadonlySet<unknown> = new Set(EDIT_READ_REASONS);
+
+interface EditRefusalCause {
+  readonly prepareCause?: EditPrepareCause;
+  readonly readReason?: EditReadReason;
+}
+
+function isEditPrepareCause(value: unknown): value is EditPrepareCause {
+  return EDIT_PREPARE_CAUSE_SET.has(value);
+}
+
+function isEditReadReason(value: unknown): value is EditReadReason {
+  return EDIT_READ_REASON_SET.has(value);
+}
+
+function editRefusalCause(value: Record<string, unknown>): EditRefusalCause | undefined {
+  const { prepareCause, readReason } = value;
+  const cause = {
+    ...(isEditPrepareCause(prepareCause) ? { prepareCause } : {}),
+    ...(isEditReadReason(readReason) ? { readReason } : {}),
+  };
+  return Object.keys(cause).length === 0 ? undefined : cause;
 }
 
 function editFailureCoaching(

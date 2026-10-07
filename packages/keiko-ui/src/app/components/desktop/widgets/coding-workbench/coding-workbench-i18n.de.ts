@@ -1022,7 +1022,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.edits-blocked":
     "Keiko hat den Lauf beendet, weil seine Änderungen mehrmals hintereinander aus einem Grund abgelehnt wurden, den das Modell durch eine andere Änderung nicht beheben kann: etwa weil keine Coding Workbench für diesen Arbeitsbereich verbunden ist, der Zugriff auf den Arbeitsbereich verloren ging oder der Pfad durch eine Richtlinie geschützt ist. Behebe diese Ursache, halte zum Beispiel die Coding Workbench für diesen Arbeitsbereich geöffnet, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.failure.edit-retries-exhausted":
-    "Keiko hat den Lauf beendet, weil die Änderungen des Modells mehrmals hintereinander aus demselben Grund abgelehnt wurden, etwa weil sie nicht mehr zur Datei passten. Starte die Aufgabe erneut, formuliere sie um oder teile sie auf, oder wähle ein anderes Modell; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+    "Keiko hat den Lauf beendet, weil die Änderungen des Modells mehrmals hintereinander abgelehnt wurden, etwa weil sie nicht mehr zur Datei passten. Starte die Aufgabe erneut, formuliere sie um oder teile sie auf, oder wähle ein anderes Modell; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.failure.runtime":
     "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
   "codingWorkbench.event.failure.generic":

@@ -12,7 +12,8 @@
 //   whether the run's Authority Envelope ran out of time (`envelopeDurationExhausted`);
 // - the event hub keeps the closed cause the coding sidecar gateway reported for the run's most
 //   recent failed model call, until a later call is answered
-//   (`CodingRuntimeEventHub.lastModelCallFailure`).
+//   (`CodingRuntimeEventHub.lastModelCallFailure`), and the gateway's own fact that the provider could
+//   not serve that call (`lastModelCallProviderUnavailable`).
 //
 // Body-free by construction: every input and output is a closed code.
 import type {
@@ -28,6 +29,13 @@ export interface CodingRuntimeTerminalFacts {
   readonly envelopeDurationExhausted: (runId: string) => boolean;
   /** The gateway's cause for the run's most recent failed model call no later answer superseded. */
   readonly lastModelCallFailure: (runId: string) => CodingWorkbenchTurnFailureCode | undefined;
+  /**
+   * True when the gateway found that the provider could not serve the run's most recent failed model
+   * call — a retryable provider status (408, 429, 5xx), a rate limit, an open breaker — which its
+   * `provider-failed` cause names the same as a rejection. Absent, no `provider-failed` call is
+   * attributed to an unavailable provider.
+   */
+  readonly lastModelCallProviderUnavailable?: ((runId: string) => boolean) | undefined;
 }
 
 export type CodingRuntimeTerminalFailureCode = Extract<
@@ -52,13 +60,14 @@ export interface CodingRuntimeTerminalFailure {
 
 // The gateway reports `stream-incomplete` for an attempt that timed out, a connection that was
 // refused or dropped, and a stream that broke before the answer completed: the provider could not
-// be reached or stopped answering.
+// be reached or stopped answering. It reports no other failure that way: a configuration or egress
+// refusal, an unknown model or a refused credential is `provider-failed` on every path.
 //
-// Not covered here: `coding-sidecar-gateway.ts` reports a ProviderError 5xx, 408 or 429, a
-// RateLimitError and a CircuitOpenError as `provider-failed`, the same code as a 4xx rejection, so
-// a provider that stayed unavailable past the outage window cannot be told apart from one that
-// rejected the turn. Such a run settles as `model-turn-failed` until the gateway reports a distinct
-// cause for the unavailable class; that cause then belongs in this set.
+// A ProviderError 5xx, 408 or 429, a RateLimitError and a CircuitOpenError are `provider-failed`
+// too, the same code as a 4xx rejection, but they are an outage once the gateway has retried through
+// its outage window (F10), and a run that ends on one has to say so. The gateway therefore reports,
+// beside the cause, the fact that the provider could not serve the call; `provider-failed` plus that
+// fact is `provider-unavailable`, and `provider-failed` without it stays a failed model step.
 const PROVIDER_UNAVAILABLE_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode> = new Set([
   "stream-incomplete",
 ]);
@@ -86,7 +95,10 @@ export function classifyTerminalFailure(
     return { failureCode: "runtime-failed", basis: "no-model-call-failure" };
   }
   return {
-    failureCode: modelCallFailureCode(modelCallFailure),
+    failureCode: modelCallFailureCode(
+      modelCallFailure,
+      facts.lastModelCallProviderUnavailable?.(runId) === true,
+    ),
     basis: "model-call-failure",
     modelCallFailure,
   };
@@ -97,8 +109,10 @@ export function classifyTerminalFailure(
 // last failed call exhausted the output budget again after that repair or those retries.
 function modelCallFailureCode(
   modelCallFailure: CodingWorkbenchTurnFailureCode,
+  providerUnavailable: boolean,
 ): CodingRuntimeTerminalFailureCode {
   if (PROVIDER_UNAVAILABLE_FAILURES.has(modelCallFailure)) return "provider-unavailable";
+  if (modelCallFailure === "provider-failed" && providerUnavailable) return "provider-unavailable";
   return modelCallFailure === "output-exhausted"
     ? "output-exhausted-repeated"
     : "model-turn-failed";

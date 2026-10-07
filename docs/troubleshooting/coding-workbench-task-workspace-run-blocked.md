@@ -597,8 +597,9 @@ F9; runs `run-65084062444586162471229658028402064666` and
 - `prompt-allowance` — the run's cumulative prompt allowance (`maxPromptTokens` of the Authority
   Envelope) refused its most recent model call. The gateway answered that call with
   `coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied` and a `turn-rejected` turn
-  failure. Failed model calls keep their reserved prompt estimate, so a long provider outage spends
-  the allowance too.
+  failure. The same cause names a call the run's CI-repair prompt budget refused, which counts the
+  same `maxPromptTokens` over the repair. Failed model calls keep their reserved prompt estimate, so
+  a long provider outage spends the allowance too.
 - `envelope-duration` — the run's Authority Envelope ran out of time (`maxRuntimeMs` after minting,
   or its `expiresAt`). A model call in flight at that moment ends with
   `coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`; a call started
@@ -606,15 +607,21 @@ F9; runs `run-65084062444586162471229658028402064666` and
 - `model-call-failure` — the coding sidecar gateway reported the run's most recent model call as
   failed, and no later call of the run was answered. `stream-incomplete` (a timeout, a refused or
   dropped connection, a stream that broke before the answer completed) settles
-  `provider-unavailable`; `output-exhausted`, which ends a run only after the gateway's steered repair
-  or the runtime's retries exhausted the budget again, settles `output-exhausted-repeated`; every
-  other cause settles `model-turn-failed`.
+  `provider-unavailable`, and so does `provider-failed` when the gateway also found that the provider
+  could not serve the call — a retryable provider status (408, 429, 5xx), a rate limit or an open
+  breaker that outlasted the gateway's outage window; that call's
+  `coding-sidecar.gateway.turn-failed` line carries `providerUnavailable: true`, and the settled line
+  names `modelCallFailure: provider-failed` beside `failureCode: provider-unavailable`.
+  `output-exhausted`, which ends a run only after the gateway's steered repair or the runtime's
+  retries exhausted the budget again, settles `output-exhausted-repeated`; every other cause,
+  including a `provider-failed` without that fact (a 4xx rejection, a refused credential, a
+  configuration or egress refusal), settles `model-turn-failed`.
 - `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
   settles `runtime-failed`: the runtime crashed or failed internally.
 
-The gateway reports a provider that stayed unavailable past the outage window — a 5xx, 408 or 429, an
-open breaker — with the same `provider-failed` code as a 4xx rejection, so such a run settles
-`model-turn-failed`, and its failed step reads "The model provider rejected this turn".
+A run that settles `provider-unavailable` on a `provider-failed` call still shows "The model provider
+rejected this turn" on its last failed step: the per-turn wording names the gateway's answer, while
+the run's own cause names the outage.
 
 **Diagnostic Steps**
 
@@ -631,7 +638,8 @@ open breaker — with the same `provider-failed` code as a 4xx rejection, so suc
 3. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
    (`maxRuntimeMs` on `coding-runtime.authority.minted`, where the composition reports it).
 4. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
-   names the cause (`failureCode`) and whether the runtime could retry it (`runtimeRetry`); a
+   names the cause (`failureCode`), whether the provider could not serve the call
+   (`providerUnavailable`) and whether the runtime could retry it (`runtimeRetry`); a
    `gateway.retry.exhausted` or `gateway.circuit.wait outcome=budget-refused` under the same chat
    correlation shows an outage that outlasted the window.
 
@@ -809,25 +817,33 @@ reasonCode=NO_ACTIVE_SESSION` lines until the operator stopped it.
 
 **Root Cause**
 
-The run's orchestration counts each run's consecutive governed edit refusals with the same closed
-reason. Reads, searches and other tool calls between two refused edits do not interrupt the count;
-an applied edit or a refusal with another reason restarts it; a human's rejection of a change in its
-review never counts (ADR-0124 D6), nor does a refusal that lands while the run is paused. At the
-reason's bound the run writes one
-`coding-runtime.run.refusal-escalated` line and settles `failed` (ADR-0137 D3):
+The run's orchestration counts each run's governed edit refusals since its last applied edit,
+whatever their closed reason codes: a model that alternates two refusals is bounded exactly like one
+that repeats one. Reads, searches and other tool calls between two refused edits do not interrupt the
+streak; an applied edit ends it; a human's rejection of a change in its review never counts
+(ADR-0124 D6), nor does an edit whose preparation was cancelled, nor a refusal that lands while the
+run is paused. When a bound is met the run writes one `coding-runtime.run.refusal-escalated` line and
+settles `failed` (ADR-0137 D3):
 
-- `edits-blocked` — three consecutive refusals the model cannot repair by changing its edit: no
-  connected Workbench editor (`NO_ACTIVE_SESSION`, `NO_ACTIVE_BRIDGE`), lost workspace access, a denied
-  path or policy (`OUT_OF_SCOPE`, `POLICY_DENIED`, `APPROVAL_REQUIRED`), an editor buffer only the
-  operator can save (`DIRTY`), an editor or transport fault.
-- `edit-retries-exhausted` — six consecutive refusals the model could have repaired: edits that do
-  not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
-  precondition, or a refusal without a closed code (`UNCLASSIFIED`).
+- `edits-blocked` — three refusals in the streak that the model cannot repair by changing its edit:
+  no connected Workbench editor (`NO_ACTIVE_SESSION`, `NO_ACTIVE_BRIDGE`), lost workspace access, a
+  denied path or policy (`OUT_OF_SCOPE`, `POLICY_DENIED`, `APPROVAL_REQUIRED`), an editor buffer only
+  the operator can save (`DIRTY`), an editor or transport fault, and an edit the edit port refused
+  while preparing it (`EDIT_PREPARE_FAILED`) because the workspace or its guard no longer held, no
+  editor context or mutation lease could be had, or the governed read of a file the edit names did not
+  answer (a file that is not text or is too large, a denied path, an unavailable workspace).
+- `edit-retries-exhausted` — six refusals of any kind in the streak: edits that do not apply
+  (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
+  precondition, an invalid changeset (`EDIT_PREPARE_FAILED` with the cause `changeset-invalid`), or a
+  refusal without a closed code (`UNCLASSIFIED`), alone or mixed with the unrepairable ones above.
 
 **Diagnostic Steps**
 
-1. Reconstruct the run and read its `coding-runtime.run.refusal-escalated` line: `reasonCode`,
-   `refusalClass` (`unrepairable` or `repairable`), `consecutiveCount` and `bound`.
+1. Reconstruct the run and read its `coding-runtime.run.refusal-escalated` line: `reasonCode` is the
+   latest refusal's code; `refusalClass` (`unrepairable` or `repairable`), `consecutiveCount` and
+   `bound` describe the count that met its bound; `refusalCount` and `unrepairableCount` give both
+   counts of the streak, so a mixed run shows how it mixed; `prepareCause` and `readReason` name why
+   a preparation refusal counted as it did.
 
    ```bash
    keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
@@ -846,8 +862,15 @@ reason's bound the run writes one
   the task workspace.
 - `edits-blocked` with a policy or authority reason: the edit targets a path or action the run may
   not change. Adjust the task, or start it in a workspace where the path is permitted.
-- `edit-retries-exhausted`: the model could not produce an edit that applies. Start the task again,
-  rephrase or split it, or choose another model.
+- `edits-blocked` with `EDIT_PREPARE_FAILED`: read `prepareCause` and `readReason`. With
+  `replacement-read-failed`, a file the edit names cannot be read as text (`not-text`, `too-large`),
+  is protected (`denied`, `preflight-refused`) or its workspace did not answer: leave that file out of
+  the task, or edit it yourself. With `workspace-access-lost`, `guard-denied`, `binding-unavailable`,
+  `editor-context-unavailable` or `lease-unavailable`, the run's workspace or authority no longer
+  held while the edit was prepared: start the task again.
+- `edit-retries-exhausted`: the model could not produce an edit that applies, or kept alternating
+  between edits that do not apply and stale re-reads. Start the task again, rephrase or split it, or
+  choose another model.
 
 The bounds are fixed and deliberately small: each refused attempt resends the run's growing context to
 the model, so a run that loops on a refusal spends its prompt allowance on nothing (ADR-0137).

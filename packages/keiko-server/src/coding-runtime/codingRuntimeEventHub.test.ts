@@ -160,6 +160,70 @@ describe("CodingRuntimeEventHub model gateway facts", () => {
   });
 });
 
+// F10 (#3873 review): `provider-failed` names a provider that rejected a turn and one that stayed
+// unavailable alike. The gateway's own fact that the provider could not serve the call is kept beside
+// the cause, never in the public frame, so a run that ends on it can be named for the outage.
+describe("CodingRuntimeEventHub provider-unavailable fact", () => {
+  it("keeps the gateway's outage fact of the latest failed call, and replaces it with the next one", () => {
+    const hub = new CodingRuntimeEventHub();
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(false);
+
+    hub.publishTurnFailure("run-a", "running", 1, "provider-failed", { providerUnavailable: true });
+    expect(hub.lastModelCallFailure("run-a")).toBe("provider-failed");
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(true);
+    expect(hub.lastModelCallProviderUnavailable("run-b")).toBe(false);
+
+    // The next failed call states its own: a rejection after an outage is no outage.
+    hub.publishTurnFailure("run-a", "running", 2, "provider-failed", {
+      providerUnavailable: false,
+    });
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(false);
+    hub.publishTurnFailure("run-a", "running", 3, "provider-failed", { providerUnavailable: true });
+    // A failure published without the fact (any caller that predates it) names no outage.
+    hub.publishTurnFailure("run-a", "running", 4, "provider-failed");
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(false);
+  });
+
+  it("forgets the fact once a later model call of the run is answered, and with a pruned run", () => {
+    const hub = new CodingRuntimeEventHub();
+    hub.publishTurnFailure("run-a", "running", 1, "provider-failed", { providerUnavailable: true });
+    hub.noteModelCallAnswered("run-a");
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(false);
+
+    hub.publishTurnFailure("run-a", "running", 2, "provider-failed", { providerUnavailable: true });
+    hub.deleteRuns(["run-a"]);
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(false);
+  });
+
+  it("records nothing for a settled run or for a run id the replay would refuse", () => {
+    const hub = new CodingRuntimeEventHub();
+    hub.publishTurnFailure("run-a", "running", 1, "provider-failed", {
+      providerUnavailable: false,
+    });
+    hub.publish(terminal("run-a", 2));
+    hub.publishTurnFailure("run-a", "running", 3, "provider-failed", { providerUnavailable: true });
+    expect(hub.lastModelCallProviderUnavailable("run-a")).toBe(false);
+
+    hub.publishTurnFailure("../run", "running", 1, "provider-failed", {
+      providerUnavailable: true,
+    });
+    expect(hub.lastModelCallProviderUnavailable("../run")).toBe(false);
+  });
+
+  it("never puts the fact in the public frame", () => {
+    const hub = new CodingRuntimeEventHub();
+    hub.publishTurnFailure("run-a", "running", 1, "provider-failed", { providerUnavailable: true });
+    const replay = hub.replay("run-a");
+    if (!replay.ok) throw new Error("expected a replay");
+    expect(replay.events).toHaveLength(1);
+    expect(JSON.stringify(replay.events)).not.toContain("providerUnavailable");
+    expect(replay.events[0]).toMatchObject({
+      eventKind: "failure-redacted",
+      failureCode: "provider-failed",
+    });
+  });
+});
+
 describe("CodingRuntimeEventHub", () => {
   it("retains every redacted gateway failure when separate turns share a task revision", () => {
     const hub = new CodingRuntimeEventHub({ maxEvents: 3 });

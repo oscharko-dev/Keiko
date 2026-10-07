@@ -1,7 +1,6 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
-  AuthenticationError,
   CancelledError,
   CircuitOpenError,
   ContextOverflowError,
@@ -136,6 +135,12 @@ export function _resetActiveCodingGatewayRequestsForTests(): void {
 interface PromptTokenReservation {
   readonly capability: string;
   readonly reservedPromptTokens: number;
+  /**
+   * The opaque identity the admitted reservation answered (#3873 run effort roll-up), handed back
+   * with the settlement so the call is timed from its own reservation, never from another call's
+   * of the same size. Absent when the authenticator answered none.
+   */
+  readonly modelCallId?: number | undefined;
   settled: boolean;
   settlement?: PromptTokenSettlement;
 }
@@ -229,11 +234,19 @@ function applyPromptTokenSettlement(
     reservation.settlement = { ...selected, status: "not-wired" };
     return reservation.settlement;
   }
-  const outcome = authenticator.settlePromptTokens(
-    reservation.capability,
-    reservation.reservedPromptTokens,
-    usage.promptTokens,
-  );
+  const outcome =
+    reservation.modelCallId === undefined
+      ? authenticator.settlePromptTokens(
+          reservation.capability,
+          reservation.reservedPromptTokens,
+          usage.promptTokens,
+        )
+      : authenticator.settlePromptTokens(
+          reservation.capability,
+          reservation.reservedPromptTokens,
+          usage.promptTokens,
+          reservation.modelCallId,
+        );
   reservation.settlement = observedPromptSettlement(outcome, selected, unverified);
   return reservation.settlement;
 }
@@ -536,6 +549,13 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
       required: true,
       values: ["allowed", "refused"],
     },
+    // #3873 review (PR #3876): `provider-failed` names a provider that rejected the turn and one that
+    // stayed unavailable alike. `true` marks the second — a retryable provider status (408, 429,
+    // 5xx), a rate limit or an open breaker that outlasted the gateway's outage window — so a run
+    // that ends on this failure settles `provider-unavailable` and the log shows why. Absent for
+    // every other failure; `required: false` because a line written before this field existed
+    // lacks it.
+    providerUnavailable: { type: "boolean", dataClass: "closed-enum", required: false },
     ...OUTPUT_REPAIR_FIELDS,
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
@@ -1969,9 +1989,23 @@ function reportGatewayTurnFailure(
   const { failureCode, runtimeRetry, error } = failure;
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
   if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
-  const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
+  const providerUnavailable = failureCode === "provider-failed" && providerUnavailableFault(error);
+  const publicationReason = gatewayTurnFailurePublication(
+    deps,
+    runId,
+    snapshot,
+    failureCode,
+    providerUnavailable,
+  );
   const run = { revision: snapshot.revision, state: snapshot.state };
-  logGatewayTurnFailure(ctx, runId, run, failureCode, { publicationReason, runtimeRetry }, error);
+  logGatewayTurnFailure(
+    ctx,
+    runId,
+    run,
+    failureCode,
+    { publicationReason, runtimeRetry, providerUnavailable },
+    error,
+  );
   return true;
 }
 
@@ -2001,12 +2035,14 @@ function gatewayTurnFailurePublication(
   runId: string,
   snapshot: CodingWorkbenchRuntimeSnapshot,
   failureCode: CodingWorkbenchTurnFailureCode,
+  providerUnavailable: boolean,
 ): GatewayFailurePublicationReason {
   const publication = deps.codingRuntimeEventHub?.publishTurnFailure(
     runId,
     snapshot.state,
     snapshot.revision,
     failureCode,
+    { providerUnavailable },
   );
   const publicationReason =
     publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");
@@ -2124,9 +2160,11 @@ function logGatewayTurnFailure(
   {
     publicationReason,
     runtimeRetry,
+    providerUnavailable,
   }: {
     readonly publicationReason: GatewayFailurePublicationReason;
     readonly runtimeRetry: RuntimeRetry;
+    readonly providerUnavailable: boolean;
   },
   error: unknown,
 ): void {
@@ -2146,6 +2184,9 @@ function logGatewayTurnFailure(
         published: publicationReason === "published",
         publicationReason,
         runtimeRetry,
+        // Present only when the provider could not serve the call (a retryable status, a rate limit,
+        // an open breaker): the fact a run that ends on this failure settles `provider-unavailable`.
+        ...(providerUnavailable ? { providerUnavailable } : {}),
         // The turn failed with a settled gateway error, which says whether a repair ran.
         ...repairEvidence(settledRepair(outputRepairOf(error))),
         ...(error === undefined || frames === undefined ? {} : { frames }),
@@ -2176,30 +2217,49 @@ function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | 
   return undefined;
 }
 
-function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
-  const modelCause = modelTurnFailureCode(error);
-  if (modelCause !== undefined) return modelCause;
-  if (
+// A gateway error that says the call stopped answering rather than that it was refused: a timeout, a
+// refused or dropped connection, a stream that ended without its terminal answer (HTTP 200).
+function isStreamInterruption(error: unknown): boolean {
+  return (
     error instanceof TimeoutError ||
     error instanceof TransportError ||
     (error instanceof ProviderError && error.httpStatus === 200)
-  )
-    return "stream-incomplete";
-  return "provider-failed";
+  );
 }
 
+function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+  const modelCause = modelTurnFailureCode(error);
+  if (modelCause !== undefined) return modelCause;
+  return isStreamInterruption(error) ? "stream-incomplete" : "provider-failed";
+}
+
+// The streamed path names `stream-incomplete` only for a call that stopped answering: an
+// interruption, or a failure that is no gateway error at all (a decoder or socket fault inside the
+// stream). Every other gateway error — a refused credential, a configuration or egress refusal, an
+// unknown model, a provider status — is named `provider-failed`, as the buffered path always named
+// it. Before (#3873 review, PR #3876) the default bucket was `stream-incomplete`, so a configuration
+// or egress error that reached the stream settled the whole run `provider-unavailable`: "nothing was
+// rejected, check that the gateway is running".
 function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
   if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
   const modelCause = modelTurnFailureCode(error);
   if (modelCause !== undefined) return modelCause;
-  if (
-    error instanceof AuthenticationError ||
-    error instanceof RateLimitError ||
-    error instanceof CircuitOpenError ||
-    (error instanceof ProviderError && error.httpStatus !== 200)
-  )
-    return "provider-failed";
-  return "stream-incomplete";
+  return error instanceof GatewayError && !isStreamInterruption(error)
+    ? "provider-failed"
+    : "stream-incomplete";
+}
+
+// Whether the provider could not serve the call, as opposed to rejecting it: a retryable provider
+// status (408, 429, 5xx), a rate limit or an open breaker. `provider-failed` names both alike, and
+// the gateway has by now retried through its outage window, so such a failure means the provider
+// stayed unavailable (#3873 review, F10). Positively identified from the error, never inferred from
+// the turn-failure bucket; an output-exhausted or empty answer is an HTTP 200 and never one.
+function providerUnavailableFault(error: unknown): boolean {
+  if (error instanceof RateLimitError || error instanceof CircuitOpenError) return true;
+  return (
+    error instanceof ProviderError &&
+    (error.httpStatus === 408 || error.httpStatus === 429 || error.httpStatus >= 500)
+  );
 }
 
 type RuntimeRetry = "allowed" | "refused";
@@ -2313,7 +2373,12 @@ interface RuntimeCapabilityAuthenticator {
   readonly reservePromptTokens?:
     ((capability: string, promptTokens: number) => unknown) | undefined;
   readonly settlePromptTokens?:
-    | ((capability: string, reservedPromptTokens: number, actualPromptTokens: number) => unknown)
+    | ((
+        capability: string,
+        reservedPromptTokens: number,
+        actualPromptTokens: number,
+        modelCallId?: number,
+      ) => unknown)
     | undefined;
   // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the real per-run fact behind the
   // outgoing tool-catalog advertisement's readiness (#3413-AC1/#3414-AC4/AC9). `undefined` for a
@@ -2377,6 +2442,15 @@ function runtimeAdapterKind(value: unknown): RuntimeAdapterKind | undefined {
 function promptReservationRunId(value: unknown): string | undefined {
   if (!isRecord(value) || value.ok !== true) return undefined;
   return typeof value.runId === "string" && value.runId.length > 0 ? value.runId : undefined;
+}
+
+// The identity an admitted reservation answers beside its run, when it answers one: a safe integer
+// the settlement hands back verbatim. Anything else is no identity, and the call is then untracked.
+function promptReservationModelCallId(value: unknown): number | undefined {
+  if (!isRecord(value) || value.ok !== true) return undefined;
+  return typeof value.modelCallId === "number" && Number.isSafeInteger(value.modelCallId)
+    ? value.modelCallId
+    : undefined;
 }
 
 function gatewayReadinessRegistry(
@@ -2649,9 +2723,14 @@ function reserveGatewayPromptBudget(
     capability,
     reservedPromptTokens,
   );
-  return promptReservationRunId(reserved) === runId
-    ? { capability, reservedPromptTokens, settled: false }
-    : undefined;
+  if (promptReservationRunId(reserved) !== runId) return undefined;
+  const modelCallId = promptReservationModelCallId(reserved);
+  return {
+    capability,
+    reservedPromptTokens,
+    ...(modelCallId === undefined ? {} : { modelCallId }),
+    settled: false,
+  };
 }
 
 function isAvailableGatewayProfile(

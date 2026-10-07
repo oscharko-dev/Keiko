@@ -12,7 +12,12 @@ import type {
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
-import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolDelegatePort,
+  CodingToolMutationGuard,
+  EditPrepareCause,
+  EditReadReason,
+} from "./codingToolFacadePorts.js";
 import type {
   CiRepairExecutionBudget,
   CiRepairExecutionLease,
@@ -59,11 +64,15 @@ export type GovernedCodingToolResult =
   // `reasonCode` is a closed-vocabulary marker. The facade forwards only its own allowlisted,
   // body-free codes and collapses every unrecognized value to a bare failed outcome. `message` is
   // the editor route's own sentence for a refused edit; only an edit carries it, and the facade
-  // decides whether the model sees it.
+  // decides whether the model sees it. `prepareCause` and `readReason` are closed words an edit's
+  // `EDIT_PREPARE_FAILED` refusal carries beside its code: they are for the run's refusal
+  // escalation, never for the model.
   | {
       readonly status: "failed";
       readonly reasonCode?: string | undefined;
       readonly message?: string | undefined;
+      readonly prepareCause?: EditPrepareCause | undefined;
+      readonly readReason?: EditReadReason | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
       /** The steps of a verification that never executed, each with its closed reason (F74). */
       readonly notRun?: readonly VerificationNotRunStep[] | undefined;
@@ -210,9 +219,24 @@ function governedFailureOutcome(
   if (action === "verification" && result.notRun !== undefined) {
     return { outcome: "failed", reasonCode: result.reasonCode, notRun: result.notRun };
   }
-  return action === "edit" && result.message !== undefined
-    ? { outcome: "failed", reasonCode: result.reasonCode, message: result.message }
+  return action === "edit"
+    ? editFailureOutcome(result)
     : { outcome: "failed", reasonCode: result.reasonCode };
+}
+
+// A refused edit keeps the editor route's sentence and, for a refusal raised while preparing the
+// edit, its closed cause: the facade decides what the model sees, and tells the run's refusal bound
+// the rest.
+function editFailureOutcome(
+  result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
+): unknown {
+  return {
+    outcome: "failed",
+    reasonCode: result.reasonCode,
+    ...(result.message === undefined ? {} : { message: result.message }),
+    ...(result.prepareCause === undefined ? {} : { prepareCause: result.prepareCause }),
+    ...(result.readReason === undefined ? {} : { readReason: result.readReason }),
+  };
 }
 
 function gitOutcome(

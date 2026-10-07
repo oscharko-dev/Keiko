@@ -186,6 +186,8 @@ interface OpenCodeRuntimeCompositionModule {
     };
     readonly onRuntimeEvent?: (event: CodingWorkbenchRuntimeEvent) => void;
     readonly onQuestionObserved?: (identity: string) => void;
+    /** The run id under which each delivered tool result's model-facing rendering is recorded. */
+    readonly toolResultCorrelationId?: string;
     readonly gatewayReadiness: {
       readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
       readonly verifyObserved: (runId: string) => void;
@@ -368,6 +370,8 @@ interface StartBridgeControl {
   readonly questionObservations?: string[];
   readonly safeActivity?: FixtureSafeActivity;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** Records each delivered tool result's rendering under this run id, on `activityLog`. */
+  readonly toolResultCorrelationId?: string;
   readonly runtimeEvents?: CodingWorkbenchRuntimeEvent[];
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   /** The gateway route refused the readiness challenge's model request (#3603). */
@@ -445,6 +449,14 @@ function optionalActivityLog(control: StartBridgeControl | undefined): {
   readonly activityLog?: ServerLogSink;
 } {
   return control?.activityLog === undefined ? {} : { activityLog: control.activityLog };
+}
+
+function optionalToolResultCorrelation(control: StartBridgeControl | undefined): {
+  readonly toolResultCorrelationId?: string;
+} {
+  return control?.toolResultCorrelationId === undefined
+    ? {}
+    : { toolResultCorrelationId: control.toolResultCorrelationId };
 }
 
 async function startBridgeFixture(
@@ -634,6 +646,7 @@ async function startBridgeFixture(
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
     ...optionalActivityLog(control),
+    ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> =>
@@ -1279,6 +1292,237 @@ describe("private OpenCode run control", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // PR #3876 review: OpenCode 2.0.10 persists a streamed text or reasoning part only empty and
+  // complete, so the live timeline is fed from the event stream's ephemeral delta events through the
+  // history projection, and the events the coalescing pump folds into one read are counted on the
+  // projection's line. These run the production wiring end to end: the SSE stream, the pump, the
+  // projection, the adapter and the safe activity feed.
+  describe("a streamed answer the history holds empty", () => {
+    const encoder = new TextEncoder();
+    let eventNumber = 0;
+    const frame = (type: string, data: Readonly<Record<string, unknown>> = {}): Uint8Array => {
+      eventNumber += 1;
+      const event = {
+        id: `evt_live_${String(eventNumber)}`,
+        type,
+        data: { sessionID: "ses_tool", assistantMessageID: "msg_assistant", ordinal: 0, ...data },
+      };
+      return encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    // The history endpoint lists newest first.
+    const assistantHistory = (
+      content: readonly Record<string, unknown>[],
+    ): readonly Readonly<Record<string, unknown>>[] =>
+      [
+        { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" },
+        { id: "msg_assistant", type: "assistant", time: { created: 2 }, content },
+      ].reverse();
+    const grown = (
+      signals: readonly CodingSafeActivitySignal[],
+      kind: "text" | "reasoning",
+    ): string[] =>
+      signals.flatMap((signal) =>
+        signal.kind === kind && signal.messageId === "msg_assistant" ? [signal.text] : [],
+      );
+    const settled = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
+    const activityFeed = (
+      ingested: CodingSafeActivitySignal[],
+    ): NonNullable<StartBridgeControl["safeActivity"]> => ({
+      arm: vi.fn(),
+      clear: vi.fn(),
+      ingest: (signal): boolean => {
+        ingested.push(signal);
+        return true;
+      },
+      recordDrops: vi.fn(),
+      settleTool: vi.fn(),
+    });
+    const projectionLines = (
+      sink: ReturnType<typeof createBufferedServerLogSink>,
+    ): Record<string, unknown>[] =>
+      sink.events
+        .filter((event) => event.op === "coding-runtime.history-projection")
+        .map((event) =>
+          expectActivityLogProof(
+            "coding-runtime.history-projection.emitted-line",
+            formatActivityLogProofLine(event),
+          ),
+        );
+    const mergedTotal = (sink: ReturnType<typeof createBufferedServerLogSink>): number =>
+      projectionLines(sink).reduce(
+        (sum, line) =>
+          sum + (typeof line.mergedEventCount === "number" ? line.mergedEventCount : 0),
+        0,
+      );
+
+    it("shows reasoning and the answer as the event stream delivers them, and nothing twice once the history completes", async () => {
+      const ingested: CodingSafeActivitySignal[] = [];
+      const historyCalls: Readonly<Record<string, number>>[] = [];
+      const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+      const activityLog = createBufferedServerLogSink();
+      let content: readonly Record<string, unknown>[] = [
+        { type: "reasoning", text: "" },
+        { type: "text", text: "" },
+      ];
+      const fixture = await startBridgeFixture(facade, undefined, {
+        activityLog,
+        historyCalls,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        safeActivity: activityFeed(ingested),
+        historyResponseFactory: () => Promise.resolve(v2Envelope(assistantHistory(content))),
+      });
+      try {
+        const stream = streams[0];
+        if (stream === undefined) throw new Error("expected the event stream");
+        stream.enqueue(frame("session.reasoning.started"));
+        stream.enqueue(frame("session.reasoning.delta", { delta: "Let me " }));
+        stream.enqueue(frame("session.reasoning.delta", { delta: "think." }));
+        await vi.waitFor(() => {
+          expect(grown(ingested, "reasoning").join("")).toBe("Let me think.");
+        });
+        stream.enqueue(frame("session.text.started"));
+        stream.enqueue(frame("session.text.delta", { delta: "It is " }));
+        stream.enqueue(frame("session.text.delta", { delta: "42." }));
+        await vi.waitFor(() => {
+          expect(grown(ingested, "text").join("")).toBe("It is 42.");
+        });
+
+        // The runtime ends the parts: the history shows them complete.
+        content = [
+          { type: "reasoning", text: "Let me think." },
+          { type: "text", text: "It is 42." },
+        ];
+        const reads = historyCalls.length;
+        stream.enqueue(frame("session.text.ended", { text: "It is 42." }));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThan(reads);
+        });
+        stream.enqueue(frame("session.step.ended"));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThan(reads + 1);
+        });
+        await settled();
+
+        expect(grown(ingested, "reasoning").join("")).toBe("Let me think.");
+        expect(grown(ingested, "text").join("")).toBe("It is 42.");
+        // The words travelled as four live deltas; the lines, which count since the previous line,
+        // say how many and that none was lost.
+        const lines = projectionLines(activityLog);
+        const counted = (field: "liveDeltaCount" | "liveDroppedCount"): number =>
+          lines.reduce((sum, line) => sum + (typeof line[field] === "number" ? line[field] : 0), 0);
+        expect(counted("liveDeltaCount")).toBe(4);
+        expect(counted("liveDroppedCount")).toBe(0);
+        expect(lines.every((line) => line.correlationId === FIXTURE_RUN_ID)).toBe(true);
+        expect(JSON.stringify(lines)).not.toContain("think");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("stops extending a part when the event stream is replaced and takes the rest from the history", async () => {
+      const ingested: CodingSafeActivitySignal[] = [];
+      const historyCalls: Readonly<Record<string, number>>[] = [];
+      const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+      let content: readonly Record<string, unknown>[] = [{ type: "reasoning", text: "" }];
+      const fixture = await startBridgeFixture(facade, undefined, {
+        historyCalls,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        safeActivity: activityFeed(ingested),
+        historyResponseFactory: () => Promise.resolve(v2Envelope(assistantHistory(content))),
+      });
+      try {
+        streams[0]?.enqueue(frame("session.reasoning.started"));
+        streams[0]?.enqueue(frame("session.reasoning.delta", { delta: "Hel" }));
+        await vi.waitFor(() => {
+          expect(grown(ingested, "reasoning")).toEqual(["Hel"]);
+        });
+
+        const readsBeforeReplacement = historyCalls.length;
+        streams[0]?.close();
+        await vi.waitFor(() => {
+          expect(streams).toHaveLength(2);
+        });
+        // Events the replaced stream missed are gone: this delta cannot extend the part.
+        streams[1]?.enqueue(frame("session.reasoning.delta", { delta: "lo wor" }));
+        streams[1]?.enqueue(frame("session.step.started"));
+        // The reconnect's own read, then the one this event asks for: the second read has started, so
+        // it read the history while the part was still empty.
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThanOrEqual(readsBeforeReplacement + 2);
+        });
+        content = [{ type: "reasoning", text: "Hello world" }];
+        streams[1]?.enqueue(frame("session.step.ended"));
+        await vi.waitFor(() => {
+          expect(grown(ingested, "reasoning").join("")).toBe("Hello world");
+        });
+
+        expect(grown(ingested, "reasoning")).toEqual(["Hel", "lo world"]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("counts the events merged into one history read on the projection's line", async () => {
+      const ingested: CodingSafeActivitySignal[] = [];
+      const historyCalls: Readonly<Record<string, number>>[] = [];
+      const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+      const activityLog = createBufferedServerLogSink();
+      let content: readonly Record<string, unknown>[] = [{ type: "text", text: "" }];
+      let hold = false;
+      let release: ((response: Response) => void) | undefined;
+      const fixture = await startBridgeFixture(facade, undefined, {
+        activityLog,
+        historyCalls,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        safeActivity: activityFeed(ingested),
+        historyResponseFactory: () =>
+          hold
+            ? new Promise<Response>((resolve) => {
+                release = resolve;
+              })
+            : Promise.resolve(v2Envelope(assistantHistory(content))),
+      });
+      try {
+        const stream = streams[0];
+        if (stream === undefined) throw new Error("expected the event stream");
+        const mergedBefore = mergedTotal(activityLog);
+        const reads = historyCalls.length;
+
+        // One event asks for a read, which waits; ten more arrive meanwhile.
+        hold = true;
+        stream.enqueue(frame("session.step.started"));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBe(reads + 1);
+        });
+        for (let sent = 0; sent < 10; sent += 1) stream.enqueue(frame("session.step.streamed"));
+        await settled();
+
+        // The history changes, so the read in flight writes the projection's line.
+        hold = false;
+        content = [{ type: "text", text: "Hello" }];
+        release?.(v2Envelope(assistantHistory(content)));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBe(reads + 2);
+        });
+        await vi.waitFor(() => {
+          expect(grown(ingested, "text")).toEqual(["Hello"]);
+        });
+
+        // Of the ten, one asked for the next read; the other nine were covered by it.
+        expect(mergedTotal(activityLog) - mergedBefore).toBe(9);
+        expect(projectionLines(activityLog).at(-1)).toMatchObject({ mergedEventCount: 9 });
+      } finally {
+        await fixture.stop();
+      }
+    });
   });
 
   it("observes live fixed-session question frames and ignores foreign or unbound ones", async () => {
@@ -2726,6 +2970,175 @@ describe("private OpenCode tool bridge", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // PR #3876 review (CodeRabbit, outside the diff): a delivered result is recorded, body-free, on the
+  // activity log after the facade has answered — and the facade has by then executed the tool, an
+  // applied edit among them. A sink that cannot take that line used to throw into the catch that
+  // answers 502 and settles the SAME action a second time as failed, so the model read a failure for
+  // a completed action and could repeat it. The record is evidence about the answer, never part of
+  // it: the answer stands and the failure goes to the operator diagnostic.
+  describe("a delivered result whose rendering record cannot be written", () => {
+    const RENDER_OP = "coding-runtime.tool-result-rendered";
+    // A sink that takes every line but the rendering record of the results it is told to refuse. The
+    // readiness challenge's own `observed` result is recorded too, so a test that wants the run to
+    // start refuses `completed` results only.
+    const failingRenderSink = (
+      refuses: "completed" | "every",
+    ): { readonly sink: ServerLogSink; readonly other: string[] } => {
+      const other: string[] = [];
+      return {
+        other,
+        sink: {
+          write: (event): void => {
+            const refused =
+              event.op === RENDER_OP &&
+              (refuses === "every" || event.extra?.resultStatus === "completed");
+            if (refused) throw new Error("PRIVATE_SINK_FAULT");
+            other.push(event.op);
+          },
+        },
+      };
+    };
+    const diagnosticsInto = (
+      records: Parameters<ServerDiagnosticSink["record"]>[0][],
+    ): ServerDiagnosticSink => ({
+      record: (record): void => {
+        records.push(record);
+      },
+    });
+
+    it("still answers 200 with the result, settles the call once as succeeded, and diagnoses the record", async () => {
+      const activity = activityRecorder();
+      const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+      const log = failingRenderSink("completed");
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        safeActivity: activity.safeActivity,
+        activityLog: log.sink,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+        diagnostics: diagnosticsInto(records),
+      });
+      try {
+        await expect(
+          fixture.runtime.toolBridge.handle({
+            method: "POST",
+            headers: new Headers(authorized),
+            body: toolBody("call_render_log_throws"),
+          }),
+        ).resolves.toEqual({ status: 200, body: JSON.stringify(completed) });
+
+        // Exactly one settlement, the call's own: never a second one as failed.
+        expect(activity.settlements).toEqual([
+          expect.objectContaining({ actionId: "tool:call_render_log_throws", state: "succeeded" }),
+        ]);
+        // One operator diagnostic names the record that was lost, content-free and correlated to the
+        // call (the `tool:<callId>` evidence id maps onto `tool-<callId>`, as the facade-failure
+        // diagnostic does).
+        expect(records).toEqual([
+          expect.objectContaining({
+            correlationId: "tool-call_render_log_throws",
+            operation: "coding-runtime.tool-bridge",
+            source: "opencode-runtime-composition.tool-result-render-log",
+            errorClass: "Error",
+            message: "tool-result-render-log-failed",
+          }),
+        ]);
+        expect(JSON.stringify(records)).not.toContain("PRIVATE_SINK_FAULT");
+        // The sink took every other line: only the rendering record was lost.
+        expect(log.other.length).toBeGreaterThan(0);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("does not answer an applied edit as a failure the model could repeat", async () => {
+      const activity = activityRecorder();
+      const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+      const applied = { status: "completed" as const, evidence: [] };
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(applied)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        safeActivity: activity.safeActivity,
+        activityLog: failingRenderSink("completed").sink,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+        diagnostics: diagnosticsInto(records),
+      });
+      try {
+        const answer = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "edit",
+            actionId: "tool:call_applied_edit",
+            idempotencyKey: "idempotency-call_applied_edit",
+            changeset: {
+              patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+              files: [{ file: "a.ts", expectedContentHash: "c".repeat(64) }],
+            },
+          }),
+        });
+
+        expect(answer).toEqual({ status: 200, body: JSON.stringify(applied) });
+        expect(activity.settlements.map((settlement) => settlement.state)).toEqual(["succeeded"]);
+        expect(records.map((record) => record.message)).toEqual(["tool-result-render-log-failed"]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    // The readiness challenge is itself a tool call, answered `observed` and recorded like any other
+    // result: a sink that refuses every rendering record used to fail the run's startup.
+    it("does not fail the run's startup when the sink refuses the readiness challenge's record", async () => {
+      const records: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        activityLog: failingRenderSink("every").sink,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+        diagnostics: diagnosticsInto(records),
+      });
+      try {
+        expect(records.map((record) => record.message)).toContain("tool-result-render-log-failed");
+        expect(records.map((record) => record.message)).not.toContain("runtime-handshake-failed");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("records the rendering under the run's correlation when the sink takes it", async () => {
+      const log = createBufferedServerLogSink();
+      const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+      const fixture = await startBridgeFixture(facade, undefined, {
+        activityLog: log,
+        toolResultCorrelationId: FIXTURE_RUN_ID,
+      });
+      try {
+        await expect(
+          fixture.runtime.toolBridge.handle({
+            method: "POST",
+            headers: new Headers(authorized),
+            body: toolBody("call_render_log_ok"),
+          }),
+        ).resolves.toMatchObject({ status: 200 });
+
+        const rendered = log.events.filter(
+          (event) => event.op === RENDER_OP && event.extra?.resultStatus === "completed",
+        );
+        expect(rendered).toHaveLength(1);
+        expect(
+          expectActivityLogProof(
+            "coding-runtime.tool-result-rendered.emitted-line",
+            formatActivityLogProofLine(rendered[0] ?? {}),
+          ),
+        ).toMatchObject({
+          correlationId: FIXTURE_RUN_ID,
+          framing: "json",
+          textBlockCount: 0,
+          resultStatus: "completed",
+        });
+      } finally {
+        await fixture.stop();
+      }
+    });
   });
 
   it("degrades an overridden Error.name to a content-free class in the diagnostic", async () => {

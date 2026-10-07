@@ -890,6 +890,16 @@ configuration sets `codingStreaming: "off"`, when the model's capability does no
 coding runtime sent its request without `stream: true`, or when a proxy between Keiko and the model
 ignores `stream` and answers with one JSON body.
 
+A turn the gateway streams can still reach the timeline in one piece when the runtime's delta
+events do not reach it. OpenCode persists a streamed reasoning or answer part only empty, when its
+block starts, and complete, when the response ends, so the timeline cannot read the words in
+between from the runtime's history; it takes them from the runtime's ephemeral delta events
+(`session.reasoning.delta`, `session.text.delta`). A part the timeline did not see starting, and
+every part a replaced event stream had been feeding, is not extended again, because a gap in the
+middle of a text would show words the model never wrote in that order; such a part shows what it
+has until the history shows it complete. A run whose event stream drops and reconnects repeatedly
+therefore shows more of its answer at the end than while it streams.
+
 **Diagnostic Steps**
 
 `keiko support analyze <report.json> --correlation-id <runId>`, then per model turn:
@@ -905,6 +915,16 @@ ignores `stream` and answers with one JSON body.
   answer whose oversized reasoning was withheld), and `coding-runtime.history-projection`
   `reasoningSignalCount` the reasoning pieces a history read prepared for the timeline, before the
   timeline accepts them.
+- `coding-runtime.history-projection` also counts, since its previous line and never as text, what
+  reached the timeline from the runtime's delta events: `liveDeltaCount` is the deltas that grew a
+  live part (zero over a turn the gateway streamed means the delta events never reached the
+  timeline), `liveDroppedCount` the deltas that extended nothing (a part not seen starting, a part
+  the replaced event stream had been feeding, a part at its bound, a malformed delta),
+  `liveDivergedCount` the parts whose complete text did not extend the text already shown (the
+  timeline keeps what it showed), and `mergedEventCount` the runtime events folded into an earlier
+  history read, which is how many events one read stood for when the timeline lags.
+  `coding-runtime.sidecar-session.bound` with `binding: reused` marks an event stream that was
+  replaced mid-run.
 - A coding turn read with `gateway.stream.started` streams live, unless its
   `chat.response.streamed` line says `outcome: whole-body` (a proxy that ignored `stream` and
   answered with one JSON body). `gateway.chat.started` means the turn was buffered:
@@ -920,6 +940,11 @@ ignores `stream` and answers with one JSON body.
 - Remove `codingReasoningDisplay: "off"` and `codingStreaming: "off"` from the gateway
   configuration to restore the defaults (both `"on"`; the only accepted values are `"on"` and
   `"off"`).
+- A high `liveDroppedCount` beside a streamed turn means the event stream was interrupted or the
+  runtime sent deltas the timeline could not attach to a part. Nothing is lost: the complete answer
+  and reasoning arrive when the runtime ends the parts. Find why the event stream keeps dropping
+  (`coding-runtime.sidecar-session.bound` lines with `binding: reused`, then the loopback runtime's
+  own health).
 - Shown reasoning is unverified model output. It is never kept in Coding History, evidence, a
   support export or the Activity Log, which record only its counts.
 

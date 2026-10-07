@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "08fc652733cded3cf2b3dda8831d974e745e030bf7eb1fb6d2b55c15addfb657" as const;
+  "b947ebc2a00d09d5c9664c9480ffe949f80387d7083113ba14ff3c6ad09b9633" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8499,6 +8499,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "prepareCause",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "readReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "reasonCode",
               type: "string",
               dataClass: "closed-enum",
@@ -8511,10 +8523,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "refusalCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "runId",
               type: "string",
               dataClass: "opaque-id",
               required: true,
+            },
+            {
+              name: "unrepairableCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
           ],
           evidenceClasses: [
@@ -9695,6 +9719,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "liveDeltaCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "liveDivergedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "liveDroppedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "mergedEventCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "reasoningSignalCount",
               type: "integer",
               dataClass: "count",
@@ -10484,6 +10532,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "providerUnavailable",
+              type: "boolean",
+              dataClass: "closed-enum",
               required: false,
             },
             {

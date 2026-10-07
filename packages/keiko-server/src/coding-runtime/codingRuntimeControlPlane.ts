@@ -334,7 +334,10 @@ function createControlPlaneOrchestrator(
  * prompt allowance and the envelope duration from the runtime host's authority.
  */
 export function codingRuntimeTerminalFacts(
-  eventHub: Pick<CodingRuntimeEventHub, "lastModelCallFailure">,
+  eventHub: Pick<
+    CodingRuntimeEventHub,
+    "lastModelCallFailure" | "lastModelCallProviderUnavailable"
+  >,
   runtimeHost:
     Pick<CodingRuntimeHost, "promptAllowanceExhausted" | "envelopeDurationExhausted"> | undefined,
 ): CodingRuntimeTerminalFacts {
@@ -342,6 +345,7 @@ export function codingRuntimeTerminalFacts(
     promptAllowanceExhausted: (runId) => runtimeHost?.promptAllowanceExhausted?.(runId) === true,
     envelopeDurationExhausted: (runId) => runtimeHost?.envelopeDurationExhausted?.(runId) === true,
     lastModelCallFailure: (runId) => eventHub.lastModelCallFailure(runId),
+    lastModelCallProviderUnavailable: (runId) => eventHub.lastModelCallProviderUnavailable(runId),
   };
 }
 

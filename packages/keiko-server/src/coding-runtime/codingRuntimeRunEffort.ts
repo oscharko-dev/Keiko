@@ -6,7 +6,10 @@
 // - model calls at the run's model-gateway capability boundary. The coding sidecar gateway
 //   reserves each call's prompt estimate against the run authority immediately before dispatching
 //   it, and settles the reservation immediately after the provider answered or failed; a settlement
-//   of zero tokens releases a call that was never dispatched. A settled count that differs from the
+//   of zero tokens releases a call that was never dispatched. The reservation answers an opaque call
+//   identity and the settlement names it, so a call's duration is always measured from its own
+//   reservation: pairing by reservation size alone measured a released call and an answered one of
+//   the same size from each other's start (#3873 review). A settled count that differs from the
 //   reserved estimate is the provider's own report. One equal to it may be the kept estimate, so it
 //   is not counted: `promptTokensTotal` never presents an estimate as a provider count;
 // - governed tool calls at the run's tool facade, which knows each call's action and its answer;
@@ -14,8 +17,8 @@
 //   them, and which knows how long the run waited on a human.
 //
 // Bounded like `codingRuntimeContextUsage`: the most recent runs, and a bounded list of open model
-// calls per run. A call that cannot be paired, or a run this process did not start, is not counted
-// (fail closed); nothing is guessed.
+// calls per run. A settlement that names no open call, or a run this process did not start, is not
+// counted (fail closed); nothing is guessed.
 import type { CodingToolAction, CodingToolResult } from "./codingToolIpc.js";
 
 const MAX_RETAINED_RUNS = 16;
@@ -41,14 +44,27 @@ export interface CodingRuntimeRunEffortRollUp extends CodingRuntimeHostRunEffort
   readonly operatorWaitMs: number;
 }
 
+/** The identity a reserved model call answers, which its settlement names. Opaque and never reused. */
+export type CodingRuntimeModelCallId = number;
+
 export interface CodingRuntimeRunEffortRegistry {
   readonly read: (runId: string) => CodingRuntimeHostRunEffort | undefined;
-  /** The run's model-gateway capability reserved the prompt estimate of a call it dispatches. */
-  readonly modelCallReserved: (runId: string, reservedPromptTokens: number) => void;
-  /** The same capability settled a reservation with the call's settled prompt count. */
-  readonly modelCallSettled: (
+  /**
+   * The run's model-gateway capability reserved the prompt estimate of a call it dispatches. Answers
+   * the call's identity, or `undefined` for an estimate that is not a count (nothing is tracked).
+   */
+  readonly modelCallReserved: (
     runId: string,
     reservedPromptTokens: number,
+  ) => CodingRuntimeModelCallId | undefined;
+  /**
+   * The same capability settled the call it reserved, naming it, with the call's settled prompt
+   * count; zero releases a call that was never dispatched. A settlement that names no open call of
+   * the run is not counted.
+   */
+  readonly modelCallSettled: (
+    runId: string,
+    modelCallId: CodingRuntimeModelCallId | undefined,
     settledPromptTokens: number,
   ) => void;
   /** The run's tool facade answered one call, naming its closed action when the call named one. */
@@ -60,6 +76,7 @@ export interface CodingRuntimeRunEffortRegistry {
 }
 
 interface OpenModelCall {
+  readonly id: CodingRuntimeModelCallId;
   readonly reservedPromptTokens: number;
   readonly startedAtMs: number;
 }
@@ -118,15 +135,13 @@ function retained<T>(records: Map<string, T>, runId: string, create: () => T, li
   return created;
 }
 
-// Oldest first among reservations of one size: however concurrent calls of one size are paired,
-// the sum of their durations is the same, so the total stays exact.
+// The open call a settlement names, removed once taken: a call is settled or released exactly once,
+// and never against another call's reservation.
 function takeOpenCall(
   record: HostEffortRecord,
-  reservedPromptTokens: number,
+  modelCallId: CodingRuntimeModelCallId,
 ): OpenModelCall | undefined {
-  const index = record.openModelCalls.findIndex(
-    (call) => call.reservedPromptTokens === reservedPromptTokens,
-  );
+  const index = record.openModelCalls.findIndex((call) => call.id === modelCallId);
   return index < 0 ? undefined : record.openModelCalls.splice(index, 1)[0];
 }
 
@@ -176,6 +191,7 @@ export function createCodingRuntimeRunEffortRegistry(
 ): CodingRuntimeRunEffortRegistry {
   const nowMs = options.nowMs ?? Date.now;
   const records = new Map<string, HostEffortRecord>();
+  let nextModelCallId = 1;
   const recordFor = (runId: string): HostEffortRecord =>
     retained(records, runId, newHostRecord, MAX_RETAINED_RUNS);
   return {
@@ -183,16 +199,21 @@ export function createCodingRuntimeRunEffortRegistry(
       const record = records.get(runId);
       return record === undefined ? undefined : hostEffort(record);
     },
-    modelCallReserved: (runId, reservedPromptTokens): void => {
-      if (!validCount(reservedPromptTokens)) return;
+    modelCallReserved: (runId, reservedPromptTokens): CodingRuntimeModelCallId | undefined => {
+      if (!validCount(reservedPromptTokens)) return undefined;
       const open = recordFor(runId).openModelCalls;
-      open.push({ reservedPromptTokens, startedAtMs: nowMs() });
+      const id = nextModelCallId;
+      nextModelCallId += 1;
+      open.push({ id, reservedPromptTokens, startedAtMs: nowMs() });
       if (open.length > MAX_OPEN_MODEL_CALLS) open.shift();
+      return id;
     },
-    modelCallSettled: (runId, reservedPromptTokens, settledPromptTokens): void => {
+    modelCallSettled: (runId, modelCallId, settledPromptTokens): void => {
       const record = records.get(runId);
-      if (record === undefined || !validCount(settledPromptTokens)) return;
-      const call = takeOpenCall(record, reservedPromptTokens);
+      if (record === undefined || modelCallId === undefined || !validCount(settledPromptTokens)) {
+        return;
+      }
+      const call = takeOpenCall(record, modelCallId);
       if (call !== undefined) settleModelCall(record, call, settledPromptTokens, nowMs());
     },
     toolSettled: (runId, action, status): void => {

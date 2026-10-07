@@ -610,6 +610,31 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
   });
 
+  // #3873 review (PR #3876): a CI-repair run's own prompt budget refuses a call before the authority
+  // is asked, so the authority never recorded the refusal and the run settled `model-turn-failed`,
+  // naming no limit. The refusal is recorded where the authority's own is, so the run's settlement
+  // names its prompt allowance — with the same rules: the active run's, superseded by the next
+  // admission.
+  it("reports the prompt allowance a CI-repair budget refused, as it reports its own refusal", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const capability = minted.modelGatewayCapability;
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+
+    authority.recordCiRepairPromptRefusal("run-1");
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+    // Only the active run's refusals count: a stray run id never rewrites what ended this run.
+    authority.recordCiRepairPromptRefusal("run-other");
+    expect(authority.promptAllowanceExhausted("run-other")).toBe(false);
+
+    // The next admission of the run describes the call that ended its turn instead.
+    expect(authority.reservePromptTokens(capability, 5, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+  });
+
   it("does not report the prompt allowance for a spent runtime or a refused run state", () => {
     const afterRuntimeBudget = Date.parse("2026-07-11T12:01:00.001Z");
     const spent = promptBudgetService();

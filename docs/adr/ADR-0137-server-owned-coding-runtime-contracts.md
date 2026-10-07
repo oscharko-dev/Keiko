@@ -176,23 +176,42 @@ qualification, #3873). A run whose workspace had no connected Workbench logged e
 `coding-runtime.edit.refused` lines with `NO_ACTIVE_SESSION` until the operator stopped it: nothing
 above the edit port counted the refusals, and the model resent an edit no change of its own could
 make apply. Each run's tool facade now reports every applied or refused governed edit, as the model
-received it, to the orchestrator, which counts the run's consecutive refusals with the same closed
-reason code. Other tool calls between two refused edits do not interrupt the count — re-reading the
-file is exactly what the refusal guidance asks for — while an applied edit or a refusal with another
-reason restarts it, and a human's rejection of a change in its review is a decision, never a refusal
-(ADR-0124 D6). Refusals that land while an operator has the run paused are not counted. A refusal the model cannot repair by changing its edit — no connected Workbench editor
+received it, to the orchestrator, which counts the run's refusals since its last applied edit,
+whatever their closed reason codes. (The first version counted refusals with the same code and
+restarted on any other; a model that alternated two refusals — an edit that does not match, a stale
+re-read, an edit that does not match again — repeated no code, was never bounded and spent the whole
+prompt allowance: PR #3876 review.) Other tool calls between two refused edits do not interrupt the
+streak — re-reading the file is exactly what the refusal guidance asks for — while an applied edit
+ends it. A human's rejection of a change in its review is a decision, never a refusal (ADR-0124 D6),
+and an edit whose preparation was cancelled says nothing about the edit: neither counts. Refusals
+that land while an operator has the run paused are not counted. Two counts run over the streak. The
+refusals the model cannot repair by changing its edit — no connected Workbench editor
 (`NO_ACTIVE_SESSION`, `NO_ACTIVE_BRIDGE`), lost workspace access, a denied path or policy
 (`OUT_OF_SCOPE`, `POLICY_DENIED`, `APPROVAL_REQUIRED`), a buffer only the operator can save, an
-editor or transport fault — settles the run `failed` with `edits-blocked` at the third consecutive
-occurrence (`UNREPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal the model can repair — an edit that does
-not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
-precondition, or a refusal that carried no closed code — keeps its guidance and settles the run with
-`edit-retries-exhausted` at the sixth (`REPAIRABLE_EDIT_REFUSAL_BOUND`). The escalation writes one
-`coding-runtime.run.refusal-escalated` line (`reasonCode`, `refusalClass`, `consecutiveCount`,
-`bound`, `failureCode`); the run then settles through the same path as a failed turn, its runtime
-stopped and its changes kept in the task workspace, and `coding-runtime.run.settled` carries the
-cause with `failureBasis: "refusal-escalation"` and `refusalReasonCode`. The bounds are fixed: every
-refused attempt resends the run's growing context, so a loop spends the prompt allowance on nothing.
+editor or transport fault, and an edit the port refused while preparing it for a cause the model
+cannot change (below) — settle the run `failed` with `edits-blocked` once three of them stand in the
+streak (`UNREPAIRABLE_EDIT_REFUSAL_BOUND`). Every refusal counts toward the second bound: an edit that
+does not apply (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a
+missing precondition, an invalid changeset, or a refusal that carried no closed code keeps its
+guidance, and six refusals of any kind in the streak settle the run with `edit-retries-exhausted`
+(`REPAIRABLE_EDIT_REFUSAL_BOUND`). A refusal that meets both bounds at once is named by the
+unrepairable one: three refusals the environment dictated say more than six of any kind.
+`EDIT_PREPARE_FAILED` is classified by its cause, not by its code alone: the edit port gives the
+facade the closed step that refused the edit before the editor route saw it and, for a failed
+governed read of a file the edit names, the closed read reason, and the facade reports both beside
+the code — never to the model. Only an invalid changeset (`changeset-invalid`) is the model's own
+input. A lost workspace, a guard or producer binding that no longer holds, an editor context or
+mutation lease that could not be had, and a read that did not answer (not text, too large, denied, an
+unavailable workspace) are conditions no edit the model writes changes. The escalation writes one
+`coding-runtime.run.refusal-escalated` line: `reasonCode` is the latest refusal's closed code;
+`refusalClass`, `consecutiveCount`, `bound` and `failureCode` describe the count that met its bound
+(`unrepairable` at three for `edits-blocked`, `repairable` at six for `edit-retries-exhausted`);
+`refusalCount` and `unrepairableCount` carry both counts; and `prepareCause` and `readReason` are the
+latest refusal's closed words when it had them. The run then settles through the same path as a
+failed turn, its runtime stopped and its changes kept in the task workspace, and
+`coding-runtime.run.settled` carries the cause with `failureBasis: "refusal-escalation"` and
+`refusalReasonCode`. The bounds are fixed: every refused attempt resends the run's growing context,
+so a loop spends the prompt allowance on nothing.
 
 **A paused run says what it is waiting for.** `paused` covers two different situations and the
 operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
@@ -256,38 +275,54 @@ flight (`coding-sidecar.gateway.outcome` `cancelled`, `cancellationCause=run-sto
 the orchestrator reads, before it stops the runtime, the facts the owning layers hold: the runtime
 authority answers whether the run's most recent model-call admission was refused by the cumulative
 prompt allowance itself (not by the runtime's time budget, expiry, revocation, or a run state that
-admits no model call) and whether the run's envelope ran out of time (`maxRuntimeMs` after minting
-or `expiresAt`, whichever comes first), and the control plane's event hub keeps the closed cause the
-coding sidecar gateway reported for the run's most recent failed model call until a later call of
-the run is answered. In that order, the run settles `prompt-allowance-exhausted`,
+admits no model call; a refusal by the run's CI-repair prompt budget, which counts the same
+`maxPromptTokens` over the repair and answers before the authority is asked, is recorded in the same
+place, so it names the limit as well) and whether the run's envelope ran out of time (`maxRuntimeMs`
+after minting or `expiresAt`, whichever comes first), and the control plane's event hub keeps the
+closed cause the coding sidecar gateway reported for the run's most recent failed model call until a
+later call of the run is answered, with the gateway's own fact that the provider could not serve
+that call. In that order, the run settles `prompt-allowance-exhausted`,
 `envelope-duration-exhausted`, `output-exhausted-repeated` (the gateway's `output-exhausted`, which
 ends a run only after the gateway's one steered repair or the runtime's retries exhausted the budget
-again), `provider-unavailable` (the gateway's `stream-incomplete`: a timeout, a refused or dropped
-connection, a stream that broke before the answer completed), or `model-turn-failed` (any other
-failed-call cause, which the failed turn's own frame names), and `runtime-failed` (the runtime
-crashed or failed internally) only when no such cause is on record. A run whose refused edits
-escalated (above) comes before all of these facts: it settles `edits-blocked` or
-`edit-retries-exhausted` whatever its last model call reported. A run that is stopped settles
-`cancelled`, as before. The Workbench says the run was stopped and that nothing failed, and never
-who stopped it: the operator's Stop and `shutdown()` — which ends the live run when the server goes
-away (an update, a restart, a machine shutdown) — take the same stop path, so the settled snapshot
-and its terminal status event are identical, and only `coding-runtime.run.shutdown` in the
-server's Activity Log names a shutdown. An earlier text claimed "You stopped this run" for every
-`cancelled` run, which blamed the operator for a restart (#3873 review). Nothing is read from
-OpenCode's error text. `coding-runtime.run.settled` records the cause with `failureBasis`
+again), `provider-unavailable`, or `model-turn-failed` (any other failed-call cause, which the
+failed turn's own frame names), and `runtime-failed` (the runtime crashed or failed internally) only
+when no such cause is on record. `provider-unavailable` is the provider that could not be reached,
+stopped answering, or stayed down: the gateway's `stream-incomplete` (a timeout, a refused or
+dropped connection, a stream that broke before the answer completed), or its `provider-failed`
+together with the gateway's fact that the call ended on a retryable provider status (408, 429, 5xx),
+a rate limit or an open breaker once its outage window had passed (F10). That fact is positively
+identified from the error — `provider-failed` alone still names a provider that rejected the turn,
+so a 4xx, a refused credential or a configuration error settles `model-turn-failed` — and it is
+published beside the cause, never in the public failure frame: the gateway's
+`coding-sidecar.gateway.turn-failed` line carries `providerUnavailable` when it holds, so the
+settlement can be traced to the call it read. The streamed path no longer files every gateway error
+it has no rule for under `stream-incomplete`: a configuration or egress refusal, an unknown model or
+a refused credential is `provider-failed` there as on the buffered path (and, being no outage, is
+final for the runtime), so it can no longer settle a run "nothing was rejected, check that the
+gateway is running" (PR #3876 review). A run whose refused edits escalated (above) comes before all
+of these facts: it settles `edits-blocked` or `edit-retries-exhausted` whatever its last model call
+reported. A run that is stopped settles `cancelled`, as before. The Workbench says the run was
+stopped and that nothing failed, and never who stopped it: the operator's Stop and `shutdown()` —
+which ends the live run when the server goes away (an update, a restart, a machine shutdown) — take
+the same stop path, so the settled snapshot and its terminal status event are identical, and only
+`coding-runtime.run.shutdown` in the server's Activity Log names a shutdown. An earlier text claimed
+"You stopped this run" for every `cancelled` run, which blamed the operator for a restart (#3873
+review). Nothing is read from OpenCode's error text. `coding-runtime.run.settled` records the cause
+with `failureBasis`
 (`prompt-allowance`, `envelope-duration`, `model-call-failure`, `no-model-call-failure`, or
-`refusal-escalation` for an escalated run) and
-`modelCallFailure`, and an error class that matches it instead of `internal`. The gateway reports a
-provider that stayed unavailable past the outage window (a 5xx, 408 or 429, an open breaker) with the
-same `provider-failed` code as a 4xx rejection, so such a run settles `model-turn-failed` until the
-gateway reports a distinct cause for the unavailable class.
+`refusal-escalation` for an escalated run) and `modelCallFailure` (a `provider-unavailable` run that
+ended on a retryable status names `provider-failed` there), and an error class that matches it
+instead of `internal`.
 
 **A settled run carries its effort roll-up** (#3873), so one line answers how many model turns and
 tool calls the run made and where its time went. `coding-runtime.run.settled` adds counts and
 durations only, each counted in process where it is observed: `wallDurationMs` (creation to
 settlement); `modelTurnCount`, `modelDurationMs` and `promptTokensTotal` at the run's model-gateway
 capability, where the sidecar gateway reserves a call's prompt estimate immediately before dispatch
-and settles it once the provider answered or failed (a released reservation is no call, and a
+and settles it once the provider answered or failed (the admitted reservation answers an opaque call
+identity and the settlement names it, so a call is timed from its own reservation and never from
+another call's of the same size: pairing by reservation size alone measured a released call and an
+answered one from each other's start, PR #3876 review; a released reservation is no call, and a
 settled count equal to the reserved estimate may be that estimate, so `promptTokensTotal` is a
 lower bound of provider-reported prompt tokens, never an estimate); `toolInvocationCount`,
 `workspaceReadCount`, `editCount` and `editRefusedCount` at the run's tool facade, which reports each
@@ -477,12 +512,49 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   keeps its streaming text out of the announcement with a nested `aria-live="off"` (#3873 review;
   an earlier text opened the block while its turn streamed). The boundary copy says what is shown
   instead of promising that reasoning is never exposed.
+- **It streams from the runtime's delta events, not from its history.** The pinned OpenCode 2.0.10
+  persists a streamed text or reasoning part only twice: empty when its block starts and complete
+  when the block ends, which for the OpenAI-compatible protocol is when the whole response finishes.
+  The words in between travel only as ephemeral `session.text.delta` and `session.reasoning.delta`
+  events; each names its assistant message and an ordinal numbering the parts of its kind in that
+  message from zero, and no history read ever returns them. A timeline built from history alone
+  would show the reasoning and the answer together, complete, when the response ends (PR #3876
+  review; measured against the pinned runtime with a slowly streaming provider). The history
+  projection therefore reads each text and reasoning part through a bounded live overlay
+  (`opencodeV2LiveText.ts`), fed by every event of the run's session as it arrives and before sync
+  hints are coalesced. A part is tracked from its `started` event and grows by its deltas in order;
+  the history's n-th part of that kind is the part with ordinal n. A delta for a part that was never
+  seen starting, for a part the replaced event stream had been feeding, for a part that reached its
+  bound, or that is malformed extends nothing and is counted: a gap in the middle of a text would
+  show words the model never wrote in that order, so such a part shows what it has until the history
+  shows it complete. Text is bounded by the history's own part bound (64 KiB), reasoning by the
+  projection bound, cut on a whole character exactly where the projection cuts the finished part, so
+  the live text is always a prefix of what the history later shows; a half surrogate pair waits for
+  its other half. When the history shows the part complete and extends what streamed, the persisted
+  text takes over and the live text is spent, so nothing is appended twice; a complete text that does
+  not extend the shown text keeps the shown text and is counted, because the timeline cannot take
+  words back. Coding History records only the persisted part, never the live text, so a turn cut
+  short leaves no partial answer and a streaming turn does not rewrite the stored message on every
+  delta. A history that grows by suffix on its own is shown as before.
+- **Reads are coalesced, and the log says by how much.** A live turn can emit an event for every
+  streamed token, and each sync hint costs one history read, so the pump folds the plain hints that
+  pile up while a read runs into one, and a control hint's read covers the plain hints queued before
+  it (control hints are never dropped and keep their order). Every event is therefore a hint
+  delivered or an event merged, apart from the hints still queued when the run stops;
+  `mergedEventCount` on `coding-runtime.history-projection` is the number merged since the previous
+  line, so a timeline that lags or skips an update is explained by how many events one read stood
+  for (PR #3876 review).
 - **Bounded, and the first content to go.** Reasoning keeps to half of a message's live byte
   budget, yields room to the answer within its message, and is the first content evicted under turn
   or feed byte pressure; the newest message keeps the reasoning that may still be streaming.
 - **Never evidence.** D4's durable rule is unchanged: reasoning never enters Coding History,
   evidence, a support export or the Activity Log. Durable lines record only counts — reasoning
   events, bytes, provider-reported reasoning tokens, frames and a closed disposition — never text.
+  The live overlay is counted the same way: `coding-runtime.history-projection` carries
+  `liveDeltaCount` (deltas that grew a live part), `liveDroppedCount` (deltas that extended
+  nothing) and `liveDivergedCount` (parts whose complete text did not extend what was shown) since
+  the previous line, and a pass that changed nothing writes no line, so its counts wait for the next
+  one.
 
 ## Amendment — the run status names a model gateway that is being retried (2026-10-07)
 

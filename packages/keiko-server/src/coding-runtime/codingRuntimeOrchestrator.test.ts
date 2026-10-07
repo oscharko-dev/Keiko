@@ -4677,8 +4677,9 @@ describe("approval challenge lifetime ceiling", () => {
 // F5 (#3873, live Gemma qualification): a run whose workspace had no connected Workbench logged
 // eleven `coding-runtime.edit.refused reasonCode=NO_ACTIVE_SESSION` lines until the operator stopped
 // it — nothing counted the refusals, so the model resent the edit and the run burned its envelope.
-// The orchestrator bounds consecutive same-reason refusals and settles the run with the refusal
-// class as its cause; the escalation and the settlement each leave one body-free line.
+// The orchestrator bounds the refusals since the run's last applied edit, whatever their reasons,
+// and settles the run with the refusal class as its cause; the escalation and the settlement each
+// leave one body-free line.
 describe("consecutive edit refusals (F5, #3873)", () => {
   const NO_SESSION: CodingToolEditOutcome = { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" };
   const INVALID: CodingToolEditOutcome = { kind: "refused", reasonCode: "INVALID_EDITS" };
@@ -4820,17 +4821,132 @@ describe("consecutive edit refusals (F5, #3873)", () => {
     });
   });
 
-  it("restarts the streak on another reason and ends it on an applied edit", async () => {
+  it("ends the streak on an applied edit", async () => {
     const { f, records } = await runningRun();
 
     observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
     observe(f, APPLIED, 1);
     observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
-    observe(f, { kind: "refused", reasonCode: "WORKSPACE_ACCESS_LOST" }, 1);
-    observe(f, NO_SESSION, UNREPAIRABLE_EDIT_REFUSAL_BOUND - 1);
+    observe(f, APPLIED, 1);
+    observe(f, INVALID, REPAIRABLE_EDIT_REFUSAL_BOUND - 1);
 
     expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
     expect(f.manager.stop).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("running");
+  });
+
+  // #3873 review (PR #3876): the streak used to restart whenever the closed reason changed, so a
+  // model that alternated two refusals was never bounded and ran until the prompt allowance or the
+  // envelope ended it. Both bounds count the refusals since the last applied edit, whatever their
+  // reasons.
+  it("settles a run whose refusals alternate two codes, which the same-code streak never did", async () => {
+    const { f, records } = await runningRun();
+    const stale: CodingToolEditOutcome = { kind: "refused", reasonCode: "CONTENT_HASH_MISMATCH" };
+
+    for (let pair = 0; pair < REPAIRABLE_EDIT_REFUSAL_BOUND / 2; pair += 1) {
+      observe(f, INVALID, 1);
+      observe(f, stale, 1);
+    }
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edit-retries-exhausted",
+      });
+    });
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({
+          reasonCode: "CONTENT_HASH_MISMATCH",
+          refusalClass: "repairable",
+          consecutiveCount: REPAIRABLE_EDIT_REFUSAL_BOUND,
+          failureCode: "edit-retries-exhausted",
+          refusalCount: REPAIRABLE_EDIT_REFUSAL_BOUND,
+          unrepairableCount: 0,
+        }) as unknown,
+      }),
+    ]);
+    expect(settledLine(records)).toMatchObject({
+      extra: {
+        failureCode: "edit-retries-exhausted",
+        failureBasis: "refusal-escalation",
+        refusalReasonCode: "CONTENT_HASH_MISMATCH",
+      },
+    });
+  });
+
+  it("settles a run whose environment refusals alternate two codes at the bound of three", async () => {
+    const { f, records } = await runningRun();
+
+    observe(f, NO_SESSION, 1);
+    observe(f, { kind: "refused", reasonCode: "WORKSPACE_ACCESS_LOST" }, 1);
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
+    observe(f, NO_SESSION, 1);
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edits-blocked",
+      });
+    });
+  });
+
+  // #3873 review (PR #3876): a refused governed read is `EDIT_PREPARE_FAILED` like an invalid
+  // changeset, but no edit the model writes changes it.
+  it("settles a run whose edits keep failing their governed read as edits-blocked at three", async () => {
+    const { f, records } = await runningRun();
+    const unreadable: CodingToolEditOutcome = {
+      kind: "refused",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "replacement-read-failed",
+      readReason: "denied",
+    };
+
+    observe(f, unreadable, UNREPAIRABLE_EDIT_REFUSAL_BOUND);
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "edits-blocked",
+      });
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.refusal-escalated.emitted-line",
+        formatActivityLogProofLine(
+          requireLoggedEvent(
+            opLines(records, "coding-runtime.run.refusal-escalated")[0],
+            "expected the refusal-escalated line",
+          ),
+        ),
+      ),
+    ).toMatchObject({
+      reasonCode: "EDIT_PREPARE_FAILED",
+      refusalClass: "unrepairable",
+      failureCode: "edits-blocked",
+      prepareCause: "replacement-read-failed",
+      readReason: "denied",
+    });
+    expect(settledLine(records)).toMatchObject({
+      extra: {
+        failureCode: "edits-blocked",
+        failureBasis: "refusal-escalation",
+        refusalReasonCode: "EDIT_PREPARE_FAILED",
+      },
+    });
+  });
+
+  it("does not count an edit whose preparation was cancelled", async () => {
+    const { f, records } = await runningRun();
+    const cancelled: CodingToolEditOutcome = {
+      kind: "refused",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "cancelled",
+    };
+
+    observe(f, cancelled, REPAIRABLE_EDIT_REFUSAL_BOUND * 2);
+
+    expect(opLines(records, "coding-runtime.run.refusal-escalated")).toEqual([]);
     expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("running");
   });
 
@@ -6289,6 +6405,7 @@ describe("terminal run cause (F9, #3873)", () => {
     lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
     promptAllowanceExhausted = false,
     envelopeDurationExhausted = false,
+    providerUnavailable = false,
   ) {
     return {
       promptAllowanceExhausted: vi.fn(
@@ -6299,6 +6416,9 @@ describe("terminal run cause (F9, #3873)", () => {
       ),
       lastModelCallFailure: vi.fn((runId: string) =>
         runId === RUN_ID ? lastModelCallFailure : undefined,
+      ),
+      lastModelCallProviderUnavailable: vi.fn(
+        (runId: string) => runId === RUN_ID && providerUnavailable,
       ),
     } satisfies CodingRuntimeTerminalFacts;
   }
@@ -6457,6 +6577,62 @@ describe("terminal run cause (F9, #3873)", () => {
     },
   );
 
+  // F10 (#3873 review, PR #3876): the gateway answers a provider that stayed down past its outage
+  // window with `provider-failed`, the same code as a rejection, and states beside it that the
+  // provider could not serve the call. The run settles on the outage, and the line says which fact
+  // named it.
+  it("settles a run whose last call the gateway found the provider unable to serve as provider-unavailable", async () => {
+    const { f, records } = settledWith(
+      "failed",
+      terminalFacts("provider-failed", false, false, true),
+    );
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "provider-unavailable",
+      });
+    });
+
+    const settled = settledLine(records);
+    expect(settled).toMatchObject({
+      correlationId: RUN_ID,
+      errorKind: "unavailable",
+      extra: {
+        failureCode: "provider-unavailable",
+        failureBasis: "model-call-failure",
+        modelCallFailure: "provider-failed",
+      },
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject({
+      failureCode: "provider-unavailable",
+      failureBasis: "model-call-failure",
+      modelCallFailure: "provider-failed",
+    });
+  });
+
+  it("keeps a bound of the run ahead of the provider outage it also read", async () => {
+    const { f, records } = settledWith(
+      "failed",
+      terminalFacts("provider-failed", true, false, true),
+    );
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)).toMatchObject({
+        state: "failed",
+        failureCode: "prompt-allowance-exhausted",
+      });
+    });
+    expect(settledLine(records)).toMatchObject({
+      extra: { failureCode: "prompt-allowance-exhausted", failureBasis: "prompt-allowance" },
+    });
+  });
+
   it("keeps runtime-failed, an internal failure, for a run with no bound or model-call cause on record", async () => {
     const { f, records } = settledWith("failed", terminalFacts(undefined));
     await f.orchestrator.start(start);
@@ -6475,7 +6651,7 @@ describe("terminal run cause (F9, #3873)", () => {
   });
 
   it("reads the terminal facts before the runtime is stopped for settlement", async () => {
-    const facts = terminalFacts("stream-incomplete");
+    const facts = terminalFacts("provider-failed", false, false, true);
     const { f } = settledWith("failed", facts);
     await f.orchestrator.start(start);
     await vi.waitFor(() => {
@@ -6483,6 +6659,9 @@ describe("terminal run cause (F9, #3873)", () => {
     });
     const stopOrder = f.manager.stop.mock.invocationCallOrder[0] ?? 0;
     expect(facts.lastModelCallFailure.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
+    expect(facts.lastModelCallProviderUnavailable.mock.invocationCallOrder[0]).toBeLessThan(
+      stopOrder,
+    );
     expect(facts.promptAllowanceExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
@@ -6505,6 +6684,7 @@ describe("terminal run cause (F9, #3873)", () => {
       expect(facts.promptAllowanceExhausted).not.toHaveBeenCalled();
       expect(facts.envelopeDurationExhausted).not.toHaveBeenCalled();
       expect(facts.lastModelCallFailure).not.toHaveBeenCalled();
+      expect(facts.lastModelCallProviderUnavailable).not.toHaveBeenCalled();
     },
   );
 
@@ -6634,13 +6814,13 @@ describe("run effort roll-up (#3873)", () => {
     // Two model turns at the run's model-gateway capability, 3 s and 5 s, each settled with the
     // provider's own prompt count; between them the facade answers a read, after them an edit and
     // the verification whose summary the run then reports.
-    host.modelCallReserved("run-1", 1_000);
+    const firstTurn = host.modelCallReserved("run-1", 1_000);
     clock.advance(3_000);
-    host.modelCallSettled("run-1", 1_000, 1_180);
+    host.modelCallSettled("run-1", firstTurn, 1_180);
     host.toolSettled("run-1", "read", "completed");
-    host.modelCallReserved("run-1", 1_400);
+    const secondTurn = host.modelCallReserved("run-1", 1_400);
     clock.advance(5_000);
-    host.modelCallSettled("run-1", 1_400, 1_520);
+    host.modelCallSettled("run-1", secondTurn, 1_520);
     host.toolSettled("run-1", "edit", "completed");
     host.toolSettled("run-1", "verification", "completed");
     await f.orchestrator.ingest(passedVerification());

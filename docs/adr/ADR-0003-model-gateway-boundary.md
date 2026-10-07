@@ -807,7 +807,10 @@ worth, the gateway's own cap. A stream cut at either bound ends `output-limit` w
 never refuses it — an oversized reasoning is withheld and the answer delivered
 (`reasoningWithheld`). `codingStreaming: "off"` restores the buffered answer, and with it the
 shared output reserve rather than the coding reserve, so a runaway whole-body attempt ends as an
-exhausted answer the gateway repairs, not as a timeout the breaker counts.
+exhausted answer the gateway repairs, not as a timeout the breaker counts. What the Workbench
+timeline shows of those deltas is decided on the runtime side, not by this route: OpenCode persists
+a streamed part only empty and then complete, so the timeline reads the words from the runtime's
+own delta events (ADR-0137 D8).
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:

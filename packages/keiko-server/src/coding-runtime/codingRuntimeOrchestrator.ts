@@ -1807,7 +1807,8 @@ export class CodingRuntimeOrchestrator {
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
-  // F5 (#3873): each live run's consecutive same-reason edit refusals; dropped when the run settles.
+  // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
+  // settles.
   private readonly editRefusals = new CodingRuntimeEditRefusalStreaks();
   /** Last accepted mode retained only for same-process post-terminal description work. */
   private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
@@ -2836,11 +2837,11 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
-   * F5 (#3873): one governed edit of a live run was answered. Consecutive refusals with the same
-   * closed reason are counted per run (`codingRuntimeRefusalEscalation.ts`); at the reason's bound the
-   * escalation is logged once and the run settles `failed` with the cause that names the refusal
-   * class, through the same settlement a failed turn takes, instead of letting the model resend an
-   * edit that cannot apply until an operator stops the run.
+   * F5 (#3873): one governed edit of a live run was answered. The run's refusals since its last
+   * applied edit are counted, whatever their closed reason codes (`codingRuntimeRefusalEscalation.ts`);
+   * when a bound is met the escalation is logged once and the run settles `failed` with the cause
+   * that names the refusal class, through the same settlement a failed turn takes, instead of
+   * letting the model resend an edit that cannot apply until an operator stops the run.
    */
   observeEditOutcome(runId: string, outcome: CodingToolEditOutcome): void {
     const current = this.current();

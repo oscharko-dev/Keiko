@@ -717,12 +717,15 @@ export interface UiHandlerDeps {
         readonly reservePromptTokens?:
           ((capability: string, promptTokens: number) => unknown) | undefined;
         // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
-        // provider's real reported usage once known, mirroring `reservePromptTokens`.
+        // provider's real reported usage once known, mirroring `reservePromptTokens`. An admitted
+        // reservation may answer an opaque `modelCallId` (#3873 run effort roll-up); the settlement
+        // of that call names it, so the call is timed from its own reservation.
         readonly settlePromptTokens?:
           | ((
               capability: string,
               reservedPromptTokens: number,
               actualPromptTokens: number,
+              modelCallId?: number,
             ) => unknown)
           | undefined;
       }

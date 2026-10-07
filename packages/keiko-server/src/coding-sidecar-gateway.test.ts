@@ -33,12 +33,15 @@ import {
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   MalformedToolCallError,
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
+  UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -4919,6 +4922,159 @@ describe("coding sidecar gateway turn failure projection", () => {
       },
     );
 
+    // F10 (#3873 review, PR #3876): `provider-failed` names a provider that rejected the turn and one
+    // that stayed unavailable alike. The turn's line and the run's last-failure record carry the
+    // gateway's own fact that the provider could not serve the call, which the run's settlement reads
+    // to name the outage. Only a retryable provider status, a rate limit and an open breaker are one.
+    it.each([
+      [new ProviderError("synthetic unavailable", 503), true],
+      [new ProviderError("synthetic gateway timeout", 504), true],
+      [new ProviderError("synthetic request timeout", 408), true],
+      [new ProviderError("synthetic throttled", 429), true],
+      [new RateLimitError("synthetic rate limit"), true],
+      [new CircuitOpenError("synthetic circuit open"), true],
+      [new ProviderError("synthetic bad request", 400), false],
+      [new ProviderError("synthetic conflict", 409), false],
+      [new AuthenticationError("synthetic credential refused"), false],
+    ] as const)(
+      "marks a provider-failed turn that ended on %s as an unavailable provider: %s",
+      async (error, unavailable) => {
+        const sink = captureServerLog("warn");
+        const eventHub = new CodingRuntimeEventHub();
+        const deps: UiHandlerDeps = {
+          ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+          codingRuntimeEventHub: eventHub,
+          codingRuntimeOrchestrator: runningOrchestrator,
+        };
+
+        await handleCodingSidecarGatewayChatCompletions(
+          routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+          deps,
+        );
+
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({ failureCode: "provider-failed" });
+        expect(line?.extra?.providerUnavailable).toBe(unavailable ? true : undefined);
+        expect(eventHub.lastModelCallProviderUnavailable("run-gateway-test")).toBe(unavailable);
+        expectActivityLogProof(
+          "coding-sidecar.gateway.turn-failed.emitted-line",
+          formatActivityLogProofLine(line ?? {}),
+        );
+        // The fact never reaches the public frame the browser receives.
+        const replay = eventHub.replay("run-gateway-test");
+        expect(JSON.stringify(replay)).not.toContain("providerUnavailable");
+      },
+    );
+
+    it.each([
+      [new TimeoutError("synthetic timeout")],
+      [new TransportError("synthetic reset")],
+      [new ProviderError("synthetic empty stream", 200)],
+    ] as const)(
+      "marks nothing on a turn that ended on %s: its own code already says the call stopped answering",
+      async (error) => {
+        const sink = captureServerLog("warn");
+        const eventHub = new CodingRuntimeEventHub();
+        const deps: UiHandlerDeps = {
+          ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+          codingRuntimeEventHub: eventHub,
+          codingRuntimeOrchestrator: runningOrchestrator,
+        };
+
+        await handleCodingSidecarGatewayChatCompletions(
+          routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+          deps,
+        );
+
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({ failureCode: "stream-incomplete" });
+        expect(line?.extra).not.toHaveProperty("providerUnavailable");
+        expect(eventHub.lastModelCallProviderUnavailable("run-gateway-test")).toBe(false);
+      },
+    );
+
+    // The streamed path filed every gateway error it had no rule for as `stream-incomplete`, the
+    // cause a failed run settles `provider-unavailable` ("nothing was rejected, check that the
+    // gateway is running"). A configuration or egress refusal is no stream that stopped answering: it
+    // is `provider-failed`, as on the buffered path, and no retry can change it.
+    it.each([
+      [new ConfigInvalidError("synthetic invalid configuration")],
+      [new UnknownModelError("synthetic unknown model")],
+      [new GatewayEgressError(ERROR_CODES.PROXY_BLOCKED_BY_POLICY, "synthetic egress block")],
+    ] as const)(
+      "reports a streamed %s as a provider failure the runtime must not retry",
+      async (error) => {
+        const sink = captureServerLog("warn");
+        const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+          [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }),
+        });
+        const response = mockResponse({ captureBody: true });
+        const context = authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic" }],
+          tools: modelVisibleTools(),
+        });
+        const deps = {
+          ...runtimeGatewayDeps(
+            () => ({ ok: true, binding: { runId: "run-stream-config" } }),
+            undefined,
+            createOpenCodeGatewayReadinessRegistry(),
+            (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+          ),
+          codingRuntimeOrchestrator: runningOrchestrator,
+        } as UiHandlerDeps;
+
+        const result = await handleCodingSidecarGatewayChatCompletions(
+          { ...context, res: response.res },
+          deps,
+        );
+
+        expect(result).toBe(STREAMING);
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({
+          failureCode: "provider-failed",
+          runtimeRetry: "refused",
+        });
+        expect(line?.extra).not.toHaveProperty("providerUnavailable");
+        expect(response.body()).toContain(rejectionChunk);
+        expect(response.body()).not.toContain(error.message);
+      },
+    );
+
+    it("keeps a fault that is no gateway error, inside the stream, a stream that stopped answering", async () => {
+      const sink = captureServerLog("warn");
+      const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(new Error("synthetic decoder fault")),
+        }),
+      });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-fault" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "stream-incomplete",
+        runtimeRetry: "allowed",
+      });
+    });
+
     // A spend rejection no retry can change ended a streamed turn with `finish_reason: "error"`,
     // which the runtime retries without end, like the lab's rejected turn.
     it("ends a streamed turn the spend budget refused with the rejection chunk", async () => {
@@ -5998,6 +6154,97 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       promptTokens: actual,
       promptSource: "reserved-estimate",
     });
+  });
+
+  // #3873 review (PR #3876): the run's effort roll-up paired a settlement with its reservation by
+  // size alone, so a released call took the start of an answered call of the same size. The
+  // admitted reservation answers an opaque identity and the settlement hands it back verbatim.
+  it("hands the identity its admitted reservation answered back with the settlement", async () => {
+    const settlePromptTokens =
+      vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.resolve(assistantResponse("azure-coding-model")),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test", modelCallId: 41 }),
+        settlePromptTokens,
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    expect(settlePromptTokens.mock.calls[0]?.[3]).toBe(41);
+  });
+
+  it("settles a release with the identity of the call it releases", async () => {
+    const settlePromptTokens =
+      vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
+    const response = mockResponse({ captureBody: true });
+    response.res.write = vi.fn(() => false);
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "undeliverable" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    await handleCodingSidecarGatewayChatCompletions(context, {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-released-identity" } }),
+        () => chat,
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-released-identity" } }),
+        reservePromptTokens: () => ({
+          ok: true,
+          runId: "run-released-identity",
+          modelCallId: 7,
+        }),
+        settlePromptTokens,
+      },
+    });
+
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, , actual, modelCallId] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(actual).toBe(0);
+    expect(modelCallId).toBe(7);
+  });
+
+  it.each([
+    ["no identity", { ok: true, runId: "run-gateway-test" }],
+    ["a non-integer identity", { ok: true, runId: "run-gateway-test", modelCallId: 1.5 }],
+    ["a textual identity", { ok: true, runId: "run-gateway-test", modelCallId: "41" }],
+  ])("settles without an identity when the reservation answered %s", async (_label, reserved) => {
+    const settlePromptTokens =
+      vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.resolve(assistantResponse("azure-coding-model")),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: () => reserved,
+        settlePromptTokens,
+      },
+    };
+
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    // Exactly the three arguments it always had: a call the registry cannot name is not tracked.
+    expect(settlePromptTokens.mock.calls[0]).toHaveLength(3);
   });
 
   it("records a retained reservation when authority refuses settlement after a pause", async () => {

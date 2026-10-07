@@ -760,11 +760,16 @@ describe("production coding runtime resolver", () => {
     }
     const capability = backend.minted.modelGatewayCapability;
 
-    // One model call the gateway admitted and, 4 s later, settled with the provider's own count.
-    expect(ledger.reservePromptTokens?.(capability, 1_000)).toMatchObject({ ok: true });
+    // One model call the gateway admitted and, 4 s later, settled with the provider's own count. The
+    // admitted reservation answers the call's identity and the settlement names it, as the gateway
+    // does, so the call is timed from its own reservation.
+    const reserved = ledger.reservePromptTokens?.(capability, 1_000);
+    expect(reserved).toMatchObject({ ok: true, modelCallId: expect.any(Number) as unknown });
     fixture.advanceNow(4_000);
     vi.setSystemTime(fixture.nowMs());
-    expect(ledger.settlePromptTokens(capability, 1_000, 1_240)).toMatchObject({ ok: true });
+    expect(
+      ledger.settlePromptTokens(capability, 1_000, 1_240, modelCallIdOf(reserved)),
+    ).toMatchObject({ ok: true });
     // A reservation the run's allowance refused is no model call: nothing was dispatched.
     expect(ledger.reservePromptTokens?.(capability, 10_000_000)).toMatchObject({ ok: false });
     // A malformed edit the run's facade refused is still a refused edit.
@@ -798,7 +803,15 @@ interface PromptSettlementPort {
     capability: string,
     reservedPromptTokens: number,
     actualPromptTokens: number,
+    modelCallId?: number,
   ) => unknown;
+}
+
+// The identity an admitted reservation answers beside its run, as the gateway reads it.
+function modelCallIdOf(reservation: unknown): number | undefined {
+  if (typeof reservation !== "object" || reservation === null) return undefined;
+  const id = (reservation as { readonly modelCallId?: unknown }).modelCallId;
+  return typeof id === "number" ? id : undefined;
 }
 
 // The settlement half of the gateway's prompt ledger is wired by the resolver but not declared on

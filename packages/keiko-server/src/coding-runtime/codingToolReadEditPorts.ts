@@ -29,7 +29,14 @@ import {
   isValidCorrelationId,
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
-import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingToolFacadePorts.js";
+import {
+  EDIT_PREPARE_CAUSES,
+  EDIT_PREPARE_ERROR_KINDS,
+  EDIT_READ_REASONS,
+  type CodingToolMutationGuard,
+  type EditPrepareCause,
+  type MaterializedPatchCharge,
+} from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import {
   changesetPayloadBytes,
@@ -80,12 +87,20 @@ type EditorChangesetRequest = CodingToolActionOf<"edit">;
 // proceed?" instead of telling the operator to open the Workbench). The activity-log diagnostic
 // for a refusal stays reason-code-only regardless (`emitEditRefusedDiagnostic` never reads this
 // field) — `message` is carried only on the outcome returned to the caller, never logged.
+//
+// `prepareCause` and `readReason` ride out with an `EDIT_PREPARE_FAILED` refusal only: the closed step
+// that refused the edit and, for a failed materialization read, the closed reason of that read. The
+// run's refusal escalation classifies the refusal by them (F5, #3873 review: a read the model cannot
+// repair is not "edits that no longer match the file"). They are closed words, never read text, and
+// the facade never forwards them to the model.
 type EditOutcome =
   | { readonly status: "completed" }
   | {
       readonly status: "failed";
       readonly reasonCode?: string | undefined;
       readonly message?: string | undefined;
+      readonly prepareCause?: EditPrepareCause | undefined;
+      readonly readReason?: WorkspaceReadFailureReason | undefined;
     };
 
 // NO_ACTIVE_SESSION means the bounded wait for a live Workbench editor bridge
@@ -472,25 +487,7 @@ const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
   type: "string",
   dataClass: "closed-enum",
   required: false,
-  values: [
-    "unsupported-platform",
-    "workspace-unavailable",
-    "artifact-unverified",
-    "busy",
-    "cancelled",
-    "timeout",
-    "process-failed",
-    "protocol-invalid",
-    "denied",
-    "not-found",
-    "not-text",
-    "too-large",
-    "unstable",
-    "exception",
-    "postflight-refused",
-    "preflight-refused",
-    "response-too-large",
-  ],
+  values: [...EDIT_READ_REASONS],
 } as const;
 
 const CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD = {
@@ -631,30 +628,6 @@ const EDIT_REFUSAL_REASONS = [
 ] as const;
 type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
 const EDIT_REFUSAL_REASON_SET: ReadonlySet<string> = new Set(EDIT_REFUSAL_REASONS);
-
-const EDIT_PREPARE_CAUSES = [
-  "workspace-access-lost",
-  "cancelled",
-  "guard-denied",
-  "changeset-invalid",
-  "binding-unavailable",
-  "editor-context-unavailable",
-  "lease-unavailable",
-  // #3873: the governed read a replacement edit is materialized against did not answer.
-  "replacement-read-failed",
-] as const;
-type EditPrepareCause = (typeof EDIT_PREPARE_CAUSES)[number];
-
-const EDIT_PREPARE_ERROR_KINDS: Readonly<Record<EditPrepareCause, ActivityLogErrorKind>> = {
-  "workspace-access-lost": "authority-denied",
-  cancelled: "cancelled",
-  "guard-denied": "authority-denied",
-  "changeset-invalid": "validation-failed",
-  "binding-unavailable": "authority-denied",
-  "editor-context-unavailable": "unavailable",
-  "lease-unavailable": "conflict",
-  "replacement-read-failed": "unavailable",
-};
 
 // #3873 review: why a replacement changeset was refused before any editor action, so the log can
 // separate a stale read from an ambiguous match or an exhausted budget. The materializer owns the
@@ -1249,9 +1222,24 @@ function editRefused(
   // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
   // the activity log, only the outcome returned to the caller.
   logEditRefused(deps, correlationId, reasonCode, evidence);
-  return message === undefined
-    ? { status: "failed", reasonCode }
-    : { status: "failed", reasonCode, message };
+  return {
+    status: "failed",
+    reasonCode,
+    ...(message === undefined ? {} : { message }),
+    ...refusalCauseFields(evidence),
+  };
+}
+
+// The closed cause of a preparation refusal, for the caller that classifies it: the same two words
+// the refusal line records.
+function refusalCauseFields({
+  prepareCause,
+  readReason,
+}: Omit<EditRefusalDetail, "message">): Pick<EditRefusalDetail, "prepareCause" | "readReason"> {
+  return {
+    ...(prepareCause === undefined ? {} : { prepareCause }),
+    ...(readReason === undefined ? {} : { readReason }),
+  };
 }
 
 function editFormFields({

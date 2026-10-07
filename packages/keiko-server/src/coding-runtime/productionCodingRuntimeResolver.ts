@@ -141,6 +141,7 @@ import {
 } from "./codingRuntimeContextUsage.js";
 import {
   createCodingRuntimeRunEffortRegistry,
+  type CodingRuntimeModelCallId,
   type CodingRuntimeRunEffortRegistry,
 } from "./codingRuntimeRunEffort.js";
 
@@ -520,7 +521,13 @@ function composedMintLaunch(
 // #3873: the sidecar gateway is the one caller of this reservation pair, and it reserves a call's
 // prompt estimate immediately before dispatching it and settles it once the provider answered or
 // failed, so an admitted reservation and its settlement are the run's model call as `runEffort`
-// counts and times it.
+// counts and times it. The admitted reservation answers the call's identity (`modelCallId`) and the
+// gateway hands it back with the settlement, so a call is timed from its own reservation and never
+// from another call's of the same size (#3873 review).
+type PromptReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> & {
+  readonly modelCallId?: CodingRuntimeModelCallId;
+};
+
 function runtimeCapabilityAuthenticatorFor(
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
@@ -530,6 +537,7 @@ function runtimeCapabilityAuthenticatorFor(
     capability: string,
     reservedPromptTokens: number,
     actualPromptTokens: number,
+    modelCallId?: CodingRuntimeModelCallId,
   ) => unknown;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
   // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
@@ -541,32 +549,29 @@ function runtimeCapabilityAuthenticatorFor(
 } {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
-    reservePromptTokens: (
-      capability,
-      promptTokens,
-    ): ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> => {
+    reservePromptTokens: (capability, promptTokens): PromptReservation => {
       const reserved = reservePromptWithCiRepair(
         authority,
         (runId) => runs.get(runId)?.ciRepairBudget,
         capability,
         promptTokens,
       );
-      if (reserved.ok) runEffort.modelCallReserved(reserved.runId, promptTokens);
-      return reserved;
+      if (!reserved.ok) return reserved;
+      const modelCallId = runEffort.modelCallReserved(reserved.runId, promptTokens);
+      return modelCallId === undefined ? reserved : { ...reserved, modelCallId };
     },
     settlePromptTokens: (
       capability,
       reservedPromptTokens,
       actualPromptTokens,
+      modelCallId,
     ): ReturnType<CodingRuntimeAuthorityService["settlePromptTokens"]> => {
       const settled = authority.settlePromptTokens(
         capability,
         reservedPromptTokens,
         actualPromptTokens,
       );
-      if (settled.ok) {
-        runEffort.modelCallSettled(settled.runId, reservedPromptTokens, actualPromptTokens);
-      }
+      if (settled.ok) runEffort.modelCallSettled(settled.runId, modelCallId, actualPromptTokens);
       return settled;
     },
     unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),

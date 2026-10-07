@@ -340,7 +340,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "changeset-invalid",
+    });
     expect(action).not.toHaveBeenCalled();
     expect(editRefusedLines(events)).toEqual([
       expect.objectContaining({
@@ -406,7 +410,8 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           scenario.aborted === true ? AbortSignal.abort() : undefined,
           { check: (): boolean => scenario.guardAllows !== false },
         ),
-      ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+        // The cause rides out beside the code, so the run's refusal bound can classify it.
+      ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED", prepareCause });
       expect(action).not.toHaveBeenCalled();
       expect(editRefusedLines(events)).toEqual([
         expect.objectContaining({
@@ -1108,7 +1113,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "changeset-invalid",
+    });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1488,7 +1497,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): false => false },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "guard-denied",
+    });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1513,7 +1526,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true, binding: admittedBinding },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "editor-context-unavailable",
+    });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1708,7 +1725,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
             undefined,
             bindingless,
           ),
-        ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+        ).resolves.toEqual({
+          status: "failed",
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "binding-unavailable",
+        });
         expect(editorAction).not.toHaveBeenCalled();
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -1942,7 +1963,12 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       Promise.resolve({ ok: false, reason: "busy" });
     const { events, result } = await settledEdit(movingChangeset(["src/d.ts"]), { read: busy });
 
-    expect(result).toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "replacement-read-failed",
+      readReason: "busy",
+    });
     expect(events.map((event) => event.op)).toEqual([
       "coding-runtime.workspace-read",
       "coding-runtime.edit.refused",
@@ -1971,7 +1997,12 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       signal: controller.signal,
     });
 
-    expect(result).toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "cancelled",
+      readReason: "cancelled",
+    });
     expect(events[0]).toMatchObject({
       op: "coding-runtime.workspace-read",
       errorKind: "cancelled",
@@ -1994,7 +2025,12 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       { read: readText },
     );
 
-    expect(result).toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "replacement-read-failed",
+      readReason: "preflight-refused",
+    });
     expect(readText).not.toHaveBeenCalled();
     expect(events.map((event) => event.op)).toEqual([
       "coding-runtime.workspace-read",

@@ -701,6 +701,10 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // The sidecar tool bridge could not record how a delivered tool result renders for the model: the
+  // activity-log sink refused the line. The answer, which the facade had already produced, is
+  // delivered unchanged and settled once; only the record is lost (PR #3876 review).
+  "tool-result-render-log-failed",
   // The sidecar tool bridge's own request deadline stopped a call (PR #3452, F44).
   "tool-bridge-deadline",
   // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)

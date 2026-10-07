@@ -9,12 +9,18 @@ import {
 
 function facts(
   lastModelCallFailure: CodingWorkbenchTurnFailureCode | undefined,
-  bounds: { readonly allowance?: boolean; readonly duration?: boolean } = {},
+  bounds: {
+    readonly allowance?: boolean;
+    readonly duration?: boolean;
+    readonly providerUnavailable?: boolean;
+  } = {},
 ): CodingRuntimeTerminalFacts {
   return {
     promptAllowanceExhausted: (runId) => runId === "run-1" && bounds.allowance === true,
     envelopeDurationExhausted: (runId) => runId === "run-1" && bounds.duration === true,
     lastModelCallFailure: (runId) => (runId === "run-1" ? lastModelCallFailure : undefined),
+    lastModelCallProviderUnavailable: (runId) =>
+      runId === "run-1" && bounds.providerUnavailable === true,
   };
 }
 
@@ -64,6 +70,73 @@ describe("classifyTerminalFailure", () => {
     });
   });
 
+  // F10 (#3873 review): a provider that stayed down past the gateway's outage window (a 5xx, 408 or
+  // 429, a rate limit, an open breaker) is `provider-failed` on the gateway's answer, the same code as
+  // a 4xx rejection. The gateway reports beside it that the provider could not serve the call, and a
+  // run that ends on such a call is named for the outage.
+  it("names a provider the gateway found unable to serve the call as unavailable, not rejecting", () => {
+    expect(
+      classifyTerminalFailure(facts("provider-failed", { providerUnavailable: true }), "run-1"),
+    ).toEqual({
+      failureCode: "provider-unavailable",
+      basis: "model-call-failure",
+      modelCallFailure: "provider-failed",
+    });
+  });
+
+  it("keeps a provider rejection a failed model step: the same code without the outage fact", () => {
+    expect(classifyTerminalFailure(facts("provider-failed"), "run-1")).toEqual({
+      failureCode: "model-turn-failed",
+      basis: "model-call-failure",
+      modelCallFailure: "provider-failed",
+    });
+    // A facts source that predates the outage fact names no outage either.
+    const withoutOutageFact: CodingRuntimeTerminalFacts = {
+      promptAllowanceExhausted: () => false,
+      envelopeDurationExhausted: () => false,
+      lastModelCallFailure: () => "provider-failed",
+    };
+    expect(classifyTerminalFailure(withoutOutageFact, "run-1")).toMatchObject({
+      failureCode: "model-turn-failed",
+    });
+  });
+
+  it.each(["turn-rejected", "empty-answer", "invalid-tool-call"] as const)(
+    "never reads the outage fact into a %s model call: the provider answered",
+    (failure) => {
+      expect(
+        classifyTerminalFailure(facts(failure, { providerUnavailable: true }), "run-1"),
+      ).toMatchObject({ failureCode: "model-turn-failed" });
+    },
+  );
+
+  it("still names the output exhaustion by itself whatever the outage fact says", () => {
+    expect(
+      classifyTerminalFailure(facts("output-exhausted", { providerUnavailable: true }), "run-1"),
+    ).toMatchObject({ failureCode: "output-exhausted-repeated" });
+  });
+
+  it("lets a bound of the run come before the outage it read", () => {
+    expect(
+      classifyTerminalFailure(
+        facts("provider-failed", { allowance: true, providerUnavailable: true }),
+        "run-1",
+      ),
+    ).toMatchObject({ failureCode: "prompt-allowance-exhausted", basis: "prompt-allowance" });
+    expect(
+      classifyTerminalFailure(
+        facts("provider-failed", { duration: true, providerUnavailable: true }),
+        "run-1",
+      ),
+    ).toMatchObject({ failureCode: "envelope-duration-exhausted", basis: "envelope-duration" });
+  });
+
+  it("reads the outage fact of the run it classifies, never another run's", () => {
+    expect(
+      classifyTerminalFailure(facts("provider-failed", { providerUnavailable: true }), "run-other"),
+    ).toEqual({ failureCode: "runtime-failed", basis: "no-model-call-failure" });
+  });
+
   it("names a repeated output exhaustion by itself", () => {
     expect(classifyTerminalFailure(facts("output-exhausted"), "run-1")).toEqual({
       failureCode: "output-exhausted-repeated",
@@ -101,11 +174,16 @@ describe("terminalFailureErrorKind", () => {
   it("states each cause's error class instead of an internal failure", () => {
     const kind = (
       failure: CodingWorkbenchTurnFailureCode | undefined,
-      bounds: { readonly allowance?: boolean; readonly duration?: boolean } = {},
+      bounds: {
+        readonly allowance?: boolean;
+        readonly duration?: boolean;
+        readonly providerUnavailable?: boolean;
+      } = {},
     ): string => terminalFailureErrorKind(classifyTerminalFailure(facts(failure, bounds), "run-1"));
     expect(kind(undefined, { allowance: true })).toBe("authority-denied");
     expect(kind("turn-rejected", { duration: true })).toBe("timeout");
     expect(kind("stream-incomplete")).toBe("unavailable");
+    expect(kind("provider-failed", { providerUnavailable: true })).toBe("unavailable");
     expect(kind("turn-rejected")).toBe("validation-failed");
     expect(kind("empty-answer")).toBe("unavailable");
     expect(kind("output-exhausted")).toBe("unavailable");

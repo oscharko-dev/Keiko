@@ -1409,7 +1409,10 @@ function joinedText(message: ProjectedMessage): string {
 
 // Lab ledger F2 (#3873): with live streaming an answer reaches the projection as one small text
 // signal per history pull. Each used to open a segment of its own, so a streamed answer was cut off
-// after its first 32 pulls.
+// after its first 32 pulls. On the pinned OpenCode 2.0.10 the history holds a streamed part empty
+// until it ends, so these small signals come from the history projection's live text overlay
+// (`opencodeV2History.ts` over `opencodeV2LiveText.ts`, fed by the runtime's delta events), one per
+// pull that saw new deltas.
 describe("streamed answers in the live feed", () => {
   it("continues the message's last segment instead of truncating after 32 pulls", () => {
     const projection = assistantTurn();

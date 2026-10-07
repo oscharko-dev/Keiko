@@ -107,6 +107,11 @@ interface RetainedEvent {
   critical: boolean;
 }
 
+interface ModelCallFailure {
+  readonly failureCode: CodingWorkbenchTurnFailureCode;
+  readonly providerUnavailable: boolean;
+}
+
 interface RunBuffer {
   nextSequence: number;
   bytes: number;
@@ -130,9 +135,10 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
  */
 export class CodingRuntimeEventHub {
   private readonly runs = new Map<string, RunBuffer>();
-  // One closed code per run with a failed model call on record; bounded like `runs` by the durable
-  // snapshot ledger's retention through `deleteRuns`.
-  private readonly modelCallFailures = new Map<string, CodingWorkbenchTurnFailureCode>();
+  // One closed code per run with a failed model call on record, with whether the provider could not
+  // serve that call (a retryable status, a rate limit, an open breaker); bounded like `runs` by the
+  // durable snapshot ledger's retention through `deleteRuns`.
+  private readonly modelCallFailures = new Map<string, ModelCallFailure>();
   private readonly maxEvents: number;
   private readonly maxBytes: number;
   private readonly maxSubscribers: number;
@@ -189,17 +195,25 @@ export class CodingRuntimeEventHub {
    * Reports each content-free gateway failure, including retries at the same task revision. The
    * cause is also kept as the run's last model-call failure (F9, #3873), apart from the bounded
    * replay, so the run's settlement can name what ended its turn even after the frame was demoted,
-   * evicted, or refused for capacity.
+   * evicted, or refused for capacity. `providerUnavailable` is the gateway's own fact that the
+   * provider could not serve the call, which `provider-failed` alone does not say; it never reaches
+   * the public frame.
    */
   publishTurnFailure(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
     revision: number,
     failureCode: CodingWorkbenchTurnFailureCode,
+    evidence: { readonly providerUnavailable?: boolean } = {},
   ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
     const run = this.runs.get(runId);
     if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
-    if (SAFE_ID.test(runId)) this.modelCallFailures.set(runId, failureCode);
+    if (SAFE_ID.test(runId)) {
+      this.modelCallFailures.set(runId, {
+        failureCode,
+        providerUnavailable: evidence.providerUnavailable === true,
+      });
+    }
     return this.publish({
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       kind: "runtime-event",
@@ -244,7 +258,16 @@ export class CodingRuntimeEventHub {
 
   /** The cause of the run's most recent failed model call that no later answered call superseded. */
   lastModelCallFailure(runId: string): CodingWorkbenchTurnFailureCode | undefined {
-    return this.modelCallFailures.get(runId);
+    return this.modelCallFailures.get(runId)?.failureCode;
+  }
+
+  /**
+   * Whether the gateway found that the provider could not serve the run's most recent failed model
+   * call (a retryable status, a rate limit, an open breaker), which no later answered call
+   * superseded. `provider-failed` names that and a rejection alike; this tells them apart.
+   */
+  lastModelCallProviderUnavailable(runId: string): boolean {
+    return this.modelCallFailures.get(runId)?.providerUnavailable === true;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {

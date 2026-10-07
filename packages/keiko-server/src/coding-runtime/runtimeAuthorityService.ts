@@ -1113,6 +1113,17 @@ export class CodingRuntimeAuthorityService {
     return deadline?.runId === runId && Number.isFinite(nowMs) && nowMs >= deadline.deadlineMs;
   }
 
+  /**
+   * A prompt-token reservation the run's CI-repair budget refused before it reached this authority
+   * (`ciRepairPromptReservation.ts`; #3873 review). That budget is the run's own prompt allowance
+   * (`maxPromptTokens`) counted over the repair, so its refusal is recorded exactly as this
+   * authority's own refusal is: the run's failed turn then settles `prompt-allowance-exhausted`
+   * instead of naming no limit at all. Like every admission record, only the active run's counts.
+   */
+  public recordCiRepairPromptRefusal(runId: string): void {
+    this.recordPromptAdmission(runId, true);
+  }
+
   // Only the active run's own admissions count: a stray capability of another run never rewrites
   // what ended the active run's turn.
   private recordPromptAdmission(runId: string, allowanceExhausted: boolean): void {
