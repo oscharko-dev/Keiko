@@ -168,7 +168,7 @@ describe("timelineLine", () => {
 
   it("omits the envelope, caps the fields and survives an event with nothing on it", () => {
     const wide = timelineLine({ ...event, extra: { blob: "x".repeat(400) } });
-    expect(wide.length).toBe("10:00:01.234 warn 123456 ".length + 46 + 1 + 230);
+    expect(wide).toHaveLength("10:00:01.234 warn 123456 ".length + 46 + 1 + 230);
     expect(wide).not.toContain("pid=");
     expect(wide).not.toContain("runId=");
     expect(() => timelineLine({})).not.toThrow();
