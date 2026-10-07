@@ -6961,6 +6961,7 @@ describe("verification truth at task settlement", () => {
       failed: status === "failed" ? 1 : 0,
       skipped: 0,
     },
+    targetDigest?: string,
   ): Promise<void> {
     await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -6973,8 +6974,48 @@ describe("verification truth at task settlement", () => {
       passedCount: counts.passed,
       failedCount: counts.failed,
       skippedCount: counts.skipped,
+      ...(targetDigest === undefined ? {} : { verificationTargetDigest: targetDigest }),
     });
   }
+
+  it("does not let a different passing target clear a failed test", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "failed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("requires the selected checks to pass again after a later edit", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "passed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
+  it("accepts fresh passes for all selected targets after the repair", async () => {
+    const { f, finish } = await runningTask();
+    await verification(f, "failed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", undefined, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["failed", "partial"] as const)(
     "does not report success after a %s verification",

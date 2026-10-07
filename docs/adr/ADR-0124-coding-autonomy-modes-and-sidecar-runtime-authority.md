@@ -155,7 +155,10 @@ Staging and fresh commit proof remain mandatory only for an accepted commit/deli
 
 An applied edit invalidates the run's previous verification. An edited task, or a task whose
 verification failed or was partial, completes successfully only after a nonempty verification
-passes after the final edit. A model turn ending normally does not establish that proof. Up to two
+passes after the final edit. Each selected verification target retains its own outcome using the
+existing body-free target digest: a different green check cannot erase a failing check, and an edit
+invalidates every selected target's previous pass. This requires only the checks already selected
+for the task, not a global quality run. A model turn ending normally does not establish that proof. Up to two
 continuations use the existing task dispatcher and unchanged authority to inspect results, repair
 the diagnosed cause, and retest. A refused continuation or exhausted continuation budget settles
 `verification-not-evidenced`; ordinary read-only tasks need no invented verification work.

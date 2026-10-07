@@ -142,6 +142,26 @@ quantized build; see the deployment shape). The complete matrix on the merged he
 fixes" baseline per task and mode (which only `b6bbe5a95` can produce now), and the remaining
 findings with an owning issue stay open under #3875 and their issues.
 
+## Small task in the full Keiko monorepo (2026-10-07)
+
+The owner's additional qualification uses an independent full Keiko clone on
+`codex/sandbox-workbench-gemma-monorepo`, with no remotes. Only its deeply nested shared React
+Toggle test is editable. Generated test changes never enter the fix branch or PR #3895. The
+browser driver approves this owner's sandbox work; it is not evidence of a person clicking every
+approval. The existing local LiteLLM and Gemma route above are used.
+
+| Run                                           | Mode                                           | Keiko source | Result                                                                                                                                                                                                                                                                                                                                                                                          | Reconstruction                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ---------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run-302798538021948115495710718424677265129` | Supervised workspace; `wb-ui`, approvals `all` | `4f72ba412`  | Succeeded in 105 seconds: exact-file verification failed on the deliberately seeded controlled callback; the model read relevant code, repaired the callback and passed the same exact-file verification after the edit. Keyboard-focus and false → true → false assertions remain present. Six model turns, one applied edit; no global tests, lint, typechecks, builds or delivery requested. | `coding-runtime.verification-summarized` failed at 15:04:56 UTC, two `coding-runtime.workspace-read` completions, `coding-runtime.editor-mutation.settled` succeeded at 15:05:41, the same verification target digest passed at 15:05:48 with zero failures/skips, `coding-runtime.run.settled` succeeded at 15:05:58. |
+
+The initial verifier defect mounted host-installed macOS native dependencies into a Linux test
+container, which failed to initialize a native binding. The repaired runner uses the existing
+macOS Seatbelt backend with filesystem and network confinement, private repository-local temporary
+storage, and the user's installed dependency tree. Actual native regression tests qualify
+outside-root reads/writes, symlink and descendant escapes, host-loopback denial and cleanup. This
+row establishes one small monorepo repair/retest journey on its named head; the complete final-head
+task/mode matrix and Epic acceptance closeout are still pending.
+
 ## Resilience under gateway load (chaos)
 
 A fault-injecting proxy between LiteLLM and the model server reproduces peak-load behavior through

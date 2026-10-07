@@ -1442,6 +1442,15 @@ function isCompleteVerificationSummary(
   ].every((value) => value !== undefined);
 }
 
+function verificationSummaryPassed(event: CodingWorkbenchRuntimeEvent): boolean {
+  return (
+    event.verificationStatus === "passed" &&
+    (event.passedCount ?? 0) > 0 &&
+    event.failedCount === 0 &&
+    event.skippedCount === 0
+  );
+}
+
 // Whether the event was a complete verification summary, the one the run's roll-up counts (#3873).
 function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
@@ -2596,10 +2605,8 @@ export class CodingRuntimeOrchestrator {
     if (recordRuntimeVerificationSummary(this.deps.activityLog, event)) {
       this.effort.verification(
         current.runId,
-        event.verificationStatus === "passed" &&
-          (event.passedCount ?? 0) > 0 &&
-          event.failedCount === 0 &&
-          event.skippedCount === 0,
+        verificationSummaryPassed(event),
+        event.verificationTargetDigest ?? event.verificationKind,
       );
     }
     return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));

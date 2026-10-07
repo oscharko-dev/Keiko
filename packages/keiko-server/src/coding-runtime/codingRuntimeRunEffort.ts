@@ -217,7 +217,7 @@ export function createCodingRuntimeRunEffortRegistry(
 interface OrchestratorEffortRecord {
   verificationCount: number;
   verificationRequired: boolean;
-  verificationPassed: boolean;
+  readonly verificationTargets: Map<string, boolean>;
   operatorDecisionCount: number;
   operatorWaitMs: number;
   waitingSinceMs: number | undefined;
@@ -257,20 +257,25 @@ export class CodingRuntimeRunEffortLedger {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     run.verificationRequired = true;
-    run.verificationPassed = false;
+    for (const target of run.verificationTargets.keys()) run.verificationTargets.set(target, false);
   }
 
-  verification(runId: string, passed = false): void {
+  verification(runId: string, passed = false, target = "legacy"): void {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     run.verificationCount += 1;
     run.verificationRequired = true;
-    run.verificationPassed = passed;
+    run.verificationTargets.set(target, passed);
   }
 
   needsVerification(runId: string): boolean {
     const run = this.runs.get(runId);
-    return run !== undefined && run.verificationRequired && !run.verificationPassed;
+    return (
+      run !== undefined &&
+      run.verificationRequired &&
+      (run.verificationTargets.size === 0 ||
+        [...run.verificationTargets.values()].some((passed) => !passed))
+    );
   }
 
   decision(runId: string): void {
@@ -318,7 +323,7 @@ function newOrchestratorRecord(): OrchestratorEffortRecord {
   return {
     verificationCount: 0,
     verificationRequired: false,
-    verificationPassed: false,
+    verificationTargets: new Map(),
     operatorDecisionCount: 0,
     operatorWaitMs: 0,
     waitingSinceMs: undefined,
