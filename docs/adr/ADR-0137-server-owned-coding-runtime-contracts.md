@@ -53,8 +53,10 @@ binding; generic tasks retain their existing behavior. Bounded issue text enters
 model turn through the existing context-pack builder and never enters the durable projections.
 The orchestrator keeps the human task intent unchanged and carries labelled untrusted context in a
 separate server-only `initialContext` dispatch field. Explicit-skill tracking observes only the
-human text. The pinned OpenCode 1.18.30 prompt transport sends context as a separate `synthetic: true`
-text part: it reaches the model but the existing safe-activity projection omits its user-message echo.
+human text. The pinned OpenCode 2.0.10 prompt transport prepends the labelled initial context to the human
+text in the existing bounded prompt and carries `keikoContextPresentationV1` metadata naming the
+human display text and the hidden context digest. The safe-activity projection verifies that
+binding and shows only the human text.
 The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
 only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
 feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.
