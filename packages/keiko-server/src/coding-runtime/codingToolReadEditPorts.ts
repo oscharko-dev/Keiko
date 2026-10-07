@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  CodingWorkbenchRuntimeFailureCode,
   EditorAgentAction,
   EditorAgentChangeset,
   EditorAgentGovernedAuthorityReference,
@@ -28,7 +29,7 @@ import {
   isValidCorrelationId,
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
-import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingToolFacadePorts.js";
 import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
 import {
   changesetPayloadBytes,
@@ -43,6 +44,7 @@ import {
   type ReplacementRefusal,
 } from "./codingToolReplacementEdits.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
+import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
   CodingRuntimeEditorMutationLeaseRequest,
@@ -1050,17 +1052,43 @@ async function materializedEdit(
   if (result.status !== "materialized") {
     return { outcome: materializationRefused(deps, result, evidence) };
   }
-  if (!chargedMaterialization(request.changeset, result.changeset.patch, mutationGuard)) {
-    return {
-      outcome: editRefused(deps, editContextCorrelationId(deps), "LIMIT_EXCEEDED", {
-        message: PATCH_BUDGET_MESSAGE,
-        replacementRefusal: "patch-budget-exhausted",
-        ...evidence,
-      }),
-    };
-  }
+  const charge = chargedMaterialization(request.changeset, result.changeset.patch, mutationGuard);
+  if (!charge.ok) return { outcome: materializedChargeRefused(deps, charge.reason, evidence) };
   return { request: { ...request, changeset: result.changeset }, evidence };
 }
+
+// A refused charge names its real cause (#3873 review): only an exhausted budget is a budget
+// refusal with the advice to split; a run that stopped, an authority that expired, drifted or was
+// replayed is the guard's denial, and a workspace drift is lost workspace access.
+function materializedChargeRefused(
+  deps: CodingToolReadEditPortDeps,
+  reason: CodingWorkbenchRuntimeFailureCode,
+  evidence: EditFormEvidence,
+): EditOutcome {
+  const correlationId = editContextCorrelationId(deps);
+  if (reason === "authority-budget-exceeded") {
+    return editRefused(deps, correlationId, "LIMIT_EXCEEDED", {
+      message: PATCH_BUDGET_MESSAGE,
+      replacementRefusal: "patch-budget-exhausted",
+      ...evidence,
+    });
+  }
+  return editRefused(deps, correlationId, "EDIT_PREPARE_FAILED", {
+    prepareCause: reason === "workspace-drift" ? "workspace-access-lost" : "guard-denied",
+    ...evidence,
+  });
+}
+
+// The governed reads a file can never answer, with what the model can do instead (#3873 review):
+// retrying the same call cannot help, so the message says so.
+const UNREADABLE_FOR_EDIT_MESSAGES: Partial<
+  Record<GovernedWorkspaceReadFailure, (file: string) => string>
+> = {
+  "not-text": (file) =>
+    `${file} is not a UTF-8 text file; keiko_changeset_edit changes text files only. Leave it in place and report it.`,
+  "too-large": (file) =>
+    `${file} is larger than the ${String(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES)} bytes a governed read returns, so keiko_changeset_edit cannot edit, move or delete it. Leave it in place and report it.`,
+};
 
 // A materialization that produced no changeset: a governed read that did not answer, recorded with
 // its closed reason (a cancelled run as cancelled), or a refusal recorded with its closed class.
@@ -1071,9 +1099,11 @@ function materializationRefused(
 ): EditOutcome {
   const correlationId = editContextCorrelationId(deps);
   if (result.status === "read-failed") {
+    const message = UNREADABLE_FOR_EDIT_MESSAGES[result.reason]?.(result.file);
     return editRefused(deps, correlationId, "EDIT_PREPARE_FAILED", {
       prepareCause: result.reason === "cancelled" ? "cancelled" : "replacement-read-failed",
       readReason: result.reason,
+      ...(message === undefined ? {} : { message }),
       ...evidence,
     });
   }
@@ -1092,11 +1122,11 @@ function chargedMaterialization(
   changeset: CodingToolReplacementChangeset,
   patch: string,
   mutationGuard: CodingToolMutationGuard,
-): boolean {
+): MaterializedPatchCharge {
   const charge = mutationGuard.chargeMaterializedPatch;
-  if (charge === undefined) return true;
+  if (charge === undefined) return { ok: true };
   const excess = Buffer.byteLength(patch, "utf8") - changesetPayloadBytes(changeset);
-  return excess <= 0 || charge(excess);
+  return excess <= 0 ? { ok: true } : charge(excess);
 }
 
 // Binds the live editor session a prepared edit needs; a refusal here discards the mutation lease.

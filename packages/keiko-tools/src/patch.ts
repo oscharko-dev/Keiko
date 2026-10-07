@@ -353,6 +353,11 @@ function alignFileHunks(file: PatchFileChange, current: string | undefined): Pat
   if (current === undefined) {
     return isCreateOnlyModify(file) ? { ...file, kind: "create" } : file;
   }
+  // A present but EMPTY file filled by a pure insertion (`@@ -0,0 +1,N @@`, what any diff tool
+  // writes for an empty pre-image) has exactly one anchor, the file's start: line 1 (#3873 review).
+  if (current === "" && isCreateOnlyModify(file)) {
+    return { ...file, hunks: file.hunks.map((hunk) => ({ ...hunk, oldStart: 1, newStart: 1 })) };
+  }
   const currentLines = toLines(current);
   const hunks = file.hunks.map((hunk, index) => {
     const preimage = hunkPreimageLines(file, index);

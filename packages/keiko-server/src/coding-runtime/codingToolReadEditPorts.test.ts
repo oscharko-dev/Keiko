@@ -26,7 +26,7 @@ import {
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
-import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingToolFacadePorts.js";
 import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
@@ -2052,11 +2052,14 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
   // guard, by its excess over the request payload admission already reserved; a refused charge
   // refuses the edit before the editor sees it.
   it("charges the materialized diff's excess over the payload through the guard, and refuses when it does not fit", async () => {
-    const accepted = vi.fn<(patchBytes: number) => boolean>(() => true);
+    const accepted = vi.fn<(patchBytes: number) => MaterializedPatchCharge>(() => ({ ok: true }));
     const { events, result } = await settledEdit(movingChangeset(["src/d.ts"]), {
       guard: { chargeMaterializedPatch: accepted },
     });
-    const refusing = vi.fn<(patchBytes: number) => boolean>(() => false);
+    const refusing = vi.fn<(patchBytes: number) => MaterializedPatchCharge>(() => ({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    }));
     const refused = await settledEdit(movingChangeset(["src/d.ts"]), {
       guard: { chargeMaterializedPatch: refusing },
     });
@@ -2092,6 +2095,35 @@ describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)",
       extra: { reasonCode: "LIMIT_EXCEEDED", replacementRefusal: "patch-budget-exhausted" },
     });
   });
+
+  // #3873 review: the charge also fails for reasons that are not the budget — a run that stopped,
+  // an authority that expired, drifted or was replayed. Those are the guard's denial, never an
+  // exhausted budget, and the model is not told to split a call that cannot succeed.
+  it.each([
+    ["authority-resolution-failed", "guard-denied"],
+    ["authority-replayed", "guard-denied"],
+    ["workspace-drift", "workspace-access-lost"],
+  ] as const)(
+    "records a charge refused with %s as the guard's %s, never as an exhausted budget",
+    async (reason, prepareCause) => {
+      const refusing = vi.fn<(patchBytes: number) => MaterializedPatchCharge>(() => ({
+        ok: false,
+        reason,
+      }));
+      const refused = await settledEdit(movingChangeset(["src/d.ts"]), {
+        guard: { chargeMaterializedPatch: refusing },
+      });
+
+      expect(refused.result).toMatchObject({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+      expect(JSON.stringify(refused.result)).not.toContain("split");
+      const line = refused.events.at(-1);
+      expect(line).toMatchObject({
+        op: "coding-runtime.edit.refused",
+        extra: { reasonCode: "EDIT_PREPARE_FAILED", prepareCause },
+      });
+      expect(line?.extra).not.toHaveProperty("replacementRefusal");
+    },
+  );
 
   it("records zero counts for a replacement edit that neither moves nor deletes", async () => {
     const { events } = await settledEdit({

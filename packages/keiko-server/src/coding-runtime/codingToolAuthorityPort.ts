@@ -25,6 +25,7 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolProducerBinding,
+  MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
@@ -468,7 +469,7 @@ function guarded(
     canChargeDelegatedRead: (): boolean => canChargeDelegatedRead(authority, context, capability),
     ...(chargesMaterializedPatch === true
       ? {
-          chargeMaterializedPatch: (patchBytes: number): boolean =>
+          chargeMaterializedPatch: (patchBytes: number): MaterializedPatchCharge =>
             chargeMaterializedPatch(authority, context, capability, request, patchBytes),
         }
       : {}),
@@ -485,18 +486,21 @@ function guarded(
 // known in that form once it is materialized. Admission reserved the request payload as the floor;
 // the materialized diff's excess is charged here as one more delegation on the same authority
 // record, identified by the action it belongs to and carrying no tool call of its own. A refused
-// charge refuses the edit before any editor action exists.
+// charge refuses the edit before any editor action exists, with the authority's closed reason: only
+// `authority-budget-exceeded` is an exhausted budget (#3873 review).
 function chargeMaterializedPatch(
   authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
   context: CodingToolAuthorityContextProvider,
   capability: string,
   request: CodingToolActionRequest,
   patchBytes: number,
-): boolean {
-  if (!Number.isSafeInteger(patchBytes) || patchBytes < 0) return false;
-  if (patchBytes === 0) return true;
+): MaterializedPatchCharge {
+  if (!Number.isSafeInteger(patchBytes) || patchBytes < 0) {
+    return { ok: false, reason: "invalid-intent" };
+  }
+  if (patchBytes === 0) return { ok: true };
   const trusted = context();
-  return authority.resolveCapabilityForDelegation({
+  const resolved = authority.resolveCapabilityForDelegation({
     capability,
     adapterKind: trusted.adapterKind,
     liveFacts: trusted.liveFacts,
@@ -506,7 +510,8 @@ function chargeMaterializedPatch(
     workspaceRoot: trusted.workspaceRoot,
     deploymentCeiling: trusted.deploymentCeiling,
     nowIso: trusted.nowIso,
-  }).ok;
+  });
+  return resolved.ok ? { ok: true } : { ok: false, reason: resolved.reason };
 }
 
 // Derived, bounded and collision-free: the registry holds a delegation identity to 256 characters

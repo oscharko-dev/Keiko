@@ -592,13 +592,46 @@ describe("production managed worktree tools", () => {
   // read reports, never a second formula.
   // Owner decision (ADR-0124 D6): contained routine edits use the medium-risk policy. Ask mode
   // reviews the diff; Supervised and Full access apply it through the same governed patch boundary.
-  it.each([
-    ["governed-assist", true],
-    ["supervised-coding", false],
-    ["autonomous-delivery", false],
-  ] as const)(
-    "derives editor review policy for %s (requiresReview=%s)",
-    async (effectiveMode: CodingWorkbenchMode, requiresReview: boolean) => {
+  // Owner decision Q2 (2026-10-07, ADR-0138 D2): a deletion and a rename take the SAME medium risk
+  // as an edit, so Supervised applies them without a review exactly like an edit; pinned per mode so
+  // a change of that decision is deliberate.
+  const REVIEW_CHANGESETS = {
+    edit: replacementChangeset(),
+    deletion: {
+      edits: [],
+      deletions: ["src/a.ts"],
+      renames: [],
+      files: [{ file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(EDITED_TEXT) }],
+      selectedFiles: ["src/a.ts"],
+    },
+    rename: {
+      edits: [],
+      deletions: [],
+      renames: [{ from: "src/a.ts", to: "src/b.ts" }],
+      files: [
+        { file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(EDITED_TEXT) },
+        { file: "src/b.ts", expectedContentHash: secureWorkspaceTextDigest("") },
+      ],
+      selectedFiles: ["src/a.ts", "src/b.ts"],
+    },
+  } as const;
+  it.each(
+    (
+      [
+        ["governed-assist", true],
+        ["supervised-coding", false],
+        ["autonomous-delivery", false],
+      ] as const
+    ).flatMap(([mode, review]) =>
+      (["edit", "deletion", "rename"] as const).map((kind) => [mode, review, kind] as const),
+    ),
+  )(
+    "derives editor review policy for %s (requiresReview=%s, %s)",
+    async (
+      effectiveMode: CodingWorkbenchMode,
+      requiresReview: boolean,
+      kind: keyof typeof REVIEW_CHANGESETS,
+    ) => {
       const order: string[] = [];
       const activity: ServerLogEvent[] = [];
       const register = vi.fn((): boolean => {
@@ -624,7 +657,12 @@ describe("production managed worktree tools", () => {
         deploymentCeiling: "autonomous-delivery",
         liveFacts: () => FACTS,
         secureWorkspaceTextRead: {
-          readText: () => Promise.resolve({ ok: true as const, text: EDITED_TEXT }),
+          readText: ({ relativePath }) =>
+            Promise.resolve(
+              relativePath === "src/a.ts"
+                ? { ok: true as const, text: EDITED_TEXT }
+                : { ok: false as const, reason: "not-found" as const },
+            ),
         },
         editorAgentClient: {
           action: (action) => {
@@ -660,7 +698,7 @@ describe("production managed worktree tools", () => {
             action: "edit",
             actionId: "edit-1",
             idempotencyKey: "edit-key-1",
-            changeset: replacementChangeset(),
+            changeset: REVIEW_CHANGESETS[kind],
           }),
         }),
       ).resolves.toMatchObject({ status: "completed" });

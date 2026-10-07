@@ -3,6 +3,7 @@ import {
   type EditorAgentChangeset,
   type EditorAgentChangesetFile,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
+import { DEFAULT_PATCH_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { lineDiffSide, unifiedDiffHunks } from "../gitDelivery/lineDiff.js";
 import {
   secureWorkspaceTextDigest,
@@ -27,8 +28,11 @@ import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadP
  *
  * Bounds (#3873 review): an edited file may not grow past the governed read ceiling, projected from
  * the match count before any result is built, so a `replaceAll` that would multiply a file cannot
- * hold the event loop or the heap; the rendered changeset is held to the editor's patch cap here,
- * with a closed reason the model can act on, instead of failing as an opaque invalid changeset.
+ * hold the event loop or the heap; the rendered changeset is held to the editor's patch cap and to
+ * the changed-line limit the editor route applies (`DEFAULT_PATCH_LIMITS`) here, before the run's
+ * patch budget is charged, with a closed reason the model can act on, instead of failing later as
+ * an opaque invalid changeset. A deletion or a rename renders its whole file and cannot be split, so
+ * one that alone exceeds a call's bounds is refused as `whole-file-too-large`, never "split it".
  */
 export interface CodingToolReplacementEdit {
   readonly file: string;
@@ -97,6 +101,10 @@ export const REPLACEMENT_REFUSALS = [
   "target-exists",
   "result-too-large",
   "patch-too-large",
+  // #3873 review: the bounds the editor route applies, checked before the run's budget is charged.
+  "changed-lines-exceeded",
+  "whole-file-too-large",
+  "escaped-line-break",
 ] as const;
 export type ReplacementRefusal = (typeof REPLACEMENT_REFUSALS)[number];
 
@@ -108,7 +116,12 @@ export type ReplacementMaterialization =
       readonly refusal: ReplacementRefusal;
       readonly message: string;
     }
-  | { readonly status: "read-failed"; readonly reason: GovernedWorkspaceReadFailure };
+  | {
+      readonly status: "read-failed";
+      readonly reason: GovernedWorkspaceReadFailure;
+      /** The file whose governed read did not answer, so the refusal can name it. */
+      readonly file: string;
+    };
 
 type Refusal = Extract<ReplacementMaterialization, { readonly status: "refused" }>;
 type ReadFailed = Extract<ReplacementMaterialization, { readonly status: "read-failed" }>;
@@ -184,18 +197,85 @@ export async function materializeReplacementChangeset(
   for (const step of planned.steps) {
     const outcome = await materializeStep(read, changeset.files, step, signal);
     if (outcome.status !== "changed") return outcome;
+    const wholeFile = wholeFileRefusal(step, outcome.changes);
+    if (wholeFile !== undefined) return wholeFile;
     changes.push(...outcome.changes);
   }
   return assembled(changes);
 }
 
+// The editor route refuses any diff text that carries a literal "\n" followed by "+", "-" or a space:
+// keiko-tools' guard against a model collapsing a diff's lines into one (`hasEscapedDiffLineBreak`,
+// pinned there by "rejects escaped newline artifacts inside diff body lines"). A rendered section
+// carries file text, so a file line with such text, or a newString that writes one, can never pass
+// that guard. It is refused here, before the run's patch budget is charged, with an action the model
+// can take (#3873 review); a test runs the rendered diff through the engine to keep the two in step.
+const ESCAPED_LINE_BREAK_MARKERS = [String.raw`\n+`, String.raw`\n-`, String.raw`\n `] as const;
+
+function carriesEscapedLineBreak(section: string): boolean {
+  return ESCAPED_LINE_BREAK_MARKERS.some((marker) => section.includes(marker));
+}
+
+// The lines a rendered section adds or removes; its two header lines are not counted.
+function changedLineCount(section: string): number {
+  return section
+    .split("\n")
+    .slice(2)
+    .filter((line) => line.startsWith("+") || line.startsWith("-")).length;
+}
+
+// A deletion or a rename renders its whole file and cannot be split into smaller calls: one that
+// alone exceeds what one call may carry is refused with that reason and an action the model can
+// take, never "split it" (#3873 review). An edit is judged with the whole call in `assembled`.
+function wholeFileRefusal(step: Step, changes: readonly FileChange[]): Refusal | undefined {
+  if (step.kind === "edit") return undefined;
+  const file = step.kind === "rename" ? step.from : step.file;
+  const verb = step.kind === "rename" ? "moved" : "deleted";
+  if (changes.some((change) => carriesEscapedLineBreak(change.section))) {
+    return refused(
+      "LIMIT_EXCEEDED",
+      "escaped-line-break",
+      `${file} cannot be ${verb} with keiko_changeset_edit: its text contains a literal backslash-n followed by +, - or a space, which the governed editor refuses in a diff. Leave it in place and report it to the operator.`,
+    );
+  }
+  const bytes = changes.reduce((sum, change) => sum + Buffer.byteLength(change.section, "utf8"), 0);
+  const lines = changes.reduce((sum, change) => sum + changedLineCount(change.section), 0);
+  if (
+    bytes <= EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES &&
+    lines <= DEFAULT_PATCH_LIMITS.maxChangedLines
+  ) {
+    return undefined;
+  }
+  return refused(
+    "LIMIT_EXCEEDED",
+    "whole-file-too-large",
+    `${file} cannot be ${verb} with keiko_changeset_edit: a ${step.kind === "rename" ? "rename" : "deletion"} renders the whole file (${String(lines)} changed lines, ${String(bytes)} bytes), more than one call may carry (${String(DEFAULT_PATCH_LIMITS.maxChangedLines)} lines, ${String(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)} bytes). Leave it in place and report it to the operator.`,
+  );
+}
+
 function assembled(changes: readonly FileChange[]): ReplacementMaterialization {
+  const escaped = changes.find((change) => carriesEscapedLineBreak(change.section));
+  if (escaped !== undefined) {
+    return refused(
+      "INVALID_EDITS",
+      "escaped-line-break",
+      `The edit of ${escaped.binding.file} would render a literal backslash-n followed by +, - or a space (from newString, or from a file line within three lines of the edit), which the governed editor refuses in a diff. Keep such text out of newString, or edit lines further away from it.`,
+    );
+  }
   const patch = changes.map((change) => change.section).join("");
   if (Buffer.byteLength(patch, "utf8") > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) {
     return refused(
       "LIMIT_EXCEEDED",
       "patch-too-large",
       `The materialized changeset exceeds ${String(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)} bytes; split it into smaller calls.`,
+    );
+  }
+  const changedLines = changes.reduce((sum, change) => sum + changedLineCount(change.section), 0);
+  if (changedLines > DEFAULT_PATCH_LIMITS.maxChangedLines) {
+    return refused(
+      "LIMIT_EXCEEDED",
+      "changed-lines-exceeded",
+      `The materialized changeset changes ${String(changedLines)} lines, more than the ${String(DEFAULT_PATCH_LIMITS.maxChangedLines)} one call may change; split the edits into smaller calls.`,
     );
   }
   const bindings = changes.map((change) => change.binding);
@@ -448,7 +528,7 @@ async function renameTargetRefusal(
   }
   return current.reason === "not-found"
     ? undefined
-    : { status: "read-failed", reason: current.reason };
+    : { status: "read-failed", reason: current.reason, file: to };
 }
 
 // The hash-bound current text of a file: `undefined` for a file that does not exist yet.
@@ -460,7 +540,7 @@ async function currentText(
 ): Promise<{ readonly before: string | undefined } | Refusal | ReadFailed> {
   const current = await read.readText({ relativePath: file, signal });
   if (!current.ok && current.reason !== "not-found") {
-    return { status: "read-failed", reason: current.reason };
+    return { status: "read-failed", reason: current.reason, file };
   }
   const before = current.ok ? current.text : undefined;
   if (secureWorkspaceTextDigest(before ?? "") !== expectedContentHash) {
@@ -524,14 +604,19 @@ function applyEdit(
   return replaceIn(file, content, edit);
 }
 
-// Matching is line-ending-insensitive: the file and both strings are compared with every "\r\n"
-// read as "\n", because a model reads a CRLF file's lines without their carriage returns and a file
-// with mixed endings must still match (#3873 review). Each replaced line break keeps the ending it
-// had; a line break the replacement adds takes the file's majority ending.
+// The tool contract asks for `oldString` byte for byte, so the exact text is matched first; only an
+// `oldString` with no exact occurrence falls back to a line-ending-insensitive match, with every
+// "\r\n" of the file and both strings read as "\n", because a model may read a CRLF file's lines
+// without their carriage returns and a file with mixed endings must still match (#3873 review). A
+// byte-exact match therefore never becomes "not found" over a trailing carriage return, nor
+// ambiguous through normalization. Every line the replacement leaves unchanged keeps its own ending;
+// a line it changes or adds takes the replaced line's ending or the file's majority ending.
 function replaceIn(file: string, content: string, edit: CodingToolReplacementEdit): ApplyOutcome {
-  const normalized = normalizeLineEndings(content);
-  const needle = edit.oldString.replaceAll("\r\n", "\n");
-  const starts = occurrencesOf(normalized.text, needle);
+  const exact = occurrencesOf(content, edit.oldString);
+  const normalized =
+    exact.length > 0 ? { text: content, collapsed: [] } : normalizeLineEndings(content);
+  const needle = exact.length > 0 ? edit.oldString : edit.oldString.replaceAll("\r\n", "\n");
+  const starts = exact.length > 0 ? exact : occurrencesOf(normalized.text, needle);
   if (starts.length === 0) {
     return refused(
       "INVALID_EDITS",
@@ -645,13 +730,60 @@ function majorityLineEnding(content: string): string {
   return crlf > endings.length - crlf ? "\r\n" : "\n";
 }
 
+// The endings of the replacement's lines, chosen by line identity rather than by position: a line
+// the replacement shares with the replaced region — in their common leading or trailing run — keeps
+// that region line's own ending; a changed line keeps the ending of the region line at its place
+// when the line count is unchanged, and an added line takes the file's majority ending (#3873
+// review: an inserted line must never move a neighbouring line's ending).
 function withRegionEndings(region: string, replacement: string, majority: string): string {
   const parts = replacement.split("\n");
   if (parts.length === 1) return replacement;
+  const regionLines = region.replaceAll("\r\n", "\n").split("\n").slice(0, -1);
   const endings = lineEndingsOf(region);
-  return parts
-    .map((part, index) => (index === parts.length - 1 ? part : part + (endings[index] ?? majority)))
+  const lines = parts.slice(0, -1);
+  const lead = commonRun(lines, regionLines, (index) => index);
+  const trail = commonRun(
+    lines.slice(lead),
+    regionLines.slice(lead),
+    (index, length) => length - 1 - index,
+  );
+  return lines
+    .map(
+      (line, index) =>
+        line + lineEnding(index, { lines, regionLines, endings, lead, trail, majority }),
+    )
+    .concat(parts.at(-1) ?? "")
     .join("");
+}
+
+interface LineEndingChoice {
+  readonly lines: readonly string[];
+  readonly regionLines: readonly string[];
+  readonly endings: readonly string[];
+  readonly lead: number;
+  readonly trail: number;
+  readonly majority: string;
+}
+
+function lineEnding(index: number, choice: LineEndingChoice): string {
+  const { lines, regionLines, endings, lead, trail, majority } = choice;
+  if (index < lead) return endings[index] ?? majority;
+  const fromEnd = lines.length - 1 - index;
+  if (fromEnd < trail) return endings[regionLines.length - 1 - fromEnd] ?? majority;
+  return lines.length === regionLines.length ? (endings[index] ?? majority) : majority;
+}
+
+// The length of the run of equal lines the two lists share, read from the start or from the end.
+function commonRun(
+  a: readonly string[],
+  b: readonly string[],
+  at: (index: number, length: number) => number,
+): number {
+  let run = 0;
+  while (run < a.length && run < b.length && a[at(run, a.length)] === b[at(run, b.length)]) {
+    run += 1;
+  }
+  return run;
 }
 
 // `undefined` on either side is the absent file: a creation from, or a deletion to, `/dev/null`. An

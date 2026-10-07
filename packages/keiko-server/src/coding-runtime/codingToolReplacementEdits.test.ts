@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyPatch } from "@oscharko-dev/keiko-tools";
+import { applyPatch, validatePatch } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
@@ -385,7 +385,7 @@ describe("materializeReplacementChangeset", () => {
       undefined,
     );
 
-    expect(result).toEqual({ status: "read-failed", reason: "denied" });
+    expect(result).toEqual({ status: "read-failed", reason: "denied", file: ".env" });
   });
 
   it("drops declared files without edits and keeps a selection of edited ones", async () => {
@@ -819,12 +819,13 @@ describe("materializeReplacementChangeset deletions and renames", () => {
       undefined,
     );
 
-    expect(result).toEqual({ status: "read-failed", reason: "busy" });
+    expect(result).toEqual({ status: "read-failed", reason: "busy", file: "b.ts" });
   });
 
-  // A rename carries the whole file twice; the 65,536-byte changeset cap (ADR-0125 D3) still binds
-  // the materialized patch, and the model is told so instead of receiving an opaque prepare failure.
-  it("refuses a materialized changeset over the patch byte cap with LIMIT_EXCEEDED", async () => {
+  // A rename carries the whole file twice and cannot be split: one that alone exceeds the
+  // 65,536-byte changeset cap (ADR-0125 D3) is refused with that reason and an action the model can
+  // take, never "split it into smaller calls" (#3873 review).
+  it("refuses a rename whose whole-file rendering alone exceeds the patch byte cap", async () => {
     const large = `${"x".repeat(1_023)}\n`.repeat(40);
     const files = { "large.ts": large };
 
@@ -837,12 +838,180 @@ describe("materializeReplacementChangeset deletions and renames", () => {
       undefined,
     );
 
+    expect(result).toMatchObject({
+      status: "refused",
+      reasonCode: "LIMIT_EXCEEDED",
+      refusal: "whole-file-too-large",
+    });
+    expect(result).toHaveProperty(
+      "message",
+      expect.stringContaining("large.ts cannot be moved with keiko_changeset_edit"),
+    );
+    expect(result).not.toHaveProperty("message", expect.stringContaining("split"));
+  });
+
+  // The editor route's changed-line limit (DEFAULT_PATCH_LIMITS) binds the rendered diff: a rename
+  // of a 1,001-line file removes and adds every line, 2,002 in all, and is refused here, before the
+  // run's budget is charged, instead of later by the route with advice the model cannot follow.
+  it("refuses moving a file over 1,000 lines before the editor route would", async () => {
+    const files = { "long.ts": "line\n".repeat(1_001) };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(
+        { ...files, "moved.ts": undefined },
+        { renames: [{ from: "long.ts", to: "moved.ts" }] },
+      ),
+      undefined,
+    );
+
+    expect(result).toMatchObject({ status: "refused", refusal: "whole-file-too-large" });
+    expect(result).toHaveProperty("message", expect.stringContaining("2002 changed lines"));
+  });
+
+  // keiko-tools refuses any diff text with a literal backslash-n followed by +, - or a space (its
+  // guard against model-collapsed diffs, pinned there). A deletion renders the whole file, so a file
+  // with such text in a string can never pass it; the materializer says so up front.
+  it("refuses deleting a file whose text the editor's escaped-line-break guard refuses", async () => {
+    const text = 'const s = "a\\n b";\n';
+    const files = { "s.ts": text };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      operations(files, { deletions: ["s.ts"] }),
+      undefined,
+    );
+
+    expect(result).toMatchObject({
+      status: "refused",
+      reasonCode: "LIMIT_EXCEEDED",
+      refusal: "escaped-line-break",
+    });
+    expect(result).toHaveProperty("message", expect.stringContaining("s.ts cannot be deleted"));
+    // The engine really refuses that shape: the pre-check mirrors a refusal that exists.
+    const root = mkdtempSync(join(tmpdir(), "keiko-escaped-"));
+    roots.push(root);
+    writeFileSync(join(root, "s.ts"), text);
+    const engine = validatePatch(
+      workspace(root),
+      `--- a/s.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-${text}`,
+    );
+    expect(engine.ok).toBe(false);
+    expect(engine.reasons.map((reason) => reason.message).join(" ")).toContain("escaped newline");
+  });
+
+  it("still advises splitting an edit-only changeset over the patch byte cap", async () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 3 }, (_, index) => [`f${String(index)}.ts`, `${"x".repeat(30_000)}\n`]),
+    );
+    const edits = Object.keys(files).map((file) => ({
+      file,
+      oldString: "x".repeat(30_000),
+      newString: "y".repeat(30_000),
+      replaceAll: false,
+    }));
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, edits),
+      undefined,
+    );
+
     expect(result).toEqual({
       status: "refused",
       reasonCode: "LIMIT_EXCEEDED",
       refusal: "patch-too-large",
       message: `The materialized changeset exceeds ${String(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)} bytes; split it into smaller calls.`,
     });
+  });
+
+  it("refuses edits that change more lines than the editor route allows, advising a split", async () => {
+    const files = { "a.ts": "x\n".repeat(1_100) };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        {
+          file: "a.ts",
+          oldString: "x\n".repeat(1_100),
+          newString: "y\n".repeat(1_100),
+          replaceAll: false,
+        },
+      ]),
+      undefined,
+    );
+
+    expect(result).toMatchObject({ status: "refused", refusal: "changed-lines-exceeded" });
+    expect(result).toHaveProperty("message", expect.stringContaining("split the edits"));
+  });
+});
+
+// #3873 review: the tool contract says `oldString` is copied byte for byte, so the exact text wins
+// over the line-ending-insensitive fallback, and an edit never moves the ending of a line it leaves
+// unchanged. Every result is applied by the real patch engine.
+describe("materializeReplacementChangeset byte-exact matching", () => {
+  it("matches an oldString that ends on the carriage return of a CRLF pair", async () => {
+    const files = { "a.ts": "x = 1;\r\ny = 2;\r\n" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        { file: "a.ts", oldString: "x = 1;\r", newString: "x = 2;\r", replaceAll: false },
+      ]),
+      undefined,
+    );
+
+    expect(applied(files, result)).toEqual({ "a.ts": "x = 2;\r\ny = 2;\r\n" });
+  });
+
+  it("keeps a byte-exact unique oldString unique in a file with mixed endings", async () => {
+    const files = { "a.ts": "a\r\nb\na\nb\n" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        { file: "a.ts", oldString: "a\r\nb", newString: "A\r\nB", replaceAll: false },
+      ]),
+      undefined,
+    );
+
+    expect(applied(files, result)).toEqual({ "a.ts": "A\r\nB\na\nb\n" });
+  });
+
+  it("keeps the ending of every line an insertion leaves unchanged", async () => {
+    const files = { "a.ts": "one\r\ntwo\nthree\r\n" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        {
+          file: "a.ts",
+          oldString: "one\ntwo\nthree",
+          newString: "one\ninserted\ntwo\nthree",
+          replaceAll: false,
+        },
+      ]),
+      undefined,
+    );
+
+    // `two` keeps its own LF; the inserted line takes the file's majority ending (CRLF).
+    expect(applied(files, result)).toEqual({ "a.ts": "one\r\ninserted\r\ntwo\nthree\r\n" });
+  });
+
+  // An existing EMPTY file is filled with an empty oldString: the engine anchors the pure insertion
+  // at the file's start instead of refusing it as unanchored (#3873 review).
+  it("fills an existing empty file", async () => {
+    const files = { "__init__.py": "" };
+
+    const result = await materializeReplacementChangeset(
+      reader(files),
+      changeset(files, [
+        { file: "__init__.py", oldString: "", newString: "export {};\n", replaceAll: false },
+      ]),
+      undefined,
+    );
+
+    expect(applied(files, result)).toEqual({ "__init__.py": "export {};\n" });
   });
 });
 

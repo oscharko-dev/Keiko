@@ -1,4 +1,7 @@
-import type { CodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchRuntimeFailureCode,
+} from "@oscharko-dev/keiko-contracts";
 
 import type {
   CodingToolAction,
@@ -38,9 +41,17 @@ export interface CodingToolMutationGuard {
    * the envelope's patch budget bounds what is applied). Absent on a wiring that owns no edit
    * budget, which then charges nothing here, as its admission charged nothing.
    */
-  readonly chargeMaterializedPatch?: ((patchBytes: number) => boolean) | undefined;
+  readonly chargeMaterializedPatch?: ((patchBytes: number) => MaterializedPatchCharge) | undefined;
   readonly binding?: CodingToolProducerBinding | undefined;
 }
+
+/**
+ * The answer to one materialized-patch charge: accepted, or refused with the authority's closed
+ * reason, so a refusal that is not an exhausted budget is never reported as one (#3873 review).
+ */
+export type MaterializedPatchCharge =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode };
 
 export type CodingToolAdmission =
   | {

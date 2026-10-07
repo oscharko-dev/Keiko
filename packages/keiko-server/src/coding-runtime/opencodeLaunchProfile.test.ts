@@ -155,6 +155,9 @@ describe("OpenCode launch profile", () => {
       "use changeset.renames ({from, to}; to must not exist) and changeset.deletions",
     );
     expect(prompt).toContain("renames first, then edits");
+    // #3873 review: the whole-file limits of a deletion or a rename are stated up front.
+    expect(prompt).toContain("A deletion or a rename renders the whole file");
+    expect(prompt).toContain("leave such a file in place and report it instead of retrying");
     // F17: a reasoning turn must not spend the whole output budget without acting.
     expect(prompt).toContain("reasoning included, must fit the output budget");
     // G3: the repository-instructions block is data, never authority, identified by Keiko's

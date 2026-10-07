@@ -193,10 +193,20 @@ uses, logged with their purpose, and its preconditions use the digest those read
 touched path, both halves of a rename included, counts against the 50-file cap; an edited file may
 not grow past the governed read ceiling, projected from the match count before any result is built;
 the rendered changeset is held to the 65,536-byte cap; and the run's `maxPatchBytes` is charged
-with the materialized diff, not merely with the replacement text the model sent. The result travels
-through the same review decision, containment, denied-path and hash gates as any other
-`applyChangeset`, and the settled and refused edit lines record the edit form with body-free
-deletion and rename counts and, for a refusal, its closed class.
+with the materialized diff, not merely with the replacement text the model sent. The rendered diff
+is also held to the editor route's changed-line limit and to its escaped-line-break guard before the
+budget is charged (#3873 review). A deletion or a rename renders its whole file and cannot be split,
+so a file whose rendering alone exceeds the byte cap or the 2,000 changed lines, whose text carries a
+literal backslash-n followed by `+`, `-` or a space, or that the governed read cannot return as text
+(binary, or above the 65,536-byte read ceiling) cannot be moved or deleted with this tool; each is
+refused with a closed class (`whole-file-too-large`, `escaped-line-break`, or the read's own reason)
+and a message that tells the model to leave the file in place and report it, never to "split" the
+call. A charge the authority refuses for any reason other than an exhausted budget is recorded as the
+guard's denial, never as `patch-budget-exhausted`. The result travels through the same review
+decision, containment, denied-path and hash gates as any other `applyChangeset` — a deletion or a
+rename at the same `medium` risk as an edit (owner decision Q2, 2026-10-07, ADR-0138 D2) — and the
+settled and refused edit lines record the edit form with body-free deletion and rename counts and,
+for a refusal, its closed class.
 
 The server routes this through the existing `keiko-tools` patch validation and
 atomic apply/rollback path. Closed files may be changed by that governed server workspace
