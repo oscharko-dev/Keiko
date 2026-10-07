@@ -377,16 +377,33 @@ function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
   );
 }
 
+// #3873 live review: the chip ellipsized "gemma-4-31b-it" to "gemma-4-…" and named itself only
+// "Coding model". It now grows with the identifier up to a bound (CodingWorkbenchWindow.module.css),
+// and its accessible name and tooltip always carry the full identifier of the selected model.
+function modelChipNaming(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): { readonly name: string; readonly title: string | undefined } {
+  const selected = input.models.find((model) => model.id === input.selectedModelId);
+  if (selected === undefined) {
+    return { name: t("codingWorkbench.composer.model.label"), title: undefined };
+  }
+  const name = t("codingWorkbench.composer.model.selected", { model: selected.id });
+  return { name, title: name };
+}
+
 function CodingModelControl({ input, t }: ControlProps): ReactNode {
   if (input.runtimePreference !== "managed-gateway") return null;
   const options = input.models.map((model) => ({ value: model.id, label: model.id }));
+  const naming = modelChipNaming(input, t);
   return (
     <div className={`cmp-model mono ${styles.modelControl}`}>
       <KeikoSelect
         triggerClassName="cmp-model-select"
+        triggerTitle={naming.title}
         value={input.selectedModelId ?? ""}
         placeholder={t("codingWorkbench.composer.model.none")}
-        ariaLabel={t("codingWorkbench.composer.model.label")}
+        ariaLabel={naming.name}
         menuTitle={t("codingWorkbench.composer.model.menu")}
         menuMinWidth={280}
         menuPopoverMinWidth={280}

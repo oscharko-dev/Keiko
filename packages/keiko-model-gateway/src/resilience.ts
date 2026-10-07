@@ -5,18 +5,25 @@
 import {
   CancelledError,
   CircuitOpenError,
+  ConfigInvalidError,
   GatewayError,
+  MalformedToolCallError,
+  ProviderEmptyAnswerError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
   activityLogErrorKind,
+  GATEWAY_FAILURE_EVIDENCE_FIELDS,
+  gatewayFailureEvidence,
   logLevelEnabled,
   logModelId,
   logTimer,
@@ -91,6 +98,24 @@ export function streamRequestBudgetMs(provider: { readonly timeoutMs: number }):
   return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS, GATEWAY_STREAM_BUDGET_FLOOR_MS);
 }
 
+/**
+ * The retry policy a call runs under (#3873): `attempts` keeps the provider's `maxRetries` and the
+ * fail-fast breaker; `outage-window` keeps retrying a transiently unavailable provider for an
+ * outage window and waits through an open breaker.
+ */
+export type RetryPolicy = "attempts" | "outage-window";
+
+// The applied policy on every retry and breaker-wait line, so an analyst can tell a deliberate
+// outage window from a retry loop that ignored its attempt count. `required: false` only because a
+// record written before this field existed lacks it (as with `outputExhausted`, PR #3602 review);
+// every line written since carries it.
+const RETRY_POLICY_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: ["attempts", "outage-window"],
+} as const;
+
 const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -150,6 +175,7 @@ const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["absent", "valid", "unparseable", "elapsed"],
     },
+    retryPolicy: RETRY_POLICY_FIELD,
   },
   causal: "none",
   lifecycle: "failure",
@@ -168,9 +194,26 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
   emitter: "resilience.executeWithRetry",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    // The position, counted from 1, of the attempt that failed on the call's whole ladder of
+    // attempts: the provider attempts AND the call's one steered repair (`reason` says which kind of
+    // further attempt this line schedules). After a repair, the retry of the next provider failure
+    // is therefore scheduled as attempt 2, while the retry observer's notice and the
+    // `coding-sidecar.gateway.retry-surfaced` line built from it count provider attempts only and
+    // name that same retry as following attempt 1. The two numbers differ on purpose (#3873 review).
     attempt: { type: "integer", dataClass: "count", required: true },
     maxRetries: { type: "integer", dataClass: "count", required: true },
     delayMs: { type: "number", dataClass: "duration", required: true },
+    // #3873 (F17, F23): why a further attempt was scheduled — a retryable provider failure, or the
+    // one steered repair of an answer the model could not use (it exhausted its output budget, or it
+    // ended after reasoning without a tool call or any text), which is not a provider retry and must
+    // read as such. `required: false` only because a record written before this field existed lacks
+    // it; every line written since carries it.
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["retryable-error", "output-exhausted-repair", "empty-answer-repair"],
+    },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
     retryAfterHeader: {
@@ -179,12 +222,43 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["absent", "valid", "unparseable", "elapsed"],
     },
+    retryPolicy: RETRY_POLICY_FIELD,
   },
   causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-retry"],
   proofIds: ["gateway.retry.scheduled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// #3873 review: a call's retry observer is the caller's code, run inside the retry loop and the
+// admission wait. One that throws is absorbed where it is called, so the call keeps its own result
+// and the throw is never an unhandled rejection; this line is the record of it. It names the notice
+// the observer was told and carries the Keiko-code frames and cause classes of the throw, never the
+// notice's content, the observer's message or its identity.
+const GATEWAY_RETRY_OBSERVER_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.retry.observer-failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.reportObserverFailure",
+  fields: {
+    ...GATEWAY_FAILURE_EVIDENCE_FIELDS,
+    modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    notice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["scheduled", "admission-wait", "settled"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-retry"],
+  proofIds: ["gateway.retry.observer-failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -323,6 +397,116 @@ export interface RetryConfig {
   // left of `timeoutMs`, so an attempt that hangs ends in time for its retry and no attempt
   // outlives the end-to-end budget.
   readonly attemptTimeoutMs?: number | undefined;
+  // When set, the call keeps scheduling retries after a transient provider failure for this long
+  // instead of stopping after `maxRetries`; a failure that reacts to the model's own output keeps
+  // the attempt count (`decisionWindowMs`), and `timeoutMs` still bounds the whole call (#3873).
+  readonly retryWindowMs?: number | undefined;
+  /**
+   * A steered repair of a TERMINAL failure the caller can correct (#3873, F17): consulted on every
+   * failed attempt; a reason schedules ONE further attempt at once, which receives the failure as
+   * its `previousError` and sends a corrected request. The repair is granted once per call, for
+   * whichever failure comes first, and is not a provider retry: neither `maxRetries` nor the outage
+   * window applies to it, only what is left of `timeoutMs`. A second failure surfaces to the caller.
+   */
+  readonly repair?: ((error: Error) => RetryRepairReason | undefined) | undefined;
+}
+
+/**
+ * The steered repairs the loop knows, one per failure of the model's own answer: one that exhausted
+ * its output budget (#3873, F17) and one that ended after reasoning without a tool call or any text
+ * (#3873, F23). The reason names the correction the caller sends and is what the scheduled line says.
+ */
+export type RetryRepairReason = "output-exhausted-repair" | "empty-answer-repair";
+
+/**
+ * An attempt that already ran outside the loop and failed (#3873, F17, option iii): the loop
+ * resumes after it, so a streamed answer that failed after nothing but forwarded reasoning — its
+ * one steered repair, a schema correction, or a provider retry under the call's policy — is
+ * decided, logged and bounded exactly like a failure before the first chunk.
+ */
+export interface RetryResume {
+  readonly failedAttempt: Error;
+  /**
+   * How many attempts the call has made, the failed one included, and how many of them were the
+   * steered repair. A stream can be resumed more than once, so the counts carry over and the call
+   * keeps ONE attempt count and ONE repair across its loops (#3873 review). Absent: the failed
+   * attempt is attempt 1 and no repair ran.
+   */
+  readonly attempts?: number | undefined;
+  readonly repairs?: number | undefined;
+}
+
+// The reason a further attempt was scheduled, on the scheduled line.
+type RetryScheduledReason = "retryable-error" | RetryRepairReason;
+
+// The gateway's own repair of an answer the model could not use: one that exhausted its output
+// budget (#3873, F17), and one that ended after reasoning without a tool call or any text (F23) —
+// an empty answer that carried no reasoning is the model's final word and gets none (#3610).
+// `Gateway` sends the corrected request on the attempt that follows; the loop only grants that
+// attempt, once, and only on a call whose retry configuration carries it (`RetryConfig.repair`).
+// The single classification every path consults: the buffered attempt, the streamed startup, and
+// the stream resumed after forwarded reasoning.
+export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined {
+  if (error instanceof ProviderOutputExhaustedError) return "output-exhausted-repair";
+  return error instanceof ProviderEmptyAnswerError && error.afterReasoning
+    ? "empty-answer-repair"
+    : undefined;
+}
+
+// Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
+// configuration, the gateway's own redaction pass refusing to walk a pathologically deep response
+// body (review finding on PR #3394 — an untyped RangeError from that last case used to slip past
+// this list and trip the breaker for an otherwise healthy model; ResponseRedactionError is now
+// thrown instead, see openai-adapter.ts's redactUnknown), or a ProviderOutputExhaustedError (an
+// HTTP 200 with `finish_reason: "length"` and no content — the model answered, it just spent its
+// budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
+// failing), or a ProviderEmptyAnswerError (#3610: an HTTP 200 answer that completed with neither
+// content nor a tool call — the provider answered, the model produced nothing usable; counting it
+// let three such answers lock every caller of a healthy model out), or a MalformedToolCallError
+// (the model's own tool call did not parse or did not match the tool's schema: the gateway retries
+// it, and the provider answered every time; a lab run of 1.1.8 behind a LiteLLM hosted_vllm route
+// opened the breaker after five such calls and failed the run on CircuitOpenError). It covers the
+// redaction-depth refusal (ResponseRedactionError) and the catalog's schema rejection
+// (GatewayToolCatalogError), both of which extend it. A named, extensible list rather than a
+// growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
+//
+// TimeoutError is deliberately NOT here (review finding on PR #3602 — it was, briefly, during
+// #3591's development). Excluding every timeout disabled the breaker's own outage guard: an
+// upstream that never responds at all would cost every caller a full (multi-minute, with the new
+// floors) attempt before failing, and the breaker would never open for it, no matter how many
+// callers piled up. With `GATEWAY_SILENCE_FLOOR_MS`/`GATEWAY_BUFFERED_BUDGET_FLOOR_MS` this
+// generous, a `TimeoutError` means the provider produced nothing for minutes — an outage-class
+// signal, not the noise of a slow-but-alive gateway (which stays inside the floor and never times
+// out at all) — so it counts as a provider failure again, exactly as it did before this PR.
+//
+// The one classification of "does this failure say the provider is unhealthy": the breaker counts
+// only failures outside this list (`gateway.ts`), and the outage window extends only their retries
+// (`decisionWindowMs`, #3873 review).
+const NON_PROVIDER_FAULTS = [
+  CancelledError,
+  ConfigInvalidError,
+  MalformedToolCallError,
+  ProviderOutputExhaustedError,
+  ProviderEmptyAnswerError,
+] as const;
+
+export function isNonProviderFault(error: unknown): boolean {
+  return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
+}
+
+// The window a retry decision runs under (#3873 review). The outage window replaces the attempt
+// count only after a failure that says the provider is unavailable (a timeout, a refused
+// connection, a retryable 5xx, a rate limit). A retry that reacts to the model's own output (a
+// rejected tool-call shape and its schema-repair correction) keeps the attempt count, window or
+// not: the provider answered every time, and waiting longer cannot make the model's answer valid.
+function decisionWindowMs(config: RetryConfig, error: Error): number | undefined {
+  return isNonProviderFault(error) ? undefined : config.retryWindowMs;
+}
+
+// The policy one retry decision applies, derived from the window it actually runs under, so a
+// retry line can never name a policy the loop did not apply (#3873).
+function retryPolicyFor(config: RetryConfig, error: Error): RetryPolicy {
+  return decisionWindowMs(config, error) === undefined ? "attempts" : "outage-window";
 }
 
 // Equal jitter over the capped exponential ladder: half the delay is fixed, half
@@ -368,18 +552,43 @@ function retryDelayMs(
 type RetryStop =
   | { readonly stop: "terminal" | "max-retries" }
   | { readonly stop: "budget"; readonly delayMs: number; readonly remainingMs: number };
-type RetryDecision = { readonly sleepMs: number } | RetryStop;
+type RetryDecision =
+  { readonly sleepMs: number; readonly repair?: RetryRepairReason | undefined } | RetryStop;
 
+interface RetryBudget {
+  readonly remainingMs: number;
+  readonly elapsedMs: () => number;
+}
+
+// The one steered repair of a call (#3873, F17), decided before the ordinary retry rules: it runs at
+// once, is granted once, ignores the attempt count and the outage window, and only the budget can
+// refuse it — a refused repair ends the call as a budget stop, so the log says the loop wanted to go
+// on, not that the failure was terminal.
+function repairDecision(
+  lastError: Error,
+  config: RetryConfig,
+  budget: RetryBudget,
+  repairs: number,
+): RetryDecision | undefined {
+  const repair = repairs === 0 ? config.repair?.(lastError) : undefined;
+  if (repair === undefined) return undefined;
+  if (budget.remainingMs <= 0)
+    return { stop: "budget", delayMs: 0, remainingMs: budget.remainingMs };
+  return { sleepMs: 0, repair };
+}
+
+// `attempt` counts the provider attempts only: a steered repair is granted on top of them.
 function retryDecision(
   lastError: Error,
   attempt: number,
   config: RetryConfig,
-  remainingMs: number,
+  budget: RetryBudget,
   random: () => number,
 ): RetryDecision {
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
     return { stop: "terminal" };
-  if (attempt > config.maxRetries) return { stop: "max-retries" };
+  const windowMs = decisionWindowMs(config, lastError);
+  if (windowMs === undefined && attempt > config.maxRetries) return { stop: "max-retries" };
   const delayMs = retryDelayMs(
     lastError,
     attempt,
@@ -387,6 +596,13 @@ function retryDecision(
     random,
     config.jitterProviderCooldown,
   );
+  // Never below zero: an attempt that outlives the window (a silent one runs to its own bound)
+  // ends it with nothing left, and a negative duration would make its exhausted line invalid, so
+  // the very line that says the window ran out was dropped (#3873 review).
+  const remainingMs =
+    windowMs === undefined
+      ? budget.remainingMs
+      : Math.max(0, Math.min(budget.remainingMs, windowMs - budget.elapsedMs()));
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
   return { sleepMs: delayMs };
 }
@@ -446,16 +662,153 @@ async function sleepWithCancellation(
   assertNotAborted(signal);
 }
 
-// What the retry loop needs in order to LABEL its lines. Optional in full: an unwired caller
-// keeps the exact behaviour it had before instrumentation, down to the allocation count.
-export interface RetryLogContext {
+/**
+ * What a call tells the caller that asked to hear it (#3873 review): a failure that says the
+ * provider is unavailable — a timeout, a refused connection, a retryable 5xx, a rate limit — was
+ * met with a scheduled retry; the call's admission is held, before an attempt, by an open circuit
+ * breaker, a saturated half-open probe slot or a cooldown the provider announced; or a call that
+ * had been retried or held settled. The retries a steered repair or a schema correction grant
+ * answer the model's own output, not an unavailable provider, and are never announced. Counts and
+ * closed words only — no provider text, no content. Local: never serialized into a provider request.
+ */
+export type GatewayRetryNotice =
+  | {
+      readonly kind: "scheduled";
+      /**
+       * The failed provider attempt this retry follows, counted from 1. A steered repair is not a
+       * provider attempt and is not counted, so after one this is lower than the `attempt` of the
+       * `gateway.retry.scheduled` line of the same retry, which counts every attempt of the call.
+       */
+      readonly attempt: number;
+      readonly retryPolicy: RetryPolicy;
+    }
+  | {
+      /**
+       * Told when an admission begins to wait, for the first attempt of a buffered or a streamed
+       * call and for every retry's alike: no failed attempt of the call precedes the first one, so
+       * this is the only way a caller learns that the call is held. A wait that cannot fit what is
+       * left of the call's window never begins and is not announced; the `budget-refused` outcome
+       * of the `gateway.circuit.wait` line records that refusal.
+       */
+      readonly kind: "admission-wait";
+      readonly reason: CircuitWaitReason;
+      readonly retryPolicy: RetryPolicy;
+    }
+  | {
+      /**
+       * Told only to a call that was retried or held before, once, when the call ends: it was
+       * answered, or it failed for good (the window refused it, or it was cancelled, included).
+       */
+      readonly kind: "settled";
+      readonly outcome: "answered" | "failed";
+    };
+
+/**
+ * Runs inside the retry loop and the admission wait, synchronously. It owns and logs its own
+ * failures (the same contract as `GatewayDeps.onContextWindowReported`), but a throw that escapes
+ * it is not trusted to be impossible: the call's announcer absorbs it where the observer is called,
+ * so the call keeps its own result, and records it on `gateway.retry.observer-failed`.
+ */
+export type GatewayRetryObserver = (notice: GatewayRetryNotice) => void;
+
+/**
+ * What a call labels the lines of its retries and of its announcements with: the sink they are
+ * written to, the model they concern and the call's correlation id. Optional in full: an unwired
+ * caller keeps the exact behaviour it had before instrumentation, down to the allocation count.
+ */
+export interface RetryLogLabels {
   readonly sink?: ModelGatewayLogSink | undefined;
   readonly modelId?: string | undefined;
   readonly correlationId?: string | undefined;
 }
 
-function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string }> {
-  return context.modelId === undefined ? {} : { modelId: logModelId(context.modelId) };
+/**
+ * One call's conversation with its observer (#3873 review): what the call does — a retry scheduled,
+ * an admission held — is told to the observer, and the call is remembered as owed exactly one
+ * settlement when it ends. The call's admission waits and every retry loop it runs share the one
+ * announcer, which is why a streamed call's first admission, ahead of its loop, settles with the
+ * loop that follows it. A call whose caller did not ask to hear it has no announcer and takes its
+ * exact path as before. An observer that throws never reaches the call: every notice is told
+ * through one guard that records the throw and carries on.
+ */
+export interface RetryAnnouncer {
+  /** A failure that says the provider is unavailable was met with a scheduled retry. */
+  scheduled(attempt: number, retryPolicy: RetryPolicy): void;
+  /** The call's admission began to wait for the breaker or a provider cooldown. */
+  admissionWait(reason: CircuitWaitReason, retryPolicy: RetryPolicy): void;
+  /** The call ended. Silent for a call the observer heard nothing about, and for a second end. */
+  settled(outcome: "answered" | "failed"): void;
+}
+
+export function retryAnnouncer(
+  observer: GatewayRetryObserver,
+  labels: RetryLogLabels = {},
+): RetryAnnouncer {
+  const sink = resolveLogSink(labels.sink);
+  // The one place the caller's observer is called. It is foreign code inside the retry loop and the
+  // admission wait, and a throw that left here would hang the call (the settlement runs ahead of the
+  // call's own resolve or reject), replace the call's result with the observer's error, or leave the
+  // loop as an unhandled rejection, which the CLI's process guard treats as fatal. It is recorded
+  // body-free, never swallowed.
+  const tell = (notice: GatewayRetryNotice): void => {
+    try {
+      observer(notice);
+    } catch (error) {
+      reportObserverFailure(sink, labels, notice.kind, error);
+    }
+  };
+  // Set before the observer is told: the call owes its settlement from the moment it announced
+  // anything, whatever the observer did with the notice.
+  let owed = false;
+  return {
+    scheduled: (attempt, retryPolicy): void => {
+      owed = true;
+      tell({ kind: "scheduled", attempt, retryPolicy });
+    },
+    admissionWait: (reason, retryPolicy): void => {
+      owed = true;
+      tell({ kind: "admission-wait", reason, retryPolicy });
+    },
+    settled: (outcome): void => {
+      if (!owed) return;
+      owed = false;
+      tell({ kind: "settled", outcome });
+    },
+  };
+}
+
+// The failure line of an observer that threw. The sink is the call's isolated one and the event
+// builder never throws (an invalid value becomes a rejection the sink drops), so recording cannot
+// bring the failure back into the call it protects.
+function reportObserverFailure(
+  sink: ModelGatewayLogSink,
+  labels: RetryLogLabels,
+  notice: GatewayRetryNotice["kind"],
+  error: unknown,
+): void {
+  sink.write(
+    activityLogEvent(
+      GATEWAY_RETRY_OBSERVER_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: labels.correlationId ?? ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        errorKind: activityLogErrorKind(error),
+      },
+      { ...loggedRetryModel(labels), notice, ...gatewayFailureEvidence(sink, error) },
+    ),
+  );
+}
+
+// What the retry loop needs in order to LABEL its lines, and the call's announcer. The announcer is
+// the one member that is not a label: the caller's own ear on the call, set only by a caller that
+// surfaces an outage to its operator (the coding sidecar route) and shared with the call's
+// admission waits.
+export interface RetryLogContext extends RetryLogLabels {
+  readonly announcer?: RetryAnnouncer | undefined;
+}
+
+function loggedRetryModel(labels: RetryLogLabels): Readonly<{ modelId?: string }> {
+  return labels.modelId === undefined ? {} : { modelId: logModelId(labels.modelId) };
 }
 
 // The provider-specific detail that turns "a retry happened" into "the provider said 503" or
@@ -540,6 +893,7 @@ interface RetryFailureLogInput {
   readonly context: RetryLogContext;
   readonly attempt: number;
   readonly maxRetries: number;
+  readonly retryPolicy: RetryPolicy;
   readonly error: Error;
   readonly durationMs: number;
 }
@@ -562,6 +916,7 @@ function logRetryExhausted(input: RetryFailureLogInput, decision: RetryStop): vo
         maxRetries: input.maxRetries,
         ...retryStopDetail(decision),
         ...providerErrorDetail(input.error),
+        retryPolicy: input.retryPolicy,
       },
     ),
   );
@@ -569,8 +924,9 @@ function logRetryExhausted(input: RetryFailureLogInput, decision: RetryStop): vo
 
 function logRetryScheduled(
   input: RetryFailureLogInput,
-  decision: Readonly<{ sleepMs: number }>,
+  decision: Readonly<{ sleepMs: number; repair?: RetryRepairReason | undefined }>,
 ): void {
+  const reason: RetryScheduledReason = decision.repair ?? "retryable-error";
   input.sink.write(
     activityLogEvent(
       GATEWAY_RETRY_SCHEDULED_OPERATION,
@@ -587,7 +943,9 @@ function logRetryScheduled(
         attempt: input.attempt,
         maxRetries: input.maxRetries,
         delayMs: decision.sleepMs,
+        reason,
         ...providerErrorDetail(input.error),
+        retryPolicy: input.retryPolicy,
       },
     ),
   );
@@ -617,6 +975,9 @@ type RetryOperation<T> = (
   attemptTimeoutMs?: number,
   remainingBudgetMs?: number,
   previousError?: Error,
+  // How long this attempt may wait for provider admission; with a retry window it is clipped to
+  // what is left of the window, so a breaker wait never outlasts the window (#3873).
+  admissionBudgetMs?: number,
 ) => Promise<T>;
 
 interface RetryState {
@@ -629,6 +990,9 @@ interface RetryState {
   readonly elapsed: () => number;
   readonly start: number;
   attempt: number;
+  // Steered repairs granted so far (#3873, F17): at most one per call. They sit on top of the
+  // provider attempts, so `attempt - repairs` is what the attempt count and the backoff ladder see.
+  repairs: number;
   lastError: Error | undefined;
 }
 
@@ -638,38 +1002,100 @@ async function executeRetryAttempt<T>(
   operation: RetryOperation<T>,
   state: RetryState,
 ): Promise<RetryAttemptResult<T>> {
-  const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
+  const { config, clock, signal, context, sink, elapsed, start, attempt } = state;
   const maxAttempts = config.maxRetries + 1;
-  if (Number.isNaN(maxAttempts) || attempt > maxAttempts)
+  if (
+    Number.isNaN(maxAttempts) ||
+    (config.retryWindowMs === undefined && attempt - state.repairs > maxAttempts)
+  )
     throw state.lastError ?? new CancelledError("request timeout budget exhausted after retries");
   assertNotAborted(signal);
   const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
   if (remaining <= 0)
     throw budgetExhaustedError(state.lastError, sink, context, attempt, elapsed());
   try {
-    const value = await operation(attemptTimeoutFor(config, remaining), remaining, state.lastError);
+    const value = await operation(
+      attemptTimeoutFor(config, remaining),
+      remaining,
+      state.lastError,
+      admissionBudgetFor(config, remaining, (): number => clock.now() - start),
+    );
     return { done: true, value };
   } catch (error) {
     rethrowTerminalAdmission(error);
-    state.lastError = asError(error);
-    const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
-    const decision = retryDecision(state.lastError, attempt, config, remainingMs, random);
-    const failureLog: RetryFailureLogInput = {
-      sink,
-      context,
-      attempt,
-      maxRetries: config.maxRetries,
-      error: state.lastError,
-      durationMs: elapsed(),
-    };
-    if (!("sleepMs" in decision)) {
-      logRetryExhausted(failureLog, decision);
-      throw state.lastError;
-    }
-    logRetryScheduled(failureLog, decision);
-    await sleepWithCancellation(clock, decision.sleepMs, signal);
-    return { done: false };
+    return recordFailedAttempt(state, asError(error));
   }
+}
+
+// What follows a failed attempt: the steered repair when one is due, else the retry rules; the
+// line that says which, and the sleep before the next attempt or the rethrow that ends the call.
+// Every path records the failure on the retry lines first, which is why the catch above may hand it
+// over (a `record` helper is the evidence call `check:error-observability` looks for).
+async function recordFailedAttempt<T>(
+  state: RetryState,
+  error: Error,
+): Promise<RetryAttemptResult<T>> {
+  const { config, clock, signal, random, context, sink, elapsed, start, attempt } = state;
+  state.lastError = error;
+  const budget: RetryBudget = {
+    remainingMs: remainingBudgetMs(start, config.timeoutMs, clock),
+    elapsedMs: (): number => clock.now() - start,
+  };
+  const decision =
+    repairDecision(error, config, budget, state.repairs) ??
+    retryDecision(error, attempt - state.repairs, config, budget, random);
+  const failureLog: RetryFailureLogInput = {
+    sink,
+    context,
+    attempt,
+    maxRetries: config.maxRetries,
+    retryPolicy: retryPolicyFor(config, error),
+    error,
+    durationMs: elapsed(),
+  };
+  if (!("sleepMs" in decision)) {
+    logRetryExhausted(failureLog, decision);
+    throw error;
+  }
+  if (decision.repair !== undefined) state.repairs += 1;
+  logRetryScheduled(failureLog, decision);
+  announceProviderRetry(state, error, decision.repair, failureLog.retryPolicy);
+  await sleepWithCancellation(clock, decision.sleepMs, signal);
+  return { done: false };
+}
+
+// Tells the call's observer that a provider that says it is unavailable is being retried. A
+// steered repair or a schema correction answers the model's own output (`isNonProviderFault`), so
+// the provider was not unavailable and nothing is announced.
+function announceProviderRetry(
+  state: RetryState,
+  error: Error,
+  repair: RetryRepairReason | undefined,
+  retryPolicy: RetryPolicy,
+): void {
+  if (repair !== undefined || isNonProviderFault(error)) return;
+  state.context.announcer?.scheduled(state.attempt - state.repairs, retryPolicy);
+}
+
+// Tells the observer that a call it heard retry or wait has ended; a call it heard nothing about
+// stays silent, and so does one whose admission was refused before it ever began to wait.
+function announceSettled(state: RetryState, outcome: "answered" | "failed"): void {
+  state.context.announcer?.settled(outcome);
+}
+
+// The admission wait of one attempt: the call's remaining budget, clipped by what is left of a
+// retry window. Never below one millisecond, so an attempt at the window's edge refuses at once.
+// The clock is read only for a windowed call, so every other call keeps its exact clock reads.
+// Exported for the one admission that precedes the loop: a streamed call's initial admission
+// (`gateway.ts`), which waits under the same clip as every retry's admission (#3873).
+export function admissionBudgetFor(
+  config: RetryConfig,
+  remainingMs: number,
+  elapsedMs: () => number,
+): number {
+  return config.retryWindowMs === undefined
+    ? remainingMs
+    : Math.max(1, Math.min(remainingMs, config.retryWindowMs - elapsedMs()));
 }
 
 export function executeWithRetry<T>(
@@ -681,6 +1107,7 @@ export function executeWithRetry<T>(
   signal?: AbortSignal,
   random: () => number = Math.random,
   logContext: RetryLogContext = {},
+  resume?: RetryResume,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const state: RetryState = {
@@ -692,21 +1119,38 @@ export function executeWithRetry<T>(
       sink: resolveLogSink(logContext.sink),
       elapsed: logTimer(),
       start: clock.now(),
-      attempt: 1,
+      attempt: resume?.attempts ?? 1,
+      repairs: resume?.repairs ?? 0,
       lastError: undefined,
+    };
+    const fail = (error: unknown): void => {
+      announceSettled(state, "failed");
+      reject(asError(error));
     };
     const advance = (): void => {
       // Return no successor promise: completed attempts are released rather than retained in a
       // recursive promise chain. Only the current provider attempt or its backoff is pending.
       void executeRetryAttempt(operation, state).then((result) => {
-        if (result.done) resolve(result.value);
-        else {
+        if (result.done) {
+          announceSettled(state, "answered");
+          resolve(result.value);
+        } else {
           state.attempt += 1;
           advance();
         }
-      }, reject);
+      }, fail);
     };
-    advance();
+    if (resume === undefined) {
+      advance();
+      return;
+    }
+    // The failed attempt comes first (attempt 1, or the call's count so far): its repair or retry
+    // decision, and the line that says which; a stop rejects with the failure itself, exactly as
+    // the loop would have.
+    void recordFailedAttempt(state, resume.failedAttempt).then(() => {
+      state.attempt += 1;
+      advance();
+    }, fail);
   });
 }
 
@@ -748,7 +1192,11 @@ export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
 }
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
-// the budget derived from it bounds the call.
+// the budget derived from it bounds the call. Every chat call — buffered, and a stream before its
+// first content — derives its policy from here. The one steered repair of an exhausted or empty
+// answer (#3873, F17, F23) is NOT part of it: only a call that asks for it with the explicit
+// `answerRepair: "steered"` signal gets it (`gateway.ts` `callRetryConfig`), so an interactive
+// surface such as the commit draft never makes a hidden second generation (#3873 review).
 export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
   return {
     maxRetries: provider.maxRetries,
@@ -756,6 +1204,79 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
     attemptTimeoutMs: chatAttemptTimeoutMs(provider),
     timeoutMs: providerRequestBudgetMs(provider),
   };
+}
+
+// #3873: how long an autonomous coding turn keeps retrying a transiently unavailable provider (429,
+// a retryable 5xx, a refused connection, a silent attempt) and waits through an open breaker,
+// instead of failing after the provider's configured attempt count. At peak load a customer's
+// LiteLLM gateway sheds load for minutes, and an autonomous coding run that gave up after three
+// attempts within two seconds failed outright although the gateway recovered (live chaos
+// qualification). The breaker still admits only its half-open probes, so waiting callers do not
+// add load while it recovers.
+// Only a call that carries the explicit `outagePolicy: "outage-window"` request signal (the coding
+// sidecar route's buffered and streamed calls) runs under it; see `gateway.ts`.
+export const GATEWAY_CODING_OUTAGE_WINDOW_MS = 600_000;
+
+/**
+ * The outage window a call runs under (#3873): the configuration's `codingOutageWindowMs`
+ * (`GATEWAY_CODING_OUTAGE_WINDOW_MS` when absent) for a call that asked for the outage policy, 0
+ * for every other call and whenever the window is switched off. The one resolution the gateway and
+ * the route deadline behind a coding call share.
+ */
+export function callOutageWindowMs(
+  config: { readonly codingOutageWindowMs?: number | undefined },
+  outagePolicy: "outage-window" | undefined,
+): number {
+  return outagePolicy === "outage-window"
+    ? (config.codingOutageWindowMs ?? GATEWAY_CODING_OUTAGE_WINDOW_MS)
+    : 0;
+}
+
+// #3873 review: under the outage window it is the WINDOW, not the provider's attempt budget, that
+// bounds how long a call keeps scheduling retries and waiting for admission. The call's end-to-end
+// budget must therefore never cut the window short: it is the window plus one full attempt bound
+// (the attempt the window admits last keeps that bound, so a healthy answer is never cut at the
+// window's edge), and never less than the budget the call has without a window. Without this, the
+// window was silently clipped to the provider budget: 600 s at `maxRetries: 0`, whatever was set.
+function outageCallBudgetMs(budgetMs: number, windowMs: number, attemptBoundMs: number): number {
+  if (windowMs <= 0) return budgetMs;
+  return Math.min(Math.max(budgetMs, windowMs + attemptBoundMs), MAX_TIMER_DELAY_MS);
+}
+
+/** The end-to-end budget of a buffered call (`Gateway.chat()`) under an outage window (0: none). */
+export function bufferedCallBudgetMs(provider: ProviderRetryPolicy, windowMs: number): number {
+  return outageCallBudgetMs(
+    providerRequestBudgetMs(provider),
+    windowMs,
+    chatAttemptTimeoutMs(provider),
+  );
+}
+
+/**
+ * The end-to-end budget of a streamed call (`Gateway.chatStream()`) under an outage window (0:
+ * none). A streamed attempt's own bound is the whole stream budget its read may spend.
+ */
+export function streamedCallBudgetMs(
+  provider: { readonly timeoutMs: number },
+  windowMs: number,
+): number {
+  const budgetMs = streamRequestBudgetMs(provider);
+  return outageCallBudgetMs(budgetMs, windowMs, budgetMs);
+}
+
+/**
+ * The retry policy of a call that asked for the outage window: retries for the window, inside a
+ * budget the window cannot outrun (`bufferedCallBudgetMs`). A window of 0 (`codingOutageWindowMs:
+ * 0`, or a call without the outage signal) keeps the provider's attempt count and budget instead.
+ */
+export function codingWorkbenchRetryConfig(
+  provider: ProviderRetryPolicy,
+  windowMs: number,
+): RetryConfig {
+  const config = providerRetryConfig(provider);
+  return windowMs > 0
+    ? { ...config, retryWindowMs: windowMs, timeoutMs: bufferedCallBudgetMs(provider, windowMs) }
+    : config;
 }
 
 export interface CircuitBreakerAdmission {
@@ -769,6 +1290,14 @@ interface CircuitAdmissionWait {
   readonly signal?: AbortSignal | undefined;
   readonly correlationId?: string | undefined;
   readonly jitterMs: number | (() => number);
+  // The waiting call's retry policy (#3873). `outage-window` waits for an open breaker's cooldown
+  // and probe slot even without a provider-announced cooldown, instead of refusing at once; absent
+  // means `attempts`, the fail-fast breaker. Every wait line reports it.
+  readonly retryPolicy?: RetryPolicy | undefined;
+  // The waiting call's announcer (#3873 review), told each time the admission begins to wait. The
+  // admission before a call's first attempt follows no failed attempt, so the retry loop alone
+  // could never tell the call's observer that the breaker or a provider cooldown holds it.
+  readonly announcer?: RetryAnnouncer | undefined;
 }
 
 type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
@@ -796,6 +1325,7 @@ const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
     },
     delayMs: { type: "number", dataClass: "duration", required: true },
     remainingMs: { type: "number", dataClass: "duration", required: false },
+    retryPolicy: RETRY_POLICY_FIELD,
   },
   diagnosticWhen: [{ field: "outcome", values: ["cancelled", "failed", "budget-refused"] }],
   causal: "none",
@@ -899,6 +1429,7 @@ export class CircuitBreaker {
       const announced = this.providerCooldownUntil > start;
       const recovering =
         announced ||
+        options.retryPolicy === "outage-window" ||
         (options.previousError !== undefined &&
           providerErrorDetail(options.previousError).retryAfterMs !== undefined);
       const advance = async (): Promise<void> => {
@@ -933,7 +1464,7 @@ export class CircuitBreaker {
       blocked.reason === "probe-saturated"
         ? remainingMs
         : Math.min(blocked.delayMs, MAX_TIMER_DELAY_MS),
-      options.correlationId,
+      options,
       remainingMs,
     );
     return new CircuitAdmissionRefusal(options.previousError);
@@ -979,20 +1510,20 @@ export class CircuitBreaker {
       this.waiters.add(notify);
     });
     try {
-      this.logWait(reason, "started", delayMs, options.correlationId);
+      this.beginWait(reason, delayMs, options);
       assertNotAborted(options.signal);
       const outcome = await Promise.race([
         changed,
         this.clock.sleep(delayMs, controller.signal).then(() => "timer" as const),
       ]);
       assertNotAborted(options.signal);
-      this.logWait(reason, outcome, delayMs, options.correlationId);
+      this.logWait(reason, outcome, delayMs, options);
     } catch (error) {
       this.logWait(
         reason,
         options.signal?.aborted === true ? "cancelled" : "failed",
         delayMs,
-        options.correlationId,
+        options,
       );
       if (options.signal?.aborted === true)
         throw new CancelledError("request cancelled while waiting for provider admission");
@@ -1004,13 +1535,26 @@ export class CircuitBreaker {
     }
   }
 
+  // The moment an admission begins to wait: its `started` line first, then the call's announcer, so
+  // the observer hears of the wait the log already records. Both happen once per wait the call
+  // enters, never for a refusal that precedes the wait.
+  private beginWait(
+    reason: CircuitWaitReason,
+    delayMs: number,
+    options: CircuitAdmissionWait,
+  ): void {
+    this.logWait(reason, "started", delayMs, options);
+    options.announcer?.admissionWait(reason, options.retryPolicy ?? "attempts");
+  }
+
   private logWait(
     reason: CircuitWaitReason,
     outcome: "started" | "changed" | "timer" | "cancelled" | "failed" | "budget-refused",
     delayMs: number,
-    correlationId: string | undefined,
+    options: CircuitAdmissionWait,
     remainingMs?: number,
   ): void {
+    const { correlationId } = options;
     this.log.write(
       activityLogEvent(
         GATEWAY_CIRCUIT_WAIT_OPERATION,
@@ -1021,6 +1565,7 @@ export class CircuitBreaker {
           outcome,
           delayMs,
           ...(remainingMs === undefined ? {} : { remainingMs }),
+          retryPolicy: options.retryPolicy ?? "attempts",
         },
       ),
     );

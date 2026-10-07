@@ -125,6 +125,154 @@ log, then send the task again.
 
 ---
 
+## Coding Workbench turn reasons until its output budget is exhausted
+
+| Field             | Value                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                        |
+| Surface           | Coding Workbench                                                                            |
+| Stable identifier | `coding-sidecar.gateway.turn-failed failureCode=output-exhausted` under the run correlation |
+
+**Symptom**
+
+A run with a reasoning model (Gemma 4 31B with reasoning enabled behind LiteLLM in the live
+qualification) reads a few files, then a turn shows "Working" for minutes and ends without a tool
+call or an answer; the next turn does the same. Each attempt lasts about as long as the model needs
+to emit its whole output allowance (seven minutes for 8k tokens at 20 tokens per second), and the
+run burns its envelope duration without progress.
+
+**Root Cause**
+
+The model spent its whole output budget on reasoning before producing a tool call or a final
+answer: the provider answered HTTP 200 with `finish_reason: "length"` and no content
+(`chat.response.streamed outcome=failed outputExhausted=true`, `gateway.chat.failed` or
+`gateway.stream.failed` with `outputExhausted=true`). Before #3873 (F17) the turn failed at once and
+the coding runtime retried the identical turn, which ran away identically.
+
+The gateway now steers one repaired attempt before the exhaustion surfaces: the same request plus a
+fixed system message that tells the model its previous answer used the whole budget and asks for the
+tool call or the final answer directly, with reasoning kept to a few sentences. The repair is
+granted once per call, counts against neither the provider's attempt count nor the coding outage
+window, and never against the circuit breaker. If the repaired attempt exhausts the budget again,
+the turn is final for the runtime (`runtimeRetry: refused`), so the run settles with an honest cause
+instead of looping. With the reasoning display on (the default), the first attempt's reasoning has
+already reached the Workbench when the repair runs: the timeline then shows a second reasoning
+passage, followed by the tool call or the answer. The forwarded reasoning of a turn is bounded by
+two output allowances in bytes — one per model attempt — so the second passage is not cut as
+`output-limit`; a turn that exhausted the budget twice shows both passages, then the final cause.
+
+The output allowance a coding turn sends (`maxOutputTokens` on `coding-sidecar.gateway.request-validated`)
+is the provider-declared output limit where the model declares one, otherwise 16k (before this change
+the shared chat profile's 8k of a 128k window), both bounded to a quarter of the model's window and
+shrunk per request to what the prompt leaves free (`admittedOutputTokens`, `coding-sidecar-gateway.ts`;
+`codingOutputReserveTokens`, `model-selection.ts` in keiko-model-gateway).
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>` shows, per exhausted turn, the first
+read ending with `outputExhausted=true`, one `gateway.retry.scheduled reason=output-exhausted-repair
+delayMs=0`, the repaired attempt's own read, and the turn's settlement: a recovered turn records
+`coding-sidecar.gateway.outcome outcome=accepted repairAttempted=true repairOutcome=recovered`; a turn
+that exhausted the budget again records `coding-sidecar.gateway.turn-failed
+failureCode=output-exhausted runtimeRetry=refused repairAttempted=true repairOutcome=exhausted-again`
+and the matching `outcome=failed` line. `repairAttempted=false` on an `output-exhausted` failure means
+the call's budget could not hold a repair. None of these lines carries the model's reasoning.
+
+**Resolution**
+
+- A recovered turn needs nothing; the repair line is the evidence of what the model was told.
+- A turn that exhausted the budget twice points at a model that reasons past any allowance on this
+  task: lower the reasoning effort for the run, or pick a model that declares a larger output limit
+  (the allowance follows the declared limit up to a quarter of the window).
+- Where the provider declares no output limit and the model needs more than 16k, add the limit to the
+  LiteLLM model info (`max_output_tokens`) so discovery carries it; the coding turn then reserves it.
+- Check the time arithmetic before raising allowances further: a whole-body (non-streaming) attempt is
+  bounded by the ten-minute buffered floor, so at 20 tokens per second about 12k tokens fit one
+  attempt; a streamed read is bounded by the call budget instead. The reserve follows the transport,
+  not the sidecar's own streaming switch. Only a model whose capability does not stream
+  (`streaming: false`) meets the whole-body bound and keeps the shared 8k reserve rather than the
+  16k coding reserve: a runaway answer then ends as an exhausted answer that gets the steered repair,
+  not as a timeout the breaker counts. `codingStreaming: "off"` on a streaming-capable model only
+  stops forwarding the answer live: Keiko still reads the provider's stream under the silence floor,
+  so that turn keeps the 16k coding reserve. Declare `max_output_tokens` only as high as one
+  buffered attempt of a non-streaming model can produce.
+
+---
+
+## Coding Workbench turn ends after reasoning without a tool call or text, again and again
+
+| Field             | Value                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                    |
+| Surface           | Coding Workbench                                                                        |
+| Stable identifier | `coding-sidecar.gateway.turn-failed failureCode=empty-answer` under the run correlation |
+
+**Symptom**
+
+A run with a reasoning model (Gemma 4 31B behind LiteLLM with streaming on in the live
+qualification) streams its first turns correctly, then a turn shows its reasoning, ends, and the
+timeline reports "The model finished this turn without any text or tool call". The same message
+repeats for turn after turn, each attempt as long as the model needs to reason, until the run is
+stopped; the prompt grows with every attempt.
+
+**Root Cause**
+
+Two defects made one empty answer a loop (#3873, F23). The model reasoned (about 4,500 tokens in the
+live run), then generated a tool call that the upstream never delivered: the provider answered HTTP
+200 with only a finish reason and usage, so the answer carried reasoning but no text and no tool
+call (`chat.response.streamed outcome=failed outputExhausted=false` after thousands of
+`reasoningEvents`, then `coding-sidecar.gateway.turn-failed failureCode=empty-answer`). Before the
+fix that answer got no repair, so the turn stayed `runtimeRetry: allowed` and the coding runtime
+retried the identical turn without end. And the failed turn's forwarded reasoning stayed in the
+runtime's history, which resent it with every later request: the prompt estimate on
+`coding-sidecar.gateway.request-validated` grew by about 6,200 tokens and two messages per attempt.
+
+The gateway now gives an empty answer that carried reasoning the same one steered repair an
+exhausted budget gets: the original request plus one fixed system message that tells the model its
+previous answer ended after reasoning without a tool call or a final answer and asks it to call the
+next tool or answer, keeping any reasoning to a few sentences. The repair is granted once per call,
+counts against neither the provider's attempt count nor the coding outage window, and never against
+the circuit breaker. If the repaired attempt ends empty again, the turn is final for the runtime
+(`runtimeRetry: refused`), so the run settles with an honest cause instead of looping. With the
+reasoning display on (the default) the first attempt's reasoning has already reached the Workbench
+when the repair runs, so the timeline shows a second reasoning passage. An empty answer that carried
+no reasoning at all is not repaired and stays the retryable failure it was. The coding sidecar also
+never resends prior reasoning upstream: the reasoning fields of prior assistant messages and every
+assistant message that carries nothing but reasoning are dropped before the gateway request is
+built.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>`, then per empty turn:
+
+- `chat.response.streamed outcome=failed` with `reasoningEvents` above 0 and `outputExhausted=false`:
+  the read ended after reasoning without content (a finish reason other than `length`).
+- One `gateway.retry.scheduled reason=empty-answer-repair delayMs=0`, then the repaired attempt's own
+  read. A recovered turn records `coding-sidecar.gateway.outcome outcome=accepted repairAttempted=true
+repairOutcome=recovered`; a turn whose repair ended empty again records
+  `coding-sidecar.gateway.turn-failed failureCode=empty-answer runtimeRetry=refused repairAttempted=true
+repairOutcome=empty-again` and the matching `outcome=failed` line. `repairAttempted=false` with
+  `runtimeRetry=allowed` means the answer carried no reasoning, or the call's budget could not hold a
+  repair.
+- `coding-sidecar.gateway.request-validated` `droppedReasoningMessageCount` above 0 is the number of
+  prior assistant messages that carried only reasoning and were not resent; its
+  `estimatedPromptTokens` and `inputMessageCount` describe what is sent. None of these lines carries
+  the model's reasoning or text.
+
+**Resolution**
+
+- A recovered turn needs nothing; the repair line is the evidence of what the model was told.
+- A turn whose repair ended empty again points at a model or route that loses its tool call on this
+  task: check the model server and the LiteLLM route for a tool-call parser that drops or truncates
+  large calls (a direct probe with the same request shows whether the call arrives as one
+  `delta.tool_calls` event), lower the reasoning effort for the run if the model offers it, or pick
+  another model, then send the task again.
+- Do not widen the output allowance for this symptom: `outputExhausted=false` says the model stopped
+  by itself, not that it ran out of budget (compare "Coding Workbench turn reasons until its output
+  budget is exhausted" above).
+
+---
+
 ## Coding Workbench refuses to start a run with the selected model
 
 | Field             | Value                                                                       |
@@ -621,6 +769,207 @@ setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, 
   used. A candidate in `droppedChatModelIds` was genuinely rejected by the gateway (wrong model id,
   no chat capability, credential mismatch for that deployment) and must be corrected in the setup
   form.
+
+---
+
+## Coding Workbench run during a gateway overload or short outage
+
+| Field             | Value                                                                        |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Severity          | High                                                                         |
+| Surface           | Coding Workbench                                                             |
+| Stable identifier | `gateway.retry.scheduled` / `gateway.circuit.wait` under the run correlation |
+
+**Symptom**
+
+At peak load the LiteLLM gateway or the model server behind it answers 429 or 503, or stops
+answering, for a few minutes. A Workbench run keeps working instead of failing: its status line
+reads "Running. Revision 4. Model gateway unavailable, retrying." while the gateway is being
+retried (a screen reader announces the same sentence), and returns to "Waiting for the model" once
+a call is answered again. With Run details open the timeline lists "Model gateway unavailable,
+retrying" and "Model gateway answered again", and "Model gateway retry stopped" for a call the run
+cancelled while it was retried.
+
+**Root Cause**
+
+Before #3873 a coding turn stopped after the provider's configured attempt count (by default three
+attempts within about two seconds) and, once the circuit breaker opened, every further attempt was
+refused at once. The coding runtime then gave up after about ten of its own retries, so a three-minute
+overload failed the whole run although the gateway recovered.
+
+A coding turn now keeps retrying a transiently unavailable provider for the outage window (ten
+minutes by default) with capped, jittered backoff and any announced `Retry-After`, and waits
+through an open breaker's cooldown instead of being refused. The coding sidecar route asks for this
+with an explicit outage policy on each of its model calls, buffered and streamed alike, so a turn
+behaves the same whether or not the model streams. On a streamed turn the window covers every
+failure before the first answer text, also after the model's reasoning was already shown: the
+retried attempt's reasoning is not shown a second time. Once answer text reached the Workbench, a
+retry inside the gateway would duplicate it, so the turn ends with an error and the coding runtime
+decides whether to retry it (`coding-sidecar.gateway.turn-failed runtimeRetry=allowed`). The breaker still admits only its half-open
+probes, so waiting runs do not add load while the gateway recovers. Only an unavailable provider is
+waited for: a model that keeps answering with an invalid tool-call shape gets the configured
+attempt count and its schema-repair corrections, then the turn fails with the invalid-shape
+rejection as before.
+
+The window applies as configured: the turn's own budget is extended to the window plus one attempt,
+so `maxRetries: 0`, which LiteLLM routes commonly use, no longer caps it at ten minutes. Each
+attempt keeps its own bound. A silent attempt ends after at least five minutes without data when the
+answer is read over a stream, otherwise after at least ten minutes, and is retried only while the
+window still has room: with the default window a silent streamed attempt is retried once and a
+silent whole-body attempt not at all.
+
+A refused connection counts as transient on purpose: a restarting or overloaded gateway can refuse
+connections for a while. Gateway Setup's probe catches a misconfigured route before any coding turn
+runs, so a Workbench turn that faces an unreachable gateway waits up to the window before it fails.
+
+The commit-message draft and interactive chat keep their fail-fast behavior: a person waits on them,
+and they never carry the outage policy, although the draft borrows the coding timeout floors. While
+the gateway answers 429 or 503 or refuses connections, the draft still fails after the provider's
+attempt count, within seconds, with `GIT_DELIVERY_COMMIT_DRAFT_FAILED`.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>` shows each retry as
+`gateway.retry.scheduled` (`httpStatus`, `delayMs`, `retryAfterHeader`), a breaker transition as
+`gateway.circuit.opened` / `gateway.circuit.half-open`, and a wait as `gateway.circuit.wait`
+(`reason`, `outcome`). A call that outlasted the window ends with `gateway.retry.exhausted reason=budget`, or, when the
+window ran out while it waited on an open breaker or a saturated probe slot, with
+`gateway.circuit.wait outcome=budget-refused`.
+
+The status line's phase is rebuilt from the run's `coding-sidecar.gateway.retry-surfaced` lines.
+`fact=retrying` is one per outage of a call while it is the newest frame of the run: a later frame
+(a pause, a mode change, a tool event) hides it from the status line, and the call's next retry or
+wait publishes it again, so a second `retrying` line with a higher `attempt` is the same outage
+seen again. `fact=recovered` follows the answer that ends it. `fact=retry-stopped` closes a call the
+run cancelled while it was retried or held (a client that went away, a cut transport, the route
+deadline), which ends with neither an answer nor a turn-failure frame; without it the status line
+would keep naming the gateway while the next call generates. A call that failed for good needs none
+of these: its turn-failure frame follows. A `retrying` fact that a retry began carries the failed
+provider `attempt`, counted from 1 without the steered repair (the `gateway.retry.scheduled` line of
+the same retry counts the repair too: after an exhausted answer's repair, the retry after a 503 is
+`attempt=2` there and `attempt=1` here), and the `retryPolicy`. One that a
+wait began carries the `waitReason` (`provider-cooldown`, `circuit-cooldown` or `probe-saturated`,
+the `reason` of the `gateway.circuit.wait` line it joins on) and the `retryPolicy`, and no
+`attempt`: the call's admission was held by the circuit breaker or a provider cooldown before any
+attempt of its own, as when a turn the runtime retried meets the breaker the earlier turn opened. A
+wait the call's window could not hold at all writes `gateway.circuit.wait outcome=budget-refused`
+and no `retrying` fact. `published=false` with a `publicationReason` means the run's event replay
+refused the fact, so the status kept naming the model while the `gateway.retry.scheduled` and
+`gateway.circuit.wait` lines show the outage; the call's next retry or wait tries again.
+
+A `gateway.retry.observer-failed` line (level `error`, `notice` naming the retry, wait or settlement
+it was told) means the code that listens to a call's retries threw. The call itself was not
+affected: it kept its result, and the throw is recorded here instead of replacing it. The line
+carries the Keiko-code `frames` and `causeChain` of the throw and no message; it is a defect of the
+listener, so include the support export when reporting it.
+
+Each of these retry and wait lines names the policy it ran under in `retryPolicy`. `outage-window`
+is a coding turn riding out the outage, so retries beyond the provider's `maxRetries` are expected.
+`attempts` is a retry that keeps the provider's attempt count: a commit draft, interactive chat, a
+coding turn with the window switched off, or a coding turn's retry of the model's own invalid
+tool-call shape. Retries beyond `maxRetries` under `retryPolicy=attempts` point at a retry-loop
+defect, not at the window.
+
+**Resolution**
+
+- A run that recovered needs nothing; the gap in its timeline is the outage.
+- A turn that still failed after the window (ten minutes by default) points at a sustained outage:
+  check the gateway's and model server's health and capacity before retrying the task.
+- The window is `codingOutageWindowMs` in the gateway configuration (milliseconds; default
+  `600000`, at most `3600000`). Raise it where peak-time overloads last longer or where a silent
+  attempt should be retried, or set `0` to restore the fail-fast attempt count for coding turns as
+  well. Gateway Setup keeps the value, `0` included, when it rewrites the configuration.
+- A Workbench turn whose retries after a 429, a 5xx, a timeout or a refused connection carry
+  `retryPolicy=attempts` ran with the window switched off (`codingOutageWindowMs: 0`).
+
+---
+
+## Coding Workbench shows no model reasoning, or the answer only once it is complete
+
+| Field             | Value                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| Severity          | Low                                                                                                |
+| Surface           | Coding Workbench                                                                                   |
+| Stable identifier | `chat.response.streamed` (`reasoningEvents`) / `gateway.stream.completed` (`reasoningDisposition`) |
+
+**Symptom**
+
+A reasoning model (Gemma 4 behind vLLM with a reasoning parser, or an Anthropic model with
+thinking) works through a Workbench run, but the timeline shows no "Model reasoning" block, or the
+answer appears in one piece only once it is complete.
+
+**Root Cause**
+
+The model's reasoning reaches Keiko only through the field LiteLLM normalises it into:
+`reasoning_content` on each streamed delta and on a buffered message (a server that names the
+field `reasoning` is read the same way). The Workbench streams a turn live and shows its reasoning
+by default; both are operator opt-outs in the gateway configuration. Nothing reaches the timeline
+when the model server does not separate the reasoning (no reasoning parser for the model family, so
+the reasoning stays inside the answer text or is not produced), when the LiteLLM route merges it
+back into the answer (`merge_reasoning_content_in_choices: true`) or drops the request parameter
+that switches it on (`drop_params` removing `reasoning_effort` on a model that needs it), or when
+the configuration sets `codingReasoningDisplay: "off"`. The answer arrives in one piece when the
+configuration sets `codingStreaming: "off"`, when the model's capability does not stream, when the
+coding runtime sent its request without `stream: true`, or when a proxy between Keiko and the model
+ignores `stream` and answers with one JSON body.
+
+A turn the gateway streams can still reach the timeline in one piece when the runtime's delta
+events do not reach it. OpenCode persists a streamed reasoning or answer part only empty, when its
+block starts, and complete, when the response ends, so the timeline cannot read the words in
+between from the runtime's history; it takes them from the runtime's ephemeral delta events
+(`session.reasoning.delta`, `session.text.delta`). A part the timeline did not see starting, and
+every part a replaced event stream had been feeding, is not extended again, because a gap in the
+middle of a text would show words the model never wrote in that order; such a part shows what it
+has until the history shows it complete. A run whose event stream drops and reconnects repeatedly
+therefore shows more of its answer at the end than while it streams.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json> --correlation-id <runId>`, then per model turn:
+
+- `chat.response.streamed` with `reasoningEvents: 0` and `reasoningBytes: 0`: the provider sent no
+  `reasoning_content`; check the model server and the LiteLLM route.
+- `reasoningEvents` above 0 with `gateway.stream.completed` (or `gateway.chat.completed`)
+  `reasoningDisposition: discarded`: the reasoning arrived and the display switch discarded it.
+- `coding-sidecar.gateway.usage-settled` records the turn's share as counts: `contentBytes`,
+  `reasoningBytes`, the provider's own `reasoningTokens` when it reports them, beside `outputBytes`;
+  `coding-sidecar.gateway.outcome` `reasoningFrames` and `forwardedReasoningBytes` count the frames
+  and bytes that carried reasoning to the coding runtime (`reasoningWithheld: true` on a buffered
+  answer whose oversized reasoning was withheld), and `coding-runtime.history-projection`
+  `reasoningSignalCount` the reasoning pieces a history read prepared for the timeline, before the
+  timeline accepts them.
+- `coding-runtime.history-projection` also counts, since its previous line and never as text, what
+  reached the timeline from the runtime's delta events: `liveDeltaCount` is the deltas that grew a
+  live part (zero over a turn the gateway streamed means the delta events never reached the
+  timeline), `liveDroppedCount` the deltas that extended nothing (a part not seen starting, a part
+  the replaced event stream had been feeding, a part at its bound, a malformed delta),
+  `liveDivergedCount` the parts whose complete text did not extend the text already shown (the
+  timeline keeps what it showed), and `mergedEventCount` the runtime events folded into an earlier
+  history read, which is how many events one read stood for when the timeline lags.
+  `coding-runtime.sidecar-session.bound` with `binding: reused` marks an event stream that was
+  replaced mid-run.
+- A coding turn read with `gateway.stream.started` streams live, unless its
+  `chat.response.streamed` line says `outcome: whole-body` (a proxy that ignored `stream` and
+  answered with one JSON body). `gateway.chat.started` means the turn was buffered:
+  `codingStreaming: "off"`, a capability without streaming, or a runtime request without
+  `stream: true`.
+
+**Resolution**
+
+- Enable the model server's reasoning parser for the model family (vLLM `--reasoning-parser`).
+- In the LiteLLM route, leave `merge_reasoning_content_in_choices` unset (or `false`) so the
+  reasoning stays in `reasoning_content`, and make sure `drop_params` does not strip the reasoning
+  parameter the model needs.
+- Remove `codingReasoningDisplay: "off"` and `codingStreaming: "off"` from the gateway
+  configuration to restore the defaults (both `"on"`; the only accepted values are `"on"` and
+  `"off"`).
+- A high `liveDroppedCount` beside a streamed turn means the event stream was interrupted or the
+  runtime sent deltas the timeline could not attach to a part. Nothing is lost: the complete answer
+  and reasoning arrive when the runtime ends the parts. Find why the event stream keeps dropping
+  (`coding-runtime.sidecar-session.bound` lines with `binding: reused`, then the loopback runtime's
+  own health).
+- Shown reasoning is unverified model output. It is never kept in Coding History, evidence, a
+  support export or the Activity Log, which record only its counts.
 
 ---
 

@@ -1,6 +1,11 @@
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { describe, expect, it, vi } from "vitest";
+import {
+  CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+  validateCodingSafeActivityFeed,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -9,13 +14,20 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
+  codingSafeActivityTtlMs,
   createCodingSafeActivityProjection,
   type CodingSafeActivityContent,
   type CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
+import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+  runtimeMaxDurationMs,
+} from "./productionRuntimeWorkspaceAuthority.js";
 
 const RUN_ID = "run-safe-activity";
 const WORKSPACE_ID = "workspace-safe-activity";
+const FULL_SEGMENT = "a".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
 
 function message(
   messageId: string,
@@ -34,6 +46,15 @@ function message(
 function text(messageId: string, value: string): CodingSafeActivitySignal {
   return {
     kind: "text",
+    messageId,
+    text: value,
+    occurredAt: "2026-07-18T17:00:00.001Z",
+  };
+}
+
+function reasoning(messageId: string, value: string): CodingSafeActivitySignal {
+  return {
+    kind: "reasoning",
     messageId,
     text: value,
     occurredAt: "2026-07-18T17:00:00.001Z",
@@ -648,6 +669,49 @@ describe("bounded coding safe-activity projection", () => {
     expect(throwing).toHaveBeenCalledOnce();
   });
 
+  // #3873: the Authority Envelope duration is an operator setting (KEIKO_CODING_RUNTIME_MAX_
+  // DURATION_MINUTES, formerly a fixed 30 minutes), and this projection's TTL is a hard cap that
+  // wins over a longer authority (the expiry tests below). A default of 30 minutes therefore evicted
+  // a live run's feed at minute 30 of a 120-minute envelope. The default now follows the default
+  // envelope duration and production derives a configured TTL through `codingSafeActivityTtlMs`;
+  // both outlive the envelope by the retention margin, so the authority expiry — not the cap — ends
+  // a live run's feed.
+  it("retains a live run for the whole envelope duration by default and for a configured one", () => {
+    const start = 1_721_323_200_000;
+    let now = start;
+    const defaultEnvelopeMs = runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES);
+    const projection = createCodingSafeActivityProjection({ now: () => now });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: new Date(start + defaultEnvelopeMs).toISOString(),
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    now = start + defaultEnvelopeMs - 1;
+    expect(projection.currentContent()?.feed.runId).toBe(RUN_ID);
+    now = start + defaultEnvelopeMs;
+    expect(projection.currentContent()).toBeNull();
+
+    const configuredEnvelopeMs = runtimeMaxDurationMs(MAX_RUNTIME_MAX_DURATION_MINUTES);
+    expect(codingSafeActivityTtlMs(configuredEnvelopeMs)).toBeGreaterThan(configuredEnvelopeMs);
+    const configured = createCodingSafeActivityProjection({
+      now: () => now,
+      ttlMs: codingSafeActivityTtlMs(configuredEnvelopeMs),
+    });
+    const configuredStart = now;
+    configured.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: new Date(configuredStart + configuredEnvelopeMs).toISOString(),
+      workspaceIsCurrent: () => true,
+    });
+    now = configuredStart + configuredEnvelopeMs - 1;
+    expect(configured.currentContent()?.feed.runId).toBe(RUN_ID);
+    now = configuredStart + configuredEnvelopeMs;
+    expect(configured.currentContent()).toBeNull();
+  });
+
   it("physically expires retained activity without requiring a reader", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-18T17:00:00.000Z"));
@@ -717,7 +781,9 @@ describe("bounded coding safe-activity projection", () => {
     projection.ingest(RUN_ID, message("msg_user", "user"));
     projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
     expect(projection.ingest(RUN_ID, message("msg_extra", "assistant", "msg_user"))).toBe(true);
-    projection.ingest(RUN_ID, text("msg_extra", "first"));
+    // Lab ledger F2: a text signal continues the message's last segment, so the one permitted
+    // segment is filled to its character bound before a second one is needed and refused.
+    projection.ingest(RUN_ID, text("msg_extra", FULL_SEGMENT));
     expect(projection.ingest(RUN_ID, text("msg_extra", "second"))).toBe(true);
     projection.ingest(RUN_ID, {
       kind: "tool",
@@ -748,7 +814,7 @@ describe("bounded coding safe-activity projection", () => {
           {
             messages: [
               {},
-              { messageId: "msg_extra", segments: [{ text: "first" }], truncated: true },
+              { messageId: "msg_extra", segments: [{ text: FULL_SEGMENT }], truncated: true },
             ],
             tools: [{ callId: "call_1" }],
             truncated: true,
@@ -918,6 +984,11 @@ describe("bounded coding safe-activity projection", () => {
           state: "running",
           occurredAt: "2026-07-18T17:00:00.004Z",
         }),
+    ],
+    [
+      "reasoning-role-invalid",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, reasoning("msg_user", "Private late text.")),
     ],
   ] as const)("names the %s cause on a projection-rejected drop", (rejection, refuse) => {
     const activityLog = createBufferedServerLogSink();
@@ -1293,3 +1364,174 @@ function planSignal(
     occurredAt: "2026-07-18T17:00:00.005Z",
   };
 }
+
+type Projection = ReturnType<typeof createCodingSafeActivityProjection>;
+type ProjectedMessage = CodingSafeActivityContent["feed"] extends infer Feed
+  ? Feed extends { readonly turns: readonly { readonly messages: readonly (infer M)[] }[] }
+    ? M
+    : never
+  : never;
+
+function assistantTurn(
+  options: Parameters<typeof createCodingSafeActivityProjection>[0] = {},
+): Projection {
+  const projection = createCodingSafeActivityProjection({
+    now: () => 1_721_323_200_000,
+    diagnostics: { record: (): void => undefined },
+    ...options,
+  });
+  projection.open({
+    runId: RUN_ID,
+    workspaceId: WORKSPACE_ID,
+    authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+    workspaceIsCurrent: () => true,
+  });
+  projection.ingest(RUN_ID, message("msg_user", "user"));
+  projection.ingest(RUN_ID, message("msg_answer", "assistant", "msg_user"));
+  return projection;
+}
+
+// The projected message, from a feed that must still satisfy the published contract.
+function projected(projection: Projection, messageId = "msg_answer"): ProjectedMessage {
+  const feed = projection.currentContent()?.feed;
+  if (feed?.availability !== "available") throw new TypeError("expected an available feed");
+  expect(validateCodingSafeActivityFeed(feed).ok).toBe(true);
+  const found = feed.turns
+    .flatMap((turn) => turn.messages)
+    .find((candidate) => candidate.messageId === messageId);
+  if (found === undefined) throw new TypeError(`missing ${messageId}`);
+  return found;
+}
+
+function joinedText(message: ProjectedMessage): string {
+  return message.segments.map((segment) => segment.text).join("");
+}
+
+// Lab ledger F2 (#3873): with live streaming an answer reaches the projection as one small text
+// signal per history pull. Each used to open a segment of its own, so a streamed answer was cut off
+// after its first 32 pulls. On the pinned OpenCode 2.0.10 the history holds a streamed part empty
+// until it ends, so these small signals come from the history projection's live text overlay
+// (`opencodeV2History.ts` over `opencodeV2LiveText.ts`, fed by the runtime's delta events), one per
+// pull that saw new deltas.
+describe("streamed answers in the live feed", () => {
+  it("continues the message's last segment instead of truncating after 32 pulls", () => {
+    const projection = assistantTurn();
+    for (let index = 0; index < 200; index += 1) {
+      expect(projection.ingest(RUN_ID, text("msg_answer", "word "))).toBe(true);
+    }
+
+    const answer = projected(projection);
+    expect(answer.truncated).toBe(false);
+    expect(answer.segments).toEqual([
+      { kind: "text", text: "word ".repeat(200), truncated: false },
+    ]);
+  });
+
+  it("splits a long streamed answer at the segment bound without losing text", () => {
+    const projection = assistantTurn();
+    const pieces = ["a".repeat(3_000), "b".repeat(3_000), "c".repeat(3_000)];
+    for (const piece of pieces) projection.ingest(RUN_ID, text("msg_answer", piece));
+
+    const answer = projected(projection);
+    expect(answer.truncated).toBe(false);
+    expect(answer.segments.map((segment) => segment.text.length)).toEqual([
+      CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+      CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+      9_000 - 2 * CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+    ]);
+    expect(joinedText(answer)).toBe(pieces.join(""));
+  });
+
+  it("never splits a surrogate pair across the segment bound", () => {
+    const projection = assistantTurn();
+    const almostFull = "a".repeat(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS - 1);
+    projection.ingest(RUN_ID, text("msg_answer", almostFull));
+    projection.ingest(RUN_ID, text("msg_answer", "😀 done"));
+
+    const answer = projected(projection);
+    expect(answer.segments.map((segment) => segment.text)).toEqual([almostFull, "😀 done"]);
+    expect(answer.truncated).toBe(false);
+  });
+
+  it("still marks the message truncated once the message byte budget is spent", () => {
+    const projection = assistantTurn({ limits: { maxMessageBytes: 600 } });
+    for (let index = 0; index < 1_000; index += 1) {
+      projection.ingest(RUN_ID, text("msg_answer", "x"));
+    }
+
+    const answer = projected(projection);
+    expect(answer.truncated).toBe(true);
+    expect(answer.segments.at(-1)?.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(answer), "utf8")).toBeLessThanOrEqual(600);
+  });
+});
+
+// #3878: the model's reasoning reaches the live feed beside its assistant message, bounded on its
+// own so the answer always keeps room, and it is the first thing to go under byte pressure.
+describe("model reasoning in the live feed", () => {
+  it("projects streamed reasoning beside the answer, never inside it", () => {
+    const projection = assistantTurn();
+    for (const piece of ["Look at ", "the parser ", "first."]) {
+      projection.ingest(RUN_ID, reasoning("msg_answer", piece));
+    }
+    projection.ingest(RUN_ID, text("msg_answer", "Fixed."));
+
+    const answer = projected(projection);
+    expect(answer.reasoning).toEqual({ text: "Look at the parser first.", truncated: false });
+    expect(answer.segments).toEqual([{ kind: "text", text: "Fixed.", truncated: false }]);
+    expect(answer.truncated).toBe(false);
+  });
+
+  it("clips reasoning at its own bound and keeps it a true prefix of what the model wrote", () => {
+    const projection = assistantTurn();
+    const long = "r".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES + 100);
+    projection.ingest(RUN_ID, reasoning("msg_answer", long));
+    projection.ingest(RUN_ID, reasoning("msg_answer", "LATER"));
+    projection.ingest(RUN_ID, text("msg_answer", "y".repeat(7_000)));
+
+    const answer = projected(projection);
+    expect(answer.reasoning).toEqual({
+      text: "r".repeat(CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES),
+      truncated: true,
+    });
+    // The reasoning bound leaves the answer room of its own.
+    expect(answer.truncated).toBe(false);
+    expect(joinedText(answer)).toBe("y".repeat(7_000));
+  });
+
+  it("cuts the reasoning back, keeping its beginning, when the answer needs the room", () => {
+    const projection = assistantTurn({ limits: { maxMessageBytes: 1_200 } });
+    projection.ingest(RUN_ID, reasoning("msg_answer", "q".repeat(500)));
+    projection.ingest(RUN_ID, text("msg_answer", "z".repeat(700)));
+
+    const answer = projected(projection);
+    expect(answer.truncated).toBe(false);
+    expect(joinedText(answer)).toBe("z".repeat(700));
+    expect(answer.reasoning?.truncated).toBe(true);
+    expect(answer.reasoning?.text).toMatch(/^q+$/u);
+    expect(answer.reasoning?.text.length ?? 0).toBeLessThan(500);
+  });
+
+  it("sheds older messages' reasoning before any answer text under turn pressure", () => {
+    const projection = assistantTurn({ limits: { maxTurnBytes: 2_000 } });
+    projection.ingest(RUN_ID, reasoning("msg_answer", "o".repeat(900)));
+    projection.ingest(RUN_ID, text("msg_answer", "first answer"));
+    projection.ingest(RUN_ID, message("msg_next", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, reasoning("msg_next", "n".repeat(900)));
+    projection.ingest(RUN_ID, text("msg_next", "second answer"));
+
+    const older = projected(projection);
+    const newest = projected(projection, "msg_next");
+    expect(older).not.toHaveProperty("reasoning");
+    expect(joinedText(older)).toBe("first answer");
+    expect(newest.reasoning?.text).toBe("n".repeat(900));
+    const feed = projection.currentContent()?.feed;
+    expect(feed?.availability === "available" && feed.turns[0]?.truncated).toBe(true);
+  });
+
+  it("drops reasoning that a format-character redactor empties", () => {
+    const projection = assistantTurn();
+    expect(projection.ingest(RUN_ID, reasoning("msg_answer", "\u202E\u2066"))).toBe(false);
+    expect(projected(projection)).not.toHaveProperty("reasoning");
+  });
+});

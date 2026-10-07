@@ -84,6 +84,87 @@ production the clock delegates to `Date.now()` and `setTimeout`. In tests the cl
 deterministic stub — no `vi.useFakeTimers`, no actual delays. This makes resilience tests fast and
 mutation-robust.
 
+An autonomous coding turn is not an interactive answer a person waits on, so it tolerates an outage
+instead of failing fast (#3873). The policy is an explicit request signal,
+`outagePolicy: "outage-window"` on the `GatewayCallRequest`, and only the coding sidecar route sets
+it, on its buffered and its streamed model calls alike. The `coding-workbench` latency profile does
+not select it: that profile only raises the timeout floors, and the interactive commit-message
+draft borrows it (#3591) while a person waits on the answer. A call with the signal keeps retrying a
+transiently unavailable provider (429, a retryable 5xx, a refused connection, a silent attempt) for
+the gateway configuration's `codingOutageWindowMs` (default `GATEWAY_CODING_OUTAGE_WINDOW_MS`, 10
+minutes; at most one hour) rather than stopping after the provider's `maxRetries`, and it waits
+through an open circuit breaker's cooldown and probe slot instead of receiving `CircuitOpenError`
+at once. The window extends only the retries after a failure the breaker counts against the
+provider (`isNonProviderFault` is false); a retry that reacts to the model's own output, a rejected
+tool-call shape and its schema-repair correction, keeps the provider's attempt count and reports
+`retryPolicy=attempts`. One policy covers both call shapes: a buffered call's retry loop and a
+streamed call's retries before its first answer delta — at startup, and after a stream that has
+delivered nothing but forwarded reasoning (#3873 review; see the streamed chunk model below) — run
+under the same window, measured from the start of the call, and every admission wait, a streamed
+call's first admission included, is clipped to what is left of it. A failure after answer text was
+delivered cannot be retried without duplicating that text: the call ends, and the coding runtime
+decides whether to retry the turn (`runtimeRetry`, ADR-0173). After a failed half-open probe, a streamed coding turn waits for the next
+probe just as a buffered one does. The capped exponential backoff with jitter, any
+provider-announced `Retry-After` and the half-open probe limit all still apply, so waiting callers
+never add load to a recovering provider.
+
+The window is the operator's explicit bound, not the provider's attempt budget. Under the outage
+policy the call's end-to-end budget is the window plus one attempt bound, and never less than the
+provider's own budget (`bufferedCallBudgetMs` / `streamedCallBudgetMs`): the configured window holds
+even at `maxRetries: 0`, where the provider budget alone is ten minutes, and the attempt the window
+admits last keeps its full bound, so a healthy answer is not cut at the window's edge. The sidecar
+route's deadline sits behind that budget, from the same derivation. Each attempt keeps its own
+bound: a silent attempt ends at the silence floor (at least five minutes without data) when the
+answer is read over a stream, otherwise at the buffered floor (at least ten minutes), and it is
+retried only while the window still has room. With the default window and floors a silent streamed
+attempt is therefore retried once and a silent whole-body attempt not at all; a longer
+`codingOutageWindowMs` buys more attempts. A call that outlasts the window ends with
+`gateway.retry.exhausted reason=budget`.
+
+A refused connection counts as transient on purpose: while a gateway restarts or sheds load its
+listener can refuse connections for a while, which is exactly the outage the window rides out. A
+misconfigured route (a wrong host or port) is caught before any coding turn by Gateway Setup's
+probe, so a Workbench turn that faces an unreachable gateway waits up to the window
+(`codingOutageWindowMs`) before it fails. Every other surface, the commit draft and interactive
+chat included, keeps its configured attempt count and fail-fast breaker, and
+`codingOutageWindowMs: 0` restores that behaviour for coding calls as well. Gateway Setup keeps the
+configured value, an explicit `0` included, through every rebuild of the configuration. The retry
+and breaker lines `gateway.retry.scheduled`, `gateway.retry.exhausted` and `gateway.circuit.wait`
+carry the applied policy as the closed field `retryPolicy` (`attempts` or `outage-window`), so the
+Activity Log tells a deliberate outage window from a retry loop that ignored its attempt count.
+
+A caller that surfaces an outage to its operator hears the call through the explicit, local
+`GatewayCallRequest.retryObserver` (#3873 review; never serialized into a provider request; only the
+coding sidecar route sets it). The observer is told when a failure that says the provider is
+unavailable (`isNonProviderFault` is false) is met with a scheduled retry — the failed provider
+attempt and the applied `retryPolicy` — and when the call's admission begins to wait for an open
+circuit breaker, a saturated half-open probe slot or a cooldown the provider announced
+(`admission-wait`: the closed `reason` of the `gateway.circuit.wait` line it joins, and the
+`retryPolicy`). The wait is announced for the first attempt of a buffered call and of a streamed
+call as well as for every retry's. That first attempt follows no failed attempt of the call, so the
+retry loop alone could not tell the observer that the gateway holds it: a turn the runtime retried
+after an earlier call outlasted the window, or one that starts during an outage, queued behind the
+open breaker (or behind another run's probe) while the run status still read "Waiting for the model"
+(PR #3876 review). A wait that cannot fit what is left of the call's window never begins, so it is
+not announced; `gateway.circuit.wait outcome=budget-refused` records that refusal. A call that was
+announced, by a retry or by a wait, settles once when it ends (`settled`: `answered`, or `failed`
+when its window refused it, it failed for good, or it was cancelled), after however many retries
+and waits it held; a call that was never announced stays silent. The retries of a steered repair
+or a schema correction answer the model's own output and are never announced as retries, though an
+admission wait of such a retry is announced like any other. The `attempt` of a `scheduled` notice
+counts provider attempts only, so a steered repair is not counted; the `attempt` of the
+`gateway.retry.scheduled` line of the same retry counts every attempt of the call, the repair
+included, and the two differ on purpose after a repair (ADR-0137 D9). The observer runs inside the
+retry loop and the admission wait and should not throw; it owns and logs its own failures. Every
+notice is nevertheless told through one guard in the call's announcer, so a throw that escapes the
+observer can neither hang the call (the settlement runs ahead of the call's own resolve or reject),
+nor replace the call's result with the observer's error, nor leave the loop as an unhandled
+rejection, which the CLI's process guard treats as fatal. It is recorded, never swallowed:
+`gateway.retry.observer-failed` names the notice kind and carries the Keiko-code frames and cause
+classes of the throw under the call's correlation id, never the notice's content or the observer's
+message. The route turns these notices into the three body-free gateway facts of ADR-0137 D9, which
+name the Workbench's run phase while a provider outage is ridden out.
+
 ### D7 — Secret redaction at the boundary
 
 A `redact()` helper in `src/gateway/redaction.ts` strips known secret patterns (API keys, bearer
@@ -599,6 +680,64 @@ following error types are never retried: `AuthenticationError`, `ModelRefusalErr
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
+**Steered repair of an exhausted or empty answer (#3873, F17, F23).** A `ProviderOutputExhaustedError` — an HTTP
+200 answer whose `finish_reason` is `length` with neither a tool call nor content, the model having
+spent its whole output budget on reasoning — is never retried as is. On a call that asks for it, it
+is not surfaced at once either: the explicit `GatewayCallRequest.answerRepair: "steered"` (local,
+never serialized) is set by the coding sidecar route alone, so every other call — the commit draft
+and interactive chat included — still surfaces such an answer at once and never makes a hidden second
+generation (#3873 review). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
+grants exactly one further attempt per call, at once, which the gateway sends as the ORIGINAL request
+plus one fixed system message (`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told
+that its previous answer used the whole budget without a tool call or a final answer and asked to
+reply with that directly, keeping any reasoning to a few sentences. The repair follows the tool-schema
+repair's pattern — one correction at a time, never the exhausted answer quoted back — but is its own
+retry-loop hook, separate from the schema correction, and applies to a buffered call, to a stream
+before its first content, and (owner decision 2026-10-06, option iii) to a stream that has delivered
+nothing but forwarded reasoning alike: the retry loop is resumed after the exhausted attempt
+(`executeWithRetry`'s `resume`, which carries the call's attempt and repair counts across every loop
+of the call), the caller then sees a second reasoning passage, and no answer text or tool call is
+ever duplicated. The provider-reported usage of the repaired attempt (and of every other attempt the
+call discarded: a rejected tool call, a stream that failed after its usage arrived) rides on the
+answer as `discardedAttemptUsage`, so the coding run's prompt allowance counts every prompt the
+provider processed (ADR-0137 D2); `usage` keeps describing the answer itself. A delivered answer delta or tool call, and a repair that already ran,
+close the window for good, so a later exhaustion surfaces at once. It is not a provider retry: neither `maxRetries` nor the coding outage window
+counts it, only what is left of the call's budget can refuse it (the call then ends as a budget stop
+rather than a terminal one), and the breaker never counts either answer. Its scheduled line is
+`gateway.retry.scheduled` with `reason: "output-exhausted-repair"` and `delayMs: 0` (and
+`retryPolicy: "attempts"`, D6: the outage window never extends a repair); an ordinary retry
+carries `reason: "retryable-error"`. A repaired attempt that exhausts the budget again surfaces that
+second `ProviderOutputExhaustedError` once, marked `outputRepair: "exhausted-again"` on the error; one
+that fails for another reason carries `outputRepair: "failed"`; a recovered answer carries
+`outputRepair: "recovered"` on the `NormalizedResponse`. The coding sidecar route reads those marks for
+its own evidence and answers a repaired-and-exhausted-again turn as final to the runtime (ADR-0173).
+Live qualification of 1.1.x with Gemma 4 31B behind LiteLLM (run
+`324076066246415201273338647160811469441`) motivated this: the fourth turn reasoned for its whole 8k
+budget, the runtime retried the identical turn twice, and every attempt cost seven minutes at 20
+tokens per second with nothing steering the model.
+
+The same one repair covers an answer that ended **after reasoning without a tool call or any text**
+(F23). That answer is a `ProviderEmptyAnswerError` (#3610: HTTP 200, a finish reason other than
+`length`, neither content nor a tool call), and it carries `afterReasoning` — a flag the adapter sets
+when the answer carried reasoning, never the reasoning itself (`carriedReasoning`, `normalize.ts`). Only
+that empty answer is repaired; an empty answer that carried no reasoning is the model's final word,
+surfaces at once, and is never retried, exactly as before. `steeredAnswerRepair` (`resilience.ts`) is
+the single classification the buffered attempt, the streamed startup and the stream resumed after
+forwarded reasoning all consult, and the repair is granted once per call whichever of the two failures
+comes first. The gateway sends the original request plus its own fixed system message
+(`EMPTY_ANSWER_REPAIR_MESSAGE`): the previous answer ended after reasoning without a tool call or a
+final answer, so call the next tool now or give the final answer, keeping any reasoning to a few
+sentences. Its scheduled line carries `reason: "empty-answer-repair"`. The marks name how the repaired
+attempt ended, whichever failure triggered the repair: `exhausted-again` (it spent the whole budget),
+`empty-again` (it ended without any text or tool call), `failed` (it failed for another reason, or the
+repair never ran). Gemma 4 31B streamed through LiteLLM (run `74202984158312182524609898190850427735`)
+motivated this: turn 5 reasoned for about 4,500 tokens and ended empty, the coding runtime retried the
+identical turn six more times, and the failed turns' reasoning stayed in the resent history. A coding
+sidecar turn whose repair ended `empty-again` is answered as final to the runtime (ADR-0173), and the
+sidecar drops that reasoning from every later request instead of resending it upstream: reasoning
+fields of prior assistant messages and assistant messages that carry nothing but reasoning never reach
+the gateway request, and `coding-sidecar.gateway.request-validated` records how many it dropped.
+
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
 (`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
 all configured attempts and exponential backoff windows. A provider cooldown above 30 s consumes
@@ -608,9 +747,10 @@ the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
 left, after earlier attempts or provider cooldowns consumed that budget, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
-coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable startup failure only before delivering its
-first non-empty delta or terminal response. Empty role deltas do not commit the answer. Once any
-content is delivered, a failure is terminal: replay must never duplicate text or tool effects.
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable failure only before delivering its first
+non-empty answer delta or terminal response; forwarded reasoning does not commit the answer (see the
+streamed chunk model below), and empty role deltas do not either. Once answer text is delivered, a
+failure is terminal: replay must never duplicate text or tool effects.
 Startup retries use the existing retry executor, configured retry count, backoff, cancellation,
 and activity-log events; every attempt reserves and settles its own spend budget. On a terminal response, the provider iterator closes, the admission and reservation settle, and completion evidence is emitted before `done` reaches the consumer. A consumer that stops reading at `done` without another `next()` or `return()` cannot strand a half-open probe, spend reservation or outcome line. A later iterator cleanup never duplicates settlement. Cancellation before the first attempt and early consumer departure release their admitted circuit probe without counting as provider recovery or failure. Every admission settles once and is bound to its circuit generation; old completions cannot release, close or reopen a later probe window. This applies to streamed and buffered calls, including spend refusal. Stream startup retries treat tool-catalog validation failures as terminal rather than replaying unchanged tool arguments. Half-open
 circuit probes get one attempt. All attempts and delays share one `streamRequestBudgetMs`
@@ -635,7 +775,63 @@ gets no special treatment past what every other interactive `Gateway.chat()`/`ch
 already receives; a larger configured timeout is retained. The sidecar route derives its backstop
 from the same effective timeout. Retrieval, indexing and voice retain their own, smaller per-call
 floor (above). The gateway's body-free call-started line records the effective `timeoutMs` so a
-slow self-hosted provider can be distinguished from a hung turn.
+slow self-hosted provider can be distinguished from a hung turn. **`latencyProfile` selects timeout
+floors only.** It never selects the retry policy (the explicit `outagePolicy: "outage-window"`, which
+only the coding sidecar route sets) and never the reasoning delivery (the explicit
+`reasoningDelivery: "forward"`, below), so an interactive surface that borrows the profile for its
+floors — the commit draft does — still fails fast and still receives its answer without the model's
+reasoning (#3873, F23).
+
+**The streamed chunk model and model reasoning (#3878, 2026-10-06).** `GatewayStreamChunk` has
+three kinds: `delta` (answer text), `reasoning` (the model's own reasoning, which LiteLLM normalises
+as `reasoning_content` for a reasoning parser behind vLLM and for Anthropic thinking; a server that
+names it `reasoning` is read the same way) and the terminal `done`. Reasoning never enters
+`content`: the normalized response carries it as `reasoning`, its UTF-8 size as
+`usage.reasoningBytes`, and the provider's own `usage.completion_tokens_details.reasoning_tokens`
+as `usage.reasoningTokens` when the provider reports it (never estimated). It passes the same
+secret redaction as the answer, in a hold-back lane of its own, and a reasoning-only answer still
+fails as output-exhausted or empty. The gateway hands reasoning only to a call that asks for it with
+the explicit `GatewayCallRequest.reasoningDelivery: "forward"` (local, never serialized; only the
+coding sidecar route sets it, beside the `coding-workbench` latency profile and the outage policy),
+and only while the configuration's `codingReasoningDisplay` is not `"off"` (owner decision
+2026-10-06: on by default, opt-out only); every other surface keeps its answer without reasoning,
+whatever latency profile it borrows. Until #3873 (F23) the gateway keyed forwarding on the latency
+profile, so the commit draft, which borrows the profile for its timeout floors, received the
+reasoning too (`reasoningDisposition=forwarded` on its completion line); it now records `discarded`.
+Discarded reasoning chunks are dropped where the provider stream is read, below the commit point:
+a discarded thought is never a delivered chunk, so it neither starts the caller's answer nor ends
+the startup retries. Forwarded reasoning does not commit the stream either (owner decision
+2026-10-06, #3873 F17 option iii: a further reasoning passage is acceptable, answer text is never
+duplicated): while a stream has delivered nothing but reasoning, its failure goes back to the call's
+retry loop, which decides it exactly like a startup failure (#3873 review) — the one steered repair
+described under "Steered repair of an exhausted or empty answer", a schema correction after a catalog
+rejection, or a provider retry under the call's policy, the outage window included. A call forwards
+at most two reasoning passages, the first and the steered repair's: any other attempt after forwarded
+reasoning streams its reasoning undelivered, so a retried outage never repeats a passage. Only a
+delivered answer delta or the terminal answer commits the stream; nothing is ever replayed after it.
+Reasoning is a body: `chat.response.streamed` records its events and bytes, and
+`gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`, `reasoningTokens`
+and `reasoningDisposition` (`none`, `forwarded`, `discarded`), never the text.
+
+**Coding sidecar streaming (lab ledger F2, #3873, 2026-10-06).** The coding sidecar profile used
+to be hard-coded as non-streaming, so the sidecar read a streaming provider in full before OpenCode
+saw a byte. It now streams wherever the coding model's capability streams and the configuration's
+`codingStreaming` is not `"off"` (default on): OpenCode receives each answer and reasoning delta as
+an OpenAI-compatible SSE frame (`content`, `reasoning_content`) as it arrives, and the tool calls,
+assembled from their fragments and bound against the catalog first, as complete `tool_calls`
+deltas with their `index`. Usage and prompt settlement, the spend reservation and the completion
+evidence still settle before the terminal `[DONE]`. The answer (text and tool calls) and the
+forwarded reasoning are each bounded by the turn's output allowance in bytes, apart from each
+other, so a reasoning model keeps its whole answer budget; the forwarded reasoning by two passages'
+worth, the gateway's own cap. A stream cut at either bound ends `output-limit` with the bound named
+(`limit`: `answer` or `reasoning`). A buffered answer is complete when it arrives: its reasoning
+never refuses it — an oversized reasoning is withheld and the answer delivered
+(`reasoningWithheld`). `codingStreaming: "off"` restores the buffered answer, and with it the
+shared output reserve rather than the coding reserve, so a runaway whole-body attempt ends as an
+exhausted answer the gateway repairs, not as a timeout the breaker counts. What the Workbench
+timeline shows of those deltas is decided on the runtime side, not by this route: OpenCode persists
+a streamed part only empty and then complete, so the timeline reads the words from the runtime's
+own delta events (ADR-0137 D8).
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:
@@ -649,11 +845,22 @@ States:
   that completed with neither content nor a tool call: the provider answered, the model produced
   nothing usable. It keeps the provider error code, so the chat surfaces are unchanged, and the
   coding runtime reports it as its own `empty-answer` turn-failure cause instead of a broken
-  stream. A stream that ends without any terminal frame is still a provider failure.
+  stream; an empty answer that carried reasoning first gets the one steered repair described above
+  before it surfaces (#3873, F23). A stream that ends without any terminal frame is still a provider
+  failure.
   `MalformedToolCallError` covers the model's own tool call that did not parse or did not match the
   tool's schema, including the catalog rejection `GatewayToolCatalogError` and the redaction-depth
   refusal `ResponseRedactionError`, which both extend it. The gateway still retries a schema
-  rejection so the model can regenerate the call, but the provider answered every time: a lab run of
+  rejection so the model can regenerate the call — on the buffered and, since the #3873 review, the
+  streamed path alike, while the stream has delivered nothing but reasoning: a streamed tool call is
+  delivered only with the terminal answer, so a rejected one was never handed to the caller, and the
+  next attempt carries the schema correction (`gateway.tool-catalog.repair state=scheduled`). A
+  streamed rejection that carries no correction is never replayed as it was, and one that follows
+  answer text the caller already received (a sentence of preface, then a malformed call) surfaces at
+  once, because a repair would deliver that text a second time; the coding sidecar then ends the turn
+  as `invalid-tool-call` with `runtimeRetry=allowed`, and the runtime retries the turn. The correction is decided when the attempt that carries it starts, on the
+  retry loop's own attempt count, so a steered repair on top of the provider's attempts never leaves
+  a rejection uncorrected or re-sends a stale correction. The provider answered every time: a lab run of
   1.1.8 behind a LiteLLM `hosted_vllm` route opened the breaker after five such calls and failed the
   run on `CircuitOpenError`. The coding runtime reports it as its own `invalid-tool-call`
   turn-failure cause, except the redaction-depth refusal: no tool call need be involved, so the

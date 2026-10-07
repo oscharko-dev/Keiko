@@ -191,8 +191,9 @@ function unavailableBudget(
   const allowed = (): boolean => availability().accepted;
   return {
     admitTool: () => (allowed() ? { check: allowed, settle: () => undefined } : undefined),
-    canChargePrompt: allowed,
-    chargePrompt: allowed,
+    // The availability guard writes its own line for the refusal and names the closed reason.
+    canChargePrompt: availability,
+    chargePrompt: availability,
     chargeDelegatedRead: allowed,
     canChargeDelegatedRead: allowed,
     observed: () => undefined,
@@ -262,12 +263,20 @@ function gateBudget(
         ? undefined
         : { ...lease, check: () => allowed() && lease.check() };
     },
-    canChargePrompt: (tokens) => allowed() && budget.canChargePrompt(tokens),
-    chargePrompt: (tokens): boolean => {
+    // A refused check is the decision of a call that reserves nothing afterwards, so it is recorded
+    // where it is made, with the closed reason (#3873 review). A check that fits stays silent: the
+    // charge that follows it records the admission.
+    canChargePrompt: (tokens): CiRepairPromptAdmission => {
       const available = availability();
-      const outcome = available.accepted ? budget.chargePromptOutcome(tokens) : available;
+      const outcome = available.accepted ? budget.canChargePrompt(tokens) : available;
+      if (!outcome.accepted) recordPrompt(tokens, outcome);
+      return outcome;
+    },
+    chargePrompt: (tokens): CiRepairPromptAdmission => {
+      const available = availability();
+      const outcome = available.accepted ? budget.chargePrompt(tokens) : available;
       recordPrompt(tokens, outcome);
-      return outcome.accepted;
+      return outcome;
     },
     chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead(id, key),
     canChargeDelegatedRead: () => allowed() && budget.canChargeDelegatedRead(),

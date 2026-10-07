@@ -27,10 +27,17 @@ export interface CiRepairExecutionLease {
 export interface CiRepairExecutionBudget {
   /** Called only after the existing authority owner admits the concrete tool action. */
   readonly admitTool: (request: CodingToolActionRequest) => CiRepairExecutionLease | undefined;
-  /** Checks whether a prompt charge fits without consuming the repair ledger. */
-  readonly canChargePrompt: (promptTokens: number) => boolean;
-  /** The existing gateway has accepted this prompt reservation; false prevents provider dispatch. */
-  readonly chargePrompt: (promptTokens: number) => boolean;
+  /**
+   * Checks whether a prompt charge fits without consuming the repair ledger. A refusal names the
+   * closed reason the budget refused with, never a bare no: only `prompt-budget-exhausted` is the
+   * run's prompt allowance, and every other limit must not be read as one (#3873 review).
+   */
+  readonly canChargePrompt: (promptTokens: number) => CiRepairPromptAdmission;
+  /**
+   * The existing gateway has accepted this prompt reservation; a refusal prevents provider dispatch
+   * and names its closed reason as `canChargePrompt` does.
+   */
+  readonly chargePrompt: (promptTokens: number) => CiRepairPromptAdmission;
   readonly chargeDelegatedRead?: (delegationId: string, idempotencyKey: string) => boolean;
   /** Checks whether one delegated read fits without consuming the repair ledger (#3417). */
   readonly canChargeDelegatedRead?: () => boolean;
@@ -182,42 +189,31 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
       },
     };
   }
-  public chargePrompt(promptTokens: number): boolean {
-    return this.chargePromptOutcome(promptTokens).accepted;
-  }
-  public chargePromptOutcome(promptTokens: number): CiRepairPromptAdmission {
+  public chargePrompt(promptTokens: number): CiRepairPromptAdmission {
     const context = this.deps.context();
     if (context === undefined) return { accepted: true };
-    if (!context.stillAuthorized()) return { accepted: false, reason: "authority-denied" };
-    const result = this.accepted(context);
-    if (result.status === "blocked" && result.reason !== "tool-budget-exhausted")
-      return { accepted: false, reason: result.reason };
-    if (active(result.record) === undefined)
-      return result.status === "blocked"
-        ? { accepted: false, reason: result.reason }
-        : { accepted: true };
-    const outcome = this.chargeOutcome(context, result.record, {
+    const gate = this.promptGate(context);
+    if ("refusal" in gate) return { accepted: false, reason: gate.refusal };
+    if (gate.record === undefined) return { accepted: true };
+    const outcome = this.chargeOutcome(context, gate.record, {
       chargeId: `prompt-${randomUUID()}`,
       toolCalls: 0,
       promptTokens,
     });
     return "reason" in outcome ? { accepted: false, reason: outcome.reason } : { accepted: true };
   }
-  public canChargePrompt(promptTokens: number): boolean {
+  public canChargePrompt(promptTokens: number): CiRepairPromptAdmission {
     const context = this.deps.context();
-    if (context === undefined) return true;
-    if (!context.stillAuthorized()) return false;
-    const result = this.accepted(context);
-    if (active(result.record) === undefined) return result.status !== "blocked";
-    return (
-      (result.status !== "blocked" || result.reason === "tool-budget-exhausted") &&
-      result.record !== undefined &&
-      chargeFits(result.record, {
-        chargeId: "prompt-admission",
-        toolCalls: 0,
-        promptTokens,
-      })
-    );
+    if (context === undefined) return { accepted: true };
+    const gate = this.promptGate(context);
+    if ("refusal" in gate) return { accepted: false, reason: gate.refusal };
+    if (gate.record === undefined) return { accepted: true };
+    const failure = chargeLimitFailure(gate.record, {
+      chargeId: "prompt-admission",
+      toolCalls: 0,
+      promptTokens,
+    });
+    return failure === undefined ? { accepted: true } : { accepted: false, reason: failure };
   }
   public chargeDelegatedRead(delegationId: string, idempotencyKey: string): boolean {
     const context = this.deps.context();
@@ -278,6 +274,23 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     if (attempt?.runId !== context.runId) return;
     const outcome = observedOutcome(attempt, snapshot);
     if (outcome !== undefined) this.settle(context, attempt.attemptId, outcome);
+  }
+  // What a model prompt may be charged against, shared by the check and the charge so both refuse for
+  // the same closed reason: the budget's own refusal, or the record an active attempt's charge lands
+  // on (`undefined` when no repair attempt is active and there is nothing to charge). An exhausted
+  // tool budget alone does not refuse a prompt while an attempt is active: a child using the last
+  // tool credit still prompts.
+  private promptGate(
+    context: CiRepairBudgetContext,
+  ):
+    | { readonly refusal: CiRepairBudgetBlockReason }
+    | { readonly record: CiRepairBudgetRecord | undefined } {
+    if (!context.stillAuthorized()) return { refusal: "authority-denied" };
+    const result = this.accepted(context);
+    if (result.status === "blocked" && result.reason !== "tool-budget-exhausted")
+      return { refusal: result.reason };
+    if (active(result.record) !== undefined) return { record: result.record };
+    return result.status === "blocked" ? { refusal: result.reason } : { record: undefined };
   }
   private prepare(
     context: CiRepairBudgetContext,

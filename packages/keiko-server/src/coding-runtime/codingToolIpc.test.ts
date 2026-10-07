@@ -20,6 +20,78 @@ describe("coding tool IPC exact changesets", () => {
   });
 });
 
+// #3873 follow-up: the replacement form gained `deletions` and `renames`. The provider descriptor
+// requires both; this wire boundary accepts their omission (like `selectedFiles`) and bounds each
+// path the way it bounds every other governed path, denied segments included.
+describe("coding tool IPC replacement changesets with deletions and renames", () => {
+  const DIGEST = "a".repeat(64);
+  function bound(file: string): { readonly file: string; readonly expectedContentHash: string } {
+    return { file, expectedContentHash: DIGEST };
+  }
+  function parse(changeset: Readonly<Record<string, unknown>>): unknown {
+    return parseCodingToolRequest(
+      JSON.stringify({ action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset }),
+      262_144,
+    );
+  }
+  const rename = { from: "src/a.ts", to: "src/b.ts" };
+  const renameOnly = {
+    edits: [],
+    deletions: [],
+    renames: [rename],
+    files: [bound("src/a.ts"), bound("src/b.ts")],
+    selectedFiles: ["src/a.ts", "src/b.ts"],
+  };
+
+  it("admits a rename-only or deletion-only changeset with no edits", () => {
+    expect(parse(renameOnly)).toMatchObject({ action: "edit", changeset: renameOnly });
+    const deletionOnly = { edits: [], deletions: ["src/a.ts"], files: [bound("src/a.ts")] };
+    expect(parse(deletionOnly)).toMatchObject({ action: "edit", changeset: deletionOnly });
+  });
+
+  it("accepts the omission of deletions and renames", () => {
+    const edits = {
+      edits: [{ file: "src/a.ts", oldString: "old", newString: "new" }],
+      files: [bound("src/a.ts")],
+    };
+    expect(parse(edits)).toMatchObject({ action: "edit", changeset: edits });
+  });
+
+  it("counts both paths of a rename against the 50-file cap", () => {
+    const renames = Array.from({ length: 25 }, (_, index) => ({
+      from: `src/${String(index)}.ts`,
+      to: `src/${String(index)}.moved.ts`,
+    }));
+    const files = renames.flatMap(({ from, to }) => [bound(from), bound(to)]);
+    expect(files).toHaveLength(50);
+    expect(parse({ edits: [], renames, files })).toMatchObject({ action: "edit" });
+    expect(
+      parse({
+        edits: [],
+        renames,
+        deletions: ["src/extra.ts"],
+        files: [...files, bound("src/extra.ts")],
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown rename key", { renames: [{ ...rename, mode: "move" }] }],
+    ["a rename without its target", { renames: [{ from: "src/a.ts" }] }],
+    ["a non-string rename target", { renames: [{ from: "src/a.ts", to: 7 }] }],
+    ["an escaping rename source", { renames: [{ from: "../outside.ts", to: "src/b.ts" }] }],
+    ["a denied rename target", { renames: [{ from: "src/a.ts", to: ".git/config" }] }],
+    ["a denied deletion", { deletions: [".envrc"] }],
+    ["a non-string deletion", { deletions: [1] }],
+    ["a non-array deletions member", { deletions: "src/a.ts" }],
+    ["a non-array renames member", { renames: rename }],
+    ["more than fifty renames", { renames: Array.from({ length: 51 }, () => rename) }],
+    ["more than fifty deletions", { deletions: Array.from({ length: 51 }, () => "src/a.ts") }],
+  ])("rejects %s before an edit request exists", (_name, members) => {
+    expect(parse({ ...renameOnly, ...members })).toBeUndefined();
+  });
+});
+
 describe("coding tool IPC authority effects", () => {
   it("requires workspace-write for both proposing and redeeming a stage operation", () => {
     const base = {

@@ -1,6 +1,7 @@
 "use client";
 import type { ReactNode } from "react";
 import type { CodingTaskSession } from "./useCodingTaskSession";
+import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import { Icons } from "../../Icons";
@@ -74,15 +75,19 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
   );
 }
 
+// The previous conversation: every message of the task except the part of the shown run's
+// conversation the timeline already carries (#3876 review). The messages of the shown run the
+// timeline's feed could not hold stay here, so none is shown in neither place.
 export function CodingTaskTranscript({
   session,
-  liveRunId,
+  shownRun,
 }: {
   readonly session: CodingTaskSession;
-  readonly liveRunId: string | undefined;
+  readonly shownRun: ShownRun | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const messages = session.detail?.messages.filter((message) => message.runId !== liveRunId) ?? [];
+  const messages =
+    session.detail?.messages.filter((message) => transcriptShows(shownRun, message)) ?? [];
   if (messages.length === 0) return null;
   return (
     <section className={styles.cmpTranscript} aria-label={t("codingWorkbench.history.transcript")}>

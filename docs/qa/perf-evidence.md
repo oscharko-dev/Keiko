@@ -208,8 +208,18 @@ throwaway clone below; only after mounting your working checkout directly re-run
   ADR-0156 D5 the run still completes and writes its document, so you can read the numbers and
   decide; before that, an overrun destroyed the evidence that would have shown it.
 - **VM sizing (macOS Docker Desktop).** The default VM allocation (~8 GiB) is marginal for the
-  cap budgets; the dev machine's VM is configured at 48 GiB / 14 CPUs
-  (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`).
+  cap budgets, and every writer mode of the tool-catalog evidence (`--rebind-case-identity`,
+  `--recalibrate`, `--extend-managed-runtime`, `--write-measurement`) requires the container to
+  report exactly the committed reference environment: 16 logical cores and `totalMemoryBytes`
+  67302940672 (a 64 GiB VM), as recorded in `docs/release/3415-tool-catalog-calibration.json`.
+  Configure the VM at 64 GiB / 16 CPUs
+  (`~/Library/Group Containers/group.com.docker/settings-store.json`: `MemoryMiB`, `Cpus`) and
+  verify it before a rebind; an 8 GiB VM fails with
+  `catalog case-identity rebind reference environment differs`:
+
+  ```bash
+  docker run --rm --platform linux/arm64 <pinned node image> node -e 'const o=require("os");console.log(o.totalmem(),o.cpus().length)'
+  ```
 
 **Reference environment.** These budgets are absolute numbers, calibrated on the pinned container as
 run on a developer machine: `platform: linux`, `architecture: arm64`, >=14 logical cores. Every
@@ -355,6 +365,46 @@ its previously reviewed value, so recalibration can only preserve or tighten a b
 ceiling is rejected by the judge even when its calibration digest is valid. Use this operation only
 for an explicitly reviewed ruler change; never recalibrate simply to erase a regression or change
 the reference class.
+
+When the reference environment itself no longer exists — the reference Mac's operating system was
+upgraded, so `--recalibrate`, which demands the exact previous environment, can no longer run — the
+reference is re-established, never improvised. It is an owner decision recorded here, dated, with
+the old and new ceilings side by side so a regression cannot hide in the move, in the same pull
+request as the new evidence:
+
+1. Record the decision and the reason the previous environment is gone (below).
+2. From a clean checkout at the head under review, with the pinned Node/npm installation: delete
+   `docs/release/2952-coding-runtime-calibration.json`, `scripts/coding-runtime-performance-budget.json`
+   and `docs/release/2952-coding-runtime-perf-evidence.json` (the one sanctioned removal), then run
+   `npm ci`, `npm run build:packages`, `npm run dev:coding-runtime:stage`,
+   `npm run perf:evidence:coding-runtime -- --calibrate`, an independent
+   `npm run perf:evidence:coding-runtime`, and
+   `npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness`, in one quiet window.
+3. Compare every new ceiling with the old one in the table below. A ceiling that rose is explained
+   (environment, not code) or the change under review is profiled before the move is accepted.
+
+**Reference re-established, 2026-10-07 (owner decision, PR #3876).** The functional test support
+(`productionOpenCodeBackend.functional/_support.ts`, a ruler input) moved to the replacement edit
+form, so the evidence had to be re-measured; the reference Mac had moved from kernel 25.6.0 to
+27.0.0, so the previous environment was gone. Measured at `7e967370e` with Node 24.18.0 / npm 11.16.0
+(official tarball, SHA-256 verified), darwin arm64, 16 cores, 128 GiB, the same CPU model digest and
+OpenCode 2.0.10 with the same payload digest; the secure-read helper was rebuilt for the new OS.
+
+| Metric                | Old ceiling (kernel 25.6.0) | New ceiling (kernel 27.0.0) | Change |
+| --------------------- | --------------------------- | --------------------------- | ------ |
+| `coldStartMs`         | 1764.1                      | 1562.4                      | −11 %  |
+| `readinessMs`         | 3.07                        | 3.26                        | +6 %   |
+| `sseFirstByteMs`      | 3.15                        | 4.65                        | +48 %  |
+| `boundedThroughputMs` | 123.1                       | 98.4                        | −20 %  |
+
+The two metrics that rose are millisecond-scale loopback timings of the mounted BFF: a readiness GET
+and the first SSE data frame including the initial state replay. Neither path changed in this pull
+request (the change under review touched the model gateway, the sidecar's edit materializer and the
+test support, not the BFF route or the event stream); the policy's allowance is the observed range
+(`maximum + (maximum - minimum)`), and 1.5 ms on a sub-5-ms loopback read is within the scheduling
+variance of the new kernel. The two workload metrics that the change could plausibly affect, the
+cold start and the bounded throughput, both tightened. The next ordinary re-measurement on this
+reference uses `--recalibrate` and its shrink-only ratchet again.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

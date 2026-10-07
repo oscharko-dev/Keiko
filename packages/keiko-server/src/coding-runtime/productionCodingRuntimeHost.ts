@@ -95,10 +95,15 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "gitDeliveryDescriptionAuthority",
   "mintDescriptionAuthority",
   "attachVerifiedHeadNotifier",
+  "attachEditOutcomeObserver",
   "attachRepositorySemanticSearch",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
   "contextUsage",
+  "secureWorkspaceTextRead",
+  "runEffort",
+  "promptAllowanceExhausted",
+  "envelopeDurationExhausted",
 ] as const;
 
 type OptionalRuntimeCapabilities = Pick<

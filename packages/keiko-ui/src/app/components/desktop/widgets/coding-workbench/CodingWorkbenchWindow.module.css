@@ -793,8 +793,13 @@
   overflow-wrap: anywhere;
 }
 
-.modelControl {
-  flex: 0 0 9rem;
+/* #3873 live review: a fixed 9rem chip cut "gemma-4-31b-it" to "gemma-4-…". The chip grows with
+   the model identifier up to a readable bound and ellipsizes only beyond it; its title and
+   accessible name always carry the full identifier. */
+.composerConfiguration > .modelControl {
+  flex: 0 1 auto;
+  min-width: min(9rem, 100%);
+  max-width: min(22rem, 100%);
 }
 
 .modelControl :global(.cmp-model-select),
@@ -1299,6 +1304,37 @@
 .messageText :global(.sm-h) {
   color: var(--text-primary);
   font-weight: var(--weight-semibold);
+}
+
+/* #3878: the model's own reasoning, set apart from the answer and labelled as unverified. */
+.cmpReasoning {
+  margin-top: var(--space-2);
+  border-left: 2px solid var(--border-subtle);
+  padding-left: var(--space-3);
+  color: var(--text-secondary);
+}
+
+.cmpReasoningBadge {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+  color: var(--feedback-warning);
+  font-size: var(--text-caption);
+}
+
+.cmpReasoningNote {
+  margin: var(--space-1) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+
+.cmpReasoningText {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-body-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .toolCard {

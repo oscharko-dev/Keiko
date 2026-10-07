@@ -1005,6 +1005,33 @@ describe("commit draft — explicit model-backed generation", () => {
     }
   });
 
+  // #3873 review: the coding outage window extends the budgets of the coding sidecar's calls only.
+  // The draft keeps its own fail-fast backstop, however long the configured window is.
+  it("keeps the draft's route deadline free of the coding outage window", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const result = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: { ...DRAFT_GATEWAY_CONFIG, codingOutageWindowMs: 3_600_000 },
+          modelPortFactory: () =>
+            draftModelPort(() => draftResponse({ subject: "fix: repair", body: "Detail." })),
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(timeoutSpy).toHaveBeenCalledWith(DRAFT_ROUTE_DEADLINE_MS);
+      expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("requests the raised reasoning-model output budget under the coding-workbench latency profile", async () => {
     let captured: GatewayCallRequest | undefined;
     const handler = createHandleCommitDraft({
@@ -1028,6 +1055,65 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(res.status).toBe(200);
     expect(captured?.maxOutputTokens).toBe(COMMIT_DRAFT_MAX_OUTPUT_TOKENS);
     expect(captured?.latencyProfile).toBe("coding-workbench");
+  });
+
+  // #3873 review: a person waits on this draft, so a gateway outage must keep failing it fast
+  // (GIT_DELIVERY_COMMIT_DRAFT_FAILED within seconds). The latency profile borrows only the timeout
+  // floors; the coding outage window is a separate signal the draft must never carry.
+  it("keeps the commit draft fail-fast: its model request carries no coding outage policy", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured).toBeDefined();
+    expect(captured).not.toHaveProperty("outagePolicy");
+  });
+
+  // #3873 (F23): the draft borrows the coding-workbench latency profile for its timeout floors only.
+  // That profile used to make the gateway hand the model's reasoning to the draft too
+  // (`reasoningDisposition=forwarded` on a commit draft's completion line); forwarding is now keyed
+  // on an explicit signal that only the coding sidecar route sets, so the draft's request carries none.
+  it("keeps the commit draft's model request free of any reasoning delivery signal", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured).toBeDefined();
+    // The timeout floors are still borrowed; nothing else of the coding turn's policy is.
+    expect(captured?.latencyProfile).toBe("coding-workbench");
+    expect(captured).not.toHaveProperty("reasoningDelivery");
   });
 
   // Review of #3591: the raised budget must not exceed what the model declares — the spend-budget
@@ -1672,6 +1758,70 @@ describe("commit draft repeatability boundaries", () => {
       (await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), dependencies)).body,
     ).toEqual(first.body);
     expect(calls).toBe(2);
+  });
+
+  // #3873 (F23): the draft borrows the coding-workbench latency profile for its timeout floors, and
+  // used to receive the model's reasoning with it (`reasoningDisposition=forwarded` on its completion
+  // line). Through the real gateway and adapter, a reasoning model's draft now carries no reasoning:
+  // the gateway parses and counts it, and discards it, as it does on every surface but the coding turn.
+  it("discards the model's reasoning on a commit draft that borrows the coding-workbench latency profile", async () => {
+    const config: GatewayConfig = {
+      ...DRAFT_GATEWAY_CONFIG,
+      capabilities: [{ ...DRAFT_MODEL_CAPABILITY, structuredOutput: false, streaming: true }],
+    };
+    const lines: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
+    }[] = [];
+    const answers: NormalizedResponse[] = [];
+    const draft = JSON.stringify({ subject: "fix: handle missing values", body: "Handle values." });
+    const frame = (delta: Record<string, unknown>, finishReason?: string): string =>
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            index: 0,
+            delta,
+            ...(finishReason === undefined ? {} : { finish_reason: finishReason }),
+          },
+        ],
+      })}\n\n`;
+    const gateway = new Gateway(config, {
+      fetchImpl: (): Promise<Response> =>
+        Promise.resolve(
+          new Response(
+            frame({ reasoning_content: "private draft reasoning" }) +
+              frame({ content: draft }, "stop") +
+              "data: [DONE]\n\n",
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        ),
+      log: { write: (event): void => void lines.push({ op: event.op, extra: event.extra }) },
+    });
+    const dependencies = deps({
+      config,
+      modelPortFactory: () => ({
+        call: async (request, cancellationSignal): Promise<NormalizedResponse> => {
+          const answer = await gateway.chat({ ...request, cancellationSignal });
+          answers.push(answer);
+          return answer;
+        },
+      }),
+    });
+
+    const result = await fixedDraftHandler()(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      dependencies,
+    );
+
+    expect(result.status).toBe(200);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).not.toHaveProperty("reasoning");
+    expect(answers[0]?.usage.reasoningBytes).toBeGreaterThan(0);
+    expect(lines.find((line) => line.op === "gateway.chat.completed")?.extra).toMatchObject({
+      reasoningDisposition: "discarded",
+    });
+    expect(JSON.stringify(lines)).not.toContain("private draft reasoning");
+    expect(JSON.stringify(result.body)).not.toContain("private draft reasoning");
   });
 
   it("records reuse and prompt bounds without recording customer content", async () => {

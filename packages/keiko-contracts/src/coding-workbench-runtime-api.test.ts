@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
+import { CODING_WORKBENCH_RUNTIME_EVENT_KINDS } from "./coding-workbench.js";
 import {
+  CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
@@ -22,6 +24,16 @@ import {
 } from "./coding-workbench-runtime-api.js";
 
 const AT = "2026-07-13T12:00:00.000Z";
+
+// F9 (#3873): the closed causes a failed run settles with instead of `runtime-failed` (an internal
+// error): its own bounds, a repeated output exhaustion, an unreachable provider, a failed model call.
+const TERMINAL_RUN_CAUSES = [
+  "prompt-allowance-exhausted",
+  "envelope-duration-exhausted",
+  "output-exhausted-repeated",
+  "provider-unavailable",
+  "model-turn-failed",
+] as const;
 
 describe("Coding Workbench runtime API contracts", () => {
   it("accepts only a bounded preview precondition attached to an issue intent", () => {
@@ -841,6 +853,43 @@ describe("Coding Workbench runtime API failure branches", () => {
     if (!failed.ok) expect(failed.errors).toContain("failureCode is invalid");
   });
 
+  // F9 (#3873): a run that ended on one of its bounds or on a failed model call settles under the
+  // closed cause that names it. Each cause is a durable run failure on the snapshot and on the terminal status
+  // frame, while the per-turn gateway vocabulary stays SSE-only and never becomes a run state.
+  it.each(TERMINAL_RUN_CAUSES)(
+    "carries the %s terminal model-call cause on a failed snapshot and its status frame",
+    (failureCode) => {
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, state: "failed", failureCode }).ok,
+      ).toBe(true);
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent({
+          schemaVersion: "1",
+          cursor: "run-1:4",
+          sequence: 4,
+          occurredAt: AT,
+          kind: "status",
+          runId: "run-1",
+          state: "failed",
+          revision: 4,
+          failureCode,
+        }).ok,
+      ).toBe(true);
+    },
+  );
+
+  it("keeps the per-turn gateway causes off the durable run snapshot", () => {
+    for (const failureCode of ["stream-incomplete", "turn-rejected", "invalid-tool-call"]) {
+      const failed = validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        state: "failed",
+        failureCode,
+      });
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) expect(failed.errors).toContain("failureCode is invalid");
+    }
+  });
+
   it("rejects malformed SSE schema versions, event kinds, instants, and failure codes", () => {
     const event = {
       schemaVersion: "1",
@@ -904,6 +953,109 @@ describe("Coding Workbench runtime API failure branches", () => {
       validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, failureCode: "provider-failed" }).ok,
     ).toBe(false);
   });
+
+  // #3873 review: the run status could not say that the model gateway was unavailable and being
+  // retried. The gateway facts are SSE-only runtime events of their own: they carry no count, text,
+  // identifier or failure code, and they are not adapter events.
+  describe("model gateway facts", () => {
+    const fact = {
+      schemaVersion: "1",
+      cursor: "run-1:4",
+      sequence: 4,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 3,
+    } as const;
+
+    it.each(CODING_WORKBENCH_GATEWAY_EVENT_KINDS)(
+      "accepts a %s frame on a runtime event",
+      (eventKind) => {
+        expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind })).toEqual({
+          ok: true,
+          value: { ...fact, eventKind },
+        });
+      },
+    );
+
+    it("lists exactly the three gateway facts, none of them an adapter event kind", () => {
+      expect(CODING_WORKBENCH_GATEWAY_EVENT_KINDS).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+        "model-gateway-retry-stopped",
+      ]);
+      for (const eventKind of CODING_WORKBENCH_GATEWAY_EVENT_KINDS) {
+        expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).not.toContain(eventKind);
+      }
+    });
+
+    it("refuses a gateway fact on a status frame, which carries no event kind", () => {
+      expect(
+        validateCodingWorkbenchRuntimeSseEvent({
+          ...fact,
+          kind: "status",
+          eventKind: "model-gateway-retrying",
+        }).ok,
+      ).toBe(false);
+    });
+
+    it.each(CODING_WORKBENCH_GATEWAY_EVENT_KINDS)(
+      "carries nothing beside the kind %s: no failure code, outcome or trust marker",
+      (eventKind) => {
+        for (const extra of [
+          { failureCode: "provider-failed" },
+          { failureCode: "provider-unavailable" },
+          { auxiliaryOutcome: "unavailable" },
+          { contentTrust: "untrusted" },
+        ] as const) {
+          expect(
+            validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind, ...extra }),
+          ).toMatchObject({ ok: false });
+        }
+      },
+    );
+
+    it("refuses an unknown gateway fact and an adapter event kind spelled as one", () => {
+      for (const eventKind of ["model-gateway", "model-gateway-failed", "model-retrying"]) {
+        expect(validateCodingWorkbenchRuntimeSseEvent({ ...fact, eventKind })).toMatchObject({
+          ok: false,
+          errors: ["eventKind is invalid"],
+        });
+      }
+    });
+  });
+
+  // F5 (#3873): a run whose edits were refused again and again settles with the refusal class.
+  // Each cause is a durable run failure — on the snapshot and on its terminal status frame — while
+  // the edit refusal reasons themselves stay off the contract.
+  it.each(["edits-blocked", "edit-retries-exhausted"] as const)(
+    "carries the %s refusal cause on a failed snapshot and its status frame",
+    (failureCode) => {
+      const status = {
+        schemaVersion: "1",
+        cursor: "run-1:5",
+        sequence: 5,
+        occurredAt: AT,
+        kind: "status",
+        runId: "run-1",
+        state: "failed",
+        revision: 5,
+        failureCode,
+      };
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, state: "failed", failureCode }).ok,
+      ).toBe(true);
+      expect(validateCodingWorkbenchRuntimeSseEvent(status).ok).toBe(true);
+      expect(
+        validateCodingWorkbenchRuntimeSnapshot({
+          ...snapshot,
+          state: "failed",
+          failureCode: "NO_ACTIVE_SESSION",
+        }).ok,
+      ).toBe(false);
+    },
+  );
 
   // #2637 (review #2646): the SSE boundary enforces the research/outcome binding, not just the field
   // type. Every invalid combination below would let the timeline misstate what a run took in.

@@ -53,6 +53,12 @@ import {
   type ExecuteVerificationResult,
 } from "./verificationExecution.js";
 import {
+  VERIFICATION_COMPLETION_FIELD_CONTRACTS,
+  VERIFICATION_DEPENDENCY_STATE_VALUES,
+  VERIFICATION_STATUS_VALUES,
+  verificationCompletionLogFields,
+} from "./verificationExecutionLog.js";
+import {
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
   type VerificationRunnerErrorCode,
@@ -110,15 +116,7 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [
-        "passed",
-        "failed",
-        "skipped",
-        "denied",
-        "timed-out",
-        "cancelled",
-        "resource-exceeded",
-      ],
+      values: VERIFICATION_STATUS_VALUES,
     },
     passedCount: { type: "integer", dataClass: "count", required: false },
     failedCount: { type: "integer", dataClass: "count", required: false },
@@ -127,6 +125,9 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
     timedOutCount: { type: "integer", dataClass: "count", required: false },
     cancelledCount: { type: "integer", dataClass: "count", required: false },
     resourceExceededCount: { type: "integer", dataClass: "count", required: false },
+    // The completion line's wall-time attribution and isolation evidence (F14, #3873), declared and
+    // explained next to the code that projects it: verificationExecutionLog.ts.
+    ...VERIFICATION_COMPLETION_FIELD_CONTRACTS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -200,7 +201,7 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["none", "current", "installed", "refused", "failed", "timed-out", "cancelled"],
+      values: VERIFICATION_DEPENDENCY_STATE_VALUES,
     },
     lockfile: {
       type: "string",
@@ -389,6 +390,11 @@ interface PreparedVerificationRun {
   readonly plan: VerificationPlan;
 }
 
+interface AgentExecution {
+  readonly execution: ExecuteVerificationResult;
+  readonly failureOutput: readonly VerificationStepOutput[];
+}
+
 class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
@@ -506,14 +512,15 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
     try {
-      const { report, failureOutput } = await this.executeAgentPlan(plan, resolved, entry);
+      const { execution, failureOutput } = await this.executeAgentPlan(plan, resolved, entry);
+      const { report } = execution;
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
       // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
       // failure instead of a redacted report the ledger has no record of.
       this.persistAndEmitTerminalOrThrow(runId, workspace.root, report, startedAtMs, entry);
-      this.recordRunnerCompletion(workspace, entry.correlationId, report);
+      this.recordRunnerCompletion(workspace, entry.correlationId, execution);
       return { report, failureOutput };
     } catch (error) {
       this.recordRunnerFailure(workspace, entry.correlationId, error);
@@ -550,20 +557,22 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   // The agent path's execution: dependencies bootstrapped, and the orchestrator's redacted output
-  // tails of non-passing steps collected (bounded) for the governed tool — never persisted.
+  // tails of non-passing steps collected (bounded) for the governed tool — never persisted. The
+  // port's whole result is kept, not only its report: the completion line also names the isolation
+  // the run executed under and how long the probe took (F14, #3873).
   private async executeAgentPlan(
     plan: VerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
-  ): Promise<VerificationRunOutcome> {
+  ): Promise<AgentExecution> {
     const failureOutput: VerificationStepOutput[] = [];
-    const { report } = await this.executePort({
+    const execution = await this.executePort({
       ...this.buildExecuteArgs(plan, resolved, entry),
       onStepOutput: (output): void => {
         if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
       },
     });
-    return { report, failureOutput };
+    return { execution, failureOutput };
   }
 
   private prepare(input: VerificationRunInput): PreparedVerificationRun {
@@ -716,7 +725,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     startedAtMs: number,
   ): Promise<void> {
     try {
-      const { report } = await this.executePort(this.buildExecuteArgs(plan, resolved, entry));
+      const execution = await this.executePort(this.buildExecuteArgs(plan, resolved, entry));
+      const { report } = execution;
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an
@@ -725,7 +735,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       try {
         this.persistEvidence(runId, resolved.workspace.root, report, startedAtMs);
         this.emitTerminalOnce(runId, entry, report);
-        this.recordRunnerCompletion(resolved.workspace, entry.correlationId, report);
+        this.recordRunnerCompletion(resolved.workspace, entry.correlationId, execution);
       } catch (error) {
         this.recordRunnerFailure(resolved.workspace, entry.correlationId, error);
         this.emitEvidenceWriteFailure(runId, entry);
@@ -794,11 +804,19 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     );
   }
 
+  // The completion line is written for every run that produced a report whose audit evidence was
+  // written -- passed, failed, denied for want of an isolation backend, timed out,
+  // resource-exceeded or cancelled. A run whose execution threw, or whose evidence could not be
+  // written, leaves its `refused` line (with frames and cause chain) instead. Besides the counts the
+  // completion line carries where the run's wall time went and which isolation applied (F14,
+  // #3873), so a 28 s verification of a 236 ms test can be attributed to the probe, the dependency
+  // bootstrap or the step from this one persisted line.
   private recordRunnerCompletion(
     workspace: WorkspaceInfo,
     correlationId: string,
-    report: VerificationReport,
+    execution: ExecuteVerificationResult,
   ): void {
+    const { report } = execution;
     this.activityLog.write(
       activityLogEvent(
         EDITOR_VERIFICATION_EXECUTE_OPERATION,
@@ -815,6 +833,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
           timedOutCount: report.counts["timed-out"],
           cancelledCount: report.counts.cancelled,
           resourceExceededCount: report.counts["resource-exceeded"],
+          ...verificationCompletionLogFields(execution),
         },
       ),
     );

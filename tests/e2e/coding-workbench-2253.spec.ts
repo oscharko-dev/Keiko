@@ -4,7 +4,10 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
-import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
+import {
+  installLiveCodingWorkbenchRuntime,
+  type LiveRuntimeFixture,
+} from "./support/coding-workbench-live-runtime.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
 // Issue #2253 - browser evidence that an unapproved Codex redistribution fails closed in the
@@ -16,6 +19,11 @@ const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "22
 const WORKSPACE_KEY = "keiko.workspace.v4";
 const CONFIRMED_SOURCE = "Keiko Gateway";
 const UNAVAILABLE_ANNOUNCEMENT = "Subscription authentication not selected.";
+// What the status sentence appends when the runtime cannot start a run (#3873 review).
+const RUNTIME_UNAVAILABLE_ANNOUNCEMENT = "Runtime unavailable.";
+const READINESS_SUMMARY = "Readiness details";
+// The Information popover keeps its secondary facts, the model source among them, in this disclosure.
+const INFORMATION_DETAILS = "Details";
 // WindowFrame's 2px border plus its one-pixel selection edge appear in scroll metrics but cannot
 // produce a horizontal scroll range. Anything beyond this is content overflow.
 const HORIZONTAL_OVERFLOW_TOLERANCE_PX = 3;
@@ -223,11 +231,16 @@ async function seedUnavailableWorkbench(page: Page, mode: ModeCase): Promise<voi
   );
 }
 
-async function openMode(page: Page, mode: ModeCase): Promise<void> {
+async function openMode(
+  page: Page,
+  mode: ModeCase,
+  runtime: { readonly runtimeAvailable?: boolean } = {},
+): Promise<LiveRuntimeFixture> {
   await page.setViewportSize(mode.viewport);
   await page.emulateMedia(mode.media);
-  await installLiveCodingWorkbenchRuntime(page, {
+  const fixture = await installLiveCodingWorkbenchRuntime(page, {
     authStatus: "redistribution-unapproved",
+    ...runtime,
   });
   await seedUnavailableWorkbench(page, mode);
   await page.goto("/");
@@ -235,6 +248,7 @@ async function openMode(page: Page, mode: ModeCase): Promise<void> {
     if (dataHc === null) document.documentElement.removeAttribute("data-hc");
     else document.documentElement.dataset.hc = dataHc;
   }, mode.dataHc);
+  return fixture;
 }
 
 function workbench(page: Page): Locator {
@@ -249,12 +263,67 @@ function windowBody(page: Page): Locator {
   return outerWindow(page).locator(".win-body");
 }
 
-function confirmedSource(page: Page): Locator {
-  return workbench(page).getByText(CONFIRMED_SOURCE, { exact: true });
+function informationDialog(page: Page): Locator {
+  return page.getByRole("dialog", { name: "Coding Workbench information" });
 }
 
-function unavailableAnnouncement(surface: Locator): Locator {
-  return surface.locator('[role="status"]').filter({ hasText: UNAVAILABLE_ANNOUNCEMENT });
+// #3494 moved the server-confirmed model source off the Workbench surface into the Information
+// popover, and #3561 keeps it in the popover's Details disclosure. This matrix still holds the same
+// fact, so it reads it where it now is: the read opens the popover, expands Details, hands the
+// source to `read`, and closes the popover again (also when `read` fails). Every capture of the
+// matrix therefore shows the Workbench as a reader first meets it, and at narrow widths no open
+// popover covers the composer.
+async function readConfirmedSource<T>(
+  fixture: LiveRuntimeFixture,
+  page: Page,
+  read: (source: Locator) => Promise<T>,
+): Promise<T> {
+  await fixture.openInformation();
+  try {
+    const dialog = informationDialog(page);
+    await dialog.getByText(INFORMATION_DETAILS, { exact: true }).click();
+    return await read(dialog.getByText(CONFIRMED_SOURCE, { exact: true }));
+  } finally {
+    await fixture.closeInformation();
+  }
+}
+
+// #3873 (ADR-0163 D9): the readiness facts moved from the run status announcement into its
+// collapsed readiness details. That is a relocation of the pin that held `UNAVAILABLE_ANNOUNCEMENT`
+// inside the polite, atomic `role="status"`, never a relaxation of it (#3873 review):
+//  - the status sentence stays that live region, and it also carries, as visible text, every fact
+//    that says a part of the Workbench is missing or failing; the unavailable-runtime test below
+//    makes the old pin's polite, atomic, in-the-region assertions on exactly such a fact;
+//  - every other fact is read from the disclosure, and `expectReadinessDisclosure` proves it is in
+//    the accessibility tree when expanded and not exposed while collapsed, so a fact left in a
+//    collapsed `<details>` cannot pass for an announced one.
+function runStatusAnnouncement(surface: Locator): Locator {
+  return surface.locator('[data-testid="coding-runtime-announcement"]');
+}
+
+function readinessFacts(surface: Locator): Locator {
+  return surface.locator('[data-testid="coding-runtime-readiness"]');
+}
+
+function readinessDisclosure(surface: Locator): Locator {
+  return surface.locator('details:has([data-testid="coding-runtime-readiness"])');
+}
+
+async function expectReadinessDisclosure(surface: Locator): Promise<void> {
+  const disclosure = readinessDisclosure(surface);
+  const facts = readinessFacts(surface);
+  await expect(disclosure).toBeVisible();
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  await expect(facts).toBeHidden();
+  expect(await disclosure.ariaSnapshot()).not.toContain(UNAVAILABLE_ANNOUNCEMENT);
+  await disclosure.getByText(READINESS_SUMMARY, { exact: true }).click();
+  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(facts).toBeVisible();
+  await expect(facts).toContainText(UNAVAILABLE_ANNOUNCEMENT);
+  expect(await disclosure.ariaSnapshot()).toContain(UNAVAILABLE_ANNOUNCEMENT);
+  // Collapsed again: every capture of this matrix shows the Workbench as a reader first meets it.
+  await disclosure.getByText(READINESS_SUMMARY, { exact: true }).click();
+  await expect(disclosure).not.toHaveAttribute("open", "");
 }
 
 async function expectUnapprovedProfile(page: Page): Promise<void> {
@@ -276,14 +345,16 @@ async function expectUnapprovedProfile(page: Page): Promise<void> {
   });
 }
 
-async function expectUnavailableSurface(page: Page): Promise<Locator> {
+async function expectUnavailableSurface(page: Page, fixture: LiveRuntimeFixture): Promise<Locator> {
   const surface = workbench(page);
   await expect(surface).toBeVisible();
-  await expect(confirmedSource(page)).toBeVisible();
-  const announcement = unavailableAnnouncement(surface);
+  await readConfirmedSource(fixture, page, (source) => expect(source).toBeVisible());
+  const announcement = runStatusAnnouncement(surface);
   await expect(announcement).toBeAttached();
+  await expect(announcement).toHaveAttribute("role", "status");
   await expect(announcement).toHaveAttribute("aria-live", "polite");
   await expect(announcement).toHaveAttribute("aria-atomic", "true");
+  await expectReadinessDisclosure(surface);
   await expect(surface.getByRole("radiogroup", { name: "Runtime model source" })).toHaveCount(0);
   await expect(surface.getByText("ChatGPT/Codex subscription", { exact: true })).toHaveCount(0);
   await expect(surface.getByText("Needs setup", { exact: true })).toHaveCount(0);
@@ -292,16 +363,16 @@ async function expectUnavailableSurface(page: Page): Promise<Locator> {
 }
 
 async function captureMode(page: Page, mode: ModeCase): Promise<CaptureRecord> {
-  await openMode(page, mode);
+  const fixture = await openMode(page, mode);
   await expectUnapprovedProfile(page);
-  const surface = await expectUnavailableSurface(page);
+  const surface = await expectUnavailableSurface(page, fixture);
   const violations = seriousOrCritical(
     await runAxe(page, 'section[aria-label="Coding Workbench"][data-state]'),
   );
   expect(violations.length, formatViolations(violations)).toBe(0);
   const overflow = await overflowState(page, surface);
   const viewportBoundsChecks = isNarrowFrame(mode)
-    ? await assertNarrowFrameViewportBounds(page, surface)
+    ? await assertNarrowFrameViewportBounds(page, surface, fixture)
     : [];
   if (isNarrowFrame(mode)) {
     expect(overflow.documentHasHorizontalOverflow).toBe(false);
@@ -311,7 +382,7 @@ async function captureMode(page: Page, mode: ModeCase): Promise<CaptureRecord> {
   }
   await surface.scrollIntoViewIfNeeded();
   await surface.screenshot({ path: screenshotPath(mode.file) });
-  return captureRecord(page, surface, mode, violations.length, overflow, viewportBoundsChecks);
+  return captureRecord(surface, fixture, mode, violations.length, overflow, viewportBoundsChecks);
 }
 
 function isNarrowFrame(mode: ModeCase): boolean {
@@ -321,6 +392,7 @@ function isNarrowFrame(mode: ModeCase): boolean {
 async function assertNarrowFrameViewportBounds(
   page: Page,
   surface: Locator,
+  fixture: LiveRuntimeFixture,
 ): Promise<readonly ViewportBoundsCheck[]> {
   const viewportWidth = await page.evaluate(() => window.innerWidth);
   const outerFrame = await boundsCheck(
@@ -330,13 +402,43 @@ async function assertNarrowFrameViewportBounds(
     null,
   );
   const outerFrameBounds = { left: outerFrame.left, right: outerFrame.right };
-  const innerChecks = await Promise.all([
-    boundsCheck(surface, "Coding Workbench", viewportWidth, outerFrameBounds),
-    boundsCheck(confirmedSource(page), "confirmed source context", viewportWidth, outerFrameBounds),
-  ]);
-  const checks = [outerFrame, ...innerChecks];
+  const workbenchCheck = await boundsCheck(
+    surface,
+    "Coding Workbench",
+    viewportWidth,
+    outerFrameBounds,
+  );
+  // The source is the value cell of the popover's fact grid, a block stretched to the popover's
+  // edge, so the bounds of its TEXT are what must stay inside the frame. This pins that the
+  // confirmed source stays readable in a 304px frame; it does not claim the popover fits there: at
+  // a 1280px viewport the popover (22rem, sized by the viewport) is wider than the 304px frame
+  // and the frame clips it, a layout limitation of the popover itself that this matrix does not
+  // measure.
+  const sourceCheck = await readConfirmedSource(fixture, page, (source) =>
+    boundsCheck(source, "confirmed source context", viewportWidth, outerFrameBounds, "text"),
+  );
+  const checks = [outerFrame, workbenchCheck, sourceCheck];
   expect(checks).toHaveLength(3);
   return checks;
+}
+
+interface Bounds {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+// The element's own box, or — for an element whose box is stretched beyond its content by the
+// layout around it — the box of the text it holds.
+async function measuredBounds(locator: Locator, region: "box" | "text"): Promise<Bounds | null> {
+  if (region === "box") return locator.boundingBox();
+  return locator.evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const { x, y, width, height } = range.getBoundingClientRect();
+    return { x, y, width, height };
+  });
 }
 
 async function boundsCheck(
@@ -344,9 +446,10 @@ async function boundsCheck(
   label: string,
   viewportWidth: number,
   outerFrame: { readonly left: number; readonly right: number } | null,
+  region: "box" | "text" = "box",
 ): Promise<ViewportBoundsCheck> {
   await expect(locator).toBeVisible();
-  const box = await locator.boundingBox();
+  const box = await measuredBounds(locator, region);
   if (box === null) throw new Error(`${label} bounding box was not available`);
   const withinViewport = box.x >= -1 && box.x + box.width <= viewportWidth + 1;
   expect(
@@ -408,13 +511,14 @@ async function overflowState(
 }
 
 async function captureRecord(
-  page: Page,
   surface: Locator,
+  fixture: LiveRuntimeFixture,
   mode: ModeCase,
   axeViolationCount: number,
   overflow: Awaited<ReturnType<typeof overflowState>>,
   viewportBoundsChecks: readonly ViewportBoundsCheck[],
 ): Promise<CaptureRecord> {
+  const page = surface.page();
   return {
     file: mode.file,
     mode: mode.mode,
@@ -423,9 +527,9 @@ async function captureRecord(
     dataHc: await page.locator("html").getAttribute("data-hc"),
     forcedColors: mode.media.forcedColors,
     reducedMotion: mode.media.reducedMotion,
-    liveAnnouncement: await unavailableAnnouncement(surface).innerText(),
+    liveAnnouncement: await runStatusAnnouncement(surface).innerText(),
     profileStatus: "redistribution-unapproved",
-    confirmedSource: await confirmedSource(page).innerText(),
+    confirmedSource: await readConfirmedSource(fixture, page, (source) => source.innerText()),
     codexSourceAffordances: await surface
       .getByText("ChatGPT/Codex subscription", { exact: true })
       .count(),
@@ -527,6 +631,50 @@ function writeArtifacts(captures: readonly CaptureRecord[]): void {
   writeJsonArtifact("a11y-proof.json", a11yProof(captures, source));
   writeJsonArtifact("manifest.json", manifest(captures));
 }
+
+// This spec runs in the nightly lane (`npm run test:e2e:coding-workbench-2253`, e2e-extended.yml),
+// so a red run there is a signal, not a merge blocker; none of its tests is `@smoke`. The per-PR
+// pins for the same invariants are the unit tests that own them (CodingWorkbenchRunStatus.test.tsx
+// and CodingWorkbenchWindow.test.tsx). `@smoke` would also put the next two tests into the required
+// Firefox and WebKit smoke lanes, and their closed-<details> accessibility-tree proofs are certified
+// on Chromium only.
+//
+// #3873 review: the old pin held an unavailable fact inside the polite, atomic `role="status"`, and
+// moving the readiness facts into collapsed details left it announced to no one. The facts that say
+// a part of the Workbench is missing or failing are the status sentence's own visible text again,
+// so the same polite/atomic assertions are made here on a runtime that cannot start a run, and the
+// facts that are fine stay out of the sentence.
+test("Issue #2253 an unavailable runtime is announced by the polite, atomic status sentence", async ({
+  page,
+}) => {
+  const [mode] = MODES;
+  if (mode === undefined) throw new Error("the Issue #2253 matrix has no desktop mode");
+  await openMode(page, mode, { runtimeAvailable: false });
+  const surface = workbench(page);
+  await expect(surface).toBeVisible();
+  const announcement = runStatusAnnouncement(surface);
+  await expect(announcement).toHaveAttribute("role", "status");
+  await expect(announcement).toHaveAttribute("aria-live", "polite");
+  await expect(announcement).toHaveAttribute("aria-atomic", "true");
+  await expect(announcement).toBeVisible();
+  await expect(announcement).toContainText(RUNTIME_UNAVAILABLE_ANNOUNCEMENT);
+  await expect(announcement).not.toContainText("Model source ready.");
+  expect(await announcement.ariaSnapshot()).toContain(RUNTIME_UNAVAILABLE_ANNOUNCEMENT);
+});
+
+// The disclosure that now holds the readiness facts is proven from the accessibility tree, in a test
+// of its own: its result must not depend on the evidence matrix below, whose captures read the
+// confirmed source context from the Workbench surface.
+test("Issue #2253 the readiness facts are in the accessibility tree once their disclosure is expanded", async ({
+  page,
+}) => {
+  const [mode] = MODES;
+  if (mode === undefined) throw new Error("the Issue #2253 matrix has no desktop mode");
+  await openMode(page, mode);
+  const surface = workbench(page);
+  await expect(surface).toBeVisible();
+  await expectReadinessDisclosure(surface);
+});
 
 test("Issue #2253 unapproved Codex redistribution stays absent from the Workbench", async ({
   browser,

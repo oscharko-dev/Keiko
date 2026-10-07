@@ -31,6 +31,9 @@ export const CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE = 32;
 export const CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN = 64;
 export const CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS = 4_096;
 export const CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES = 16 * 1_024;
+// #3878: an assistant message's model reasoning keeps to half of the message budget, so the answer
+// always keeps room of its own.
+export const CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES = 8 * 1_024;
 export const CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES = 32 * 1_024;
 // Leaves serialization reserve for the authenticated channel's tagged snapshot wrapper.
 export const CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES = 60 * 1_024;
@@ -57,12 +60,26 @@ export interface CodingSafeActivityTextSegment {
   readonly truncated: boolean;
 }
 
+/**
+ * #3878: the model's own reasoning beside an assistant message, as the provider returned it
+ * (`reasoning_content`). Untrusted, unverified model text: consumers render it as escaped text,
+ * label it as unverified model reasoning and never treat it as the answer. Live content only — it
+ * never enters Coding History, evidence, a support export or the Activity Log.
+ */
+export interface CodingSafeActivityReasoning {
+  readonly text: string;
+  /** True when the reasoning was shortened to remain inside its declared projection bound. */
+  readonly truncated: boolean;
+}
+
 export interface CodingSafeActivityMessage {
   readonly messageId: string;
   readonly role: CodingSafeActivityMessageRole;
   readonly occurredAt: string;
   readonly segments: readonly CodingSafeActivityTextSegment[];
   readonly truncated: boolean;
+  /** Assistant messages only; absent when the model returned no reasoning or it is not shown. */
+  readonly reasoning?: CodingSafeActivityReasoning;
 }
 
 export interface CodingSafeActivityTool {
@@ -315,7 +332,11 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
     return;
   }
   errors.push(
-    ...exactKeys(value, ["messageId", "role", "occurredAt", "segments", "truncated"], path),
+    ...exactKeys(
+      value,
+      ["messageId", "role", "occurredAt", "segments", "truncated", "reasoning"],
+      path,
+    ),
   );
   validateUniqueId(value.messageId, `${path}.messageId`, ids, errors);
   if (!isOneOf(value.role, CODING_SAFE_ACTIVITY_MESSAGE_ROLES)) {
@@ -323,6 +344,7 @@ function validateMessage(value: unknown, path: string, ids: Set<string>, errors:
   }
   validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
   validateSegments(value.segments, path, errors);
+  if ("reasoning" in value) validateReasoning(value, path, errors);
   if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated must be a boolean`);
   if (messageHasTruncatedSegment(value) && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated segments`);
@@ -362,6 +384,33 @@ function validateSegments(value: unknown, path: string, errors: string[]): void 
       errors.push(`${segmentPath}.truncated must be a boolean`);
     }
   });
+}
+
+function validateReasoning(message: Record<string, unknown>, path: string, errors: string[]): void {
+  const reasoningPath = `${path}.reasoning`;
+  const value = message.reasoning;
+  if (message.role !== "assistant") errors.push(`${reasoningPath} is only allowed on assistant`);
+  if (!isRecord(value)) {
+    errors.push(`${reasoningPath} must be an object`);
+    return;
+  }
+  errors.push(...exactKeys(value, ["text", "truncated"], reasoningPath));
+  if (
+    typeof value.text !== "string" ||
+    value.text.length < 1 ||
+    utf8Bytes(value.text) > CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES
+  ) {
+    errors.push(`${reasoningPath}.text must be a bounded non-empty string`);
+  } else if (stripUnsafeFormatChars(value.text) !== value.text) {
+    errors.push(`${reasoningPath}.text contains unsafe format characters`);
+  }
+  if (typeof value.truncated !== "boolean") {
+    errors.push(`${reasoningPath}.truncated must be a boolean`);
+  }
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).length;
 }
 
 function validateTools(value: unknown, path: string, ids: Set<string>, errors: string[]): void {

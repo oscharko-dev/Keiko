@@ -19,7 +19,11 @@ import {
 // pass unchanged; the handlers degrade gracefully (no config → 400 NO_MODEL on a run, null config on
 // the inspector; no store → an empty evidence list).
 
-import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import {
+  configuredRuntimeMaxDurationMinutes,
+  configuredRuntimePromptTokenBudget,
+  runtimeMaxDurationMs,
+} from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
   assumedChatCapability,
   findConfiguredCapability,
@@ -369,6 +373,10 @@ import {
   type CodingRuntimeEditorMutationLeasePort,
 } from "./coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
+  createMaterializedPatchRegistry,
+  type MaterializedPatchRegistry,
+} from "./coding-runtime/materializedPatchRegistry.js";
+import {
   createCodingRuntimeSnapshotStore,
   type CodingRuntimeSnapshotStore,
 } from "./coding-runtime/codingRuntimeSnapshotStore.js";
@@ -386,6 +394,12 @@ import {
   createCodingRuntimeProjectMemoryPort,
   type CodingRuntimeProjectMemoryPort,
 } from "./coding-runtime/codingRuntimeProjectMemory.js";
+import {
+  configuredCodingRuntimeRepositoryInstructionsEnabled,
+  createCodingRuntimeRepositoryInstructionsPort,
+  KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV,
+  type CodingRuntimeRepositoryInstructionsPort,
+} from "./coding-runtime/codingRuntimeRepositoryInstructions.js";
 import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import {
   createCodingRuntimeControlPlane,
@@ -707,12 +721,15 @@ export interface UiHandlerDeps {
         readonly reservePromptTokens?:
           ((capability: string, promptTokens: number) => unknown) | undefined;
         // #3384 wave-3 W3-3 "needs": reconciles a prompt-token reservation above against the
-        // provider's real reported usage once known, mirroring `reservePromptTokens`.
+        // provider's real reported usage once known, mirroring `reservePromptTokens`. An admitted
+        // reservation may answer an opaque `modelCallId` (#3873 run effort roll-up); the settlement
+        // of that call names it, so the call is timed from its own reservation.
         readonly settlePromptTokens?:
           | ((
               capability: string,
               reservedPromptTokens: number,
               actualPromptTokens: number,
+              modelCallId?: number,
             ) => unknown)
           | undefined;
       }
@@ -783,6 +800,11 @@ export interface UiHandlerDeps {
   // Optional server-private final mutation claim for managed-runtime editor changesets. #2256 owns
   // composition; absence preserves the established local editor action path.
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
+  // Server-owned record of the diff text the coding runtime's edit port rendered itself, read by the
+  // editor route to lift keiko-tools' collapsed-diff heuristic for a registered diff alone (PR #3876
+  // review). The same instance the runtime's edit port writes (assembleUiHandlerDeps); only the read
+  // side is exposed here. Absent, the heuristic stays for every diff.
+  readonly materializedPatches?: Pick<MaterializedPatchRegistry, "lookup" | "stats"> | undefined;
   // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
   // routes keep the root evidence store clean and fall back to diagnostics-only observability.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
@@ -4464,6 +4486,11 @@ function gatewayOutcomeState(outcome: GatewayEvidenceOutcome): "running" | "canc
   return "failed";
 }
 
+// The provider answered: completely (`accepted`), or beyond the run's output budget (`output-limit`).
+function gatewayOutcomeAnswered(outcome: GatewayEvidenceOutcome): boolean {
+  return outcome === "accepted" || outcome === "output-limit";
+}
+
 function gatewayOutcomeFailureCode(
   outcome: GatewayEvidenceOutcome,
 ):
@@ -4724,6 +4751,10 @@ function buildUiCodingRuntimeControlPlane(
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
+  const repositoryInstructions = createUiCodingRuntimeRepositoryInstructions(
+    args,
+    codingRuntimeHost,
+  );
   return createCodingRuntimeControlPlane({
     historyStore: args.bundle.uiStore,
     issueIntake: createProductionCodingRuntimeIssueIntake({
@@ -4741,6 +4772,7 @@ function buildUiCodingRuntimeControlPlane(
       ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
     projectMemory,
+    repositoryInstructions,
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.
     // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
@@ -4759,6 +4791,24 @@ function createUiCodingRuntimeProjectMemory(
     vault: memoryVault,
     evidenceStore: args.evidenceStore,
     redactString: args.redactString,
+  });
+}
+
+// The task workspace's own AGENTS.md as bounded untrusted initial context (ADR-0137 D1). Default
+// on; the explicit `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` opt-out is read once here,
+// and any other explicit value fails composition closed exactly like the neighbouring
+// `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`. The loader reads through the runtime host's own secure
+// workspace read helper, never a second filesystem path; an unqualified host leaves it no source.
+function createUiCodingRuntimeRepositoryInstructions(
+  args: UiHandlerDepsAssemblyArgs,
+  codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
+): CodingRuntimeRepositoryInstructionsPort {
+  return createCodingRuntimeRepositoryInstructionsPort({
+    enabled: configuredCodingRuntimeRepositoryInstructionsEnabled(
+      args.options.env[KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV],
+    ),
+    source: codingRuntimeHost?.secureWorkspaceTextRead,
+    activityLog: processServerLogSink(),
   });
 }
 
@@ -5128,14 +5178,30 @@ function buildRuntimeUiHandlerDeps(
     memoryDeploymentCeiling: resolveConfiguredDeploymentCeiling(args.options) ?? "governed-assist",
     ...buildRuntimeMutationLeaseDependency(args.options, services.runtimeComposition),
     ...codingRuntimeControlPlaneDeps,
-    codingSidecarGatewayEvidenceAggregator: {
-      record: ({ runId, outcome }): void => {
-        services.codingRuntimeEvidenceAggregator.observe(runId, {
-          kind: "model-request",
-          state: gatewayOutcomeState(outcome),
-          ...gatewayOutcomeFailureCode(outcome),
-        });
-      },
+    codingSidecarGatewayEvidenceAggregator: codingSidecarGatewayEvidenceRecorder(
+      services.codingRuntimeEvidenceAggregator,
+      services.codingRuntimeControlPlane?.eventHub,
+    ),
+  };
+}
+
+/**
+ * Records each sidecar gateway call outcome of a run: as content-free run evidence, and, for an
+ * answered call, on the run's event hub, where an answer supersedes an earlier failed call so a
+ * failed run never names a model-call cause it already recovered from (F9, #3873).
+ */
+export function codingSidecarGatewayEvidenceRecorder(
+  evidence: Pick<ReturnType<typeof createCodingRuntimeEvidenceAggregator>, "observe">,
+  eventHub: Pick<CodingRuntimeEventHub, "noteModelCallAnswered"> | undefined,
+): NonNullable<UiHandlerDeps["codingSidecarGatewayEvidenceAggregator"]> {
+  return {
+    record: ({ runId, outcome }): void => {
+      evidence.observe(runId, {
+        kind: "model-request",
+        state: gatewayOutcomeState(outcome),
+        ...gatewayOutcomeFailureCode(outcome),
+      });
+      if (gatewayOutcomeAnswered(outcome)) eventHub?.noteModelCallAnswered(runId);
     },
   };
 }
@@ -5567,13 +5633,21 @@ function buildCodingRuntimeControlPlaneDeps(
   };
 }
 
+// The editor route's two runtime-mutation ports: the final claim on a mutation, and the record of
+// which diff text the runtime's edit port rendered itself. Both come from the one qualified
+// composition, so the route reads the same instances the runtime writes.
 function buildRuntimeMutationLeaseDependency(
   options: BuildHandlerDepsOptions,
   runtimeComposition: ReturnType<typeof productionRuntimeResolver>,
-): Partial<Pick<UiHandlerDeps, "runtimeMutationLease">> {
+): Partial<Pick<UiHandlerDeps, "runtimeMutationLease" | "materializedPatches">> {
   if (options.codingRuntimeResolver !== undefined) return {};
   if (runtimeComposition.runtimeMutationLease === undefined) return {};
-  return { runtimeMutationLease: runtimeComposition.runtimeMutationLease };
+  return {
+    runtimeMutationLease: runtimeComposition.runtimeMutationLease,
+    ...(runtimeComposition.materializedPatches === undefined
+      ? {}
+      : { materializedPatches: runtimeComposition.materializedPatches }),
+  };
 }
 
 export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
@@ -5603,6 +5677,7 @@ interface ProductionRuntimeComposition {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
+  readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
 }
 
@@ -5619,6 +5694,28 @@ function unqualifiedComposition(
   return { resolver: undefined, unavailableReason, evidenceClass: undefined };
 }
 
+/**
+ * ADR-0137 D2 (#3873): the two Authority Envelope bounds are operator settings. Both are parsed
+ * ONCE here, before runtime activation, so an invalid value fails the composition closed at
+ * startup, and the same numbers reach every newly minted envelope and the safe-activity
+ * retention that must outlive it.
+ */
+interface RuntimeEnvelopeBounds {
+  readonly promptTokenBudget: number;
+  readonly maxDurationMinutes: number;
+}
+
+function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds {
+  return {
+    promptTokenBudget: configuredRuntimePromptTokenBudget(
+      env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
+    ),
+    maxDurationMinutes: configuredRuntimeMaxDurationMinutes(
+      env.KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES,
+    ),
+  };
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -5626,6 +5723,7 @@ function resolveProductionRuntimePorts(
   runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   readiness: OpenCodeGatewayReadinessRegistry,
   workspaceLifecycle: WorkspaceLifecycleService,
+  envelopeBounds: RuntimeEnvelopeBounds,
 ): ProductionRuntimePortResolution {
   const injectedPorts = args.options.codingRuntimeProductionPorts;
   if (injectedPorts !== undefined) {
@@ -5644,6 +5742,7 @@ function resolveProductionRuntimePorts(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
     gatewayReadiness: readiness,
+    runtimeMaxDurationMs: runtimeMaxDurationMs(envelopeBounds.maxDurationMinutes),
     resolveGatewayRunMetadata: (modelId) => {
       const result = resolveCodingSafeSidecarGatewayProfile(args.runtimeConfig.current(), {
         modelId,
@@ -5703,14 +5802,14 @@ function runtimeWorkspaceAuthority(
   workspaceLifecycle: NonNullable<UiHandlerDepsAssemblyArgs["bundle"]["workspaceLifecycle"]>,
   managedTaskWorkspaceRoot: string,
   deploymentCeiling: CodingWorkbenchMode,
+  envelopeBounds: RuntimeEnvelopeBounds,
 ): Parameters<typeof createProductionCodingRuntimeResolver>[0]["workspaceAuthority"] {
   return {
     workspaceLifecycle,
     managedTaskWorkspaceRoot,
     deploymentCeiling,
-    promptTokenBudget: configuredRuntimePromptTokenBudget(
-      args.options.env.KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS,
-    ),
+    promptTokenBudget: envelopeBounds.promptTokenBudget,
+    maxDurationMinutes: envelopeBounds.maxDurationMinutes,
     readWorkspaceHead: readProductionWorkspaceHead,
     verifiedCommitResult: (runId) =>
       args.bundle.codingRuntimeSnapshotStore?.getLastSuccessfulVerifiedCommit?.(runId),
@@ -5746,12 +5845,14 @@ function productionRuntimeResolver(
   if (workspaceLifecycle === undefined || managedTaskWorkspaceRoot === undefined) {
     return unqualifiedComposition("runtime-unqualified");
   }
+  const envelopeBounds = configuredRuntimeEnvelopeBounds(args.options.env);
   const readiness = createOpenCodeGatewayReadinessRegistry();
   const resolution = resolveProductionRuntimePorts(
     args,
     runtimeEvidence,
     readiness,
     workspaceLifecycle,
+    envelopeBounds,
   );
   const ports = resolution.ports;
   if (ports === undefined) {
@@ -5760,36 +5861,52 @@ function productionRuntimeResolver(
   if (!materializedManagedRoot(managedTaskWorkspaceRoot, args.options.diagnostics)) {
     return unqualifiedComposition("runtime-unqualified");
   }
-  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
+  const mutationPorts = createRuntimeMutationPorts();
   return qualifiedProductionRuntimeComposition(
     qualifiedRuntimeResolver({
       args,
       deploymentCeiling,
+      envelopeBounds,
       managedTaskWorkspaceRoot,
       ports,
       activated: resolution.activated,
-      runtimeMutationLeaseBroker,
+      ...mutationPorts,
       commandRunner,
       verificationRunner,
       editorSettingsControl,
       workspaceLifecycle,
     }),
     readiness,
-    runtimeMutationLeaseBroker,
+    mutationPorts,
     // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
     resolution.evidenceClass ?? "functional-not-platform-qualified",
   );
 }
 
-interface QualifiedRuntimeResolverInput {
-  readonly args: UiHandlerDepsAssemblyArgs;
-  readonly deploymentCeiling: CodingWorkbenchMode;
-  readonly managedTaskWorkspaceRoot: string;
-  readonly ports: ProductionCodingRuntimePorts;
-  readonly activated: boolean;
+// The two server-owned ports of a runtime mutation, created once per composition: the final claim
+// on the mutation, and the record of the diff text the edit port rendered itself (PR #3876 review).
+// The runtime writes both and the editor route reads both, so each side must hold the same instance.
+interface RuntimeMutationPorts {
   readonly runtimeMutationLeaseBroker: ReturnType<
     typeof createCodingRuntimeEditorMutationLeaseBroker
   >;
+  readonly materializedPatches: MaterializedPatchRegistry;
+}
+
+function createRuntimeMutationPorts(): RuntimeMutationPorts {
+  return {
+    runtimeMutationLeaseBroker: createCodingRuntimeEditorMutationLeaseBroker(),
+    materializedPatches: createMaterializedPatchRegistry(),
+  };
+}
+
+interface QualifiedRuntimeResolverInput extends RuntimeMutationPorts {
+  readonly args: UiHandlerDepsAssemblyArgs;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly envelopeBounds: RuntimeEnvelopeBounds;
+  readonly managedTaskWorkspaceRoot: string;
+  readonly ports: ProductionCodingRuntimePorts;
+  readonly activated: boolean;
   readonly commandRunner: PeripheralManagers["commandRunner"];
   readonly verificationRunner: PeripheralManagers["verificationRunner"];
   readonly editorSettingsControl: PeripheralManagers["editorSettingsControl"];
@@ -5810,6 +5927,7 @@ function qualifiedRuntimeResolver(
       input.workspaceLifecycle,
       input.managedTaskWorkspaceRoot,
       input.deploymentCeiling,
+      input.envelopeBounds,
     ),
     ...input.ports,
     commandRunner: input.commandRunner,
@@ -5820,6 +5938,7 @@ function qualifiedRuntimeResolver(
     ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
     ...(draftDelivery === undefined ? {} : { draftDelivery }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,
+    materializedPatches: input.materializedPatches,
     resolveWorkspaceRootAccess: collapsedWorkspaceRootAccessResolver(resolveWorkspaceRootAccess),
     gatewayEgress: () => args.runtimeConfig.current()?.egress ?? args.egress,
     childModelPortFactory:
@@ -5879,9 +5998,10 @@ function runtimeDraftDeliveryDependencies(
 function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
-  runtimeMutationLeaseBroker: ReturnType<typeof createCodingRuntimeEditorMutationLeaseBroker>,
+  mutationPorts: RuntimeMutationPorts,
   evidenceClass: CodingWorkbenchRuntimeEvidenceClass,
 ): ProductionRuntimeComposition {
+  const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {
     resolver: {
       resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
@@ -5894,6 +6014,7 @@ function qualifiedProductionRuntimeComposition(
     unavailableReason: undefined,
     evidenceClass,
     runtimeMutationLease: runtimeMutationLeaseBroker,
+    materializedPatches,
     dispose: (): void => {
       runtimeMutationLeaseBroker.dispose();
     },

@@ -811,12 +811,37 @@ export interface UsageMetadata {
   readonly completionTokens: number;
   readonly latencyMs: number;
   readonly costClass: CostClass;
+  /**
+   * The provider's own count of the completion tokens spent on reasoning
+   * (`usage.completion_tokens_details.reasoning_tokens`). Absent when the provider does not report
+   * it; never estimated (#3878).
+   */
+  readonly reasoningTokens?: number | undefined;
+  /**
+   * UTF-8 size of the reasoning (`reasoning_content`) the provider returned with this answer, as a
+   * count only. Present when the answer carried reasoning, also where the gateway discarded the
+   * reasoning itself, so its share of the completion stays measurable (#3878).
+   */
+  readonly reasoningBytes?: number | undefined;
 }
 
 // ─── Normalised response ──────────────────────────────────────────────────────
 
 export type FinishReason =
   "stop" | "tool_calls" | "length" | "content_filter" | "error" | "cancelled";
+
+/**
+ * How the gateway's one steered repair of an answer the model could not use ended: an answer that
+ * exhausted its output budget without a tool call or a final answer (#3873, F17), or one that ended
+ * after reasoning without a tool call or any text (#3873, F23). `recovered` rides on the repaired
+ * response (`NormalizedResponse.outputRepair`). The rest ride on the error the repaired attempt
+ * surfaced (`GatewayError.outputRepair` in keiko-security) and name how that attempt ended, whichever
+ * failure triggered the repair: `exhausted-again` (it spent the whole budget), `empty-again` (it
+ * ended without any text or tool call) and `failed` (it failed for another reason, or the repair
+ * never ran). A call whose first answer was usable, or whose budget could not hold a repair,
+ * carries neither.
+ */
+export type GatewayOutputRepairOutcome = "recovered" | "exhausted-again" | "empty-again" | "failed";
 
 export interface NormalizedResponse {
   readonly modelId: string;
@@ -825,6 +850,37 @@ export interface NormalizedResponse {
   readonly toolCalls: readonly NormalizedToolCall[];
   readonly structuredOutput: Record<string, unknown> | null;
   readonly usage: UsageMetadata;
+  /**
+   * The model's own reasoning beside the answer (#3878): what an OpenAI-compatible provider returns
+   * as `reasoning_content` (LiteLLM's normalization of a reasoning parser's output or of Anthropic
+   * thinking). Never part of `content`, unverified model text, and a body: it never enters the
+   * Activity Log, a support export or run evidence, where only its counts may appear. Present only
+   * when non-empty, and only on a call that asks for reasoning delivery (the gateway's local
+   * `reasoningDelivery: "forward"`, set by the coding sidecar route alone); the gateway discards it
+   * everywhere else.
+   */
+  readonly reasoning?: string | undefined;
+  /**
+   * Set by the gateway, never by a provider: this answer came from the one steered repair of a
+   * preceding answer that exhausted its output budget (#3873, F17) or ended after reasoning without
+   * a tool call or any text (#3873, F23). Absent on every first answer.
+   */
+  readonly outputRepair?: Extract<GatewayOutputRepairOutcome, "recovered"> | undefined;
+  /**
+   * Set by the gateway, never by a provider (#3873 review): the provider-reported usage of earlier
+   * attempts of this call that the gateway discarded — the first answer of a steered repair, a tool
+   * call the catalog rejected, a stream that failed after its usage arrived — so a caller that
+   * meters every token the provider processed (the coding run's prompt allowance) can count them.
+   * `usage` keeps describing the answer itself. Counts only; absent when no discarded attempt
+   * reported usage.
+   */
+  readonly discardedAttemptUsage?:
+    | {
+        readonly attemptCount: number;
+        readonly promptTokens: number;
+        readonly completionTokens: number;
+      }
+    | undefined;
 }
 
 // ─── Streaming (schema only — Wave 1 adapter does not process chunked streams) ─

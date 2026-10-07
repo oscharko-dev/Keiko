@@ -1,10 +1,25 @@
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
+import { CODING_MODEL_STORAGE_KEY } from "./codingModelPreference";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { journeyFixture } from "./_journeyOutcomeTestSupport";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  conversationLabel,
+  endShown,
+  labelledText,
+  largestHolding,
+  startsShown,
+} from "./_restoredConversationTestSupport";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+  CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+  CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
+  CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
@@ -14,6 +29,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  CodingWorkbenchRuntimeStateName,
   ModelCapability,
   WorkspaceBinding,
   WorkspaceInstance,
@@ -28,9 +44,18 @@ import {
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
-import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
+import {
+  CodingWorkbenchWindow,
+  sessionGrowthKey,
+  type CodingWorkbenchGitTarget,
+} from "./CodingWorkbenchWindow";
 import type { CodingTaskSession } from "./useCodingTaskSession";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import { restoreConversation } from "./codingWorkbenchRestoredRun";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
 import {
@@ -353,6 +378,13 @@ function openWorkbenchInformation(): HTMLElement {
   return screen.getByRole("dialog", { name: "Coding Workbench information" });
 }
 
+// The run status sentence is the one live region that speaks for the run: polite and atomic.
+function expectPoliteAtomicStatus(announcement: HTMLElement): void {
+  expect(announcement).toHaveAttribute("role", "status");
+  expect(announcement).toHaveAttribute("aria-live", "polite");
+  expect(announcement).toHaveAttribute("aria-atomic", "true");
+}
+
 function activeWorkspaceWithBinding(
   repositoryRoot: string,
   activeRoot: string,
@@ -461,6 +493,7 @@ beforeEach(() => {
     response: null,
     loading: false,
     error: null,
+    denied: false,
     branches: [],
     currentBranch: root === null ? null : "dev",
     refresh: vi.fn(() => Promise.resolve()),
@@ -519,6 +552,381 @@ describe("CodingWorkbenchWindow", () => {
       expect(screen.queryByRole("region", { name: "Code setup" })).not.toBeInTheDocument();
     },
   );
+
+  // #3873 live review: after a reload a finished or failed run showed only "Previous conversation"
+  // and "0 changed files" — its timeline and the cause of its terminal state were gone, although the
+  // restored snapshot carries the outcome and Coding History holds the conversation it captured from
+  // the run's display projection. Mounted here against exactly such a restored run.
+  describe("a run restored after a reload", () => {
+    const SETTLED_AT = "2026-07-13T12:09:00.000Z";
+    type HistoryMessage = NonNullable<CodingTaskSession["detail"]>["messages"][number];
+
+    function historyMessage(
+      id: string,
+      runId: string,
+      role: "user" | "assistant",
+      text: string,
+    ): HistoryMessage {
+      return {
+        id,
+        chatId: "task-7",
+        role,
+        content: text,
+        timestamp: Date.parse(AT) + Number(id.slice(2)) * 60_000,
+        runId,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      };
+    }
+
+    // The earlier run's two messages come first, then the shown run's own conversation.
+    function restoredSession(
+      runMessages: readonly HistoryMessage[] = [
+        historyMessage("m-3", "run-7", "user", "Repair the parser"),
+        historyMessage("m-4", "run-7", "assistant", "I read the parser and ran the tests."),
+      ],
+      storedHistoryCut = false,
+    ): CodingTaskSession {
+      return {
+        ...defaultTaskSession(),
+        conversationId: "task-7",
+        detail: {
+          task: {
+            id: "task-7",
+            title: "Repair the parser",
+            projectPath: "/repo",
+            modelId: "gemma-4-31b-it",
+            branch: "issue/7",
+            workspaceId: "workspace-1",
+            taskId: "task-1",
+            status: "active",
+            createdAt: Date.parse(AT),
+            updatedAt: Date.parse(SETTLED_AT),
+            latestRunId: "run-7",
+          },
+          messages: [
+            historyMessage("m-1", "run-6", "user", "Earlier request"),
+            historyMessage("m-2", "run-6", "assistant", "Earlier answer"),
+            ...runMessages,
+          ],
+          truncated: storedHistoryCut,
+        },
+      };
+    }
+
+    function restoredRun(
+      events: readonly CodingWorkbenchRuntimeSseEvent[] = [],
+    ): CodingWorkbenchRuntimeState {
+      return liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "failed",
+            runId: "run-7",
+            revision: 9,
+            updatedAt: SETTLED_AT,
+            failureCode: "runtime-failed",
+            conversationId: "task-7",
+          }),
+        },
+        events,
+      });
+    }
+
+    function settledRows(): readonly Element[] {
+      return [...document.querySelectorAll('[data-timeline-kind="event"]')].filter((row) =>
+        row.textContent?.includes("Coding run failed"),
+      );
+    }
+
+    it("renders the captured conversation and the terminal outcome in the timeline", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      renderWorkbench(restoredRun());
+
+      const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
+      expect(timeline).toHaveTextContent("Repair the parser");
+      expect(timeline).toHaveTextContent("I read the parser and ran the tests.");
+      expect(settledRows()).toHaveLength(1);
+      expect(settledRows()[0]).toHaveAttribute("data-event-tone", "attention");
+      expect(settledRows()[0]).toHaveTextContent("The coding run ended with an internal error");
+      const transcript = screen.getByRole("region", { name: "Previous conversation" });
+      expect(transcript).toHaveTextContent("Earlier request");
+      expect(transcript).not.toHaveTextContent("I read the parser");
+    });
+
+    it("keeps the server's own activity projection while it is still held", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({
+        ...IDLE_ACTIVITY,
+        status: "ended",
+        feed: { ...activityFeed(), runId: "run-7" },
+      });
+      renderWorkbench(restoredRun());
+
+      const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
+      expect(timeline).toHaveTextContent("Review the repository");
+      expect(timeline).not.toHaveTextContent("I read the parser and ran the tests.");
+      expect(settledRows()).toHaveLength(1);
+      // The feed the server holds carries the run's whole conversation, so the transcript keeps
+      // hiding the run's own history messages — their ids are not the feed's — and shows the rest.
+      const transcript = screen.getByRole("region", { name: "Previous conversation" });
+      expect(transcript).toHaveTextContent("Earlier request");
+      expect(transcript).not.toHaveTextContent("Repair the parser");
+      expect(transcript).not.toHaveTextContent("I read the parser and ran the tests.");
+    });
+
+    it("adds no second settlement to a run whose settlement was streamed", () => {
+      taskSessionHookMock.mockReturnValue(restoredSession());
+      activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+      renderWorkbench(
+        restoredRun([
+          {
+            schemaVersion: "1",
+            cursor: "run-7:8",
+            sequence: 8,
+            occurredAt: SETTLED_AT,
+            kind: "status",
+            runId: "run-7",
+            state: "failed",
+            revision: 9,
+            failureCode: "runtime-failed",
+          },
+        ]),
+      );
+
+      expect(settledRows()).toHaveLength(1);
+    });
+
+    // #3876 review (PRRT_kwDOSqilAM6px-aO): the restored feed keeps to the safe-activity contract's
+    // bounds, and the Window used to hide every message of a run whose feed was available from the
+    // transcript — so a message the bounds dropped was shown in neither place and the operator's own
+    // first prompt could vanish after a reload. Each test below judges where every message of the
+    // run is shown. Sizes are derived from the contract's constants, never restated.
+    describe("a restored conversation measured against the feed's bounds", () => {
+      // Three answers of this size overflow one turn; the whole conversation still fits the feed.
+      const ANSWER_CHARS = Math.floor(CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES / 3);
+      const PROMPT_CHARS = 60;
+
+      // Alternating operator prompts and agent answers of the shown run, oldest first.
+      function runConversation(answers: number): HistoryMessage[] {
+        return Array.from({ length: answers * 2 }, (_, index) => {
+          const prompt = index % 2 === 0;
+          return historyMessage(
+            `m-${String(index + 3)}`,
+            "run-7",
+            prompt ? "user" : "assistant",
+            labelledText(conversationLabel(index), prompt ? PROMPT_CHARS : ANSWER_CHARS),
+          );
+        });
+      }
+
+      function renderRestored(messages: readonly HistoryMessage[], storedHistoryCut = false): void {
+        taskSessionHookMock.mockReturnValue(restoredSession(messages, storedHistoryCut));
+        activityHookMock.mockReturnValue({ ...IDLE_ACTIVITY, status: "ended" });
+        renderWorkbench(restoredRun());
+      }
+
+      const labelsOf = (messages: readonly HistoryMessage[]): string[] =>
+        messages.map((_, index) => conversationLabel(index));
+      const timelineText = (): string | null =>
+        screen.getByRole("list", { name: "Coding run event timeline" }).textContent;
+      const transcriptText = (): string | null | undefined =>
+        screen.queryByRole("region", { name: "Previous conversation" })?.textContent;
+      const inTimeline = (label: string): number => startsShown(timelineText(), label);
+      const inTranscript = (label: string): number => startsShown(transcriptText(), label);
+      const shownText = (): string => `${transcriptText() ?? ""}${timelineText() ?? ""}`;
+      // Where each message is shown: the transcript above the timeline, then the timeline.
+      const placements = (labels: readonly string[]): ("transcript" | "timeline")[] =>
+        labels.map((label) => (inTranscript(label) > 0 ? "transcript" : "timeline"));
+
+      it("shows every message of the run exactly once, the operator's first prompt included", () => {
+        const messages = runConversation(3);
+        renderRestored(messages);
+
+        for (const label of labelsOf(messages)) {
+          expect(inTimeline(label) + inTranscript(label), label).toBe(1);
+        }
+        expect(screen.getByRole("region", { name: "Previous conversation" })).toHaveTextContent(
+          "Earlier request",
+        );
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      it("carries a conversation that overflows one turn but fits the feed in the timeline", () => {
+        const messages = runConversation(3);
+        renderRestored(messages);
+
+        for (const label of labelsOf(messages)) {
+          expect(inTimeline(label), label).toBe(1);
+          expect(endShown(timelineText(), label), label).toBe(true);
+          expect(inTranscript(label), label).toBe(0);
+        }
+      });
+
+      it("moves the oldest messages the whole feed cannot carry to the transcript, and loses none", () => {
+        const answers = Math.ceil(CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES / ANSWER_CHARS) + 1;
+        const messages = runConversation(answers);
+        renderRestored(messages);
+
+        const labels = labelsOf(messages);
+        for (const label of labels) {
+          expect(inTimeline(label) + inTranscript(label), label).toBe(1);
+          expect(endShown(shownText(), label), label).toBe(true);
+        }
+        // The transcript holds an unbroken run of the oldest messages, the timeline the rest.
+        const shown = placements(labels);
+        const firstInTimeline = shown.indexOf("timeline");
+        expect(firstInTimeline).toBeGreaterThan(0);
+        expect(shown.slice(firstInTimeline).every((place) => place === "timeline")).toBe(true);
+        expect(inTranscript("P1")).toBe(1);
+        expect(inTimeline(labels.at(-1) ?? "")).toBe(1);
+        // Everything the timeline lacks is shown above it: nothing was lost, so nothing is marked.
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      it("shows a message above the per-message bound cut and marked, once, and says so", () => {
+        const oversized = CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES * 3;
+        renderRestored([
+          historyMessage("m-3", "run-7", "user", labelledText("P1", PROMPT_CHARS)),
+          historyMessage("m-4", "run-7", "assistant", labelledText("A1", oversized)),
+        ]);
+
+        expect(inTimeline("P1") + inTranscript("P1")).toBe(1);
+        expect(inTimeline("A1") + inTranscript("A1")).toBe(1);
+        // What the bound cut is shown nowhere, and the page says so on the message and the activity.
+        expect(endShown(shownText(), "A1")).toBe(false);
+        expect(screen.getAllByText(/Output truncated/u)).toHaveLength(1);
+        expect(screen.getByText("Activity truncated.")).toBeInTheDocument();
+      });
+
+      it("says the activity is truncated when Coding History itself cut the task's messages", () => {
+        renderRestored(runConversation(1), true);
+
+        expect(screen.getByText("Activity truncated.")).toBeInTheDocument();
+        expect(inTimeline("P1") + inTranscript("P1")).toBe(1);
+        expect(inTimeline("A1") + inTranscript("A1")).toBe(1);
+      });
+
+      it("restores nothing for a run without a conversation and leaves the transcript whole", () => {
+        renderRestored([]);
+
+        expect(screen.getByRole("region", { name: "Previous conversation" })).toHaveTextContent(
+          "Earlier request",
+        );
+        expect(settledRows()).toHaveLength(1);
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      it("shows each message once at the feed's exact boundary and one byte beyond it", () => {
+        // The projection draws the line and the page is judged on both sides of it. The fillers and
+        // the oldest message, the operator's first prompt, each fit one segment, so the prompt
+        // grows by exactly one byte per character.
+        const fillerChars = 1_000;
+        const minimumPrompt = 16;
+        const conversation = (fillers: number, promptChars: number): HistoryMessage[] => [
+          historyMessage("m-3", "run-7", "user", labelledText("P1", promptChars)),
+          ...Array.from({ length: fillers }, (_, index) =>
+            historyMessage(
+              `m-${String(index + 4)}`,
+              "run-7",
+              "assistant",
+              labelledText(`F${String(index + 1)}`, fillerChars),
+            ),
+          ),
+        ];
+        const overflowOf = (messages: readonly HistoryMessage[]): number =>
+          restoreConversation(restoredRun().run.value, restoredSession(messages).detail)
+            ?.overflowMessageIds.size ?? 0;
+        const fillers = largestHolding(
+          1,
+          400,
+          (count) => overflowOf(conversation(count, minimumPrompt)) === 0,
+        );
+        const prompt = largestHolding(
+          minimumPrompt,
+          CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
+          (chars) => overflowOf(conversation(fillers, chars)) === 0,
+        );
+        expect(prompt).toBeLessThan(CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS);
+        // The line is the feed's, not one turn's: it falls beyond what one turn holds.
+        expect(fillers).toBeGreaterThan(CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN);
+        const labels = [
+          "P1",
+          ...Array.from({ length: fillers }, (_, index) => `F${String(index + 1)}`),
+        ];
+
+        renderRestored(conversation(fillers, prompt));
+        for (const label of labels) {
+          expect(inTimeline(label), label).toBe(1);
+          expect(inTranscript(label), label).toBe(0);
+        }
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+        cleanup();
+
+        renderRestored(conversation(fillers, prompt + 1));
+        expect(inTranscript("P1")).toBe(1);
+        expect(inTimeline("P1")).toBe(0);
+        for (const label of labels.slice(1)) {
+          expect(inTimeline(label), label).toBe(1);
+          expect(inTranscript(label), label).toBe(0);
+        }
+        expect(screen.queryByText("Activity truncated.")).not.toBeInTheDocument();
+      });
+
+      describe("reported as counts", () => {
+        const reports: ClientDiagnosticMeta[] = [];
+        beforeEach(() => {
+          setClientDiagnosticWriter((_message, meta) => {
+            if (meta?.codingRunRestore !== undefined) reports.push(meta);
+          });
+        });
+        afterEach(() => {
+          reports.length = 0;
+          resetClientDiagnosticWriter();
+        });
+
+        it("tells where the messages went, joined to the run, and carries no text", () => {
+          const answers = Math.ceil(CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES / ANSWER_CHARS) + 1;
+          const messages = runConversation(answers);
+          renderRestored(messages);
+
+          const labels = labelsOf(messages);
+          const inTheTimeline = labels.filter((label) => inTimeline(label) === 1).length;
+          const inTheTranscript = labels.filter((label) => inTranscript(label) === 1).length;
+          expect(inTheTimeline).toBeGreaterThan(0);
+          expect(inTheTranscript).toBeGreaterThan(0);
+          expect(reports).toHaveLength(1);
+          expect(reports[0]?.correlationId).toBe("run-7");
+          expect(reports[0]?.codingRunRestore).toMatchObject({
+            timelineCount: inTheTimeline,
+            transcriptCount: inTheTranscript,
+            cutCount: 0,
+            historyTruncated: false,
+          });
+          expect(JSON.stringify(reports[0])).not.toContain("-begin");
+        });
+
+        it("reports a run restored whole and stays silent about a run it restores nothing for", () => {
+          renderRestored(runConversation(1));
+          expect(reports).toHaveLength(1);
+          expect(reports[0]?.codingRunRestore).toMatchObject({
+            timelineCount: 2,
+            transcriptCount: 0,
+            transcriptChars: 0,
+          });
+          cleanup();
+          reports.length = 0;
+
+          renderRestored([]);
+          expect(reports).toHaveLength(0);
+        });
+      });
+    });
+  });
 
   it.each(["running", "paused", "awaiting-approval", "recovery-required"] as const)(
     "does not offer a new issue while a run is %s",
@@ -1283,6 +1691,60 @@ describe("CodingWorkbenchWindow", () => {
     expect(alert.nextElementSibling).toHaveClass(sessionClass);
   });
 
+  // #3873 live review: the run status region opened with "Model source ready. Subscription
+  // authentication not selected. …" before saying what the run was doing. It now leads with the
+  // run's state and revision, then its elapsed time and phase; readiness sits in closed details.
+  it("leads the run status with the run itself and collapses the readiness facts", (): void => {
+    const verifying = activityFeed();
+    activityHookMock.mockReturnValue({
+      ...IDLE_ACTIVITY,
+      status: "live",
+      feed: {
+        ...verifying,
+        turns: [
+          {
+            ...verifying.turns[0]!,
+            tools: [
+              { callId: "call-2", tool: "keiko_verification", state: "running", occurredAt: AT },
+            ],
+          },
+        ],
+      },
+    });
+    renderWorkbench(
+      liveState({
+        canStart: false,
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1", revision: 4 }),
+        },
+        events: [
+          {
+            schemaVersion: "1",
+            cursor: "cursor-0",
+            sequence: 0,
+            occurredAt: AT,
+            kind: "status",
+            runId: "run-1",
+            state: "starting",
+            revision: 1,
+          },
+        ],
+      }),
+    );
+
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      /^Running\. Revision 4\.$/u,
+    );
+    expect(screen.getByRole("timer")).toHaveTextContent(/^Elapsed /u);
+    expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Running a verifier");
+    const readiness = screen.getByTestId("coding-runtime-readiness");
+    expect(readiness).toHaveTextContent("Model source ready.");
+    expect(readiness).toHaveTextContent("Workspace ready.");
+    expect(readiness.closest("details")).not.toHaveAttribute("open");
+  });
+
   // Release-audit F-01: the idle header pill is a READINESS claim, not a run state. It must
   // consume the same server-confirmed readiness the start action gates on — including the
   // sidecar gateway profile — so it can never say "Ready to start" over an unavailable source.
@@ -1312,6 +1774,179 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
 
+  // #3873 review: the readiness facts moved into collapsed details, which left an unavailable
+  // runtime and an unpaired window announced to no one — in the setup layout, which lays out no
+  // readiness text, as in the run layout. A fact that says the Workbench cannot start stays in the
+  // polite, atomic run status sentence, where it is also visible text; healthy facts stay in the
+  // details.
+  describe("readiness facts that need attention", () => {
+    const UNAVAILABLE_RUNTIME = {
+      status: "ready",
+      error: null,
+      value: {
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "supervised-coding",
+        effectiveMode: "governed-assist",
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "runtime-disabled",
+      },
+    } as const satisfies CodingWorkbenchRuntimeState["runtime"];
+
+    it("announces an unavailable runtime in the run status sentence, after the run itself", (): void => {
+      renderWorkbench(liveState({ canStart: false, runtime: UNAVAILABLE_RUNTIME }));
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveTextContent(/^Not ready to start\. Runtime unavailable\.$/u);
+      expect(announcement).not.toHaveTextContent(/Model source ready|Workspace ready/u);
+      const readiness = screen.getByTestId("coding-runtime-readiness");
+      expect(readiness).toHaveTextContent("Runtime unavailable.");
+      expect(readiness).toHaveTextContent("Model source ready.");
+      expect(readiness.closest("details")).not.toHaveAttribute("open");
+    });
+
+    it("announces an unpaired window in the run status sentence", (): void => {
+      renderWorkbench(liveState({ canStart: false, pairing: "unpaired" }));
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveTextContent(
+        /^Not ready to start\. Workbench is not paired\. Open Keiko from the launcher\.$/u,
+      );
+    });
+
+    it("announces an unavailable runtime where the setup is centred and lays out no status line", (): void => {
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ canStart: false, runtime: UNAVAILABLE_RUNTIME }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveClass("sr-only");
+      expect(announcement).toHaveTextContent("Runtime unavailable.");
+      expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
+    });
+
+    it("announces an unpaired window where the setup is centred and lays out no status line", (): void => {
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ canStart: false, pairing: "unpaired" }),
+        actions: actions(),
+      });
+      render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveClass("sr-only");
+      expect(announcement).toHaveTextContent("Workbench is not paired.");
+      expect(screen.queryByTestId("coding-runtime-readiness")).toBeNull();
+    });
+
+    it("keeps a healthy Workbench's status to the run itself", (): void => {
+      renderWorkbench(liveState({ canStart: true }));
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expect(announcement).not.toHaveTextContent(/unavailable|not paired|failed/iu);
+      expect(announcement).not.toHaveTextContent(/Model source|Workspace|Runtime/u);
+    });
+  });
+
+  // #3873 review: during a provider outage the run's gateway retries for minutes, and the status
+  // line read "Waiting for the model" for the whole window — the same as a slow generation. The
+  // gateway facts the sidecar route publishes to the run's events name the phase.
+  describe("a model gateway that is unavailable and being retried", () => {
+    function gatewayFact(
+      sequence: number,
+      eventKind:
+        "model-gateway-retrying" | "model-gateway-recovered" | "model-gateway-retry-stopped",
+    ): CodingWorkbenchRuntimeSseEvent {
+      return {
+        schemaVersion: "1",
+        cursor: `cursor-${String(sequence)}`,
+        sequence,
+        occurredAt: AT,
+        kind: "runtime-event",
+        runId: "run-1",
+        state: "running",
+        revision: 4,
+        eventKind,
+      };
+    }
+
+    function renderRunning(events: readonly CodingWorkbenchRuntimeSseEvent[]): void {
+      renderWorkbench(
+        liveState({
+          run: {
+            status: "ready",
+            error: null,
+            value: snapshot({ state: "running", runId: "run-1", revision: 4 }),
+          },
+          events,
+        }),
+      );
+    }
+
+    // Review thread 6pydza: the phase sat in a span outside the live region, so the polite, atomic
+    // sentence read "Running. Revision 4." for the whole outage — a screen reader user heard
+    // "Running" while the visible line named the outage. The phase is in that sentence now (it is
+    // the visible text too, so it is shown once), and the sentence is the one that changes.
+    it("says so in the run status instead of waiting for the model", (): void => {
+      renderRunning([gatewayFact(1, "model-gateway-retrying")]);
+
+      const announcement = screen.getByTestId("coding-runtime-announcement");
+      expectPoliteAtomicStatus(announcement);
+      expect(announcement).toHaveTextContent(
+        /^Running\. Revision 4\. Model gateway unavailable, retrying\.$/u,
+      );
+      expect(announcement).toBeVisible();
+      expect(screen.queryByTestId("coding-runtime-phase")).toBeNull();
+      expect(screen.getByTestId("coding-runtime-status")).not.toHaveTextContent(
+        "Waiting for the model",
+      );
+    });
+
+    it("waits for the model again once the gateway answered", (): void => {
+      renderRunning([
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-recovered"),
+      ]);
+
+      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+        /^Running\. Revision 4\.$/u,
+      );
+    });
+
+    // A call the run cancelled while the gateway retried it ends with no answer; the status must
+    // not keep naming a gateway nobody retries any more while the next call generates.
+    it("waits for the model again once the retry of a cancelled call was stopped", (): void => {
+      renderRunning([
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-retry-stopped"),
+      ]);
+
+      expect(screen.getByTestId("coding-runtime-phase")).toHaveTextContent("Waiting for the model");
+      expect(screen.getByTestId("coding-runtime-phase")).not.toHaveTextContent(
+        "Model gateway unavailable, retrying",
+      );
+    });
+
+    it("lists the facts among the run's details, apart from attention-grade failures", async (): Promise<void> => {
+      renderRunning([
+        gatewayFact(1, "model-gateway-retrying"),
+        gatewayFact(2, "model-gateway-recovered"),
+      ]);
+
+      expect(document.querySelector('[data-event-tone="attention"]')).toBeNull();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Run details" }));
+      const rows = screen.getByRole("list", { name: "Coding run event timeline" });
+      expect(rows).toHaveTextContent("Model gateway unavailable, retrying");
+      expect(rows).toHaveTextContent("Model gateway answered again");
+    });
+  });
+
   /**
    * ADR-0163 D9 / audit F-01. An unverified evaluation runtime must never render as plain green:
    * not in the idle pill's label, not in the run-state pill's colour, and not by silence in the
@@ -1334,11 +1969,16 @@ describe("CodingWorkbenchWindow", () => {
       };
     }
 
+    // #3873: the readiness facts moved out of the run status region into its readiness details,
+    // so every pin on them reads the details; the status line itself never claims readiness.
     it("never renders the plain Ready to start label over an evaluation runtime", (): void => {
       renderWorkbench(evaluationState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
+      );
+      expect(screen.getByTestId("coding-runtime-status")).not.toHaveTextContent(
+        /Ready to start|Runtime ready/u,
       );
     });
 
@@ -1346,12 +1986,12 @@ describe("CodingWorkbenchWindow", () => {
       renderWorkbench(evaluationState());
 
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
 
-    it("keeps runtime assurance in the lifecycle announcement", (): void => {
+    it("keeps runtime assurance in the run's readiness details", (): void => {
       renderWorkbench(evaluationState());
 
       openWorkbenchInformation();
@@ -1359,7 +1999,7 @@ describe("CodingWorkbenchWindow", () => {
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1381,7 +2021,7 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps a platform-qualified runtime rendering exactly as before", (): void => {
       renderWorkbench(liveState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent("Runtime ready");
+      expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
       openWorkbenchInformation();
       expect(
@@ -1651,7 +2291,7 @@ describe("CodingWorkbenchWindow", () => {
         },
       }),
     );
-    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+    expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
       "Workspace unavailable",
     );
     openWorkbenchInformation();
@@ -2692,9 +3332,16 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(
-      screen.getByText("Authentication setup plan unavailable.", { exact: false }),
-    ).toBeInTheDocument();
+    // #3873 review: an unavailable part is announced by the polite, atomic run status itself, and
+    // the readiness details keep the complete list.
+    const announcement = screen.getByTestId("coding-runtime-announcement");
+    expect(announcement).toHaveTextContent("Authentication setup plan unavailable.");
+    expect(announcement).toHaveAttribute("role", "status");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+    expect(screen.getByTestId("coding-runtime-readiness")).toHaveTextContent(
+      "Authentication setup plan unavailable.",
+    );
   });
 
   it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", async () => {
@@ -3714,6 +4361,46 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
   });
 
+  // #3873 live review: after a run with "gemma-4-31b-it" the composer fell back to the first offered
+  // model on the next visit. Like the run authority, an explicit human choice is saved and restored
+  // while the gateway still offers it; the default the Workbench elects by itself is never saved.
+  describe("persisted coding model choice", () => {
+    afterEach(() => {
+      window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+    });
+
+    it("restores the model the operator chose last instead of the first offered model", () => {
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      const liveActions = renderWorkbench(liveState());
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+    });
+
+    it("falls back to the current default when the saved model is no longer offered", () => {
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "retired-model");
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      const liveActions = renderWorkbench(liveState());
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+      expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe("retired-model");
+    });
+
+    it("saves an explicit choice from the composer but never the elected default", async () => {
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      const liveActions = renderWorkbench(liveState({ selectedModelId: "model-a" }));
+      expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBeNull();
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Coding model: model-a" }));
+      await user.click(screen.getByRole("option", { name: "model-b" }));
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe("model-b");
+    });
+  });
+
   it("still falls back once the refreshed catalog genuinely no longer offers the selected model", () => {
     chatCatalogMock.models = [MODEL_A, MODEL_B];
     const liveActions = actions();
@@ -3757,5 +4444,220 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
 
     expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
     expect(liveActions.setReasoningEffort).toHaveBeenCalledWith(null);
+  });
+});
+
+// Lab ledger F2 (#3873): a streamed answer grows inside one message whose activity timestamp stays
+// the message's creation time, so the session stream only followed it if its follow key also saw
+// the text grow.
+describe("sessionGrowthKey", () => {
+  function streamingFeed(answer: string, reasoning?: string): AvailableCodingSafeActivityFeed {
+    return {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-growth",
+      updatedAt: "2026-07-19T12:00:00.000Z",
+      turns: [
+        {
+          turnId: "turn-growth",
+          messages: [
+            {
+              messageId: "message-growth",
+              role: "assistant",
+              occurredAt: "2026-07-19T12:00:00.000Z",
+              segments: [{ kind: "text", text: answer, truncated: false }],
+              truncated: false,
+              ...(reasoning === undefined
+                ? {}
+                : { reasoning: { text: reasoning, truncated: false } }),
+            },
+          ],
+          tools: [],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+  }
+
+  it("changes as streamed text and reasoning grow under an unchanged activity timestamp", () => {
+    const keys = [
+      sessionGrowthKey(4, streamingFeed("Hel"), 0),
+      sessionGrowthKey(4, streamingFeed("Hello"), 0),
+      sessionGrowthKey(4, streamingFeed("Hello", "Thinking"), 0),
+    ];
+    expect(new Set(keys).size).toBe(3);
+    expect(sessionGrowthKey(4, streamingFeed("Hello"), 0)).toBe(keys[1]);
+    expect(sessionGrowthKey(4, null, 0)).toBe("4::0:0");
+  });
+});
+
+// #3873 review: `streaming` removes code highlighting and the Copy button, and the Workbench used
+// to hand it to every message of an active run, so an answer that was finished lost both for as
+// long as the operator took to decide. Only a run whose model may still produce text is generating.
+//
+// Review thread 6pyds7 moved `paused` from the finished side of this block (where it was pinned
+// beside `awaiting-approval` and `stopping`) to the generating side, deliberately inverting those
+// pins: pausing refuses new work but aborts no call the run had already admitted, so the message
+// it is writing keeps growing while the run reads `paused`, and the safe-activity feed keeps
+// delivering it.
+describe("CodingWorkbenchWindow finished answers", () => {
+  const FINISHED_ANSWER = "Run:\n\n```sh\nnpm test\n```";
+  // The same answer cut off inside its code block, which is what a message still being written is.
+  const PARTIAL_ANSWER = "Run:\n\n```sh\nnpm te";
+  const AFTER_THE_ANSWER = "2026-07-13T12:00:05.000Z";
+
+  function answerFeed(answer: string, toolAt?: string): AvailableCodingSafeActivityFeed {
+    return {
+      schemaVersion: "1",
+      availability: "available",
+      runId: "run-1",
+      updatedAt: AT,
+      turns: [
+        {
+          turnId: "turn-code",
+          messages: [
+            {
+              messageId: "message-code",
+              role: "assistant",
+              occurredAt: AT,
+              segments: [{ kind: "text", text: answer, truncated: false }],
+              truncated: false,
+            },
+          ],
+          tools:
+            toolAt === undefined
+              ? []
+              : [
+                  {
+                    callId: "call-command",
+                    tool: "keiko_run_command",
+                    state: "pending",
+                    occurredAt: toolAt,
+                  },
+                ],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+      droppedEventCount: 0,
+    };
+  }
+
+  function showRun(
+    state: CodingWorkbenchRuntimeStateName,
+    feed: AvailableCodingSafeActivityFeed,
+  ): void {
+    activityHookMock.mockReturnValue({
+      status: "live",
+      feed,
+      errorCode: null,
+      retry: vi.fn(),
+    } satisfies UseCodingWorkbenchSafeActivityResult);
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+      }),
+      actions: actions(),
+    });
+  }
+
+  function renderRunInState(
+    state: CodingWorkbenchRuntimeStateName,
+    feed: AvailableCodingSafeActivityFeed = answerFeed(FINISHED_ANSWER),
+  ): ReturnType<typeof render> {
+    showRun(state, feed);
+    return render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+  }
+
+  // The run moves on (its message grows, it settles): the hooks answer anew and the Window renders
+  // again, inside `act` so the selector's own asynchronous updates settle with it.
+  async function updateRun(
+    view: ReturnType<typeof render>,
+    state: CodingWorkbenchRuntimeStateName,
+    feed: AvailableCodingSafeActivityFeed,
+  ): Promise<void> {
+    showRun(state, feed);
+    await act(async () => {
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      await Promise.resolve();
+    });
+  }
+
+  function copyButtons(): readonly HTMLElement[] {
+    return within(screen.getByRole("list", { name: "Coding run event timeline" })).queryAllByRole(
+      "button",
+      { name: "Copy code block" },
+    );
+  }
+
+  it.each(["awaiting-approval", "stopping"] as const)(
+    "keeps Copy on a finished answer while the run is %s",
+    (state) => {
+      renderRunInState(state);
+      expect(copyButtons()).toHaveLength(1);
+    },
+  );
+
+  it.each(["running", "starting"] as const)(
+    "withholds Copy from an answer the %s run may still be streaming",
+    (state) => {
+      renderRunInState(state);
+      expect(copyButtons()).toHaveLength(0);
+    },
+  );
+
+  // Thread 6pyds7's probe: with an answer ending in an unclosed fence the Copy buttons were 0 while
+  // `running` and 1 while `paused`, so Copy was offered on a partial code block and the block was
+  // re-highlighted on every batch the feed kept delivering.
+  describe("a paused run", () => {
+    // The order the live run takes: the answer streams while the run runs, then the operator pauses.
+    // The pause must not flip the message into its finished form while its text keeps growing.
+    it("does not flip a streaming message into its finished form when the run is paused", async () => {
+      const view = renderRunInState("running", answerFeed(PARTIAL_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+
+      await updateRun(view, "paused", answerFeed(PARTIAL_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+    });
+
+    it("keeps the answer it is still extending in its streaming form as the answer grows", async () => {
+      const view = renderRunInState("paused", answerFeed(PARTIAL_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+
+      await updateRun(view, "paused", answerFeed(`${PARTIAL_ANSWER}st`));
+      expect(screen.getByRole("list", { name: "Coding run event timeline" })).toHaveTextContent(
+        "npm test",
+      );
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+    });
+
+    // The trade-off, stated so that nobody mistakes it for an oversight: from the feed alone a
+    // finished last text of a paused run cannot be told from one that is still being written, so it
+    // stays in its streaming form (no Copy, no highlighting) until the run settles, or until the
+    // model moves on to a tool call (next test).
+    it("leaves the last text of a paused run without Copy until the run settles", async () => {
+      const view = renderRunInState("paused", answerFeed(FINISHED_ANSWER));
+      expect(copyButtons()).toHaveLength(0);
+      expect(document.querySelector(".sm-code-block-header")).toBeNull();
+
+      await updateRun(view, "cancelled", answerFeed(FINISHED_ANSWER));
+      expect(copyButtons()).toHaveLength(1);
+      expect(document.querySelector(".sm-code-block-header")).not.toBeNull();
+    });
+
+    it("closes the message once a tool began after it, exactly as for a running run", () => {
+      renderRunInState("paused", answerFeed(FINISHED_ANSWER, AFTER_THE_ANSWER));
+      expect(copyButtons()).toHaveLength(1);
+    });
+  });
+
+  it("keeps Copy on the answer of a settled run", () => {
+    renderRunInState("succeeded");
+    expect(copyButtons()).toHaveLength(1);
   });
 });

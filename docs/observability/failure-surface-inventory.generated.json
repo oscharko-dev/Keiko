@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4243a821f6210835886e0e6de437f152f89b7caa9b64c0e6d96acf157268815a"
+    "catalogDigest": "4ecbe6444bfa06c2227de1d2b474d15e135ed964d73589e0c49a4880387fd7b7"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 520,
-    "proofCount": 527,
-    "resolvedProofCount": 527,
-    "failureClassCount": 336,
+    "operationCount": 527,
+    "proofCount": 534,
+    "resolvedProofCount": 534,
+    "failureClassCount": 339,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -137,6 +137,7 @@
         "client.binding.resolved",
         "client.binding.target-missing",
         "client.citation.activated",
+        "client.coding-run.restored",
         "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
@@ -222,6 +223,7 @@
         "gateway.reranker.setup.resolved",
         "gateway.retry.budget-exhausted",
         "gateway.retry.exhausted",
+        "gateway.retry.observer-failed",
         "gateway.retry.scheduled",
         "gateway.route.rejected",
         "gateway.setup.metadata.resolved",
@@ -320,6 +322,7 @@
         "coding-runtime.read-only-child.runner-failed",
         "coding-runtime.readiness.failed",
         "coding-runtime.readiness.phase",
+        "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-rerank",
         "coding-runtime.run.delivery-continuation-refused",
         "coding-runtime.run.delivery-continued",
@@ -329,6 +332,7 @@
         "coding-runtime.run.issue-context-attached",
         "coding-runtime.run.operator-decision",
         "coding-runtime.run.recovery-acknowledged",
+        "coding-runtime.run.refusal-escalated",
         "coding-runtime.run.settled",
         "coding-runtime.run.shutdown",
         "coding-runtime.run.started",
@@ -339,6 +343,7 @@
         "coding-runtime.tool-authority.denied",
         "coding-runtime.tool-availability.failed",
         "coding-runtime.tool-result",
+        "coding-runtime.tool-result-rendered",
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.workspace-read",
@@ -346,6 +351,7 @@
         "coding-sidecar.gateway.readiness-insufficient",
         "coding-sidecar.gateway.rejected",
         "coding-sidecar.gateway.request-validated",
+        "coding-sidecar.gateway.retry-surfaced",
         "coding-sidecar.gateway.tool-availability",
         "coding-sidecar.gateway.turn-failed",
         "coding-sidecar.gateway.usage-settled",
@@ -489,6 +495,7 @@
       "ports": ["ModelGatewayLogSink", "ServerLogSink"],
       "operations": [
         "dap.debug-runtime.selected",
+        "editor.agent.changeset-provenance",
         "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
         "editor.local-history.rekey.failed",
@@ -726,6 +733,7 @@
     "client-answer-speech": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
+    "client-coding-run-restore": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -735,7 +743,7 @@
     "coding-app-session-sign-out": ["tools-workflows.dependency-failure"],
     "coding-context-linked-issue": ["tools-workflows.dependency-failure"],
     "coding-context-pack": ["tools-workflows.dependency-failure"],
-    "coding-editor-mutation": ["tools-workflows.rejection"],
+    "coding-editor-mutation": ["editor-delivery.rejection", "tools-workflows.rejection"],
     "coding-repository-search": ["tools-workflows.dependency-failure"],
     "coding-runtime-approval-wait": ["tools-workflows.dependency-failure"],
     "coding-runtime-authority-mint": ["tools-workflows.dependency-failure"],
@@ -756,13 +764,14 @@
     "coding-runtime-operation-refusal": ["tools-workflows.rejection"],
     "coding-runtime-operator-decision": ["tools-workflows.dependency-failure"],
     "coding-runtime-project-memory": ["tools-workflows.dependency-failure"],
+    "coding-runtime-repository-instructions": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-list": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-revision-rebound": ["tools-workflows.dependency-failure"],
     "coding-runtime-readiness": ["tools-workflows.dependency-failure"],
     "coding-runtime-recovery-acknowledgement": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-rerank": ["tools-workflows.dependency-failure"],
-    "coding-runtime-run-settlement": ["tools-workflows.dependency-failure"],
+    "coding-runtime-run-settlement": ["tools-workflows.rejection"],
     "coding-runtime-run-start": ["tools-workflows.dependency-failure"],
     "coding-runtime-session-continuity": ["tools-workflows.dependency-failure"],
     "coding-runtime-shutdown": ["tools-workflows.crash"],
@@ -775,6 +784,7 @@
     "coding-sidecar-gateway-readiness": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-rejection": ["tools-workflows.rejection"],
     "coding-sidecar-gateway-turn-failure": ["tools-workflows.dependency-failure"],
+    "coding-sidecar-gateway-retry": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-request": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-availability": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-facade-rejection": ["tools-workflows.rejection"],
@@ -1160,6 +1170,9 @@
     "client.citation.activated.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
+    "client.coding-run.restored.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.composer.activity.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
@@ -1314,6 +1327,7 @@
       "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.test.ts"
     ],
     "coding-runtime.history-projection.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
     "coding-runtime.initial-turn.dispatch-failed.emitted-line": [
@@ -1355,6 +1369,9 @@
     "coding-runtime.readiness.phase.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
     ],
+    "coding-runtime.repository-instructions.context.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.test.ts"
+    ],
     "coding-runtime.repository-rerank.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
@@ -1381,6 +1398,10 @@
     ],
     "coding-runtime.run.recovery-acknowledged.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+    ],
+    "coding-runtime.run.refusal-escalated.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingRuntimeRefusalEscalation.test.ts"
     ],
     "coding-runtime.run.settled.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
@@ -1413,6 +1434,10 @@
     "coding-runtime.tool-result.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.test.ts"
     ],
+    "coding-runtime.tool-result-rendered.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/governedToolModelContent.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
     "coding-runtime.verification.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
@@ -1420,6 +1445,7 @@
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
     "coding-runtime.workspace-read.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingToolFileCreation.test.ts",
       "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
     ],
     "coding-sidecar.gateway.outcome.line": [
@@ -1432,6 +1458,9 @@
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.request-validated.line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
+    "coding-sidecar.gateway.retry-surfaced.emitted-line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.tool-availability.line": [
@@ -1464,6 +1493,9 @@
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
     ],
+    "editor.agent.changeset-provenance.emitted-line": [
+      "packages/keiko-server/src/editor/agentRoutes.test.ts"
+    ],
     "editor.buffer-safety.state.lifecycle": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
@@ -1481,6 +1513,7 @@
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.execute.emitted-line": [
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.workspace.emitted-line": [
@@ -1637,7 +1670,8 @@
     ],
     "gateway.circuit.wait.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
-      "packages/keiko-model-gateway/src/resilience.admission.test.ts"
+      "packages/keiko-model-gateway/src/resilience.admission.test.ts",
+      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
@@ -1704,10 +1738,18 @@
     "gateway.retry.budget-exhausted.emitted-line": [
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
-    "gateway.retry.exhausted.emitted-line": ["packages/keiko-model-gateway/src/resilience.test.ts"],
+    "gateway.retry.exhausted.emitted-line": [
+      "packages/keiko-model-gateway/src/resilience.logging.test.ts",
+      "packages/keiko-model-gateway/src/resilience.test.ts"
+    ],
+    "gateway.retry.observer-failed.emitted-line": [
+      "packages/keiko-model-gateway/src/resilience.test.ts"
+    ],
     "gateway.retry.scheduled.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
       "packages/keiko-model-gateway/src/openai-adapter.test.ts",
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
+      "packages/keiko-model-gateway/src/resilience.logging.test.ts",
+      "packages/keiko-model-gateway/src/resilience.test.ts"
     ],
     "gateway.route.rejected.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
@@ -1749,6 +1791,7 @@
       "packages/keiko-model-gateway/src/toolCatalogBridge.test.ts"
     ],
     "gateway.tool-catalog.repair.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
       "packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts"
     ],
     "gateway.voice.setup.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],

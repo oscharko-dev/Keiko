@@ -35,6 +35,7 @@ import {
   type CodingRuntimeTrustedContext,
 } from "./runtimeAuthorityService.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
+import type { CiRepairBudgetBlockReason } from "./codingRuntimeCiRepairBudgetTypes.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   createRuntimeProcessSupervisor,
@@ -383,6 +384,9 @@ describe("CodingRuntimeAuthorityService", () => {
         connectorScopes: trusted.connectorScopes,
         networkPolicyMode: "deny-all",
         maxPromptTokens: trusted.budget.maxPromptTokens,
+        // #3873: the minted duration is reported beside the allowance, so a run that later fails
+        // closed on expiry can be reconstructed from this one line without the envelope body.
+        maxRuntimeMs: trusted.budget.maxRuntimeMs,
       },
     });
     const mintedEvent = activity.find((event) => event.op === "coding-runtime.authority.minted");
@@ -393,6 +397,20 @@ describe("CodingRuntimeAuthorityService", () => {
         formatActivityLogProofLine(mintedEvent),
       ),
     ).toMatchObject({ runId: "run-0001", effectiveMode: "supervised-coding" });
+    // #3873 review: a 1.2.0 line was written before `maxRuntimeMs` existed. It must still validate
+    // as a complete record, so the field is optional although every new line carries it.
+    const persisted = JSON.parse(formatActivityLogProofLine(mintedEvent)) as Record<
+      string,
+      unknown
+    >;
+    expect(persisted).toHaveProperty("maxRuntimeMs");
+    const { maxRuntimeMs: _added, ...olderLine } = persisted;
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.authority.minted.emitted-line",
+        JSON.stringify(olderLine),
+      ),
+    ).not.toHaveProperty("maxRuntimeMs");
   });
 
   it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {
@@ -559,6 +577,200 @@ describe("CodingRuntimeAuthorityService", () => {
       ok: false,
       reason: "authority-budget-exceeded",
     });
+  });
+
+  // F9 (#3873): the run's terminal cause asks whether its most recent model call was refused by
+  // the cumulative prompt allowance. Only a refusal by the allowance itself answers yes; a later
+  // admitted call, the runtime's spent time budget and a refused run state all answer no.
+  it("reports an exhausted prompt allowance only for the run's latest allowance refusal", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const capability = minted.modelGatewayCapability;
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+
+    expect(authority.reservePromptTokens(capability, 10_000, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+    expect(authority.reservePromptTokens(capability, 1, Date.parse(NOW))).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+    expect(authority.promptAllowanceExhausted("run-other")).toBe(false);
+
+    // The provider reported far less than the estimate: the refund admits the next call, which
+    // supersedes the earlier refusal.
+    expect(authority.settlePromptTokens(capability, 10_000, 10, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.reservePromptTokens(capability, 5, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+  });
+
+  // #3873 review (PR #3876): a CI-repair run's own prompt budget refuses a call before the authority
+  // is asked, so the authority never recorded the refusal and the run settled `model-turn-failed`,
+  // naming no limit. The refusal is recorded where the authority's own is, so the run's settlement
+  // names its prompt allowance — with the same rules: the active run's, superseded by the next
+  // admission.
+  it("reports the prompt allowance a CI-repair budget refused, as it reports its own refusal", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const capability = minted.modelGatewayCapability;
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+
+    authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+    // Only the active run's refusals count: a stray run id never rewrites what ended this run.
+    authority.recordCiRepairPromptRefusal("run-other", "prompt-budget-exhausted");
+    expect(authority.promptAllowanceExhausted("run-other")).toBe(false);
+
+    // The next admission of the run describes the call that ended its turn instead.
+    expect(authority.reservePromptTokens(capability, 5, Date.parse(NOW))).toMatchObject({
+      ok: true,
+    });
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+  });
+
+  // #3873 review (PR #3876): every CI-repair refusal was recorded as the prompt allowance, whatever
+  // refused, so a repair that ran past its runtime limit settled "prompt allowance exhausted" and sent
+  // the operator to a setting that cannot help. Only the budget's own prompt allowance is the
+  // allowance; its runtime limit, which counts the same `maxRuntimeMs` over the repair, is the time
+  // limit; every other closed reason names neither and still supersedes the run's earlier answer.
+  it("reports a CI-repair refusal for the repair's runtime limit as the time limit, not the allowance", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    // Well inside the envelope: nothing but the repair's own limit can make the time limit true.
+    const insideEnvelope = Date.parse(NOW) + 1_000;
+    expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
+
+    authority.recordCiRepairPromptRefusal("run-1", "deadline-exhausted");
+
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+    expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(true);
+    // Only the active run's refusals count, and the next admission describes the call that ended
+    // the turn instead.
+    authority.recordCiRepairPromptRefusal("run-other", "deadline-exhausted");
+    expect(authority.envelopeDurationExhausted("run-other", insideEnvelope)).toBe(false);
+    expect(
+      authority.reservePromptTokens(minted.modelGatewayCapability, 5, Date.parse(NOW)),
+    ).toMatchObject({ ok: true });
+    expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
+  });
+
+  it("replaces a refusal of one kind with the next, so a run names only its last one", () => {
+    const authority = promptBudgetService();
+    expect(mint(authority).ok).toBe(true);
+    const insideEnvelope = Date.parse(NOW) + 1_000;
+
+    authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
+    authority.recordCiRepairPromptRefusal("run-1", "deadline-exhausted");
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+    expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(true);
+
+    authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
+    expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+    expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
+  });
+
+  // Every closed reason but the two above, as a record that the compiler keeps complete: a reason
+  // added to the budget's vocabulary must be classified here before this file compiles.
+  const REASONS_NAMING_NO_LIMIT: Record<
+    Exclude<CiRepairBudgetBlockReason, "prompt-budget-exhausted" | "deadline-exhausted">,
+    true
+  > = {
+    "authority-denied": true,
+    "invalid-binding": true,
+    "invalid-input": true,
+    "stale-revision": true,
+    "clock-drift": true,
+    "tool-budget-exhausted": true,
+    "attempt-budget-exhausted": true,
+    "storage-capacity": true,
+    "attempt-active": true,
+    "attempt-replayed": true,
+    "attempt-missing": true,
+    "recovery-required": true,
+    "storage-unavailable": true,
+  };
+
+  it.each(Object.keys(REASONS_NAMING_NO_LIMIT))(
+    "names no limit for a CI-repair refusal for %s, and clears an earlier allowance refusal",
+    (reason) => {
+      const authority = promptBudgetService();
+      expect(mint(authority).ok).toBe(true);
+      const insideEnvelope = Date.parse(NOW) + 1_000;
+      authority.recordCiRepairPromptRefusal("run-1", "prompt-budget-exhausted");
+      expect(authority.promptAllowanceExhausted("run-1")).toBe(true);
+
+      authority.recordCiRepairPromptRefusal("run-1", reason as CiRepairBudgetBlockReason);
+
+      expect(authority.promptAllowanceExhausted("run-1")).toBe(false);
+      expect(authority.envelopeDurationExhausted("run-1", insideEnvelope)).toBe(false);
+    },
+  );
+
+  it("does not report the prompt allowance for a spent runtime or a refused run state", () => {
+    const afterRuntimeBudget = Date.parse("2026-07-11T12:01:00.001Z");
+    const spent = promptBudgetService();
+    const spentMint = mint(spent);
+    if (!spentMint.ok) throw new Error("expected mint");
+    expect(
+      spent.reservePromptTokens(spentMint.modelGatewayCapability, 20_000, afterRuntimeBudget),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    expect(spent.promptAllowanceExhausted("run-1")).toBe(false);
+
+    const paused = promptBudgetService();
+    const pausedMint = mint(paused);
+    if (!pausedMint.ok) throw new Error("expected mint");
+    expect(
+      paused.reservePromptTokens(pausedMint.modelGatewayCapability, 20_000, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+    expect(paused.promptAllowanceExhausted("run-1")).toBe(true);
+    expect(paused.pause("run-1", NOW)).toMatchObject({ ok: true });
+    expect(
+      paused.reservePromptTokens(pausedMint.modelGatewayCapability, 1, Date.parse(NOW)),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
+    expect(paused.promptAllowanceExhausted("run-1")).toBe(false);
+  });
+
+  // F9 (#3873): run `run-272120967981827964065820685403290179367` reached its 30-minute envelope with
+  // a model call in flight and settled `runtime-failed`, an internal error. The authority answers
+  // whether a run's envelope ran out of time: `maxRuntimeMs` after minting or its `expiresAt`,
+  // whichever comes first — and keeps answering after the end, when the failed turn settles.
+  it("reports an envelope that ran out of time from its earlier bound", () => {
+    const authority = promptBudgetService();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    // The context's budget allows 60 s from minting at NOW; its expiry is an hour later.
+    const budgetEnd = Date.parse("2026-07-11T12:01:00.000Z");
+    expect(authority.envelopeDurationExhausted("run-1", budgetEnd - 1)).toBe(false);
+    expect(authority.envelopeDurationExhausted("run-1", budgetEnd)).toBe(true);
+    expect(authority.envelopeDurationExhausted("run-1", budgetEnd + 3_600_000)).toBe(true);
+    expect(authority.envelopeDurationExhausted("run-other", budgetEnd)).toBe(false);
+    expect(authority.envelopeDurationExhausted("run-1", Number.NaN)).toBe(false);
+
+    const early = promptBudgetService();
+    const trusted = { ...context(), expiresAt: "2026-07-11T12:00:30.000Z" };
+    const confirmation = early.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    expect(early.mintStart(intent, trusted, confirmation, NOW)).toMatchObject({ ok: true });
+    expect(early.envelopeDurationExhausted("run-1", Date.parse("2026-07-11T12:00:29.999Z"))).toBe(
+      false,
+    );
+    expect(early.envelopeDurationExhausted("run-1", Date.parse("2026-07-11T12:00:30.000Z"))).toBe(
+      true,
+    );
+  });
+
+  it("reports no envelope end for a run no envelope was minted for", () => {
+    expect(promptBudgetService().envelopeDurationExhausted("run-1", Date.parse(NOW) + 1e9)).toBe(
+      false,
+    );
   });
 
   it("revalidates expiry and permits only idempotent or monotonically narrower resume", () => {

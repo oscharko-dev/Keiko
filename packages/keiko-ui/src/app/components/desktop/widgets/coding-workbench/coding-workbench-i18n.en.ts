@@ -275,6 +275,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.resume": "Resume run",
   "codingWorkbench.composer.send": "Send follow-up",
   "codingWorkbench.composer.model.label": "Coding model",
+  "codingWorkbench.composer.model.selected": "Coding model: {model}",
   "codingWorkbench.composer.model.menu": "Choose coding model",
   "codingWorkbench.composer.model.none": "No coding model available",
   "codingWorkbench.composer.source.label": "Model source",
@@ -375,6 +376,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
+  "codingWorkbench.repository.deniedHelp":
+    "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
     "Repositories could not be loaded. Refresh the list and try again.",
   "codingWorkbench.repository.retryLoad": "Retry",
@@ -498,7 +501,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.previousPath": " (previously {path})",
   "codingWorkbench.changes.diff.elevatedReview": "Elevated review",
   "codingWorkbench.activity.reasoningBoundary":
-    "This timeline shows observable conversation and work activity. It never exposes private reasoning.",
+    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
+  "codingWorkbench.activity.reasoning.title": "Model reasoning",
+  "codingWorkbench.activity.reasoning.badge": "Unverified",
+  "codingWorkbench.activity.reasoning.note":
+    "Unverified model reasoning: how the model approached this step. It can be wrong; the answer and the changes are what count.",
   "codingWorkbench.activity.status.idle": "No run yet.",
   "codingWorkbench.activity.status.loading": "Connecting activity…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -913,6 +920,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runState.cancelled": "Stopped",
   "codingWorkbench.runState.taken-over": "Taken over",
   "codingWorkbench.runState.recovery-required": "Recovery required",
+  "codingWorkbench.runStatus.elapsed": "Elapsed {duration}",
+  "codingWorkbench.runStatus.duration": "Took {duration}",
+  "codingWorkbench.runStatus.duration.seconds": "{seconds} s",
+  "codingWorkbench.runStatus.duration.minutes": "{minutes} min {seconds} s",
+  "codingWorkbench.runStatus.duration.hours": "{hours} h {minutes} min",
+  "codingWorkbench.runStatus.phase.model": "Waiting for the model",
+  "codingWorkbench.runStatus.phase.gateway": "Model gateway unavailable, retrying",
+  "codingWorkbench.runStatus.phase.verifier": "Running a verifier",
+  "codingWorkbench.runStatus.phase.tool": "Running a tool",
+  "codingWorkbench.runStatus.phase.decision": "Waiting for your decision",
+  "codingWorkbench.runStatus.readiness": "Readiness details",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
@@ -963,12 +981,31 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Child agent completed",
   "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
+  "codingWorkbench.event.model-gateway-retrying": "Model gateway unavailable, retrying",
+  "codingWorkbench.event.model-gateway-recovered": "Model gateway answered again",
+  "codingWorkbench.event.model-gateway-retry-stopped": "Model gateway retry stopped",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
+  "codingWorkbench.event.failure.edits-blocked":
+    "Keiko stopped the run because its edits were refused several times in a row for a reason the model cannot fix by changing the edit: for example, no Coding Workbench is connected for this workspace, access to the workspace was lost, or the path is protected by policy. Fix that condition, for example by keeping the Coding Workbench open for this workspace, then start the task again; your changes so far stay in the task workspace.",
+  "codingWorkbench.event.failure.edit-retries-exhausted":
+    "Keiko stopped the run because the model's edits were refused several times in a row, for example because they no longer matched the file. Start the task again, rephrase or split it, or choose another model; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.runtime":
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
+  "codingWorkbench.event.failure.prompt-allowance-exhausted":
+    "The run used up its prompt allowance, the total prompt tokens one run may send to the model, so Keiko refused its next model call. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh allowance, or split the task into smaller ones. An operator can raise the allowance with KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS, up to 20,000,000 tokens. Keiko reads the setting only when it starts: restart Keiko after changing it.",
+  "codingWorkbench.event.failure.envelope-duration-exhausted":
+    "The run used up its time limit, how long one run may work, so it ended before the task was done. This is a limit, not an error. Your changes so far stay in the task workspace: start the task again as a new run, which gets a fresh time limit, or split the task into smaller ones. An operator can lengthen the limit with KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES, up to 480 minutes. Keiko reads the setting only when it starts: restart Keiko after changing it.",
+  "codingWorkbench.event.failure.output-exhausted-repeated":
+    "The run ended because the model used its whole output budget again without calling a tool or answering, even after a repair attempt. The model usually spends that budget on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then start the task again; your changes so far stay in the task workspace.",
+  "codingWorkbench.event.stopped":
+    "This run was stopped. Nothing failed, and your changes so far stay in the task workspace.",
+  "codingWorkbench.event.failure.provider-unavailable":
+    "The run ended because the model provider could not be reached or stopped answering, even after Keiko waited and retried. Nothing was rejected. Check that the model gateway and its provider are running, then start the task again; your changes so far stay in the task workspace. An operator can lengthen the wait with the gateway setting codingOutageWindowMs.",
+  "codingWorkbench.event.failure.model-turn-failed":
+    "The run ended because its last model step failed, for the reason shown on that step above. Address that reason, then start the task again; your changes so far stay in the task workspace.",
   "codingWorkbench.event.runFailed": "Coding run failed",
   "codingWorkbench.event.turnFailure.provider-failed":
     "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",

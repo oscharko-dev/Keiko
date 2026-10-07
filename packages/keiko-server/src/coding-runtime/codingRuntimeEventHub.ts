@@ -1,5 +1,8 @@
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchGatewayEventKind,
+  CodingWorkbenchTurnFailureCode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeFailureCode,
@@ -104,6 +107,11 @@ interface RetainedEvent {
   critical: boolean;
 }
 
+interface ModelCallFailure {
+  readonly failureCode: CodingWorkbenchTurnFailureCode;
+  readonly providerUnavailable: boolean;
+}
+
 interface RunBuffer {
   nextSequence: number;
   bytes: number;
@@ -127,6 +135,10 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
  */
 export class CodingRuntimeEventHub {
   private readonly runs = new Map<string, RunBuffer>();
+  // One closed code per run with a failed model call on record, with whether the provider could not
+  // serve that call (a retryable status, a rate limit, an open breaker); bounded like `runs` by the
+  // durable snapshot ledger's retention through `deleteRuns`.
+  private readonly modelCallFailures = new Map<string, ModelCallFailure>();
   private readonly maxEvents: number;
   private readonly maxBytes: number;
   private readonly maxSubscribers: number;
@@ -179,15 +191,29 @@ export class CodingRuntimeEventHub {
     return { ok: true, event };
   }
 
-  /** Reports each content-free gateway failure, including retries at the same task revision. */
+  /**
+   * Reports each content-free gateway failure, including retries at the same task revision. The
+   * cause is also kept as the run's last model-call failure (F9, #3873), apart from the bounded
+   * replay, so the run's settlement can name what ended its turn even after the frame was demoted,
+   * evicted, or refused for capacity. `providerUnavailable` is the gateway's own fact that the
+   * provider could not serve the call, which `provider-failed` alone does not say; it never reaches
+   * the public frame.
+   */
   publishTurnFailure(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
     revision: number,
     failureCode: CodingWorkbenchTurnFailureCode,
+    evidence: { readonly providerUnavailable?: boolean } = {},
   ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
     const run = this.runs.get(runId);
     if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
+    if (SAFE_ID.test(runId)) {
+      this.modelCallFailures.set(runId, {
+        failureCode,
+        providerUnavailable: evidence.providerUnavailable === true,
+      });
+    }
     return this.publish({
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       kind: "runtime-event",
@@ -197,6 +223,64 @@ export class CodingRuntimeEventHub {
       eventKind: "failure-redacted",
       failureCode,
     });
+  }
+
+  /**
+   * Reports a content-free fact about the model gateway under the run's turn (#3873 review): it is
+   * retrying an unavailable provider, got an answer again after doing so, or stopped retrying a call
+   * the run cancelled. Ordinary, evictable frames — never critical, and never the run's last
+   * model-call failure: a retry is no failure, and a turn that does fail is named by
+   * `publishTurnFailure`, whose frame follows these.
+   */
+  publishModelGatewayFact(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+    revision: number,
+    eventKind: CodingWorkbenchGatewayEventKind,
+  ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
+    if (this.runs.get(runId)?.terminal === true) return { ok: false, reason: "terminal-run" };
+    return this.publish({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      kind: "runtime-event",
+      runId,
+      state,
+      revision,
+      eventKind,
+    });
+  }
+
+  /**
+   * Whether the newest frame the run's replay retains is the `model-gateway-retrying` fact, which is
+   * what the Workbench reads as "the gateway is being retried": it names that phase only while no
+   * later frame of the run exists. Any later frame — a pause, a mode change, a tool event, a failed
+   * turn, the answer — ends the phase on the client, so a publisher that is still retrying asks this
+   * before it publishes the fact again.
+   */
+  modelGatewayRetrying(runId: string): boolean {
+    const newest = this.runs.get(runId)?.events.at(-1)?.event;
+    return newest?.kind === "runtime-event" && newest.eventKind === "model-gateway-retrying";
+  }
+
+  /**
+   * A model call of the run was answered: an earlier failure was recovered from and no longer
+   * describes how the run's turn ends.
+   */
+  noteModelCallAnswered(runId: string): void {
+    this.modelCallFailures.delete(runId);
+  }
+
+  /** The cause of the run's most recent failed model call that no later answered call superseded. */
+  lastModelCallFailure(runId: string): CodingWorkbenchTurnFailureCode | undefined {
+    return this.modelCallFailures.get(runId)?.failureCode;
+  }
+
+  /**
+   * Whether the gateway found that the provider could not serve the run's most recent failed model
+   * call (a retryable status, a rate limit, an open breaker), which no later answered call
+   * superseded. `provider-failed` names that and a rejection alike; this tells them apart.
+   */
+  lastModelCallProviderUnavailable(runId: string): boolean {
+    return this.modelCallFailures.get(runId)?.providerUnavailable === true;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {
@@ -243,6 +327,7 @@ export class CodingRuntimeEventHub {
   /** Retention coupling: delete only ids selected by the durable snapshot ledger. */
   deleteRuns(runIds: readonly string[]): void {
     for (const runId of runIds) {
+      this.modelCallFailures.delete(runId);
       const run = this.runs.get(runId);
       if (run === undefined) continue;
       this.closeSubscribers(run);

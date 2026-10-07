@@ -103,6 +103,14 @@ Summary of the delta: `governed-assist` workspace-contained becomes approval-req
 risk; `supervised-coding` external-file and internet become approval-required at every risk; every
 other cell is unchanged from ADR-0125 D1.
 
+**Risk class of file deletion and move (owner decision Q2, 2026-10-07).** A governed changeset that
+deletes or renames workspace-contained files carries the same `medium` risk as an edit: it is one
+hash-bound, reviewable changeset (ADR-0125 D3), so `governed-assist` reviews it, `supervised-coding`
+applies it without a per-action approval, and `autonomous-delivery` applies it. Denied sensitive
+paths, the workspace boundary and every hard denial still refuse it in every mode. The decision is
+pinned per mode and changeset kind (`productionManagedWorktreeTools.test.ts`), so changing it is a
+deliberate edit of this paragraph and that pin together.
+
 **Monotonicity invariant (normative and machine-tested):** with strictness ordered
 `denied` > `approval-required` > `allowed` and modes ordered
 `governed-assist` < `supervised-coding` < `autonomous-delivery`, for every fixed

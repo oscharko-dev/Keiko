@@ -1,0 +1,115 @@
+diff --git a/src/csv.ts b/src/csv.ts
+index 0d066dc..16f3c77 100644
+--- a/src/csv.ts
++++ b/src/csv.ts
+@@ -10,7 +10,7 @@ function splitCsvLine(line: string): string[] {
+   let inQuotes = false;
+ 
+   for (let i = 0; i < line.length; i++) {
+-    const char = line[i];
++    const char = line.charAt(i);
+     if (inQuotes) {
+       if (char === '"') {
+         if (i + 1 < line.length && line[i + 1] === '"') {
+@@ -47,7 +47,7 @@ export function parseCsv(text: string): Entry[] {
+   return rows.map((row, index) => {
+     const cells = splitCsvLine(row);
+     if (cells.length !== 4) {
+-      throw new Error(`Line ${index + 2}: expected 4 columns, got ${cells.length}`);
++      throw new Error(`Line ${String(index + 2)}: expected 4 columns, got ${String(cells.length)}`);
+     }
+     const [date, account, description, amount] = cells as [string, string, string, string];
+     return {
+diff --git a/src/importers/bank-b.ts b/src/importers/bank-b.ts
+index 888b486..5bed7d1 100644
+--- a/src/importers/bank-b.ts
++++ b/src/importers/bank-b.ts
+@@ -31,7 +31,7 @@ function germanAmountToCents(input: string): Cents {
+ function entryFromRow(row: string, lineNumber: number): Entry {
+   const cells = row.split(";");
+   if (cells.length !== 4) {
+-    throw new Error(`Line ${lineNumber}: expected 4 columns, got ${cells.length}`);
++    throw new Error(`Line ${String(lineNumber)}: expected 4 columns, got ${String(cells.length)}`);
+   }
+   const [date, account, description, amount] = cells as [string, string, string, string];
+   return {
+diff --git a/src/ledger.test.ts b/src/ledger.test.ts
+index 4a07bb9..145322d 100644
+--- a/src/ledger.test.ts
++++ b/src/ledger.test.ts
+@@ -42,8 +42,7 @@ test("monthly totals handle start-of-month dates independently of timezone", ()
+ });
+ 
+ test("add rejects invalid dates", () => {
+-  assert.throws(
+-    () => new Ledger().add({ date: "05.01.2026", account: "a", description: "x", amount: 1 }),
+-    /Invalid date/,
+-  );
++  assert.throws(() => {
++    new Ledger().add({ date: "05.01.2026", account: "a", description: "x", amount: 1 });
++  }, /Invalid date/);
+ });
+diff --git a/src/ledger.ts b/src/ledger.ts
+index 424e9b9..7e32230 100644
+--- a/src/ledger.ts
++++ b/src/ledger.ts
+@@ -43,11 +43,7 @@ export class Ledger {
+       totals.set(key, (totals.get(key) ?? 0) + entry.amount);
+     }
+ 
+-    const sortedKeys = Array.from(totals.keys()).sort();
+-    const sortedTotals = new Map<string, Cents>();
+-    for (const key of sortedKeys) {
+-      sortedTotals.set(key, totals.get(key)!);
+-    }
+-    return sortedTotals;
++    // Keys are unique "YYYY-MM" strings, so a plain comparison orders them chronologically.
++    return new Map([...totals].sort(([left], [right]) => (left < right ? -1 : 1)));
+   }
+ }
+diff --git a/src/money.ts b/src/money.ts
+index 52a23a9..212e9ed 100644
+--- a/src/money.ts
++++ b/src/money.ts
+@@ -16,5 +16,5 @@ export function parseAmount(input: string): Cents {
+ export function formatAmount(cents: Cents): string {
+   const sign = cents < 0 ? "-" : "";
+   const absolute = Math.abs(cents);
+-  return `${sign}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, "0")}`;
++  return `${sign}${String(Math.floor(absolute / 100))}.${String(absolute % 100).padStart(2, "0")}`;
+ }
+diff --git a/src/report.test.ts b/src/report.test.ts
+index 461596e..48d757d 100644
+--- a/src/report.test.ts
++++ b/src/report.test.ts
+@@ -36,18 +36,26 @@ test("summarizeAccounts separates income and expenses per account", () => {
+   const [card, checking] = summarizeAccounts(entries);
+   assert.deepEqual(card, { account: "card", entryCount: 1, income: 0, expenses: -8450, balance: -8450 });
+   assert.equal(checking?.income, 300000);
+-  assert.equal(checking?.expenses, -249610);
++  assert.equal(checking.expenses, -249610);
+ });
+ 
++function sampleEntry(index: number): Entry {
++  const entry = entries[index];
++  if (entry === undefined) {
++    throw new Error(`No sample entry at index ${String(index)}`);
++  }
++  return entry;
++}
++
+ test("categorize uses the first matching keyword rule", () => {
+-  assert.equal(categorize(entries[1] as Entry), "Housing");
+-  assert.equal(categorize({ ...(entries[0] as Entry), description: "Consulting" }), "Other");
++  assert.equal(categorize(sampleEntry(1)), "Housing");
++  assert.equal(categorize({ ...sampleEntry(0), description: "Consulting" }), "Other");
+ });
+ 
+ test("summarizeCategories lists expense categories largest first with their share", () => {
+   const [housing, food] = summarizeCategories(entries);
+   assert.equal(housing?.category, "Housing");
+-  assert.equal(housing?.total, -249610);
++  assert.equal(housing.total, -249610);
+   assert.equal(food?.category, "Food");
+   assert.equal(share(-8450, -258060), 3.3);
+ });

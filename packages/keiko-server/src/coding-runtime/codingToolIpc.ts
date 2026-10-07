@@ -1,4 +1,5 @@
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { CodingToolReplacementChangeset } from "./codingToolReplacementEdits.js";
 import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
@@ -60,6 +61,26 @@ export type CodingToolAction =
   | "skill"
   | "skill-discover"
   | "child-agent";
+
+// Every wire action, so a request the facade cannot parse can still be counted under the action it
+// names (#3873). Checked for completeness by `satisfies`; read only as a Set, never as an object
+// lookup, because the name arrives in untrusted runtime JSON (see `requestFromRecord`).
+const CODING_TOOL_ACTION_NAMES = {
+  read: true,
+  discover: true,
+  search: true,
+  edit: true,
+  command: true,
+  verification: true,
+  git: true,
+  delivery: true,
+  connector: true,
+  egress: true,
+  skill: true,
+  "skill-discover": true,
+  "child-agent": true,
+} as const satisfies Readonly<Record<CodingToolAction, true>>;
+const CODING_TOOL_ACTIONS: ReadonlySet<string> = new Set(Object.keys(CODING_TOOL_ACTION_NAMES));
 
 export interface CodingToolRequestIdentity {
   readonly actionId: string;
@@ -149,7 +170,7 @@ export type CodingToolActionRequest =
     })
   | (CodingToolRequestIdentity & {
       readonly action: "edit";
-      readonly changeset: EditorAgentChangeset;
+      readonly changeset: EditorAgentChangeset | CodingToolReplacementChangeset;
     })
   | (CodingToolRequestIdentity & {
       readonly action: "command";
@@ -338,6 +359,26 @@ export function parseCodingToolRequest(
   return isRecord(value) ? requestFromRecord(value) : undefined;
 }
 
+/**
+ * The closed action a request names even when it fails `parseCodingToolRequest`, so a refused call
+ * is still counted under its action (#3873 run effort roll-up). Reads the `action` field alone and
+ * never returns anything from the body but that closed name; `undefined` when it names none.
+ */
+export function declaredCodingToolAction(
+  body: string | Buffer,
+  maxBodyBytes: number,
+): CodingToolAction | undefined {
+  const decoded = decodeBody(body, maxBodyBytes);
+  if (decoded === undefined) return undefined;
+  const value = parseJson(decoded);
+  if (!isRecord(value) || typeof value.action !== "string") return undefined;
+  return isCodingToolAction(value.action) ? value.action : undefined;
+}
+
+function isCodingToolAction(value: string): value is CodingToolAction {
+  return CODING_TOOL_ACTIONS.has(value);
+}
+
 export function isPermissionObservation(body: string | Buffer, maxBodyBytes: number): boolean {
   const decoded = decodeBody(body, maxBodyBytes);
   if (decoded === undefined) return false;
@@ -513,11 +554,97 @@ function readWindowParameter(
 
 function editRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  return identity !== undefined &&
-    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "changeset"]) &&
-    isExactEditorAgentChangeset(value.changeset)
-    ? { ...identity, action: "edit", changeset: value.changeset }
+  if (
+    identity === undefined ||
+    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "changeset"])
+  )
+    return undefined;
+  const changeset = value.changeset;
+  return isExactEditorAgentChangeset(changeset) || isExactReplacementChangeset(changeset)
+    ? { ...identity, action: "edit", changeset }
     : undefined;
+}
+
+const REPLACEMENT_EDIT_MAX_COUNT = 50;
+const REPLACEMENT_TEXT_MAX_LENGTH = 65_536;
+const CONTENT_HASH = /^[a-f0-9]{64}$/u;
+
+/** The exact-text replacement form of a governed edit (#3873); see codingToolReplacementEdits.ts. */
+export function isExactReplacementChangeset(
+  value: unknown,
+): value is CodingToolReplacementChangeset {
+  return (
+    isRecord(value) &&
+    hasAllowedKeys(value, ["edits", "deletions", "renames", "files", "selectedFiles"]) &&
+    exactReplacementOperations(value) &&
+    boundedArray(value.files, REPLACEMENT_EDIT_MAX_COUNT) &&
+    value.files.every(exactReplacementFile) &&
+    (value.selectedFiles === undefined ||
+      (boundedArray(value.selectedFiles, REPLACEMENT_EDIT_MAX_COUNT) &&
+        value.selectedFiles.every((file) => typeof file === "string" && isGovernedReadPath(file))))
+  );
+}
+
+// #3873 follow-up: `edits` may be empty when a call only renames or deletes; `deletions` and
+// `renames` may be omitted (the provider descriptor requires them, this wire boundary accepts their
+// omission like `selectedFiles`). Every path is held to the governed read-path rule, so a denied
+// segment or a workspace escape never reaches the materializer.
+function exactReplacementOperations(value: Record<string, unknown>): boolean {
+  return (
+    boundedList(value.edits, REPLACEMENT_EDIT_MAX_COUNT, exactReplacementEdit) &&
+    (value.deletions === undefined ||
+      boundedList(value.deletions, REPLACEMENT_EDIT_MAX_COUNT, isGovernedReadPath)) &&
+    (value.renames === undefined ||
+      boundedList(value.renames, REPLACEMENT_EDIT_MAX_COUNT, exactReplacementRename))
+  );
+}
+
+function exactReplacementRename(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["from", "to"]) &&
+    isGovernedReadPath(value.from) &&
+    isGovernedReadPath(value.to)
+  );
+}
+
+function boundedArray(value: unknown, maximum: number): value is readonly unknown[] {
+  return Array.isArray(value) && value.length >= 1 && value.length <= maximum;
+}
+
+function boundedList(
+  value: unknown,
+  maximum: number,
+  entry: (candidate: unknown) => boolean,
+): boolean {
+  return Array.isArray(value) && value.length <= maximum && value.every(entry);
+}
+
+function exactReplacementEdit(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasAllowedKeys(value, ["file", "oldString", "newString", "replaceAll"]) &&
+    typeof value.file === "string" &&
+    isGovernedReadPath(value.file) &&
+    boundedText(value.oldString) &&
+    boundedText(value.newString) &&
+    (value.replaceAll === undefined || typeof value.replaceAll === "boolean")
+  );
+}
+
+function exactReplacementFile(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["file", "expectedContentHash"]) &&
+    typeof value.file === "string" &&
+    isGovernedReadPath(value.file) &&
+    typeof value.expectedContentHash === "string" &&
+    CONTENT_HASH.test(value.expectedContentHash)
+  );
+}
+
+function boundedText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= REPLACEMENT_TEXT_MAX_LENGTH;
 }
 
 export function isExactEditorAgentChangeset(value: unknown): value is EditorAgentChangeset {

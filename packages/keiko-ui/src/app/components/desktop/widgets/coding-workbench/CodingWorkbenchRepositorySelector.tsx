@@ -357,12 +357,16 @@ function SelectorField({
   );
 }
 
-// The help for a repository Git no longer lists, or for a folder whose Git status could not be read.
+// The help for a repository Git no longer lists, for a folder the server's read surface excludes
+// (#3873 F1: a policy decision the Git window names as `DENIED`, never a missing Git repository), or
+// for a folder whose Git status could not be read.
 function selectorNoticeKey(
   unavailable: boolean,
   branchUnavailable: boolean,
+  branchDenied: boolean,
 ): Parameters<CodingWorkbenchTranslate>[0] | undefined {
   if (unavailable) return "codingWorkbench.repository.unavailableHelp";
+  if (branchDenied) return "codingWorkbench.repository.deniedHelp";
   if (branchUnavailable) return "codingWorkbench.repository.gitUnavailableHelp";
   return undefined;
 }
@@ -375,12 +379,14 @@ function selectorNoticeKey(
 function SelectorNotice({
   unavailable,
   branchUnavailable,
+  branchDenied,
   catalogError,
   onRetryCatalog,
   t,
 }: {
   readonly unavailable: boolean;
   readonly branchUnavailable: boolean;
+  readonly branchDenied: boolean;
   readonly catalogError: boolean;
   readonly onRetryCatalog: () => void;
   readonly t: CodingWorkbenchTranslate;
@@ -395,7 +401,7 @@ function SelectorNotice({
       />
     );
   }
-  const key = selectorNoticeKey(unavailable, branchUnavailable);
+  const key = selectorNoticeKey(unavailable, branchUnavailable, branchDenied);
   if (key === undefined) return null;
   return (
     <p className={styles.cmpRepositorySelectorNotice} role="alert">
@@ -411,6 +417,7 @@ function SelectorRecovery({
   root,
   unavailable,
   branchUnavailable,
+  branchDenied,
   catalogError,
   onOpenGit,
   onRetryCatalog,
@@ -420,6 +427,7 @@ function SelectorRecovery({
   readonly root: string | null;
   readonly unavailable: boolean;
   readonly branchUnavailable: boolean;
+  readonly branchDenied: boolean;
   readonly catalogError: boolean;
   readonly onOpenGit: () => void;
   readonly onRetryCatalog: () => void;
@@ -437,6 +445,7 @@ function SelectorRecovery({
       <SelectorNotice
         unavailable={unavailable}
         branchUnavailable={branchUnavailable}
+        branchDenied={branchDenied}
         catalogError={catalogError}
         onRetryCatalog={onRetryCatalog}
         t={t}
@@ -451,18 +460,21 @@ interface RepositorySelectorState {
   readonly branchLocked: boolean;
   readonly branchState: RepositoryBranchState;
   readonly branchUnavailable: boolean;
+  // #3873 F1: the branch read was refused as an access decision, not answered by Git.
+  readonly branchDenied: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
-// catalog and branch reads, and the two derived "cannot proceed with Git" flags (#B, #D), belong
-// together as one unit of state the component's JSX only renders.
+// catalog and branch reads, and the derived "cannot proceed with Git" flags (#B, #D, #3873 F1),
+// belong together as one unit of state the component's JSX only renders.
 function useRepositorySelectorState(root: string | null, locked: boolean): RepositorySelectorState {
   const catalog = useGitRepositoryCatalog();
   const unavailable = repositoryUnavailable(root, catalog);
   const branchLocked = locked || unavailable;
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
   const branchUnavailable = repositoryBranchUnavailable(root, unavailable, catalog, branchState);
-  return { catalog, unavailable, branchLocked, branchState, branchUnavailable };
+  const branchDenied = branchUnavailable && branchState.denied;
+  return { catalog, unavailable, branchLocked, branchState, branchUnavailable, branchDenied };
 }
 
 interface CodingWorkbenchRepositorySelectorProps {
@@ -554,6 +566,7 @@ function SelectorRecoveryForState({
       root={root}
       unavailable={state.unavailable}
       branchUnavailable={state.branchUnavailable}
+      branchDenied={state.branchDenied}
       catalogError={state.catalog.error}
       onOpenGit={onOpenGit}
       onRetryCatalog={state.catalog.reload}

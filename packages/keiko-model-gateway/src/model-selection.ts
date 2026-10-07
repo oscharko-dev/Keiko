@@ -34,7 +34,10 @@ import type {
   GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfileFromCapability,
+  type ContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   codingWorkbenchModelEligibility,
   conversationDefaultRank,
@@ -230,9 +233,60 @@ function provenWindowCapability(capability: ModelCapability): ModelCapability {
   return proven;
 }
 
+// Lab ledger F2 (#3873): the profile used to be hard-coded as non-streaming, so the sidecar buffered
+// the whole answer even from a provider that streams and the Workbench showed only "Working" until
+// it existed. It streams wherever the model's capability streams, unless the operator switched coding
+// streaming off (owner decision 2026-10-06: on by default, opt-out only).
+function codingSidecarStreams(config: GatewayConfig, capability: ModelCapability): boolean {
+  return capability.streaming && config.codingStreaming !== "off";
+}
+
+/**
+ * The output allowance a coding turn reserves when the provider declares no output limit (#3873,
+ * F17). The shared chat profile reserves 8k of a 128k window, and Gemma 4 31B with reasoning
+ * enabled spent exactly that on reasoning before its tool call, three turns in a row; a coding turn
+ * reasons about files and tool results, so its reserve starts at twice the chat reserve.
+ */
+export const CODING_OUTPUT_RESERVE_TOKENS = 16_384;
+
+// A reserve never takes more than this fraction of the window: the rest stays prompt input, the
+// same bound the shared profile applies to an undeclared reserve (`undeclaredOutputReserveTokens`).
+const CODING_OUTPUT_RESERVE_WINDOW_FRACTION = 4;
+
+/**
+ * The output allowance of a coding turn (`runMetadata.maxOutputTokens`), from which the sidecar
+ * derives the `maxOutputTokens` it sends (`admittedOutputTokens`) and OpenCode its context
+ * geometry. Where the provider declared its output limit (discovery's `max_output_tokens`, kept on
+ * `capability.maxOutputTokens`), that limit is the allowance; where it declared none, the coding
+ * reserve above, never below the shared chat profile's own reserve — for a model whose transport
+ * streams. A model that does not stream keeps the shared reserve (#3873 review): its attempt is one
+ * whole-body read under the buffered attempt bound, and
+ * at self-hosted throughput (about 20 tokens/s) the larger reserve would outlive that bound, so a
+ * runaway turn would end as a provider timeout — counted by the breaker, retried unchanged and
+ * never repaired — instead of an exhausted answer the gateway steers a repair for. Either is bounded
+ * to a quarter of the model's window so a prompt keeps three quarters of it, and the sidecar's
+ * admission arithmetic (`admissiblePromptTokens`, `admittedOutputTokens`) shrinks it further.
+ */
+// A provider-DECLARED limit is used as declared on every route (#3873 review, accepted case): the
+// operator states it in the LiteLLM model info, and the troubleshooting entry tells them to declare a
+// non-streaming route's limit only as high as one whole-body attempt can produce.
+export function codingOutputReserveTokens(
+  capability: Pick<ModelCapability, "maxOutputTokens">,
+  profile: Pick<ContextProfile, "maxInputTokens" | "reservedOutputTokens">,
+  streams = true,
+): number {
+  const undeclaredReserve = streams
+    ? Math.max(profile.reservedOutputTokens, CODING_OUTPUT_RESERVE_TOKENS)
+    : profile.reservedOutputTokens;
+  const preferred = capability.maxOutputTokens > 0 ? capability.maxOutputTokens : undeclaredReserve;
+  const windowBound = Math.floor(profile.maxInputTokens / CODING_OUTPUT_RESERVE_WINDOW_FRACTION);
+  return Math.max(1, Math.min(preferred, windowBound));
+}
+
 function codingSidecarProjection(
   capability: ModelCapability,
   verification: GatewayVerificationState,
+  supportsStreaming: boolean,
 ): CodingWorkbenchSidecarGatewayProjection {
   const contextProfile = deriveContextProfileFromCapability(provenWindowCapability(capability));
   return {
@@ -240,14 +294,17 @@ function codingSidecarProjection(
     profileId: "coding-safe-openai-compatible",
     modelAlias: capability.id,
     localEndpointPath: "/api/coding-sidecar/gateway",
-    supportsStreaming: false,
+    supportsStreaming,
     supportsToolCalling: true,
     runMetadata: {
       maxPromptTokens: contextProfile.maxInputTokens,
       ...(contextProfile.inputTokenLimit === undefined
         ? {}
         : { inputTokenLimit: contextProfile.inputTokenLimit }),
-      maxOutputTokens: contextProfile.reservedOutputTokens,
+      // The transport, not the sidecar's own streaming: a buffered call to a streaming-capable model
+      // still reads the provider's stream under the silence floor (`readsOverStream`), so only a
+      // capability that does not stream meets the whole-body attempt bound (#3873 review).
+      maxOutputTokens: codingOutputReserveTokens(capability, contextProfile, capability.streaming),
       // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
       // remains the hard memory bound, while 512 permits native compaction to run before ordinary
       // multi-turn coding sessions hit an unrelated record-count rejection.
@@ -362,7 +419,11 @@ export function resolveCodingSafeSidecarGatewayProfile(
   if (!hasCredential(provider)) {
     return codingSidecarUnavailable("missing-credentials");
   }
-  return codingSidecarProjection(selected, options.gatewayVerification ?? UNVERIFIED_GATEWAY);
+  return codingSidecarProjection(
+    selected,
+    options.gatewayVerification ?? UNVERIFIED_GATEWAY,
+    codingSidecarStreams(config, selected),
+  );
 }
 
 // Completion-oriented model selection (Issue #1210, ADR-0042 D5). Resolves the configured

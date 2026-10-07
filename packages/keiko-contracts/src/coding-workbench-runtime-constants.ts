@@ -99,7 +99,57 @@ export type CodingWorkbenchRuntimeFailureCode =
   // could not be qualified for the run (non-canonical or symlinked path, inactive or drifted
   // workspace instance, repository identity unreadable).
   | "model-unavailable"
-  | "workspace-unqualified";
+  | "workspace-unqualified"
+  // F9 (#3873, live Gemma qualification): a run whose last turn ended on one of its own bounds or on
+  // a failed model call names that cause instead of `runtime-failed`, which the Workbench renders as
+  // an internal error. `prompt-allowance-exhausted`: the run's cumulative prompt allowance (the
+  // Authority Envelope's `maxPromptTokens`) refused its most recent model call.
+  // `envelope-duration-exhausted`: the run's Authority Envelope ran out of time (its `expiresAt`, or
+  // `maxRuntimeMs` since minting). `output-exhausted-repeated`: the most recent model call spent the
+  // whole output budget again without a tool call or an answer, after the gateway's steered repair
+  // or the runtime's retries. `provider-unavailable`: the model provider could not be reached or
+  // stopped answering on the most recent model call. `model-turn-failed`: the most recent model call
+  // failed for a cause the failed turn itself names (a provider or Workbench-guard rejection, an
+  // unusable model answer). `runtime-failed` stays the code of a run that ended with no such cause
+  // on record: the runtime crashed or failed internally.
+  | "prompt-allowance-exhausted"
+  | "envelope-duration-exhausted"
+  | "output-exhausted-repeated"
+  | "provider-unavailable"
+  | "model-turn-failed"
+  // F5 (#3873, live Gemma qualification): a run whose edits were refused again and again settles
+  // with the refusal class instead of looping until an operator stops it. `edits-blocked`: three
+  // refusals since the run's last applied edit that the model cannot repair by changing its edit —
+  // no connected Workbench, lost workspace access, a denied path or policy, a governed read of a
+  // file that cannot be edited. `edit-retries-exhausted`: six refusals of any kind since then (an
+  // edit that does not apply, a stale base), alone or mixed with those. The settlement line names
+  // the latest refusal's closed reason.
+  | "edits-blocked"
+  | "edit-retries-exhausted";
+
+/**
+ * Redacted facts about the model gateway under a coding turn (#3873 review). `model-gateway-retrying`:
+ * the gateway met a failure that says the provider is unavailable — a timeout, a refused connection,
+ * a retryable 5xx, a rate limit — with a retry, or holds a call at its admission behind the circuit
+ * breaker or a provider cooldown before its first attempt, and keeps going for its outage window.
+ * `model-gateway-recovered`: a call it had been retrying or holding was answered.
+ * `model-gateway-retry-stopped`: a call it had been retrying or holding ended with no answer and no
+ * failure frame of its own, because the run cancelled it (the client went away, the transport was
+ * cut, the route deadline ran out), so the gateway is no longer retrying anything for that call —
+ * not an answer, which is what `recovered` says, and not a failure, which the turn-failure frame
+ * says. SSE-only, like the per-turn causes below, and never adapter events: the runtime does not
+ * produce them, the sidecar gateway route does. They carry no count, text, identifier or failure
+ * code.
+ */
+export type CodingWorkbenchGatewayEventKind =
+  "model-gateway-retrying" | "model-gateway-recovered" | "model-gateway-retry-stopped";
+
+export const CODING_WORKBENCH_GATEWAY_EVENT_KINDS: readonly CodingWorkbenchGatewayEventKind[] =
+  Object.freeze([
+    "model-gateway-retrying",
+    "model-gateway-recovered",
+    "model-gateway-retry-stopped",
+  ] as const);
 
 /** Redacted per-turn gateway causes. These are SSE-only, not durable run failure states. */
 export type CodingWorkbenchTurnFailureCode =
@@ -142,4 +192,11 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "delivery-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
+    "prompt-allowance-exhausted",
+    "envelope-duration-exhausted",
+    "output-exhausted-repeated",
+    "provider-unavailable",
+    "model-turn-failed",
+    "edits-blocked",
+    "edit-retries-exhausted",
   ] as const);

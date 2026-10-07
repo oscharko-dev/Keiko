@@ -72,4 +72,42 @@ describe("KeikoSelect accessibility", () => {
     // both the trigger and the popup for role/name/ownership violations.
     expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
   });
+
+  // #3873 live review: the Coding Workbench listboxes showed every option as a nameless "option" in
+  // the accessibility tree, although each displayed its text. The visible text sits two spans deep
+  // inside the option, so an accessibility consumer that does not derive a name from descendant
+  // content announced nothing. Each option now carries its whole visible text as its own name.
+  it("names every option by its own visible text, description and badge included", async () => {
+    render(
+      <KeikoSelect
+        ariaLabel="Coding repository"
+        onValueChange={vi.fn()}
+        sections={[
+          {
+            options: [
+              { value: "plain", label: "gemma-4-31b-it" },
+              { value: "described", label: "Model only", description: "No live files" },
+              { value: "badged", label: "archive", badge: "unavailable", disabled: true },
+            ],
+          },
+        ]}
+        value="plain"
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Coding repository" }), {
+      key: "ArrowDown",
+    });
+
+    for (const parts of [
+      ["gemma-4-31b-it"],
+      ["Model only", "No live files"],
+      ["archive", "unavailable"],
+    ] as const) {
+      const option = screen.getByRole("option", { name: parts.join(", ") });
+      expect(option).toHaveAttribute("aria-label", parts.join(", "));
+      for (const part of parts) expect(option).toHaveTextContent(part);
+    }
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+  });
 });

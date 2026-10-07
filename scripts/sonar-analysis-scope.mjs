@@ -115,7 +115,10 @@ const approvedScopeValueDigests = new Map([
   // the SHA-256 of the raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
   ["sonar.exclusions", "dc113fa197390651bc9f0377b9a1395d19c5cadb60a9754b92c3f93e3c19b135"],
   ["sonar.test.inclusions", "8db9d0077b198b3b047e46ea3c5151f1b30aef42dabc06be1e589c8c475e1704"],
-  ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
+  // Re-pinned for PR #3876: `tests/fixtures/coding-workbench-lab/ledger-lab/**` is the live lab's
+  // target repository, fixture data with deliberately planted defects, excluded from test analysis
+  // as it is from the root tsconfig, ESLint and Prettier. SHA-256 of the raw value after `=`.
+  ["sonar.test.exclusions", "97f44732ea6c8c21888f0e15f46c6f0df9cca9f623042f63738bb3a6b7b57565"],
   [
     "sonar.typescript.tsconfigPaths",
     "016c8b1bfc0b97a73ee1b5680a7b1f46ccb5c24206229367ea88a266fe20c0d5",

@@ -18,6 +18,7 @@
   "exclude": [
     "tests/architecture/fixtures/**",
     "tests/fixtures/frontend-test-generation/**",
+    "tests/fixtures/coding-workbench-lab/ledger-lab/**",
     "packages/*/dist/**",
     "packages/keiko-ui/**",
     "packages/keiko-editor/src/**/*.test.tsx",

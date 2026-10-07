@@ -156,7 +156,7 @@ import {
   activeRunState,
   changesetDeliveryAlert,
   cx,
-  lifecycleAnnouncement,
+  generatingRunState,
   modeLabel,
   modelSourceLabel,
   startBlockedReason,
@@ -164,6 +164,13 @@ import {
   visibleAlertFailure,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
+import {
+  CodingWorkbenchRunAnnouncement,
+  CodingWorkbenchRunStatus,
+} from "./CodingWorkbenchRunStatus";
+import { runPhase } from "./codingWorkbenchRunFacts";
+import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
+import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
@@ -936,7 +943,6 @@ export function CodingWorkbenchWindow({
       onTaskIntentChange={setTaskIntent}
       focusRef={focusRef}
       alert={alert}
-      t={t}
       workbenchLabel={workbenchLabel}
       onDecision={decideApproval}
       research={research}
@@ -979,7 +985,8 @@ function useCodingModelSelection(
   const selected = models.find((model) => model.id === state.selectedModelId);
   useEffect(() => {
     if (state.runtimePreference !== "managed-gateway" || catalogEmpty) return;
-    const next = selected?.id ?? models[0]?.id ?? null;
+    // #3873: the operator's saved choice while the gateway still offers it, else the default.
+    const next = selected?.id ?? offeredSavedCodingModel(models)?.id ?? models[0]?.id ?? null;
     if (next !== state.selectedModelId) actions.setSelectedModel(next);
   }, [actions, catalogEmpty, models, selected?.id, state.runtimePreference, state.selectedModelId]);
   useEffect(() => {
@@ -1008,7 +1015,6 @@ interface WorkbenchContentProps {
   readonly onTaskIntentChange: (taskIntent: string) => void;
   readonly focusRef: RefObject<HTMLHeadingElement | null>;
   readonly alert: string | null;
-  readonly t: CodingWorkbenchTranslate;
   readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
   readonly research: UseCodingWorkbenchResearchResult;
@@ -1116,15 +1122,10 @@ function EditorBridgeUnavailableNotice({ visible }: { readonly visible: boolean 
   );
 }
 
-// The three props this level owns are named; the rest belong to `WorkbenchColumns` and pass
+// The two props this level owns are named; the rest belong to `WorkbenchColumns` and pass
 // through as one rest object, so a new column prop is not restated on this hop at all.
-function WorkbenchContent({
-  alert,
-  t,
-  workbenchLabel,
-  ...columns
-}: WorkbenchContentProps): ReactNode {
-  const { research, state } = columns;
+function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchContentProps): ReactNode {
+  const { state } = columns;
   return (
     <section
       className={styles.shell}
@@ -1134,15 +1135,6 @@ function WorkbenchContent({
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
       <WorkbenchHeader columns={columns} />
-      <p
-        className="sr-only"
-        role="status"
-        data-testid="coding-runtime-announcement"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        {lifecycleAnnouncement(state, t, research.grant)}
-      </p>
       <div className={styles.body}>
         <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
         <WorkbenchColumns {...columns} />
@@ -1154,7 +1146,7 @@ function WorkbenchContent({
 function WorkbenchHeader({
   columns,
 }: {
-  readonly columns: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">;
+  readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
   return (
@@ -1193,6 +1185,22 @@ function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => vo
     seenRunIdRef.current = runId;
     retry();
   }, [runId, retry]);
+}
+
+// Lab ledger F2 (#3873): a streamed answer grows inside one message, whose activity timestamp stays
+// the message's creation time, so the session stream's follow key also counts the feed's visible
+// text and reasoning. Live growth then stays in view while the reader is at the bottom.
+export function sessionGrowthKey(
+  runtimeEventSignal: number,
+  feed: ReturnType<typeof useCodingWorkbenchSafeActivity>["feed"],
+  questionCount: number,
+): string {
+  let contentLength = 0;
+  for (const message of feed?.turns.flatMap((turn) => turn.messages) ?? []) {
+    contentLength += message.reasoning?.text.length ?? 0;
+    for (const segment of message.segments) contentLength += segment.text.length;
+  }
+  return `${String(runtimeEventSignal)}:${feed?.updatedAt ?? ""}:${String(contentLength)}:${String(questionCount)}`;
 }
 
 function workbenchStartBlocker(
@@ -1277,7 +1285,7 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   const issueIntake = useCodingWorkbenchIssueIntake(
@@ -1346,7 +1354,7 @@ function WorkbenchColumns({
   const sessionStreamRef = useRef<HTMLDivElement>(null);
   const { onScroll: onStreamScroll, resume: followNewest } = useFollowNewest(
     sessionStreamRef,
-    `${String(runtimeEventSignal)}:${activity.feed?.updatedAt ?? ""}:${String(questions.questions.length)}`,
+    sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length),
   );
   const runId = state.run.value?.runId;
   useEffect(() => {
@@ -1421,7 +1429,10 @@ function WorkbenchColumns({
       models={codingModels}
       selectedModelId={state.selectedModelId}
       reasoningEffort={state.reasoningEffort}
-      onSelectedModelChange={actions.setSelectedModel}
+      onSelectedModelChange={(modelId): void => {
+        actions.setSelectedModel(modelId);
+        rememberCodingModel(modelId);
+      }}
       onReasoningEffortChange={actions.setReasoningEffort}
     />
   );
@@ -1440,9 +1451,12 @@ function WorkbenchColumns({
       onOpenGit={onOpenGit}
     />
   );
+  // #3873: a run restored after a reload keeps its settlement and its captured conversation.
+  const timeline = useRestoredRunTimeline(state.events, state.run.value, activity, history.detail);
   if (showSetup) {
     return (
       <div className={styles.emptySession}>
+        <CodingWorkbenchRunAnnouncement state={state} researchGrant={research.grant} />
         <CodingWorkbenchSetup
           renderRepositoryControls={(bindPending): ReactNode => (
             <WorkbenchContextControls
@@ -1473,6 +1487,19 @@ function WorkbenchColumns({
       </div>
     );
   }
+  // #3873: the run status line — state, elapsed time, revision and phase first, readiness collapsed.
+  const runStatus = (
+    <CodingWorkbenchRunStatus
+      state={state}
+      researchGrant={research.grant}
+      phase={runPhase({
+        snapshot: state.run.value,
+        feed: activity.feed,
+        events: state.events,
+        pendingDecision: questions.questions.length > 0 || editorBridge.pendingReview !== null,
+      })}
+    />
+  );
   const showWelcome = welcomeEligible(history, state, {
     activity: activity.feed !== null,
     questions: questions.questions.length > 0,
@@ -1493,12 +1520,7 @@ function WorkbenchColumns({
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
           tabIndex={0}
         >
-          <CodingTaskTranscript
-            session={history}
-            liveRunId={
-              activity.feed?.availability === "available" ? state.run.value?.runId : undefined
-            }
-          />
+          <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
           <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
           <CodingWorkbenchDraftDelivery
@@ -1550,8 +1572,9 @@ function WorkbenchColumns({
           />
           <Timeline
             active={runIsActive}
-            events={state.events}
-            activity={activity}
+            generating={generatingRunState(state.run.value?.state)}
+            events={timeline.events}
+            activity={timeline.activity}
             questions={questions}
             focusRef={focusRef}
           />
@@ -1566,6 +1589,7 @@ function WorkbenchColumns({
         </div>
       )}
       <div className={styles.composerDock}>
+        {runStatus}
         {repositorySelector}
         <LocationBindingNotices locationState={locationState} />
         <CodingWorkbenchIssueIntake

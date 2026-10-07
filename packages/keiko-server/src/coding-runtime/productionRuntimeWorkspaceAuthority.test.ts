@@ -7,12 +7,18 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+  DEFAULT_RUNTIME_PROMPT_TOKENS,
+  MAX_RUNTIME_MAX_DURATION_MINUTES,
+  MAX_RUNTIME_PROMPT_TOKENS,
   productionGitDeliveryModeGrants,
   productionRuntimeAuthorityFacts,
   productionWorkspaceMatches,
   type ProductionWorkspaceAuthorityInput,
   resolveProductionRuntimeContext,
+  configuredRuntimeMaxDurationMinutes,
   configuredRuntimePromptTokenBudget,
+  runtimeMaxDurationMs,
 } from "./productionRuntimeWorkspaceAuthority.js";
 import {
   CodingRuntimeLaunchResolutionError,
@@ -49,25 +55,101 @@ function expectLaunchResolutionFailure(
 }
 
 describe("production runtime workspace authority", () => {
+  // #3873: the cumulative prompt allowance and the envelope duration are operator settings whose
+  // defaults the live Gemma qualification re-sized (ADR-0137 D2). Every expectation below derives
+  // from the exported bounds or the parser that owns them, never from a restated literal
+  // (AGENTS.md §7), so a future re-sizing cannot leave a stale number green here.
   it("binds an explicit deployment prompt budget only into newly resolved authority", () => {
     const fixture = liveFixture();
     const prior = resolveProductionRuntimeContext(fixture.input, fixture.request);
     const next = resolveProductionRuntimeContext(
-      { ...fixture.input, promptTokenBudget: 2_000_000 },
+      { ...fixture.input, promptTokenBudget: MAX_RUNTIME_PROMPT_TOKENS },
       { ...fixture.request, runId: "run-next" },
     );
-    expect(prior.budget.maxPromptTokens).toBe(200_000);
-    expect(next.budget.maxPromptTokens).toBe(2_000_000);
+    expect(MAX_RUNTIME_PROMPT_TOKENS).toBeGreaterThan(DEFAULT_RUNTIME_PROMPT_TOKENS);
+    expect(prior.budget.maxPromptTokens).toBe(DEFAULT_RUNTIME_PROMPT_TOKENS);
+    expect(next.budget.maxPromptTokens).toBe(MAX_RUNTIME_PROMPT_TOKENS);
     expect(next.budget.maxToolCalls).toBe(prior.budget.maxToolCalls);
     expect(next.budget.maxRuntimeMs).toBe(prior.budget.maxRuntimeMs);
     expect(next.budget.maxPatchBytes).toBe(prior.budget.maxPatchBytes);
   });
 
   it("validates the deployment prompt budget without an invalid-value fallback", () => {
-    expect(configuredRuntimePromptTokenBudget(undefined)).toBe(200_000);
-    expect(configuredRuntimePromptTokenBudget("2000000")).toBe(2_000_000);
-    for (const invalid of ["", "0", "-1", "1.5", "NaN", "Infinity", "2000001", "1e6"]) {
+    expect(configuredRuntimePromptTokenBudget(undefined)).toBe(DEFAULT_RUNTIME_PROMPT_TOKENS);
+    expect(configuredRuntimePromptTokenBudget("1")).toBe(1);
+    expect(configuredRuntimePromptTokenBudget(String(MAX_RUNTIME_PROMPT_TOKENS))).toBe(
+      MAX_RUNTIME_PROMPT_TOKENS,
+    );
+    for (const invalid of [
+      "",
+      "0",
+      "-1",
+      "1.5",
+      "NaN",
+      "Infinity",
+      String(MAX_RUNTIME_PROMPT_TOKENS + 1),
+      "1e6",
+      " 1",
+      "+1",
+    ]) {
       expect(() => configuredRuntimePromptTokenBudget(invalid)).toThrow(RangeError);
+    }
+  });
+
+  it("validates the deployment maximum duration without an invalid-value fallback", () => {
+    expect(configuredRuntimeMaxDurationMinutes(undefined)).toBe(
+      DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
+    );
+    expect(configuredRuntimeMaxDurationMinutes("1")).toBe(1);
+    expect(configuredRuntimeMaxDurationMinutes(String(MAX_RUNTIME_MAX_DURATION_MINUTES))).toBe(
+      MAX_RUNTIME_MAX_DURATION_MINUTES,
+    );
+    expect(MAX_RUNTIME_MAX_DURATION_MINUTES).toBeGreaterThan(DEFAULT_RUNTIME_MAX_DURATION_MINUTES);
+    for (const invalid of [
+      "",
+      "0",
+      "-1",
+      "1.5",
+      "NaN",
+      "Infinity",
+      String(MAX_RUNTIME_MAX_DURATION_MINUTES + 1),
+      "1e2",
+      " 1",
+      "+1",
+      "60m",
+    ]) {
+      expect(() => configuredRuntimeMaxDurationMinutes(invalid)).toThrow(RangeError);
+    }
+  });
+
+  // Both the budget's `maxRuntimeMs` and the envelope's `expiresAt` derive from the ONE configured
+  // duration, so the registry's runtime-budget check and its expiry check can never disagree about
+  // when a run ends. The minute-to-millisecond relation is asserted through proportionality against
+  // the default rather than by restating the conversion the producer owns.
+  it("mints maxRuntimeMs and expiresAt from one configured duration and fails closed outside its range", () => {
+    const now = new Date("2026-10-06T12:00:00.000Z");
+    const fixture = liveFixture();
+    const input = { ...fixture.input, now: () => now };
+    const defaulted = resolveProductionRuntimeContext(input, fixture.request);
+    const defaultMs = runtimeMaxDurationMs(DEFAULT_RUNTIME_MAX_DURATION_MINUTES);
+    expect(defaulted.budget.maxRuntimeMs).toBe(defaultMs);
+    expect(defaulted.expiresAt).toBe(new Date(now.getTime() + defaultMs).toISOString());
+
+    const configured = resolveProductionRuntimeContext(
+      { ...input, maxDurationMinutes: 7 },
+      { ...fixture.request, runId: "run-configured" },
+    );
+    expect(configured.budget.maxRuntimeMs).toBe(runtimeMaxDurationMs(7));
+    expect(configured.budget.maxRuntimeMs * DEFAULT_RUNTIME_MAX_DURATION_MINUTES).toBe(
+      defaultMs * 7,
+    );
+    expect(Date.parse(configured.expiresAt) - now.getTime()).toBe(configured.budget.maxRuntimeMs);
+    expect(configured.budget.maxPromptTokens).toBe(defaulted.budget.maxPromptTokens);
+
+    for (const invalid of [0, -1, 1.5, Number.NaN, MAX_RUNTIME_MAX_DURATION_MINUTES + 1]) {
+      expect(() =>
+        resolveProductionRuntimeContext({ ...input, maxDurationMinutes: invalid }, fixture.request),
+      ).toThrow(RangeError);
     }
   });
   it("binds only the healthy active managed worktree and fails on live HEAD drift", () => {

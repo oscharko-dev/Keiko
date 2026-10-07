@@ -25,6 +25,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   runVerification,
+  type NetworkEnforcementMode,
   type VerificationPlan,
   type VerificationReport,
   type VerificationStepOutput,
@@ -159,9 +160,22 @@ export interface ExecuteVerificationArgs {
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
 }
 
+// The egress policy every verification run executes under: a step that needs an enforced
+// `network: "none"` boundary runs only where the probe found a backend, and is denied before
+// spawning where it did not. It never degrades to an inherited network. One constant, so the policy
+// the orchestrator receives and the policy the run reports cannot differ (F14, #3873).
+const VERIFICATION_NETWORK_ENFORCEMENT =
+  "enforce-or-fail-closed" as const satisfies NetworkEnforcementMode;
+
 export interface ExecuteVerificationResult {
   readonly report: VerificationReport;
   readonly probe: NetworkIsolationProbe;
+  // Wall time of the isolation probe, in whole milliseconds. It runs before the report's own clock
+  // starts, so no duration on the report accounts for it. Optional so a caller-supplied execution
+  // port that does not measure it stays valid; the real execution always reports it.
+  readonly probeDurationMs?: number | undefined;
+  // The egress policy the orchestrator ran under (see VERIFICATION_NETWORK_ENFORCEMENT).
+  readonly networkEnforcement?: NetworkEnforcementMode | undefined;
 }
 
 // Builds the runCommand termination-evidence callback for one verification run, tagged with the
@@ -216,17 +230,19 @@ export async function executeVerificationEnforced(
 async function executeExclusiveVerification(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
+  const probeStartedAtMs = Date.now();
   const probe = probeNetworkIsolation(
     args.probeCwd ?? args.workspace.root,
     args.diagnostics,
     args.correlationId,
   );
+  const probeDurationMs = Math.max(0, Date.now() - probeStartedAtMs);
   const activityLog = args.activityLog ?? processServerLogSink();
   const report = await runVerification(args.plan, {
     workspace: args.workspace,
     ...(args.fs === undefined ? {} : { fs: args.fs }),
     signal: args.signal,
-    networkEnforcement: "enforce-or-fail-closed",
+    networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
     enforcedNetworkAvailable: probe.available,
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
@@ -240,5 +256,10 @@ async function executeExclusiveVerification(
       : { dependencyBootstrap: args.dependencyBootstrap }),
     ...(args.onStepOutput === undefined ? {} : { onStepOutput: args.onStepOutput }),
   });
-  return { report, probe };
+  return {
+    report,
+    probe,
+    probeDurationMs,
+    networkEnforcement: VERIFICATION_NETWORK_ENFORCEMENT,
+  };
 }

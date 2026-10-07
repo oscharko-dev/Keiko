@@ -25,6 +25,7 @@ import type { PortableSidecarRuntimeVerification } from "../update-portable-side
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import type { DevLanePortableOpenCodeRuntime } from "./devLanePortableCodingRuntime.js";
 import {
+  codingSafeActivityTtlMs,
   createCodingSafeActivityProjection,
   type CodingSafeActivityProjection,
   type CodingSafeActivitySignal,
@@ -123,6 +124,13 @@ export interface ProductionOpenCodeBackendInput {
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  /**
+   * The configured Authority Envelope duration (ms, #3873). The safe-activity projection this
+   * backend creates retains a run's feed for that duration plus its retention margin, so a feed
+   * is never evicted before the envelope it shows has expired. Absent keeps the projection's
+   * default, which follows the default envelope duration.
+   */
+  readonly runtimeMaxDurationMs?: number | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
     | ((input: {
@@ -145,6 +153,10 @@ export function createProductionOpenCodeBackend(
     createCodingSafeActivityProjection({
       diagnostics: input.diagnostics,
       activityLog: input.activityLog ?? processServerLogSink(),
+      ttlMs:
+        input.runtimeMaxDurationMs === undefined
+          ? undefined
+          : codingSafeActivityTtlMs(input.runtimeMaxDurationMs),
     });
   return {
     safeActivityProjection,
@@ -236,11 +248,15 @@ function composeOpenCodeRun(
     supervisor: runtimeSupervisor(input, run),
     diagnostics: input.diagnostics,
     activityLog: input.activityLog,
+    toolResultCorrelationId: run.minted.authorityRef.runId,
     onRuntimeEvent: run.onRuntimeEvent,
     onSandboxAttestation: observeOpenCodeSandboxAttestation(input, run),
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
     resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
+    // #3873: one submitted task's whole agent loop is bounded by the run's own envelope duration,
+    // never by a fixed turn wall shorter than the envelope the operator configured.
+    maxTurnWaitMs: run.context.budget.maxRuntimeMs,
   });
 }
 

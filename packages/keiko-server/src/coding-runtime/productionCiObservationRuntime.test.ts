@@ -224,8 +224,8 @@ describe("production CI observation service repair-budget wiring (#3384 wave-3 W
     const test = fixture(() => Promise.resolve(failingFacts()));
     const repairBudget: CiRepairExecutionBudget = {
       admitTool: () => undefined,
-      canChargePrompt: () => true,
-      chargePrompt: () => true,
+      canChargePrompt: () => ({ accepted: true }),
+      chargePrompt: () => ({ accepted: true }),
       observed: () => undefined,
       repairBudgetExhausted: () => true,
     };

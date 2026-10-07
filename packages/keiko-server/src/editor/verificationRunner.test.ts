@@ -34,6 +34,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogEvent } from "../observability/index.js";
+import { MAX_LOG_LINE_BYTES } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -93,7 +94,15 @@ interface FakePort {
   calls: number;
 }
 
-function fakePort(rep: VerificationReport, waitForAbort = false): FakePort {
+const DEFAULT_EXECUTION: Omit<ExecuteVerificationResult, "report"> = {
+  probe: { available: true, backend: "test-backend" },
+};
+
+function fakePort(
+  rep: VerificationReport,
+  waitForAbort = false,
+  execution: Omit<ExecuteVerificationResult, "report"> = DEFAULT_EXECUTION,
+): FakePort {
   const state: FakePort = {
     calls: 0,
     correlationIds: [],
@@ -113,7 +122,7 @@ function fakePort(rep: VerificationReport, waitForAbort = false): FakePort {
           );
         });
       }
-      return { report: rep, probe: { available: true, backend: "test-backend" } };
+      return { report: rep, ...execution };
     },
   };
   return state;
@@ -1196,6 +1205,20 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
           timedOutCount: 1,
           cancelledCount: 0,
           resourceExceededCount: 1,
+          // F14 (#3873): the same line now also attributes the run's wall time and names the
+          // isolation that applied. The twelve fields above are unchanged and still compared with
+          // exact equality, so this pin only grew: an unregistered extra field still fails it.
+          // The fixture's two 5 ms steps outlast its 5 ms report total, so the time outside the
+          // steps clamps to zero, and the fake port's "test-backend" is not a sandbox backend.
+          durationMs: 5,
+          outsideStepsMs: 0,
+          maxStepDurationMs: 5,
+          typecheckStatus: "timed-out",
+          typecheckDurationMs: 5,
+          lintStatus: "resource-exceeded",
+          lintDurationMs: 5,
+          isolationBackend: "unknown",
+          isolationAvailable: true,
         },
       }),
     );
@@ -1444,6 +1467,406 @@ describe("decideScriptTrust", () => {
         }),
       ).toEqual({ trusted: false, refusal: "worktree-manifest-drift" });
     });
+  });
+});
+
+// F14 (#3873): a targeted-test verification took 28.5 s inside the Workbench run, the same path
+// took 236 ms called directly, and the log held nothing between `workspace acquired` and
+// `released`: the completion line carried neither a duration nor the isolation that ran the step.
+// These pins prove the completion line now lets a reader attribute the wall time -- to the
+// isolation probe, the dependency bootstrap or the steps themselves -- from the persisted line
+// alone, through the real registered formatter, without a single command, argument, path or output.
+type TimedStep = readonly [kind: VerificationKind, status: VerificationStatus, durationMs: number];
+
+// Distinct, recognisable per-step wall times, so a test can tell which one a logged number came
+// from. The command-bearing fields are sentinels the completion line must never repeat.
+function timedReport(
+  steps: readonly TimedStep[],
+  totalMs: number,
+  over: Partial<VerificationReport> = {},
+): VerificationReport {
+  const results = steps.map(([kind, status, durationMs]): VerificationResult => ({
+    kind,
+    scriptName: "SCRIPT-NAME-SENTINEL",
+    command: "npm",
+    args: ["run", "ARGUMENT-SENTINEL"],
+    status,
+    exitCode: status === "passed" ? 0 : 1,
+    signal: null,
+    durationMs,
+    truncated: false,
+    redacted: true,
+    outputSummary: "OUTPUT-SENTINEL",
+    appliedLimits: [],
+    detail: "DETAIL-SENTINEL",
+  }));
+  const tally = counts({});
+  for (const result of results) tally[result.status] += 1;
+  return {
+    workspaceRoot: "/ws",
+    results,
+    overallStatus: results.every((result) => result.status === "passed") ? "passed" : "failed",
+    startedAtMs: 1,
+    durationMs: totalMs,
+    counts: tally,
+    ...over,
+  };
+}
+
+function completionLine(
+  events: readonly ServerLogEvent[],
+  correlationId: string,
+): Record<string, unknown> {
+  const event = events.find(
+    (entry) =>
+      entry.op === "editor.verification.execute" &&
+      entry.correlationId === correlationId &&
+      entry.extra?.state === "completed",
+  );
+  if (event === undefined) throw new Error("completion line missing");
+  return expectActivityLogProof(
+    "editor.verification.execute.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+}
+
+const PLANNED_EVERY_KIND = ["typecheck", "lint", "test", "build", "targeted-test"] as const;
+const STEP_FIELD_PREFIXES = ["test", "targetedTest", "typecheck", "lint", "build"] as const;
+
+describe("VerificationRunnerManager — the completion line attributes a run's wall time (F14, #3873)", () => {
+  function recordingManager(
+    execute: VerificationExecutePort,
+    over: Partial<VerificationRunnerManagerOptions> = {},
+  ): { readonly manager: VerificationRunnerManager; readonly events: ServerLogEvent[] } {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute,
+      isWorkspaceTrustedForPackageScripts: () => true,
+      ...over,
+    });
+    return { manager, events };
+  }
+
+  it("attributes the 28.5 s run from the persisted line alone: total, outside-steps and step wall time, probe, isolation and bootstrap", async () => {
+    // The F14 shape: one 236 ms targeted test inside a 28.5 s verification.
+    const slow = timedReport([["targeted-test", "passed", 236]], 28_512, {
+      overallStatus: "passed",
+      dependencies: { state: "current", lockfile: "present", exitCode: null, durationMs: 0 },
+    });
+    const { manager, events } = recordingManager(
+      fakePort(slow, false, {
+        probe: { available: true, backend: "container-docker" },
+        probeDurationMs: 7,
+        networkEnforcement: "enforce-or-fail-closed",
+      }).port,
+    );
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "f14-slow-run",
+      }),
+      new AbortController().signal,
+    );
+
+    const line = completionLine(events, "f14-slow-run");
+    expect(line).toMatchObject({
+      op: "editor.verification.execute",
+      correlationId: "f14-slow-run",
+      state: "completed",
+      verificationStatus: "passed",
+      durationMs: 28_512,
+      outsideStepsMs: 28_276,
+      maxStepDurationMs: 236,
+      targetedTestStatus: "passed",
+      targetedTestDurationMs: 236,
+      probeDurationMs: 7,
+      isolationBackend: "container-docker",
+      isolationAvailable: true,
+      networkEnforcement: "enforce-or-fail-closed",
+      dependencyBootstrap: "current",
+    });
+    // A kind the run did not plan leaves no field behind.
+    for (const prefix of STEP_FIELD_PREFIXES.filter((entry) => entry !== "targetedTest")) {
+      expect(line).not.toHaveProperty(`${prefix}Status`);
+      expect(line).not.toHaveProperty(`${prefix}DurationMs`);
+    }
+    const text = JSON.stringify(line);
+    for (const sentinel of [
+      "SCRIPT-NAME-SENTINEL",
+      "ARGUMENT-SENTINEL",
+      "OUTPUT-SENTINEL",
+      "DETAIL-SENTINEL",
+      workspaceRoot,
+    ]) {
+      expect(text).not.toContain(sentinel);
+    }
+  });
+
+  it("records each planned kind's status and wall time under its own closed field", async () => {
+    const everyKind = timedReport(
+      [
+        ["typecheck", "passed", 1_100],
+        ["lint", "failed", 2_200],
+        ["test", "timed-out", 120_000],
+        ["build", "skipped", 0],
+        ["targeted-test", "denied", 0],
+      ],
+      125_000,
+    );
+    const { manager, events } = recordingManager(fakePort(everyKind).port);
+
+    await manager.runToReport(
+      input({
+        kinds: [...PLANNED_EVERY_KIND],
+        targetPath: "src/a.test.ts",
+        correlationId: "f14-every-kind",
+      }),
+      new AbortController().signal,
+    );
+
+    expect(completionLine(events, "f14-every-kind")).toMatchObject({
+      typecheckStatus: "passed",
+      typecheckDurationMs: 1_100,
+      lintStatus: "failed",
+      lintDurationMs: 2_200,
+      testStatus: "timed-out",
+      testDurationMs: 120_000,
+      buildStatus: "skipped",
+      buildDurationMs: 0,
+      targetedTestStatus: "denied",
+      targetedTestDurationMs: 0,
+      maxStepDurationMs: 120_000,
+      durationMs: 125_000,
+      // The report's total minus the five steps: what the bootstrap decision and orchestration took.
+      outsideStepsMs: 1_700,
+    });
+  });
+
+  it("keeps the fully populated line inside the persisted-line bound, with every duration fifteen digits long", async () => {
+    // ~31,700 years: far beyond any real run, and still a safe integer once the evidence entry adds
+    // the run's start time to it.
+    const ceiling = 999_999_999_999_999;
+    const worst = timedReport(
+      [
+        ["typecheck", "resource-exceeded", ceiling],
+        ["lint", "resource-exceeded", ceiling],
+        ["test", "resource-exceeded", ceiling],
+        ["build", "resource-exceeded", ceiling],
+        ["targeted-test", "resource-exceeded", ceiling],
+      ],
+      ceiling,
+      {
+        dependencies: { state: "timed-out", lockfile: "created", exitCode: 1, durationMs: ceiling },
+      },
+    );
+    const { manager, events } = recordingManager(
+      fakePort(worst, false, {
+        probe: { available: true, backend: "container-podman" },
+        probeDurationMs: ceiling,
+        networkEnforcement: "enforce-or-fail-closed",
+      }).port,
+    );
+
+    await manager.runToReport(
+      input({
+        kinds: [...PLANNED_EVERY_KIND],
+        targetPath: "src/a.test.ts",
+        correlationId: "f14-worst-case",
+      }),
+      new AbortController().signal,
+    );
+
+    const event = events.find(
+      (entry) => entry.op === "editor.verification.execute" && entry.extra?.state === "completed",
+    );
+    expect(Buffer.byteLength(formatActivityLogProofLine(event ?? {}), "utf8")).toBeLessThanOrEqual(
+      MAX_LOG_LINE_BYTES,
+    );
+    expect(completionLine(events, "f14-worst-case")).toMatchObject({
+      durationMs: ceiling,
+      outsideStepsMs: 0,
+      maxStepDurationMs: ceiling,
+      probeDurationMs: ceiling,
+      dependencyBootstrap: "timed-out",
+    });
+  });
+
+  it("rounds a fractional wall time to whole milliseconds instead of losing the line", async () => {
+    const fractional = timedReport([["typecheck", "passed", 12.6]], 20.4, {
+      overallStatus: "passed",
+    });
+    const { manager, events } = recordingManager(
+      fakePort(fractional, false, {
+        probe: { available: true, backend: "bubblewrap" },
+        probeDurationMs: 0.4,
+      }).port,
+    );
+
+    await manager.runToReport(
+      input({ kinds: ["typecheck"], correlationId: "f14-fractional" }),
+      new AbortController().signal,
+    );
+
+    expect(completionLine(events, "f14-fractional")).toMatchObject({
+      durationMs: 20,
+      typecheckDurationMs: 13,
+      maxStepDurationMs: 13,
+      outsideStepsMs: 7,
+      probeDurationMs: 0,
+    });
+  });
+
+  it("still attributes a run the operator aborted: its wall time, isolation and cancelled step", async () => {
+    const cancelled = timedReport([["targeted-test", "cancelled", 1_875]], 1_900, {
+      overallStatus: "cancelled",
+    });
+    const { manager, events } = recordingManager(
+      fakePort(cancelled, true, {
+        probe: { available: true, backend: "seatbelt" },
+        probeDurationMs: 2,
+        networkEnforcement: "enforce-or-fail-closed",
+      }).port,
+    );
+    const { done } = collect(manager);
+
+    const start = manager.execute(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "f14-aborted-run",
+      }),
+    );
+    expect(manager.abort(start.runId)).toBe(true);
+    await done;
+
+    expect(completionLine(events, "f14-aborted-run")).toMatchObject({
+      verificationStatus: "cancelled",
+      cancelledCount: 1,
+      targetedTestStatus: "cancelled",
+      targetedTestDurationMs: 1_875,
+      durationMs: 1_900,
+      outsideStepsMs: 25,
+      isolationBackend: "seatbelt",
+      isolationAvailable: true,
+      networkEnforcement: "enforce-or-fail-closed",
+    });
+  });
+
+  it("names the fail-closed isolation of a run the host could not confine and denied before spawning", async () => {
+    const denied = timedReport([["typecheck", "denied", 0]], 3);
+    const { manager, events } = recordingManager(
+      fakePort(denied, false, {
+        probe: { available: false, backend: "none" },
+        probeDurationMs: 1,
+        networkEnforcement: "enforce-or-fail-closed",
+      }).port,
+    );
+
+    await manager.runToReport(
+      input({ kinds: ["typecheck"], correlationId: "f14-fail-closed" }),
+      new AbortController().signal,
+    );
+
+    expect(completionLine(events, "f14-fail-closed")).toMatchObject({
+      verificationStatus: "failed",
+      deniedCount: 1,
+      typecheckStatus: "denied",
+      typecheckDurationMs: 0,
+      isolationBackend: "none",
+      isolationAvailable: false,
+      networkEnforcement: "enforce-or-fail-closed",
+    });
+  });
+
+  it("claims only what the execution reported: an unlisted backend label is unknown and nothing is invented", async () => {
+    const { manager, events } = recordingManager(
+      fakePort(timedReport([], 4, { overallStatus: "failed" })).port,
+    );
+
+    await manager.runToReport(
+      input({ kinds: ["typecheck"], correlationId: "f14-unreported" }),
+      new AbortController().signal,
+    );
+
+    const line = completionLine(events, "f14-unreported");
+    expect(line).toMatchObject({ isolationBackend: "unknown", isolationAvailable: true });
+    for (const absent of [
+      "probeDurationMs",
+      "networkEnforcement",
+      "dependencyBootstrap",
+      "maxStepDurationMs",
+    ]) {
+      expect(line).not.toHaveProperty(absent);
+    }
+  });
+
+  it.each(["none", "current", "installed", "refused", "failed", "timed-out", "cancelled"] as const)(
+    "records the dependency bootstrap outcome %s on the completion line",
+    async (state) => {
+      const bootstrapped = timedReport([["typecheck", "skipped", 0]], 9, {
+        dependencies: { state, lockfile: "present", exitCode: null, durationMs: 0 },
+      });
+      const { manager, events } = recordingManager(fakePort(bootstrapped).port);
+
+      await manager.runToReport(
+        input({ kinds: ["typecheck"], correlationId: "f14-bootstrap-state" }),
+        new AbortController().signal,
+      );
+
+      expect(completionLine(events, "f14-bootstrap-state")).toMatchObject({
+        dependencyBootstrap: state,
+      });
+    },
+  );
+
+  it("gives the human-triggered run the same attribution as the agent run", async () => {
+    const human = timedReport([["targeted-test", "failed", 410]], 520);
+    const { manager, events } = recordingManager(
+      fakePort(human, false, {
+        probe: { available: true, backend: "bubblewrap" },
+        probeDurationMs: 3,
+        networkEnforcement: "enforce-or-fail-closed",
+      }).port,
+    );
+    const { done } = collect(manager);
+
+    manager.execute(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "f14-human-run",
+      }),
+    );
+    await done;
+
+    expect(completionLine(events, "f14-human-run")).toMatchObject({
+      verificationStatus: "failed",
+      durationMs: 520,
+      outsideStepsMs: 110,
+      targetedTestStatus: "failed",
+      targetedTestDurationMs: 410,
+      probeDurationMs: 3,
+      isolationBackend: "bubblewrap",
+    });
+  });
+
+  it("leaves a run whose execution threw with its refusal line only, never a half-filled completion", async () => {
+    const { manager, events } = recordingManager(() => Promise.reject(new Error("execution lost")));
+
+    await expect(
+      manager.runToReport(
+        input({ kinds: ["typecheck"], correlationId: "f14-execution-threw" }),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("execution lost");
+
+    const states = events
+      .filter((event) => event.op === "editor.verification.execute")
+      .map((event) => event.extra?.state);
+    expect(states).toEqual(["selected", "refused"]);
   });
 });
 

@@ -1,12 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createSecureWorkspaceTextReadPort,
   type SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
+import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
-import { decodeSecureWorkspaceReadRequest } from "./secureWorkspaceTextReadProtocol.js";
+import {
+  decodeSecureWorkspaceReadRequest,
+  encodeSecureWorkspaceReadResponse,
+  type SecureWorkspaceReadClosedStatus,
+} from "./secureWorkspaceTextReadProtocol.js";
 
 const MAX_TEXT_BYTES = 65_536;
 const artifact: SecureWorkspaceTextReadArtifact = {
@@ -37,6 +46,7 @@ function createPort(
   platform: { readonly os: string; readonly arch: string } = { os: "darwin", arch: "arm64" },
   resolveWorkspaceRoot: () => string | undefined | Promise<string | undefined> = () =>
     "/server-owned/workspace",
+  lstat?: WorkspacePathLstat,
 ): {
   readonly port: ReturnType<typeof createSecureWorkspaceTextReadPort>;
   readonly verify: ReturnType<typeof vi.fn>;
@@ -52,6 +62,7 @@ function createPort(
       artifactVerifier: { verify },
       processFactory,
       platform,
+      ...(lstat === undefined ? {} : { lstat }),
     }),
     verify,
     create,
@@ -292,5 +303,318 @@ describe("SecureWorkspaceTextReadPort", () => {
     await expect(Promise.all(active)).resolves.toEqual(
       Array.from({ length: 8 }, (): SecureWorkspaceTextReadResult => ({ ok: true, text: "ok" })),
     );
+  });
+});
+
+// F27 (#3876): the native helper answers `access-denied` for every path it cannot open -- a missing
+// file, a link, a file used as a directory, an unreadable directory, an unusable root -- and has no
+// `not-found` status (native/secure-workspace-read/secure_workspace_read.c). A file creation asks
+// "is there nothing here yet?", so every creation through the replacement form was refused as
+// `denied` and no live run ever created a file. The earlier stubs here never answered
+// `access-denied` for a missing path, so the production shape of the answer was untested; these
+// tests drive the real wrapper over a real workspace with the helper answering what it answers in
+// production (checked against a helper compiled from that source).
+describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
+  const bases: string[] = [];
+
+  afterEach(() => {
+    for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
+  });
+
+  function fixture(): { readonly base: string; readonly root: string; readonly outside: string } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-secure-read-")));
+    bases.push(base);
+    const root = join(base, "workspace");
+    const outside = join(base, "outside");
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    return { base, root, outside };
+  }
+
+  function directorySymlinkType(): "dir" | "junction" {
+    return process.platform === "win32" ? "junction" : "dir";
+  }
+
+  // Encoded by the protocol module that owns the wire format, never restated here as a number.
+  function helperRefuses(
+    status: SecureWorkspaceReadClosedStatus = "access-denied",
+  ): () => Promise<Uint8Array> {
+    return () => Promise.resolve(encodeSecureWorkspaceReadResponse({ status }));
+  }
+
+  function portOver(
+    root: string,
+    run: () => Promise<Uint8Array> = helperRefuses(),
+    lstat?: WorkspacePathLstat,
+  ): ReturnType<typeof createPort> {
+    return createPort(run, { os: "darwin", arch: "arm64" }, () => root, lstat);
+  }
+
+  it.each([
+    ["a missing file in an existing directory", "src/cli.test.ts"],
+    ["a missing file at the workspace root", "cli.test.ts"],
+    ["a file below a missing directory", "src/new/nested/cli.test.ts"],
+  ])("answers not-found for %s the helper could not open", async (_label, relativePath) => {
+    const { root } = fixture();
+    const { port, create } = portOver(root);
+
+    await expect(port.readText({ relativePath })).resolves.toEqual({
+      ok: false,
+      reason: "not-found",
+      absence: "absent",
+    });
+    // The helper stays the first authority: it was asked, and its refusal was refined.
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the helper's denial for a path that exists", async () => {
+    const { root } = fixture();
+    writeFileSync(join(root, "src", "present.ts"), "export {};\n");
+    const { port } = portOver(root);
+
+    await expect(port.readText({ relativePath: "src/present.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "denied",
+      absence: "exists",
+    });
+  });
+
+  it("keeps the helper's denial for a directory at the final component", async () => {
+    const { root } = fixture();
+    const { port } = portOver(root);
+
+    await expect(port.readText({ relativePath: "src" })).resolves.toEqual({
+      ok: false,
+      reason: "denied",
+      absence: "exists",
+    });
+  });
+
+  it("keeps the helper's denial below a file used as a directory", async () => {
+    const { root } = fixture();
+    writeFileSync(join(root, "src", "present.ts"), "export {};\n");
+    const { port } = portOver(root);
+
+    await expect(port.readText({ relativePath: "src/present.ts/nested.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "denied",
+      absence: "not-directory",
+    });
+  });
+
+  it("does not follow a symlinked directory out of the workspace", async () => {
+    const { root, outside } = fixture();
+    symlinkSync(outside, join(root, "link"), directorySymlinkType());
+    writeFileSync(join(outside, "present.ts"), "export {};\n");
+    const { port } = portOver(root);
+
+    // A file beyond the link and one that is not there are the same answer: the wrapper never
+    // looks past the link, so the link cannot be used to probe what exists outside the workspace.
+    for (const relativePath of ["link/present.ts", "link/absent.ts", "link/deeper/absent.ts"]) {
+      await expect(port.readText({ relativePath })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+        absence: "link",
+      });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "treats a dangling symlink at the final component as present",
+    async () => {
+      const { root, outside } = fixture();
+      symlinkSync(join(outside, "gone.ts"), join(root, "src", "alias.ts"));
+      const { port } = portOver(root);
+
+      // `stat` and `exists` follow the link and call it absent; `lstat` sees the link itself.
+      await expect(port.readText({ relativePath: "src/alias.ts" })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+        absence: "link",
+      });
+    },
+  );
+
+  // #3873 review (PR #3876): a denied creation could not be told apart in the log. A repository that
+  // keeps a bind-mounted `build/` directory under the workspace, or whose parent directory lost its
+  // search bit, was refused as `denied` exactly as a symlink was; the verdict names which it was. The
+  // probe is scripted here because a mount and a lost search bit cannot be made on a test machine.
+  describe("a denial the walk could not turn into not-found names why", () => {
+    const directory = (dev: bigint): Awaited<ReturnType<WorkspacePathLstat>> => ({
+      dev,
+      isDirectory: (): boolean => true,
+      isSymbolicLink: (): boolean => false,
+    });
+    const errno = (code: string): Error => Object.assign(new Error(code), { code });
+
+    it("names the other device a bind-mounted directory in the chain lives on", async () => {
+      const { root } = fixture();
+      const { port } = portOver(root, helperRefuses(), (path) =>
+        path === join(root, "build")
+          ? Promise.resolve(directory(2n))
+          : Promise.resolve(directory(1n)),
+      );
+
+      await expect(port.readText({ relativePath: "build/out/report.md" })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+        absence: "foreign-device",
+      });
+    });
+
+    it.each(["EACCES", "EIO"])(
+      "names a directory in the chain whose probe failed with %s, never the error",
+      async (code) => {
+        const { root } = fixture();
+        const { port } = portOver(root, helperRefuses(), (path) =>
+          path === join(root, "build")
+            ? Promise.reject(errno(code))
+            : Promise.resolve(directory(1n)),
+        );
+
+        const result = await port.readText({ relativePath: "build/out/report.md" });
+
+        expect(result).toEqual({ ok: false, reason: "denied", absence: "probe-failed" });
+        expect(JSON.stringify(result)).not.toContain(code);
+        expect(JSON.stringify(result)).not.toContain("build");
+      },
+    );
+  });
+
+  it("denies, and never answers not-found, when the root is not a real directory", async () => {
+    const { base, root } = fixture();
+    writeFileSync(join(base, "file-root"), "not a directory\n");
+    symlinkSync(root, join(base, "link-root"), directorySymlinkType());
+
+    for (const unusable of [join(base, "gone"), join(base, "file-root"), join(base, "link-root")]) {
+      const { port } = portOver(unusable);
+      await expect(port.readText({ relativePath: "src/new.ts" })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+        absence: "root-unusable",
+      });
+    }
+  });
+
+  it.each([
+    ["invalid-path", "denied"],
+    ["malformed-request", "protocol-invalid"],
+    ["unsupported-platform", "unsupported-platform"],
+    ["not-regular", "not-text"],
+    ["content-too-large", "too-large"],
+    ["content-not-text", "not-text"],
+    ["changed-during-read", "unstable"],
+    ["io-failure", "process-failed"],
+  ] as const)(
+    "refines only access-denied: a missing path stays %s's own answer",
+    async (status, reason) => {
+      const { root } = fixture();
+      const { port } = portOver(root, helperRefuses(status));
+
+      await expect(port.readText({ relativePath: "src/new.ts" })).resolves.toEqual({
+        ok: false,
+        reason,
+      });
+    },
+  );
+
+  it("proves absence under the root that is live at each read, never a stale one", async () => {
+    const first = fixture();
+    const second = fixture();
+    writeFileSync(join(first.root, "src", "shared.ts"), "export {};\n");
+    let root = first.root;
+    const { port } = createPort(helperRefuses(), { os: "darwin", arch: "arm64" }, () => root);
+
+    await expect(port.readText({ relativePath: "src/shared.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "denied",
+      absence: "exists",
+    });
+    root = second.root;
+    await expect(port.readText({ relativePath: "src/shared.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "not-found",
+      absence: "absent",
+    });
+  });
+
+  it("never manufactures not-found for a request that was aborted while the helper ran", async () => {
+    const { root } = fixture();
+    const controller = new AbortController();
+    const refuse = helperRefuses();
+    const { port } = portOver(root, () => {
+      controller.abort();
+      return refuse();
+    });
+
+    await expect(
+      port.readText({ relativePath: "src/new.ts", signal: controller.signal }),
+    ).resolves.toEqual({ ok: false, reason: "denied", absence: "aborted" });
+  });
+
+  describe("the always-on deny list", () => {
+    const DENIED_PATHS = [
+      ".env",
+      ".env.local",
+      "config/.env",
+      ".ENV",
+      ".git/config",
+      "node_modules/pkg/index.js",
+      ".ssh/id_rsa",
+      "certs/server.pem",
+      ".claude/settings.json",
+    ] as const;
+
+    it.each(DENIED_PATHS)(
+      "answers denied for %s that exists, though the helper has no policy and would read it",
+      async (relativePath) => {
+        const { root } = fixture();
+        mkdirSync(dirname(join(root, relativePath)), { recursive: true });
+        writeFileSync(join(root, relativePath), "SECRET=1\n");
+        // What the real helper answers for `.env`: it has no deny list and returns the bytes.
+        const { port, create, verify } = portOver(root, () =>
+          Promise.resolve(
+            encodeSecureWorkspaceReadResponse({ status: "ok", bytes: Buffer.from("SECRET=1\n") }),
+          ),
+        );
+
+        await expect(port.readText({ relativePath })).resolves.toEqual({
+          ok: false,
+          reason: "denied",
+        });
+        expect(verify).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(DENIED_PATHS)(
+      "answers denied for %s that does not exist, never not-found",
+      async (relativePath) => {
+        const { root } = fixture();
+        const { port, create, verify } = portOver(root);
+
+        await expect(port.readText({ relativePath })).resolves.toEqual({
+          ok: false,
+          reason: "denied",
+        });
+        expect(verify).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+      },
+    );
+
+    it("leaves the documented .env.example exception to the helper", async () => {
+      const { root } = fixture();
+      const { port, create } = portOver(root, () =>
+        Promise.resolve(
+          encodeSecureWorkspaceReadResponse({ status: "ok", bytes: Buffer.from("KEY=\n") }),
+        ),
+      );
+
+      await expect(port.readText({ relativePath: ".env.example" })).resolves.toEqual({
+        ok: true,
+        text: "KEY=\n",
+      });
+      expect(create).toHaveBeenCalledOnce();
+    });
   });
 });

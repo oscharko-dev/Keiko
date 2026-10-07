@@ -547,6 +547,13 @@ test("deletes selected chats with one mouse action and no confirmation @smoke", 
     );
   });
   await page.goto("/");
+  // The seeded chat window binds its chat and loads its composer chunk after the page is up, and
+  // the history panel below must not be driven while that bind is still settling: on a slow CI
+  // runner (PR #3876, run 37579726862) the search text typed and the "Select all" click made
+  // during the bind never reached the panel, although both controls were visible and enabled.
+  // Waiting for the bound composer orders the two windows' startup before the journey begins.
+  const chatWindow = page.getByRole("region", { name: `Chat — ${chat.title}` });
+  await expect(chatWindow.getByRole("textbox", { name: "Chat message" })).toBeVisible();
   const history = page.getByRole("region", { name: /^Chat History/u });
   await expect(history).toBeVisible();
   await history.getByRole("textbox", { name: "Search chat history" }).fill("Batch deletion");

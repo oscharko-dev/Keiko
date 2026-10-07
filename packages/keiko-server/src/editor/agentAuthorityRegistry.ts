@@ -278,6 +278,25 @@ export class EditorAgentAuthorityRegistry {
   }
 
   /**
+   * Whether the retained runtime's cumulative prompt allowance alone cannot hold `promptTokens`
+   * more: the record is otherwise live (not revoked, expired or past its runtime budget) and only
+   * `maxPromptTokens` refuses. {@link reserveRuntimePromptTokens} answers `authority-budget-exceeded`
+   * for both an exhausted allowance and a spent runtime, so a run's terminal cause asks this to tell
+   * them apart (F9, #3873). A pure read: it books nothing.
+   */
+  public runtimePromptAllowanceExhausted(
+    reference: EditorAgentGovernedAuthorityReference,
+    promptTokens: number,
+    nowIso: string,
+  ): boolean {
+    if (!validUsageCount(promptTokens)) return false;
+    const resolved = this.resolveRetainedRuntime(reference, nowIso);
+    if (!resolved.ok) return false;
+    const { usage, envelope } = resolved.record;
+    return usage.promptTokens + promptTokens > envelope.budget.maxPromptTokens;
+  }
+
+  /**
    * Reconciles a prompt-token reservation already booked by {@link reserveRuntimePromptTokens}
    * against the provider's actual reported usage for that same call, once known. A tool-calling
    * client resends its whole growing history on every turn, so charging the full pre-call

@@ -57,6 +57,13 @@ const RUNTIME_EVENT_PRESENTATION: Record<
   "child-run-completed": { type: "step", labelKey: "activity.event.childRunCompleted" },
   "operator-decision": { type: "approval", labelKey: "activity.event.operatorDecision" },
   "failure-redacted": { type: "rejected", labelKey: "activity.event.failureRedacted" },
+  // #3873 review: SSE-only facts about the model gateway under a coding turn.
+  "model-gateway-retrying": { type: "step", labelKey: "activity.event.modelGatewayRetrying" },
+  "model-gateway-recovered": { type: "step", labelKey: "activity.event.modelGatewayRecovered" },
+  "model-gateway-retry-stopped": {
+    type: "step",
+    labelKey: "activity.event.modelGatewayRetryStopped",
+  },
 };
 
 // An `operator-decision` event with no `auxiliaryOutcome` is an OPEN decision; one carrying an

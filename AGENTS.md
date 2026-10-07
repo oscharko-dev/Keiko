@@ -232,7 +232,7 @@ evidence.
 
 | You changed…                                                    | Also run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9), and `npm run check:update-ui-evidence` when the change touches one of the eight sources the updater UI evidence binds (`src/lib/i18n-messages.de.ts` and `.en.ts`, `src/lib/api.ts`, `globals.css`, the `desktop/update/` components): a stale digest fails the `ui` and `Core quality` jobs, and the regeneration procedure is in `docs/design-system/evidence/3405/README.md`                                                                                                                                                                      |
 | A package's **public exports** / a new package                  | `npm run check:package-surface:assembled`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -553,6 +553,18 @@ is not a successfully opened file. `rootCount` and `matchCount` explain the choi
 recording the fingerprint, file path, source label or citation text. The registered server
 projection retains these closed fields on the existing Activity Log timeline.
 
+`client.coding-run.restored` records, once per distinct restoration, how the Workbench rebuilt a
+settled coding run's conversation from Coding History after a reload, under the run's own id (the
+correlation its `coding-runtime.history` lines carry). The timeline carries the newest messages the
+safe-activity contract's bounds admit (`timelineCount`, `turnCount`, `feedBytes`); every older
+message the feed cannot carry stays in the transcript, whole (`transcriptCount`,
+`transcriptChars`), so no message of the run is shown in neither place. The restoration reads the
+run's messages from the newest end and only as far as the feed can still hold them; everything
+older is named for the transcript by position and never examined. `cutCount` counts timeline
+messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
+task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
+truncated.". Counts only — never a message, path or run name.
+
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
 `resultScopeDigest`, and connected/local-knowledge/Git-change source counts. Send and PATCH
@@ -634,6 +646,41 @@ for an answer read aloud in the voice dialogue, under the correlation its synthe
 `search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
 assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
 (`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+A model turn's reasoning share is counts only (#3878): `chat.response.streamed` records the
+provider events that carried `reasoning_content` and their bytes (`reasoningEvents`,
+`reasoningBytes`); `gateway.chat.completed` and `gateway.stream.completed` record `reasoningBytes`,
+the provider-reported `reasoningTokens` (absent when not reported, never estimated) and
+`reasoningDisposition` (`none`, `forwarded`, `discarded`); `coding-sidecar.gateway.usage-settled`
+records `contentBytes`, `reasoningBytes` and `reasoningTokens` beside `outputBytes`;
+`coding-sidecar.gateway.outcome` records the `reasoningFrames` and `forwardedReasoningBytes`
+forwarded to the coding runtime, `reasoningWithheld` for a buffered answer delivered without its
+oversized reasoning, and on an `output-limit` turn the bound that ended it (`limit`: `answer`,
+`reasoning`); and `coding-runtime.history-projection` the `reasoningSignalCount` a history read
+prepared for the timeline. OpenCode persists a streamed text or reasoning part only empty and then
+complete, so the timeline grows from the runtime's delta events: the same line counts, since its
+previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
+(`liveDroppedCount`), the parts whose complete text did not extend what was shown
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
+A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
+final answer gets one steered repair from the gateway on a call that asks for it with the explicit
+`answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it
+in closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
+`reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
+`coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`
+and, when a repair ran, `repairOutcome` (`recovered`, `exhausted-again`, `empty-again`, `failed`,
+naming how the repaired attempt ended) — a line written before the gateway call settled (a byte cut,
+a cancellation) omits both, because it cannot know; a repaired turn that failed the same way again
+is final for the coding runtime (`runtimeRetry=refused`). The provider usage of the attempts a call
+discarded (a repair's first answer, a rejected tool call) counts against the run's prompt
+allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemptCount`,
+`discardedPromptTokens`, `discardedCompletionTokens`). The correction the model receives is one fixed
+sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
+upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
+assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
+records the number dropped as `droppedReasoningMessageCount`. The gateway hands reasoning only to a
+call that asks for it with the explicit `reasoningDelivery: "forward"` (the coding sidecar route
+alone); the `coding-workbench` latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
 

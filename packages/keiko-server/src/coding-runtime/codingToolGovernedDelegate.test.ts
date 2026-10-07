@@ -13,9 +13,16 @@ import {
   type CodingToolGovernedPorts,
   type GovernedCodingToolPort,
 } from "./codingToolGovernedDelegate.js";
+import type { CiRepairPromptAdmission } from "./codingRuntimeCiRepairController.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type { SkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts";
+
+// What a budget that refuses every prompt answers; the delegate never reads the prompt gate.
+const REFUSED_PROMPT: CiRepairPromptAdmission = {
+  accepted: false,
+  reason: "prompt-budget-exhausted",
+};
 
 function governedPort<
   Kind extends CodingToolActionRequest["action"],
@@ -76,8 +83,8 @@ describe("CodingToolGovernedDelegate", () => {
       };
       const budget = {
         admitTool: vi.fn(() => ({ check: (): boolean => true, settle: vi.fn() })),
-        canChargePrompt: vi.fn(() => true),
-        chargePrompt: vi.fn(() => true),
+        canChargePrompt: vi.fn(() => ({ accepted: true as const })),
+        chargePrompt: vi.fn(() => ({ accepted: true as const })),
         canChargeDelegatedRead: vi.fn(() => budgetFits),
         observed: vi.fn(),
       };
@@ -117,8 +124,8 @@ describe("CodingToolGovernedDelegate", () => {
     const ports = governedPorts();
     const budget = {
       admitTool: vi.fn(() => undefined),
-      canChargePrompt: vi.fn(() => false),
-      chargePrompt: vi.fn(() => false),
+      canChargePrompt: vi.fn(() => REFUSED_PROMPT),
+      chargePrompt: vi.fn(() => REFUSED_PROMPT),
       observed: vi.fn(),
     };
     const delegate = createCodingToolGovernedDelegate(ports, budget);
@@ -136,8 +143,8 @@ describe("CodingToolGovernedDelegate", () => {
     const ports = governedPorts();
     const budget = {
       admitTool: vi.fn(() => undefined),
-      canChargePrompt: vi.fn(() => false),
-      chargePrompt: vi.fn(() => false),
+      canChargePrompt: vi.fn(() => REFUSED_PROMPT),
+      chargePrompt: vi.fn(() => REFUSED_PROMPT),
       observed: vi.fn(),
       ciObservationRequired: vi.fn(() => true),
     };
@@ -169,8 +176,8 @@ describe("CodingToolGovernedDelegate", () => {
     const ports = { ...governedPorts(), verificationRunner };
     const budget = {
       admitTool: vi.fn(() => ({ check: (): boolean => allowed, settle })),
-      canChargePrompt: vi.fn(() => true),
-      chargePrompt: vi.fn(() => true),
+      canChargePrompt: vi.fn(() => ({ accepted: true as const })),
+      chargePrompt: vi.fn(() => ({ accepted: true as const })),
       observed: vi.fn(),
     };
     const delegate = createCodingToolGovernedDelegate(ports, budget);
@@ -206,8 +213,8 @@ describe("CodingToolGovernedDelegate", () => {
       };
       const budget = {
         admitTool: vi.fn(() => ({ check: (): boolean => repairLive, settle })),
-        canChargePrompt: (): boolean => true,
-        chargePrompt: (): boolean => true,
+        canChargePrompt: (): CiRepairPromptAdmission => ({ accepted: true }),
+        chargePrompt: (): CiRepairPromptAdmission => ({ accepted: true }),
         observed: vi.fn(),
       };
       const events: ServerLogEvent[] = [];

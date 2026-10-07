@@ -8,12 +8,75 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "patch": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 65536,
-              "pattern": "^(?:(?:(?:diff --git [^\\r\\n]+ [^\\r\\n]+\\r?\\n)(?:index [^\\r\\n]+\\r?\\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\\r\\n]+\\r?\\n@@ )",
-              "description": "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation."
+            "edits": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+                  },
+                  "oldString": {
+                    "type": "string",
+                    "maxLength": 65536,
+                    "description": "Exact current text to replace, copied byte for byte from the latest keiko_workspace_read. Empty only to create a new file."
+                  },
+                  "newString": {
+                    "type": "string",
+                    "maxLength": 65536,
+                    "description": "Replacement text."
+                  },
+                  "replaceAll": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence instead of exactly one."
+                  }
+                },
+                "required": ["file", "oldString", "newString"]
+              },
+              "description": "Exact text replacements applied in order, after renames and before deletions. Each oldString must occur exactly once in its file unless replaceAll is true. Use [] when the call only renames or deletes."
+            },
+            "deletions": {
+              "type": "array",
+              "maxItems": 50,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+              },
+              "description": "Files to delete entirely, applied after edits; each must be listed in files with its last read digest and may not also be edited. Use [] for none."
+            },
+            "renames": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+                    "description": "Existing file to move, listed in files with its last read digest."
+                  },
+                  "to": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
+                    "description": "New path, which must not exist, listed in files with the empty-content digest."
+                  }
+                },
+                "required": ["from", "to"]
+              },
+              "description": "Files to move, applied before edits; an edit addresses a moved file by its new path. Use [] for none."
             },
             "files": {
               "type": "array",
@@ -37,7 +100,7 @@
                 },
                 "required": ["file", "expectedContentHash"]
               },
-              "description": "Every file changed by patch, bound to its last governed read digest."
+              "description": "Every path touched by edits, renames (both paths) and deletions, bound to its last governed read digest (a new file or rename target uses the empty-content digest)."
             },
             "selectedFiles": {
               "type": "array",
@@ -50,10 +113,10 @@
                 "maxLength": 512,
                 "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
               },
-              "description": "Optional subset of files to apply; each entry must occur in files."
+              "description": "Every path the call touches; a touched path left out is refused, never applied partially. Each entry must occur in files."
             }
           },
-          "required": ["patch", "files"]
+          "required": ["edits", "files"]
         }
       },
       "required": ["changeset"],

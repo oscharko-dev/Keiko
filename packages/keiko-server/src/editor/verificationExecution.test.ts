@@ -237,6 +237,74 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
   });
 });
 
+// F14 (#3873): the isolation probe runs before the report's own clock starts, so its wall time was in
+// no number the log carried, and the egress policy the orchestrator ran under was an inline literal
+// nothing reported. The execution now hands both back next to the report, so the manager can put
+// them on the run's completion line.
+describe("executeVerificationEnforced — what the execution reports about its own isolation (F14, #3873)", () => {
+  it("measures the probe's own wall time and reports the egress policy the orchestrator ran under", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-probe-time-")));
+    const availability = vi.spyOn(sandbox, "probeBackends");
+    try {
+      await writeFile(join(root, "package.json"), PACKAGE_JSON, "utf8");
+      const workspace = detectWorkspaceAt(root);
+      const plan = buildVerificationPlan(workspace, detectScripts(workspace), {
+        only: ["typecheck"],
+      });
+      // Only Date is faked: the probe "takes" seven seconds on a clock the test owns, while the rest
+      // of the execution (a step denied before any spawn) runs on the real event loop.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_000_000);
+      availability.mockImplementation(() => {
+        vi.setSystemTime(Date.now() + 7_000);
+        return { bubblewrap: false, unshare: false, seatbelt: false, docker: false, podman: false };
+      });
+
+      const result = await executeVerificationEnforced({
+        plan,
+        workspace,
+        signal: new AbortController().signal,
+      });
+
+      expect(result.probeDurationMs).toBe(7_000);
+      expect(result.networkEnforcement).toBe("enforce-or-fail-closed");
+      expect(result.probe).toEqual({ available: false, backend: "none" });
+      // The policy reported is the one the orchestrator received: with no backend it denied the step
+      // before spawning, which only the fail-closed mode does.
+      expect(result.report.results[0]?.status).toBe("denied");
+    } finally {
+      vi.useRealTimers();
+      availability.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a whole, non-negative probe duration on any host", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-probe-whole-")));
+    try {
+      // No script to run: the step is skipped before any spawn, so the real probe is the only
+      // host-dependent part and the test is hermetic on a host with or without a backend.
+      await writeFile(join(root, "package.json"), JSON.stringify({ name: "no-scripts" }), "utf8");
+      const workspace = detectWorkspaceAt(root);
+      const plan = buildVerificationPlan(workspace, detectScripts(workspace), {
+        only: ["typecheck"],
+      });
+
+      const result = await executeVerificationEnforced({
+        plan,
+        workspace,
+        signal: new AbortController().signal,
+      });
+
+      expect(Number.isSafeInteger(result.probeDurationMs)).toBe(true);
+      expect(result.probeDurationMs).toBeGreaterThanOrEqual(0);
+      expect(result.networkEnforcement).toBe("enforce-or-fail-closed");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // Audit finding: VerificationRunnerManager already tracks a per-run correlationId at both of its
 // executePort call sites but never forwarded it into executeVerificationEnforced, so every
 // verification termination line was stamped UNKNOWN_CORRELATION_ID even when the run's real id was

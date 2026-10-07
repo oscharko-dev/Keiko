@@ -26,6 +26,10 @@ import {
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
+import type { CodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type { CodingRuntimeHostRunEffort } from "./codingRuntimeRunEffort.js";
+import type { CodingRuntimeTerminalFacts } from "./codingRuntimeTerminalCause.js";
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -36,6 +40,7 @@ import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import type { ToolBridgeApprovalRejection } from "./opencodeV2ApprovalRequests.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import type { CodingRuntimeEditOutcomeObserver } from "./codingToolFacadePorts.js";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
 
 /**
@@ -78,8 +83,33 @@ export interface CodingRuntimeHost {
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
+  // The one secure workspace read the governed `keiko_workspace_read` tool answers through, exposed
+  // so `deps.ts` can compose the repository-instructions loader (ADR-0137 D1) over the SAME helper
+  // instead of a second filesystem path. Present once a qualified runtime host is composed.
+  readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   readonly contextUsage?:
     { readonly read: (runId: string) => CodingWorkbenchContextUsage | undefined } | undefined;
+  /**
+   * #3873: the run host's share of a run's effort — its model calls and governed tool calls, counted
+   * where the host saw them. Read when the run settles, for the roll-up on `coding-runtime.run.settled`.
+   */
+  readonly runEffort?:
+    { readonly read: (runId: string) => CodingRuntimeHostRunEffort | undefined } | undefined;
+  /**
+   * F9 (#3873): whether the run's most recent model-call admission was refused by its cumulative
+   * prompt allowance, the authority's own or the same `maxPromptTokens` counted by the run's CI
+   * repair, and by no other reason a CI-repair budget refuses for. Read when a failed task settles,
+   * so the run names the exhausted allowance instead of an internal error; absent, no failure is
+   * attributed to the allowance.
+   */
+  readonly promptAllowanceExhausted?: ((runId: string) => boolean) | undefined;
+  /**
+   * F9 (#3873): whether the run's time limit has run out: its Authority Envelope's end, or the same
+   * `maxRuntimeMs` counted by the run's CI repair when that refused its most recent model call. Read
+   * when a failed task settles, so a run that reached its limit names it instead of an internal
+   * error; absent, no failure is attributed to the duration.
+   */
+  readonly envelopeDurationExhausted?: ((runId: string) => boolean) | undefined;
   readonly runtimeCapabilityAuthenticator?:
     | {
         readonly authenticate: (
@@ -110,6 +140,15 @@ export interface CodingRuntimeHost {
   // .notifyVerifiedHeadAdvanced` once it does. Consumed internally by
   // `createCodingRuntimeControlPlane` below -- never forwarded past this module.
   readonly attachVerifiedHeadNotifier?: ((notify: (runId: string) => void) => void) | undefined;
+  /**
+   * F5 (#3873): called exactly once, right after this control plane builds its orchestrator, with
+   * the orchestrator's `observeEditOutcome`. Late-bound for the reason `attachVerifiedHeadNotifier`
+   * is: each run's tool facade is composed inside the runtime resolver, before the orchestrator
+   * exists, and reports every applied or refused edit through this slot so the run's consecutive
+   * refusals are bounded. Consumed internally by `createCodingRuntimeControlPlane` below.
+   */
+  readonly attachEditOutcomeObserver?:
+    ((observe: CodingRuntimeEditOutcomeObserver) => void) | undefined;
   /**
    * Binds the repository semantic index this server can open (#3416). Late-bound for the same
    * reason `attachVerifiedHeadNotifier` is: the lease is derived from the assembled deps graph,
@@ -176,6 +215,7 @@ export interface CodingRuntimeControlPlaneInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -226,6 +266,7 @@ export function createCodingRuntimeControlPlane(
     void orchestrator.ingest(event);
   };
   attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
+  attachEditOutcomeObserver(input.runtimeHost, orchestrator);
   orchestrator.startupReconcileNow();
   return {
     orchestrator,
@@ -280,9 +321,35 @@ function createControlPlaneOrchestrator(
       ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
     ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
+    ...(input.repositoryInstructions
+      ? { repositoryInstructions: input.repositoryInstructions }
+      : {}),
+    terminalFacts: codingRuntimeTerminalFacts(eventHub, input.runtimeHost),
+    runEffort: input.runtimeHost?.runEffort?.read,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
   });
+}
+
+/**
+ * F9 (#3873): the facts a failed run's settlement names its cause from, each read from the layer
+ * that owns it — the sidecar gateway's failed-call causes from the control plane's event hub, the
+ * prompt allowance and the envelope duration from the runtime host's authority.
+ */
+export function codingRuntimeTerminalFacts(
+  eventHub: Pick<
+    CodingRuntimeEventHub,
+    "lastModelCallFailure" | "lastModelCallProviderUnavailable"
+  >,
+  runtimeHost:
+    Pick<CodingRuntimeHost, "promptAllowanceExhausted" | "envelopeDurationExhausted"> | undefined,
+): CodingRuntimeTerminalFacts {
+  return {
+    promptAllowanceExhausted: (runId) => runtimeHost?.promptAllowanceExhausted?.(runId) === true,
+    envelopeDurationExhausted: (runId) => runtimeHost?.envelopeDurationExhausted?.(runId) === true,
+    lastModelCallFailure: (runId) => eventHub.lastModelCallFailure(runId),
+    lastModelCallProviderUnavailable: (runId) => eventHub.lastModelCallProviderUnavailable(runId),
+  };
 }
 
 // #3401: fills the runtime host's notify slot with the orchestrator's real, public
@@ -294,6 +361,17 @@ function attachVerifiedHeadNotifier(
 ): void {
   runtimeHost?.attachVerifiedHeadNotifier?.((runId: string): void => {
     orchestrator.notifyVerifiedHeadAdvanced(runId);
+  });
+}
+
+// F5 (#3873): fills the runtime host's edit outcome slot with the orchestrator's real, public
+// `observeEditOutcome` seam, so the refusal bound counts what each run's facade answered.
+function attachEditOutcomeObserver(
+  runtimeHost: CodingRuntimeHost | undefined,
+  orchestrator: CodingRuntimeOrchestrator,
+): void {
+  runtimeHost?.attachEditOutcomeObserver?.((runId, outcome): void => {
+    orchestrator.observeEditOutcome(runId, outcome);
   });
 }
 

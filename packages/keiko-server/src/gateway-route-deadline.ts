@@ -1,8 +1,9 @@
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
+  bufferedCallBudgetMs,
+  callOutageWindowMs,
   codingWorkbenchProviderTimeoutMs,
-  providerRequestBudgetMs,
-  streamRequestBudgetMs,
+  streamedCallBudgetMs,
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 
@@ -25,26 +26,37 @@ export const UNCONFIGURED_MODEL_ROUTE_DEADLINE_MS = 30_000;
 // route's signal can stop would hang three times longer than its own budget (PR #3602 review).
 export type GatewayCallShape = "buffered" | "streamed";
 
-type RouteProviderBudgetPolicy = Parameters<typeof providerRequestBudgetMs>[0];
+type RouteProviderBudgetPolicy = Parameters<typeof bufferedCallBudgetMs>[0];
 
-function gatewayCallBudgetMs(provider: RouteProviderBudgetPolicy, shape: GatewayCallShape): number {
-  return shape === "streamed" ? streamRequestBudgetMs(provider) : providerRequestBudgetMs(provider);
+function gatewayCallBudgetMs(
+  provider: RouteProviderBudgetPolicy,
+  shape: GatewayCallShape,
+  outageWindowMs: number,
+): number {
+  return shape === "streamed"
+    ? streamedCallBudgetMs(provider, outageWindowMs)
+    : bufferedCallBudgetMs(provider, outageWindowMs);
 }
 
+// `outagePolicy` is the request signal the route's calls carry (#3873): a route whose calls ride
+// out a gateway outage gets a backstop behind the window-extended budget the gateway then grants,
+// from the same derivation, so the route cannot cut the configured window short (#3873 review).
 export function gatewayRouteDeadlineMs(
   config: GatewayConfig,
   modelId: string,
   shapes: readonly [GatewayCallShape, ...GatewayCallShape[]],
+  outagePolicy?: "outage-window",
 ): number {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   const raised =
     provider === undefined
       ? undefined
       : { ...provider, timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs) };
+  const outageWindowMs = callOutageWindowMs(config, outagePolicy);
   const budget =
     raised === undefined
       ? UNCONFIGURED_MODEL_ROUTE_DEADLINE_MS
-      : Math.max(...shapes.map((shape) => gatewayCallBudgetMs(raised, shape)));
+      : Math.max(...shapes.map((shape) => gatewayCallBudgetMs(raised, shape, outageWindowMs)));
   // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
   // turn the backstop into an immediate abort.
   return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);

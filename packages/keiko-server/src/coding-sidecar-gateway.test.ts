@@ -10,12 +10,14 @@ import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  Gateway,
   ProviderError,
   ResponseRedactionError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
+  type GatewayRetryNotice,
   type GatewayStreamChunk,
   type ModelCapability,
   type ModelProviderConfig,
@@ -28,16 +30,23 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
   AuthenticationError,
+  CancelledError,
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   MalformedToolCallError,
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
+  TransportError,
+  UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
@@ -399,6 +408,56 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 describe("coding-sidecar gateway", () => {
   afterEach(resetServerLogger);
 
+  // #3873 review: the outage window is an explicit request signal that only this route sets, on its
+  // buffered AND its streamed model calls; the commit draft borrows the latency profile alone. The
+  // coding profile streams upstream wherever the capability streams and `codingStreaming` is not
+  // "off" (lab ledger F2), so the streamed case here is answered live through `chatStream()` and the
+  // buffered one through `chat()`: whichever gateway call serves the turn carries the policy.
+  it.each([
+    { label: "buffered", stream: false },
+    { label: "streamed", stream: true },
+  ])("gives the gateway call of a $label coding turn the outage policy", async ({ stream }) => {
+    resetGatewayInstanceCacheForTests();
+    const captured: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      captured.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    const chatStream = vi.spyOn(Gateway.prototype, "chatStream").mockImplementation((request) => {
+      captured.push(request);
+      return streamedResponse(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          stream,
+          messages: [{ role: "user", content: "continue" }],
+          tools: [],
+        }),
+        depsValue(configValue(provider(), capability())),
+      );
+
+      if (stream) expect(result).toBe(STREAMING);
+      else expect(result).toMatchObject({ status: 200 });
+      expect(captured).toHaveLength(1);
+      // #3873 (F23): the explicit reasoning delivery rides with the timeout floors and the outage
+      // policy, so the gateway forwards the model's reasoning on this route and nowhere else.
+      expect(captured[0]).toMatchObject({
+        latencyProfile: "coding-workbench",
+        outagePolicy: "outage-window",
+        reasoningDelivery: "forward",
+      });
+      // #3873 review: the call also carries the observer through which the route surfaces the
+      // gateway's retries to the run status; the default factories keep it.
+      expect(captured[0]?.retryObserver).toBeTypeOf("function");
+    } finally {
+      chat.mockRestore();
+      chatStream.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it.each([
     { label: "buffered", stream: false },
     { label: "streaming", stream: true },
@@ -414,10 +473,15 @@ describe("coding-sidecar gateway", () => {
           return Promise.reject(new Error("provider unavailable"));
         }),
       );
-      const initialConfig = configValue(
-        provider({ baseUrl: "https://initial-gateway.example/v1", maxRetries: 0 }),
-        capability(),
-      );
+      // #3873: the coding outage window is switched off so the dead provider fails at once; the
+      // pinned invariant is the gateway binding, and gateway.coding-outage.test.ts owns the policy.
+      const initialConfig = {
+        ...configValue(
+          provider({ baseUrl: "https://initial-gateway.example/v1", maxRetries: 0 }),
+          capability(),
+        ),
+        codingOutageWindowMs: 0,
+      };
       const runtimeConfig = probeVerifiedGatewayConfig(initialConfig);
       const deps = {
         ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-pinned" } })),
@@ -741,9 +805,12 @@ describe("coding-sidecar gateway", () => {
     resetGatewayInstanceCacheForTests();
     const fetchMock = vi.fn(() => Promise.reject(new Error("provider unavailable")));
     vi.stubGlobal("fetch", fetchMock);
+    // #3873: with the coding outage window switched off, the open breaker refuses the third call
+    // at once; the pinned invariant is the breaker state shared across separate requests.
     const config = {
       ...configValue(provider({ maxRetries: 0 }), capability()),
       circuitBreaker: { failureThreshold: 2, cooldownMs: 30_000, halfOpenProbes: 1 },
+      codingOutageWindowMs: 0,
     };
     const deps = depsValue(config);
     const request = (): RouteContext =>
@@ -894,7 +961,9 @@ describe("coding-sidecar gateway", () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
-      ["keiko_changeset_edit", "ed31a7b545d02b150eb3896ca88a2b6823a4b9c02f1c86bb425351334dc9a2e1"],
+      // #3873 follow-up: deletions and renames joined the replacement changeset (regenerated from
+      // the producer with projectedGatewaySchema; a schema change here is deliberate, never typed).
+      ["keiko_changeset_edit", "a88e907c1c4f7f955dccfa4d960e10f315a59a1f94b16cedc223f2a47bf4abf6"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
@@ -2243,11 +2312,33 @@ describe("coding-sidecar gateway", () => {
   // 1,800 s stream floor, and the route adds its one-second grace behind the LONGER of the two
   // budgets — with no retries the buffered budget is the shorter one, and a deadline derived from
   // it alone cancelled a healthy stream the gateway was still reading (PR #3602 review).
+  // #3873: the arithmetic above is the one without an outage window, so this pin switches the window
+  // off; the window's own extension of the budgets is pinned in the next test.
   it("keeps a slow Coding Workbench turn alive past a 30-second provider spike", () => {
     const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
     expect(
-      codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
+      codingSidecarGatewayRequestDeadlineMs(
+        { ...configValue(slow, capability()), codingOutageWindowMs: 0 },
+        slow.modelId,
+      ),
     ).toBe(1_801_000);
+  });
+
+  // #3873 review: the sidecar's calls ride out a gateway outage, and their budgets extend to the
+  // window plus one attempt (the stream's own 1,800 s read for a streamed call), so the backstop
+  // must sit behind that extension or it would cut the configured window short: 1,800 s + 600 s
+  // default window + 1 s grace, and 1,800 s + 1,800 s + 1 s for a 30-minute window.
+  it("keeps the route deadline behind the outage window the coding turn rides out", () => {
+    const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
+    expect(
+      codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
+    ).toBe(2_401_000);
+    expect(
+      codingSidecarGatewayRequestDeadlineMs(
+        { ...configValue(slow, capability()), codingOutageWindowMs: 1_800_000 },
+        slow.modelId,
+      ),
+    ).toBe(3_601_000);
   });
 
   // The sidecar reaches the gateway both ways (`chat()` buffered, `chatStream()` streamed), so the
@@ -2874,6 +2965,9 @@ describe("coding-sidecar gateway", () => {
       cancellationCause: "client-disconnect",
       deadlineMs: expect.any(Number) as number,
     });
+    // #3873 review: the gateway call never settled, so the line cannot know whether a steered
+    // repair was running (a disconnect during a repair looks the same) and says nothing about it.
+    expect(outcome?.extra).not.toHaveProperty("repairAttempted");
   });
 
   // #3602 review: a stream that stalls until the route backstop fires used to leave the same
@@ -3151,7 +3245,8 @@ describe("coding-sidecar gateway", () => {
       profileId: "coding-safe-openai-compatible",
       modelAlias: "azure-coding-model",
       localEndpointPath: "/api/coding-sidecar/gateway",
-      supportsStreaming: false,
+      // Lab ledger F2: the fixture capability streams, so the profile streams by default.
+      supportsStreaming: true,
       supportsToolCalling: true,
     });
     expect(JSON.stringify(result)).not.toContain("baseUrl");
@@ -4828,6 +4923,159 @@ describe("coding sidecar gateway turn failure projection", () => {
       },
     );
 
+    // F10 (#3873 review, PR #3876): `provider-failed` names a provider that rejected the turn and one
+    // that stayed unavailable alike. The turn's line and the run's last-failure record carry the
+    // gateway's own fact that the provider could not serve the call, which the run's settlement reads
+    // to name the outage. Only a retryable provider status, a rate limit and an open breaker are one.
+    it.each([
+      [new ProviderError("synthetic unavailable", 503), true],
+      [new ProviderError("synthetic gateway timeout", 504), true],
+      [new ProviderError("synthetic request timeout", 408), true],
+      [new ProviderError("synthetic throttled", 429), true],
+      [new RateLimitError("synthetic rate limit"), true],
+      [new CircuitOpenError("synthetic circuit open"), true],
+      [new ProviderError("synthetic bad request", 400), false],
+      [new ProviderError("synthetic conflict", 409), false],
+      [new AuthenticationError("synthetic credential refused"), false],
+    ] as const)(
+      "marks a provider-failed turn that ended on %s as an unavailable provider: %s",
+      async (error, unavailable) => {
+        const sink = captureServerLog("warn");
+        const eventHub = new CodingRuntimeEventHub();
+        const deps: UiHandlerDeps = {
+          ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+          codingRuntimeEventHub: eventHub,
+          codingRuntimeOrchestrator: runningOrchestrator,
+        };
+
+        await handleCodingSidecarGatewayChatCompletions(
+          routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+          deps,
+        );
+
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({ failureCode: "provider-failed" });
+        expect(line?.extra?.providerUnavailable).toBe(unavailable ? true : undefined);
+        expect(eventHub.lastModelCallProviderUnavailable("run-gateway-test")).toBe(unavailable);
+        expectActivityLogProof(
+          "coding-sidecar.gateway.turn-failed.emitted-line",
+          formatActivityLogProofLine(line ?? {}),
+        );
+        // The fact never reaches the public frame the browser receives.
+        const replay = eventHub.replay("run-gateway-test");
+        expect(JSON.stringify(replay)).not.toContain("providerUnavailable");
+      },
+    );
+
+    it.each([
+      [new TimeoutError("synthetic timeout")],
+      [new TransportError("synthetic reset")],
+      [new ProviderError("synthetic empty stream", 200)],
+    ] as const)(
+      "marks nothing on a turn that ended on %s: its own code already says the call stopped answering",
+      async (error) => {
+        const sink = captureServerLog("warn");
+        const eventHub = new CodingRuntimeEventHub();
+        const deps: UiHandlerDeps = {
+          ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+          codingRuntimeEventHub: eventHub,
+          codingRuntimeOrchestrator: runningOrchestrator,
+        };
+
+        await handleCodingSidecarGatewayChatCompletions(
+          routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+          deps,
+        );
+
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({ failureCode: "stream-incomplete" });
+        expect(line?.extra).not.toHaveProperty("providerUnavailable");
+        expect(eventHub.lastModelCallProviderUnavailable("run-gateway-test")).toBe(false);
+      },
+    );
+
+    // The streamed path filed every gateway error it had no rule for as `stream-incomplete`, the
+    // cause a failed run settles `provider-unavailable` ("nothing was rejected, check that the
+    // gateway is running"). A configuration or egress refusal is no stream that stopped answering: it
+    // is `provider-failed`, as on the buffered path, and no retry can change it.
+    it.each([
+      [new ConfigInvalidError("synthetic invalid configuration")],
+      [new UnknownModelError("synthetic unknown model")],
+      [new GatewayEgressError(ERROR_CODES.PROXY_BLOCKED_BY_POLICY, "synthetic egress block")],
+    ] as const)(
+      "reports a streamed %s as a provider failure the runtime must not retry",
+      async (error) => {
+        const sink = captureServerLog("warn");
+        const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+          [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }),
+        });
+        const response = mockResponse({ captureBody: true });
+        const context = authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic" }],
+          tools: modelVisibleTools(),
+        });
+        const deps = {
+          ...runtimeGatewayDeps(
+            () => ({ ok: true, binding: { runId: "run-stream-config" } }),
+            undefined,
+            createOpenCodeGatewayReadinessRegistry(),
+            (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+          ),
+          codingRuntimeOrchestrator: runningOrchestrator,
+        } as UiHandlerDeps;
+
+        const result = await handleCodingSidecarGatewayChatCompletions(
+          { ...context, res: response.res },
+          deps,
+        );
+
+        expect(result).toBe(STREAMING);
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({
+          failureCode: "provider-failed",
+          runtimeRetry: "refused",
+        });
+        expect(line?.extra).not.toHaveProperty("providerUnavailable");
+        expect(response.body()).toContain(rejectionChunk);
+        expect(response.body()).not.toContain(error.message);
+      },
+    );
+
+    it("keeps a fault that is no gateway error, inside the stream, a stream that stopped answering", async () => {
+      const sink = captureServerLog("warn");
+      const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(new Error("synthetic decoder fault")),
+        }),
+      });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-fault" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "stream-incomplete",
+        runtimeRetry: "allowed",
+      });
+    });
+
     // A spend rejection no retry can change ended a streamed turn with `finish_reason: "error"`,
     // which the runtime retries without end, like the lab's rejected turn.
     it("ends a streamed turn the spend budget refused with the rejection chunk", async () => {
@@ -5909,6 +6157,97 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     });
   });
 
+  // #3873 review (PR #3876): the run's effort roll-up paired a settlement with its reservation by
+  // size alone, so a released call took the start of an answered call of the same size. The
+  // admitted reservation answers an opaque identity and the settlement hands it back verbatim.
+  it("hands the identity its admitted reservation answered back with the settlement", async () => {
+    const settlePromptTokens =
+      vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.resolve(assistantResponse("azure-coding-model")),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-gateway-test", modelCallId: 41 }),
+        settlePromptTokens,
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    expect(settlePromptTokens.mock.calls[0]?.[3]).toBe(41);
+  });
+
+  it("settles a release with the identity of the call it releases", async () => {
+    const settlePromptTokens =
+      vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
+    const response = mockResponse({ captureBody: true });
+    response.res.write = vi.fn(() => false);
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "undeliverable" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    await handleCodingSidecarGatewayChatCompletions(context, {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-released-identity" } }),
+        () => chat,
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-released-identity" } }),
+        reservePromptTokens: () => ({
+          ok: true,
+          runId: "run-released-identity",
+          modelCallId: 7,
+        }),
+        settlePromptTokens,
+      },
+    });
+
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, , actual, modelCallId] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(actual).toBe(0);
+    expect(modelCallId).toBe(7);
+  });
+
+  it.each([
+    ["no identity", { ok: true, runId: "run-gateway-test" }],
+    ["a non-integer identity", { ok: true, runId: "run-gateway-test", modelCallId: 1.5 }],
+    ["a textual identity", { ok: true, runId: "run-gateway-test", modelCallId: "41" }],
+  ])("settles without an identity when the reservation answered %s", async (_label, reserved) => {
+    const settlePromptTokens =
+      vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.resolve(assistantResponse("azure-coding-model")),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: () => reserved,
+        settlePromptTokens,
+      },
+    };
+
+    await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    // Exactly the three arguments it always had: a call the registry cannot name is not tracked.
+    expect(settlePromptTokens.mock.calls[0]).toHaveLength(3);
+  });
+
   it("records a retained reservation when authority refuses settlement after a pause", async () => {
     const sink = captureServerLog("info");
     const reservedEstimates: number[] = [];
@@ -5982,5 +6321,2539 @@ describe("admittedOutputTokens", () => {
       8_000,
     );
     expect(admittedOutputTokens({ maxPromptTokens: 128_000, maxOutputTokens: 4 }, 10)).toBe(4);
+  });
+});
+
+const sseData = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
+const sseDelta = (delta: Readonly<Record<string, unknown>>): string =>
+  sseData({ choices: [{ index: 0, delta }] });
+const sseFinish = (reason: string): string =>
+  sseData({ choices: [{ index: 0, delta: {}, finish_reason: reason }] });
+
+interface DrivenProviderStream {
+  readonly response: Response;
+  readonly push: (line: string) => void;
+  readonly end: () => void;
+}
+
+// A provider SSE answer the test writes line by line; it stays open until the test ends it.
+function drivenProviderStream(): DrivenProviderStream {
+  const encoder = new TextEncoder();
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(started): void {
+      controller = started;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    push: (line): void => {
+      controller?.enqueue(encoder.encode(line));
+    },
+    end: (): void => {
+      controller?.close();
+    },
+  };
+}
+
+function providerSse(lines: readonly string[]): Response {
+  const stream = drivenProviderStream();
+  for (const line of lines) stream.push(line);
+  stream.end();
+  return stream.response;
+}
+
+function sseFrames(body: string): readonly unknown[] {
+  return body
+    .trim()
+    .split("\n\n")
+    .filter((frame) => frame.startsWith("data: ") && frame !== "data: [DONE]")
+    .map((frame) => JSON.parse(frame.slice("data: ".length)) as unknown);
+}
+
+function isDeltaRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && Object.keys(value).length > 0;
+}
+
+function frameDeltas(body: string): readonly Readonly<Record<string, unknown>>[] {
+  return sseFrames(body).flatMap((frame) => {
+    const choices = (frame as { readonly choices?: readonly { readonly delta?: unknown }[] })
+      .choices;
+    const delta = choices?.[0]?.delta;
+    return isDeltaRecord(delta) ? [delta] : [];
+  });
+}
+
+function liveTurnContext(response: ReturnType<typeof mockResponse>): RouteContext {
+  return {
+    ...authenticatedContext({
+      model: "coding",
+      stream: true,
+      messages: [{ role: "user", content: "fix the parser" }],
+      tools: modelVisibleTools(),
+    }),
+    res: response.res,
+  };
+}
+
+function liveDeps(runId: string, config: Partial<GatewayConfig> = {}): UiHandlerDeps {
+  return {
+    ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId } })),
+    config: { ...configValue(provider(), capability()), ...config },
+  };
+}
+
+// Lab ledger F2 (#3873): the sidecar profile was hard-coded as non-streaming, so even a provider that
+// streams (`chat.response.streamed dataEvents=2571` in the live run) reached OpenCode as one buffered
+// frame (`sse.stream.closed frameCount=5`) and a slow model showed only "Working". Owner decision
+// 2026-10-06: live by default wherever the model streams; `codingStreaming: "off"` opts out.
+describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  it("forwards each provider delta to the coding runtime before the provider has finished", async () => {
+    resetGatewayInstanceCacheForTests();
+    const upstream = drivenProviderStream();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(upstream.response)),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const pending = handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-live"),
+    );
+    upstream.push(sseDelta({ role: "assistant", content: "First " }));
+    await vi.waitFor(() => {
+      expect(response.body()).toContain('"content":"First "');
+    });
+    upstream.push(sseDelta({ content: "second." }));
+    upstream.push(sseFinish("stop"));
+    upstream.push("data: [DONE]\n\n");
+    upstream.end();
+
+    expect(await pending).toBe(STREAMING);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { content: "First " },
+      { content: "second." },
+    ]);
+    expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("keeps a silent live turn's connection alive with SSE comments, as the buffered answer did", async () => {
+    vi.useFakeTimers();
+    try {
+      let release = (): void => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const response = mockResponse({ captureBody: true });
+      const deps = runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-silent" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await gate;
+            yield { type: "delta", token: "late" };
+            yield {
+              type: "done",
+              response: { ...assistantResponse("azure-coding-model"), content: "late" },
+            };
+          },
+      );
+
+      const pending = handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps);
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(response.body()).toContain(": keep-alive");
+      release();
+
+      expect(await pending).toBe(STREAMING);
+      expect(frameDeltas(response.body())).toEqual([{ role: "assistant" }, { content: "late" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the buffered answer when the operator switched coding streaming off", async () => {
+    resetGatewayInstanceCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          providerSse([
+            sseDelta({ content: "First " }),
+            sseDelta({ content: "second." }),
+            sseFinish("stop"),
+            "data: [DONE]\n\n",
+          ]),
+        ),
+      ),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-buffered", { codingStreaming: "off" }),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { content: "First second." },
+    ]);
+  });
+});
+
+// #3878: the model's reasoning (`reasoning_content`) reaches OpenCode as `delta.reasoning_content`,
+// the field its OpenAI-compatible provider turns into a reasoning part, and the log records only
+// its share of the turn, never its text.
+describe("coding sidecar gateway model reasoning (#3878)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const REASONING_DELTAS = ["Prüfe ", "den Randfall."] as const;
+  const CONTENT_DELTAS = ["Asking ", "first."] as const;
+
+  function reasonedProviderAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: REASONING_DELTAS[0] }),
+      sseDelta({ reasoning_content: REASONING_DELTAS[1] }),
+      sseDelta({ content: CONTENT_DELTAS[0] }),
+      sseDelta({ content: CONTENT_DELTAS[1] }),
+      sseDelta({
+        tool_calls: [
+          {
+            index: 0,
+            id: "call-q",
+            type: "function",
+            function: { name: "question", arguments: "" },
+          },
+        ],
+      }),
+      sseDelta({ tool_calls: [{ index: 0, function: { arguments: '{"questions":[]}' } }] }),
+      sseFinish("tool_calls"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 120,
+          completion_tokens_details: { reasoning_tokens: 96 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  const utf8 = (value: string): number => Buffer.byteLength(value, "utf8");
+
+  it("records the turn's content, reasoning and tool-call share on usage-settled", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(reasonedProviderAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-reasoning-share"),
+    );
+
+    expect(result).toBe(STREAMING);
+    const settled = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.usage-settled",
+    );
+    expect(settled?.extra).toMatchObject({
+      completionTokens: 120,
+      contentBytes: utf8(CONTENT_DELTAS.join("")),
+      reasoningBytes: utf8(REASONING_DELTAS.join("")),
+      reasoningTokens: 96,
+    });
+    expect(utf8(REASONING_DELTAS.join(""))).toBe(20);
+    expect(utf8(CONTENT_DELTAS.join(""))).toBe(13);
+    // Answer text, tool call and structured output together; the tool call is the difference.
+    expect(Number(settled?.extra?.outputBytes)).toBeGreaterThan(13 + "question".length);
+    expectActivityLogProof(
+      "coding-sidecar.gateway.usage-settled.line",
+      formatActivityLogProofLine(settled ?? {}),
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "accepted", reasoningFrames: 2 });
+    expect(JSON.stringify(sink.events)).not.toContain("Randfall");
+  });
+
+  it("forwards reasoning as reasoning_content frames ahead of the answer and its tool call", async () => {
+    resetGatewayInstanceCacheForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(reasonedProviderAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-reasoning-frames"),
+    );
+
+    const deltas = frameDeltas(response.body());
+    expect(deltas.slice(0, 5)).toEqual([
+      { role: "assistant" },
+      { reasoning_content: REASONING_DELTAS[0] },
+      { reasoning_content: REASONING_DELTAS[1] },
+      { content: CONTENT_DELTAS[0] },
+      { content: CONTENT_DELTAS[1] },
+    ]);
+    expect(deltas[5]).toMatchObject({
+      tool_calls: [{ index: 0, id: "call-q", type: "function", function: { name: "question" } }],
+    });
+    expect(
+      deltas.some((delta) => "content" in delta && String(delta.content).includes("Prüfe")),
+    ).toBe(false);
+  });
+
+  it("discards the reasoning but keeps its counts when the operator switched the display off", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(reasonedProviderAnswer())),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(response),
+      liveDeps("run-reasoning-off", { codingReasoningDisplay: "off" }),
+    );
+
+    expect(response.body()).not.toContain("reasoning_content");
+    expect(response.body()).not.toContain("Randfall");
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({ reasoningBytes: 20, reasoningTokens: 96, contentBytes: 13 });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "accepted", reasoningFrames: 0 });
+    expect(
+      sink.events.find((event) => event.op === "gateway.stream.completed")?.extra,
+    ).toMatchObject({ reasoningDisposition: "discarded", reasoningBytes: 20 });
+  });
+
+  it("forwards the reasoning of a buffered answer in its one frame and in a JSON answer", async () => {
+    const reasoned: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "Fixed.",
+      reasoning: "Weigh the edge case.",
+    };
+    const chatFactory =
+      (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+        Promise.resolve(reasoned);
+    const streamed = mockResponse({ captureBody: true });
+    const sink = captureServerLog("info");
+
+    await handleCodingSidecarGatewayChatCompletions(
+      liveTurnContext(streamed),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-buffered-reasoning" } }),
+        chatFactory,
+      ),
+    );
+    const json = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix it" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-json-reasoning" } }),
+        chatFactory,
+      ),
+    );
+
+    expect(frameDeltas(streamed.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Weigh the edge case.", content: "Fixed." },
+    ]);
+    assertRouteResult(json);
+    expect(json.body).toMatchObject({
+      choices: [{ message: { content: "Fixed.", reasoning_content: "Weigh the edge case." } }],
+    });
+    const outcomes = sink.events.filter((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcomes.map((event) => event.extra?.reasoningFrames)).toEqual([1, 1]);
+    expect(JSON.stringify(sink.events)).not.toContain("edge case");
+  });
+
+  it("ends a turn whose forwarded reasoning outgrows the output allowance as output-limit", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const endless = "r".repeat(1_000_000);
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-reasoning-limit" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) =>
+        async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          yield { type: "reasoning", token: endless };
+          yield { type: "delta", token: "never sent" };
+          yield { type: "done", response: assistantResponse("azure-coding-model") };
+        },
+    );
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).not.toContain("never sent");
+    expect(response.body()).not.toContain(endless.slice(0, 64));
+    expect(response.body()).toContain('"finish_reason":"length"');
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    // #3873 review: the line names the reasoning bound and the bytes the runtime received, and —
+    // written before the gateway call settled — says nothing about a steered repair it cannot know.
+    expect(outcome?.extra).toMatchObject({
+      outcome: "output-limit",
+      limit: "reasoning",
+      reasoningFrames: 0,
+      forwardedReasoningBytes: 0,
+    });
+    expect(outcome?.extra).not.toHaveProperty("repairAttempted");
+    expect(outcome?.extra).not.toHaveProperty("repairOutcome");
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.outcome.line",
+        formatActivityLogProofLine(outcome ?? {}),
+      ),
+    ).toMatchObject({ outcome: "output-limit", limit: "reasoning" });
+  });
+
+  it("names the answer bound of an output-limit turn and the reasoning the runtime received", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-answer-limit" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) =>
+        async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          yield { type: "reasoning", token: "Prüfe" };
+          yield { type: "delta", token: "a".repeat(1_000_000) };
+          yield { type: "done", response: assistantResponse("azure-coding-model") };
+        },
+    );
+
+    await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps);
+
+    expect(response.body()).toContain('"finish_reason":"length"');
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "output-limit",
+      limit: "answer",
+      reasoningFrames: 1,
+      forwardedReasoningBytes: Buffer.byteLength("Prüfe", "utf8"),
+    });
+    expect(outcome?.extra).not.toHaveProperty("repairAttempted");
+  });
+
+  // #3873 review: a buffered answer is complete when it arrives, so the size of the reasoning beside
+  // it never refuses it (before, a reasoning averaging more than four bytes per token turned a valid
+  // answer into a 503). The reasoning is display-only: it is withheld, and the line says so.
+  it("delivers a complete buffered answer and withholds a reasoning that outgrew its bound", async () => {
+    const sink = captureServerLog("info");
+    const reasoned: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "Fixed.",
+      reasoning: "r".repeat(1_000_000),
+    };
+    const answer = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix it" }],
+        tools: modelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-withheld-reasoning" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.resolve(reasoned),
+      ),
+    );
+
+    assertRouteResult(answer);
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({ choices: [{ message: { content: "Fixed." } }] });
+    expect(JSON.stringify(answer.body)).not.toContain("reasoning_content");
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "accepted",
+      reasoningWithheld: true,
+      reasoningFrames: 0,
+      forwardedReasoningBytes: 0,
+      repairAttempted: false,
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.outcome.line",
+        formatActivityLogProofLine(outcome ?? {}),
+      ),
+    ).toMatchObject({ outcome: "accepted", reasoningWithheld: true });
+  });
+
+  // #3873 review: the attempts the gateway discarded on its way to the answer — a steered repair's
+  // first answer, a rejected tool call — were processed by the provider, so the run's prompt
+  // allowance counts them beside the answer's own prompt, and the usage line names them.
+  it("counts the prompt tokens of the attempts the gateway discarded against the run allowance", async () => {
+    const sink = captureServerLog("info");
+    const settlePromptTokens = vi.fn(
+      (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
+    );
+    const repaired: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      outputRepair: "recovered",
+      discardedAttemptUsage: { attemptCount: 1, promptTokens: 1_200, completionTokens: 8_192 },
+    };
+    const answer = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "fix it" }],
+        tools: modelVisibleTools(),
+      }),
+      {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-discarded" } }),
+          (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+            Promise.resolve(repaired),
+        ),
+        runtimeCapabilityAuthenticator: {
+          authenticate: () => ({ ok: true, binding: { runId: "run-discarded" } }),
+          reservePromptTokens: () => ({ ok: true, runId: "run-discarded" }),
+          settlePromptTokens,
+        },
+      },
+    );
+
+    assertRouteResult(answer);
+    expect(answer.status).toBe(200);
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, , actual] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(actual).toBe(12 + 1_200);
+    const usage = sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled");
+    expect(usage?.extra).toMatchObject({
+      promptTokens: 12 + 1_200,
+      promptSource: "provider-reported",
+      discardedAttemptCount: 1,
+      discardedPromptTokens: 1_200,
+      discardedCompletionTokens: 8_192,
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.usage-settled.line",
+        formatActivityLogProofLine(usage ?? {}),
+      ),
+    ).toMatchObject({ discardedAttemptCount: 1 });
+  });
+
+  // #3873 review: a stream that already delivered answer text cannot be replayed without
+  // duplicating it, so a provider failure after it ends the turn with `finish_reason: "error"` and
+  // leaves the retry to the runtime (`runtimeRetry=allowed`). A failure while only reasoning was
+  // delivered is retried inside the gateway under the turn's outage policy (gateway tests).
+  it("ends a live turn whose provider failed after answer text with an error the runtime may retry", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-after-text" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            throw new TransportError("connection reset after answer text");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).toContain("partial");
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({ outcome: "failed", repairAttempted: false });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runId: "run-after-text", runtimeRetry: "allowed" });
+  });
+});
+
+// #3873 (F17): the allowance a coding turn actually sends, derived from the production entry points
+// — the coding profile's run metadata and the shared chat profile — never from a restated formula.
+// Gemma 4 31B behind LiteLLM (131,072-token window, no declared output limit) was sent the chat
+// surface's 8,192 and spent all of it on reasoning; a coding turn now reserves at least 16,384 unless
+// the declared `max_output_tokens` or the prompt-admission arithmetic is smaller.
+describe("admittedOutputTokens — coding turns reserve room for reasoning (#3873 F17)", () => {
+  const WINDOW = 131_072;
+  const PROMPT = 20_000;
+
+  function codingBounds(
+    maxOutputTokens: number,
+    route: { readonly streaming?: boolean; readonly codingStreaming?: "on" | "off" } = {},
+  ): CodingWorkbenchSidecarGatewayRunMetadata {
+    const config = configValue(
+      provider(),
+      capability({
+        contextWindow: WINDOW,
+        maxOutputTokens,
+        ...(route.streaming === undefined ? {} : { streaming: route.streaming }),
+      }),
+    );
+    const result = resolveCodingSafeSidecarGatewayProfile(
+      route.codingStreaming === undefined
+        ? config
+        : { ...config, codingStreaming: route.codingStreaming },
+      { modelId: "azure-coding-model" },
+    );
+    if (result.status !== "available") throw new Error("expected an available coding profile");
+    return result.runMetadata;
+  }
+
+  it("sends a coding turn 16,384 output tokens where the model declares no limit", () => {
+    expect(admittedOutputTokens(codingBounds(0), PROMPT)).toBe(16_384);
+  });
+
+  it("keeps the chat surface's own 8,192 reserve for the same window", () => {
+    const chat = deriveContextProfileFromCapability(
+      capability({ contextWindow: WINDOW, maxOutputTokens: 0 }),
+    );
+    expect(
+      admittedOutputTokens(
+        { maxPromptTokens: chat.maxInputTokens, maxOutputTokens: chat.reservedOutputTokens },
+        PROMPT,
+      ),
+    ).toBe(8_192);
+  });
+
+  it("lets a smaller declared max_output_tokens win", () => {
+    expect(admittedOutputTokens(codingBounds(4_096), PROMPT)).toBe(4_096);
+  });
+
+  it("shrinks the coding reserve to what the prompt leaves after the safety margin", () => {
+    // 131,072 window, 4,096 safety margin at that size: a 120,000-token prompt leaves 6,976.
+    expect(admittedOutputTokens(codingBounds(0), 120_000)).toBe(WINDOW - 120_000 - 4_096);
+  });
+
+  // #3873 review: a buffered coding turn is one whole-body read under the buffered attempt bound.
+  // At self-hosted throughput the larger reserve would outlive it and turn a runaway answer into a
+  // provider timeout the breaker counts and nothing repairs, so it keeps the shared reserve, and
+  // the runaway ends as an exhausted answer the gateway steers a repair for.
+  it("keeps the shared 8,192 reserve on a model that does not stream", () => {
+    expect(admittedOutputTokens(codingBounds(0, { streaming: false }), PROMPT)).toBe(8_192);
+  });
+
+  // #3873 review: with coding streaming switched off, a streaming-capable model is still read over
+  // its own stream under the silence floor (`readsOverStream`), not under the whole-body bound, so
+  // shrinking its reserve would only bring back F17's exhaustion.
+  it("keeps the 16,384 coding reserve when only the sidecar's streaming is switched off", () => {
+    expect(admittedOutputTokens(codingBounds(0, { codingStreaming: "off" }), PROMPT)).toBe(16_384);
+  });
+
+  // Accepted case (#3873 review): a DECLARED output limit is the operator's statement and is used as
+  // declared on every route; the troubleshooting entry tells them to declare a non-streaming route's
+  // limit only as high as one whole-body attempt can produce.
+  it("uses a declared output limit as declared on a model that does not stream", () => {
+    expect(admittedOutputTokens(codingBounds(12_000, { streaming: false }), PROMPT)).toBe(12_000);
+  });
+});
+
+// #3873 (F17): run 324076066246415201273338647160811469441 — Gemma 4 31B with reasoning enabled
+// spent its whole output budget without a tool call, and the runtime retried the identical turn,
+// which ran away identically, three times. The gateway now steers one repaired attempt
+// (gateway.output-repair.test.ts); the turn's settlement lines say whether it ran and how it ended,
+// and a repair that exhausted the budget again is answered as final to the runtime.
+describe("coding sidecar gateway output-exhausted repair evidence (#3873 F17)", () => {
+  afterEach(resetServerLogger);
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 7 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const exhaustedAgain = (): ProviderOutputExhaustedError =>
+    Object.assign(new ProviderOutputExhaustedError("coding"), {
+      outputRepair: "exhausted-again",
+    });
+  const recovered = (): NormalizedResponse => ({
+    ...assistantResponse("azure-coding-model"),
+    outputRepair: "recovered",
+  });
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const bufferedDeps = (answer: () => Promise<NormalizedResponse>): UiHandlerDeps => ({
+    ...depsValue(configValue(provider(), capability()), () => answer),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+  const streamedDeps = (stream: () => AsyncGenerator<GatewayStreamChunk>): UiHandlerDeps => ({
+    ...runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-output-repair" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+        stream(),
+    ),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+  const streamedContext = (): RouteContext =>
+    authenticatedContext({
+      model: "coding",
+      stream: true,
+      messages: [{ role: "user", content: "synthetic turn" }],
+      tools: modelVisibleTools(),
+    });
+
+  it("refuses a runtime retry once the repaired buffered attempt exhausted the budget again", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(exhaustedAgain())),
+    );
+    // A final 400, which the runtime reads as the end of the turn, not a 503 it would retry.
+    expect(result).toMatchObject({ status: 400 });
+    const failed = lineOf(sink.events, "coding-sidecar.gateway.turn-failed");
+    expect(failed?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.turn-failed.emitted-line",
+        formatActivityLogProofLine(failed ?? {}),
+      ),
+    ).toMatchObject({ runtimeRetry: "refused", repairOutcome: "exhausted-again" });
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+  });
+
+  it("keeps a first exhaustion the call could not repair retryable, with no repair recorded", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(new ProviderOutputExhaustedError("coding"))),
+    );
+    expect(result).toMatchObject({ status: 503 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "allowed",
+      repairAttempted: false,
+    });
+    expect(
+      lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra?.repairOutcome,
+    ).toBeUndefined();
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: false,
+    });
+  });
+
+  it("records a recovered repair on the accepted buffered outcome", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.resolve(recovered())),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(JSON.stringify(result)).not.toContain("outputRepair");
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+  });
+
+  it("refuses a runtime retry once the repaired streamed attempt exhausted the budget again", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw exhaustedAgain();
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      { ...streamedContext(), res: response.res },
+      streamedDeps(stream),
+    );
+    expect(result).toBe(STREAMING);
+    // The final rejection chunk, never `finish_reason: "error"`, which the runtime would retry.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+  });
+
+  it("records a recovered repair on the accepted streamed outcome", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      { ...streamedContext(), res: response.res },
+      streamedDeps(() => streamedResponse(recovered())),
+    );
+    expect(result).toBe(STREAMING);
+    expect(response.body()).not.toContain("outputRepair");
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+  });
+});
+
+// Owner decision 2026-10-06 (#3873 F17, option iii): with the reasoning display on, a live coding
+// turn has already shown its reasoning when the model exhausts the budget on it. The gateway's one
+// steered repair still runs — the runtime sees a second reasoning passage, never a duplicated answer
+// — and a second exhaustion is final for the runtime. Proven through the real gateway over the
+// provider's wire, as the Workbench runs it.
+describe("coding sidecar gateway output-exhausted repair after forwarded reasoning (#3873 F17, option iii)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 9 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+
+  // The provider's answer that spent its whole budget on reasoning: reasoning deltas, then
+  // `finish_reason: "length"` with no content.
+  function exhaustedReasoningAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Think " }),
+      sseDelta({ reasoning_content: "hard." }),
+      sseFinish("length"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 4_096,
+          completion_tokens_details: { reasoning_tokens: 4_096 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function repairedAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Briefly: " }),
+      sseDelta({ content: "Done." }),
+      sseFinish("stop"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 70,
+          completion_tokens: 12,
+          completion_tokens_details: { reasoning_tokens: 4 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function liveRepairDeps(runId: string): UiHandlerDeps {
+    return { ...liveDeps(runId), codingRuntimeOrchestrator: runningOrchestrator };
+  }
+
+  it("repairs a live turn that exhausted its budget after forwarded reasoning and delivers the second passage", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+        return Promise.resolve(bodies.length === 1 ? exhaustedReasoningAnswer() : repairedAnswer());
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-repair-live"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(bodies).toHaveLength(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Briefly: " },
+      { content: "Done." },
+    ]);
+    expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
+    // The repaired request is the original plus the fixed correction, never the reasoning quoted back.
+    const repaired = bodies[1] as { readonly messages?: readonly { readonly content?: unknown }[] };
+    expect(repaired.messages?.at(-1)).toMatchObject({ role: "system" });
+    expect(String(repaired.messages?.at(-1)?.content)).toContain("whole output budget");
+    expect(JSON.stringify(bodies[1])).not.toContain("Think ");
+    expect(lineOf(sink.events, "gateway.retry.scheduled")?.extra).toMatchObject({
+      reason: "output-exhausted-repair",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+      reasoningFrames: 3,
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  it("refuses a runtime retry once the repaired live turn exhausted the budget again after forwarded reasoning", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const fetchMock = vi.fn(() => Promise.resolve(exhaustedReasoningAnswer()));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-repair-exhausted"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+    ]);
+    // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "output-exhausted",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "exhausted-again",
+      reasoningFrames: 4,
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  // The forwarded-reasoning bound admits one passage per model attempt: the answer attempt and its
+  // one steered repair. Two passages that each fit one allowance are not an overgrown reasoning.
+  it("admits a second reasoning passage within the turn's two-attempt reasoning bound", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    // The fixture capability declares 4,096 output tokens: one passage of 15,000 bytes fits that
+    // allowance in bytes (16,384); two of them exceed it and fit two.
+    const passage = "r".repeat(15_000);
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-two-passages" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) =>
+        async function* (): AsyncGenerator<GatewayStreamChunk> {
+          await Promise.resolve();
+          yield { type: "reasoning", token: passage };
+          yield { type: "reasoning", token: passage };
+          yield { type: "delta", token: "ok" };
+          yield {
+            type: "done",
+            response: { ...assistantResponse("azure-coding-model"), outputRepair: "recovered" },
+          };
+        },
+    );
+
+    expect(await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps)).toBe(
+      STREAMING,
+    );
+
+    expect(response.body()).not.toContain('"finish_reason":"length"');
+    expect(response.body()).toContain('"content":"ok"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      reasoningFrames: 2,
+      repairAttempted: true,
+      repairOutcome: "recovered",
+    });
+  });
+});
+
+// #3873 (F23): run 74202984158312182524609898190850427735 — Gemma 4 31B streamed through LiteLLM
+// reasoned for about 4,500 tokens and ended its turn without a tool call or any text, and the
+// runtime retried the identical turn seven times. The gateway now steers one repair for an answer
+// that ended after reasoning (gateway.output-repair.test.ts); the turn's settlement lines say how it
+// ended, and a repair that ended empty again is answered as final to the runtime, like an exhausted
+// budget that stayed exhausted.
+describe("coding sidecar gateway empty-answer repair evidence (#3873 F23)", () => {
+  afterEach(resetServerLogger);
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 7 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const emptyAfterReasoning = (outputRepair?: "empty-again" | "failed"): ProviderEmptyAnswerError =>
+    Object.assign(
+      new ProviderEmptyAnswerError("coding", [], true),
+      outputRepair === undefined ? {} : { outputRepair },
+    );
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const bufferedDeps = (answer: () => Promise<NormalizedResponse>): UiHandlerDeps => ({
+    ...depsValue(configValue(provider(), capability()), () => answer),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+  const streamedDeps = (stream: () => AsyncGenerator<GatewayStreamChunk>): UiHandlerDeps => ({
+    ...runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-empty-repair" } }),
+      undefined,
+      createOpenCodeGatewayReadinessRegistry(),
+      (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+        stream(),
+    ),
+    codingRuntimeOrchestrator: runningOrchestrator,
+  });
+
+  it("refuses a runtime retry once the repaired buffered attempt ended empty again", async () => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(emptyAfterReasoning("empty-again"))),
+    );
+    // A final 400, which the runtime reads as the end of the turn, not a 503 it would retry.
+    expect(result).toMatchObject({ status: 400 });
+    const failed = lineOf(sink.events, "coding-sidecar.gateway.turn-failed");
+    expect(failed?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.turn-failed.emitted-line",
+        formatActivityLogProofLine(failed ?? {}),
+      ),
+    ).toMatchObject({ runtimeRetry: "refused", repairOutcome: "empty-again" });
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+  });
+
+  it.each([
+    ["a first empty answer the call could not repair", undefined, false],
+    ["a repair that never ran because its admission was refused", "failed", true],
+  ] as const)("keeps %s retryable", async (_label, outputRepair, repairAttempted) => {
+    const sink = captureServerLog("info");
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      bufferedDeps(() => Promise.reject(emptyAfterReasoning(outputRepair))),
+    );
+    expect(result).toMatchObject({ status: 503 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "allowed",
+      repairAttempted,
+    });
+  });
+
+  it("refuses a runtime retry once the repaired streamed attempt ended empty again", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw emptyAfterReasoning("empty-again");
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic turn" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      },
+      streamedDeps(stream),
+    );
+    expect(result).toBe(STREAMING);
+    // The final rejection chunk, never `finish_reason: "error"`, which the runtime would retry.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+  });
+});
+
+// The F23 loop on the sidecar's real wire: the provider's SSE answer ends after reasoning, the real
+// gateway steers its one repair, and the runtime receives the second reasoning passage — or, when
+// the repaired attempt ends empty again, the final rejection it reads as the end of the turn.
+describe("coding sidecar gateway empty-answer repair after forwarded reasoning (#3873 F23)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 9 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const usageFrame = (): string =>
+    sseData({
+      choices: [],
+      usage: {
+        prompt_tokens: 40,
+        completion_tokens: 900,
+        completion_tokens_details: { reasoning_tokens: 900 },
+      },
+    });
+
+  // The provider's answer that reasoned and ended its turn: reasoning deltas, `finish_reason: "stop"`
+  // and no content or tool call (HTTP 200, so neither a broken stream nor an exhausted budget).
+  function emptyAfterReasoningAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Think " }),
+      sseDelta({ reasoning_content: "hard." }),
+      sseFinish("stop"),
+      usageFrame(),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  // The same, with no reasoning at all: the model's final word, never repaired (#3610).
+  function plainEmptyAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: "" }),
+      sseFinish("stop"),
+      usageFrame(),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function repairedAnswer(): Response {
+    return providerSse([
+      sseDelta({ role: "assistant", content: null, reasoning_content: "Briefly: " }),
+      sseDelta({ content: "Done." }),
+      sseFinish("stop"),
+      sseData({
+        choices: [],
+        usage: {
+          prompt_tokens: 70,
+          completion_tokens: 12,
+          completion_tokens_details: { reasoning_tokens: 4 },
+        },
+      }),
+      "data: [DONE]\n\n",
+    ]);
+  }
+
+  function liveRepairDeps(runId: string): UiHandlerDeps {
+    return { ...liveDeps(runId), codingRuntimeOrchestrator: runningOrchestrator };
+  }
+
+  it("repairs a live turn that ended empty after forwarded reasoning and delivers the second passage", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+        return Promise.resolve(
+          bodies.length === 1 ? emptyAfterReasoningAnswer() : repairedAnswer(),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-empty-repair-live"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(bodies).toHaveLength(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Briefly: " },
+      { content: "Done." },
+    ]);
+    expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
+    // The repaired request is the original plus the fixed correction, never the reasoning quoted back.
+    const repaired = bodies[1] as { readonly messages?: readonly { readonly content?: unknown }[] };
+    expect(repaired.messages?.at(-1)).toMatchObject({ role: "system" });
+    expect(String(repaired.messages?.at(-1)?.content)).toContain("ended after reasoning");
+    expect(JSON.stringify(bodies[1])).not.toContain("Think ");
+    expect(lineOf(sink.events, "gateway.retry.scheduled")?.extra).toMatchObject({
+      reason: "empty-answer-repair",
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.outcome")?.extra).toMatchObject({
+      outcome: "accepted",
+      repairAttempted: true,
+      repairOutcome: "recovered",
+      reasoningFrames: 3,
+    });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  it("refuses a runtime retry once the repaired live turn ended empty again after forwarded reasoning", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const fetchMock = vi.fn(() => Promise.resolve(emptyAfterReasoningAnswer()));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-empty-repair-exhausted"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(frameDeltas(response.body())).toEqual([
+      { role: "assistant" },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+      { reasoning_content: "Think " },
+      { reasoning_content: "hard." },
+    ]);
+    // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
+    expect(response.body()).toContain('"code":400');
+    expect(response.body()).not.toContain('"finish_reason":"error"');
+    const failed = lineOf(sink.events, "coding-sidecar.gateway.turn-failed");
+    expect(failed?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "refused",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.turn-failed.emitted-line",
+      formatActivityLogProofLine(failed ?? {}),
+    );
+    const outcome = lineOf(sink.events, "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "failed",
+      repairAttempted: true,
+      repairOutcome: "empty-again",
+      reasoningFrames: 4,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
+    expect(JSON.stringify(sink.events)).not.toContain("Think ");
+  });
+
+  // The #3610 pin on the real wire: an empty answer with no reasoning is the model's final word, so
+  // it gets no repair and stays the retryable failure it always was.
+  it("does not repair an empty live answer that carried no reasoning", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const fetchMock = vi.fn(() => Promise.resolve(plainEmptyAnswer()));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = mockResponse({ captureBody: true });
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        liveTurnContext(response),
+        liveRepairDeps("run-empty-no-repair"),
+      ),
+    ).toBe(STREAMING);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(lineOf(sink.events, "gateway.retry.scheduled")).toBeUndefined();
+    expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")?.extra).toMatchObject({
+      failureCode: "empty-answer",
+      runtimeRetry: "allowed",
+      repairAttempted: false,
+    });
+  });
+});
+
+// #3873 (F23): the failed turn's reasoning stayed in OpenCode's history and was resent, which grew
+// the prompt by about 6,200 tokens and two messages per attempt. Prior reasoning is never resent
+// upstream: the sidecar drops the reasoning fields of prior assistant messages and every assistant
+// message that carries nothing but reasoning, before the gateway request is built, and records how
+// many it dropped as a count.
+describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F23)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+    resetServerLogger();
+  });
+
+  const lineOf = (events: readonly ServerLogEvent[], op: string): ServerLogEvent | undefined =>
+    events.find((event) => event.op === op);
+  const READ_CALL = {
+    id: "call-1",
+    type: "function",
+    function: { name: "keiko_workspace_read", arguments: '{"relativePath":"src/a.ts"}' },
+  };
+  // OpenCode's history after a failed turn: the reasoning the sidecar forwarded came back as an
+  // assistant message that carries nothing else, and earlier assistant messages carry their own.
+  const HISTORY: readonly unknown[] = [
+    { role: "system", content: "governed prompt" },
+    { role: "user", content: "fix the parser" },
+    { role: "assistant", content: "", reasoning_content: "private failed-turn reasoning" },
+    { role: "user", content: "continue" },
+    {
+      role: "assistant",
+      content: "Reading the file.",
+      reasoning_content: "private reasoning beside a tool call",
+      tool_calls: [READ_CALL],
+    },
+    { role: "tool", content: "file body", tool_call_id: "call-1" },
+    { role: "assistant", content: null, reasoning: "private second failed-turn reasoning" },
+    { role: "user", content: "go on" },
+  ];
+
+  it("drops prior reasoning and reasoning-only assistant messages before the gateway request is built", async () => {
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "coding", messages: HISTORY, tools: v2ModelVisibleTools() }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    expect(seen[0]?.messages[3]).toMatchObject({
+      role: "assistant",
+      content: "Reading the file.",
+      toolCalls: [expect.objectContaining({ id: "call-1" })],
+    });
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("private");
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("reasoning");
+    const validated = lineOf(sink.events, "coding-sidecar.gateway.request-validated");
+    expect(validated?.extra).toMatchObject({
+      inputMessageCount: 6,
+      droppedReasoningMessageCount: 2,
+    });
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.request-validated.line",
+        formatActivityLogProofLine(validated ?? {}),
+      ),
+    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    expect(JSON.stringify(sink.events)).not.toContain("private");
+  });
+
+  it("sends neither the reasoning nor a reasoning-only message over the provider wire", async () => {
+    resetGatewayInstanceCacheForTests();
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit) => {
+        bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+        return Promise.resolve(
+          providerSse([
+            sseDelta({ role: "assistant", content: "ok" }),
+            sseFinish("stop"),
+            "data: [DONE]\n\n",
+          ]),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+
+    await handleCodingSidecarGatewayChatCompletions(
+      {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: HISTORY,
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      },
+      liveDeps("run-history-wire"),
+    );
+
+    expect(bodies).toHaveLength(1);
+    const upstream = bodies[0] as { readonly messages?: readonly Record<string, unknown>[] };
+    expect(upstream.messages?.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    // No assistant message is empty, and none carries a reasoning field of either name.
+    expect(
+      upstream.messages?.every(
+        (message) => !("reasoning_content" in message) && !("reasoning" in message),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(bodies[0])).not.toContain("private");
+  });
+
+  it.each([
+    ["an empty string", { content: "" }],
+    ["null", { content: null }],
+    ["no content field", {}],
+    ["whitespace only", { content: " \n\t" }],
+    ["an empty text part list", { content: [] }],
+    ["empty text parts", { content: [{ type: "text", text: "" }] }],
+    ["an empty list of tool calls", { content: "", tool_calls: [] }],
+  ] as const)(
+    "drops an assistant message whose only payload is reasoning, with %s as its content",
+    async (_label, contentFields) => {
+      const sink = captureServerLog("info");
+      const seen: GatewayRequest[] = [];
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [
+            { role: "user", content: "task" },
+            { role: "assistant", ...contentFields, reasoning_content: "private thought" },
+            { role: "user", content: "continue" },
+          ],
+          tools: v2ModelVisibleTools(),
+        }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-history-shapes" } }),
+          (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+            (request: GatewayRequest): Promise<NormalizedResponse> => {
+              seen.push(request);
+              return Promise.resolve(assistantResponse("azure-coding-model"));
+            },
+        ),
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(seen[0]?.messages.map((message) => message.role)).toEqual(["user", "user"]);
+      expect(lineOf(sink.events, "coding-sidecar.gateway.request-validated")?.extra).toMatchObject({
+        inputMessageCount: 2,
+        droppedReasoningMessageCount: 1,
+      });
+    },
+  );
+
+  it.each([
+    ["answer text", { content: "Done." }],
+    ["a tool call", { content: "", tool_calls: [READ_CALL] }],
+    ["a null content and a tool call", { content: null, tool_calls: [READ_CALL] }],
+  ] as const)(
+    "keeps an assistant message that carries %s beside its reasoning, without the reasoning",
+    async (_label, payload) => {
+      const sink = captureServerLog("info");
+      const seen: GatewayRequest[] = [];
+      const messages: unknown[] = [
+        { role: "user", content: "task" },
+        { role: "assistant", ...payload, reasoning_content: "private thought" },
+      ];
+      if ("tool_calls" in payload)
+        messages.push({ role: "tool", content: "file body", tool_call_id: "call-1" });
+      messages.push({ role: "user", content: "continue" });
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "coding", messages, tools: v2ModelVisibleTools() }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-history-kept" } }),
+          (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+            (request: GatewayRequest): Promise<NormalizedResponse> => {
+              seen.push(request);
+              return Promise.resolve(assistantResponse("azure-coding-model"));
+            },
+        ),
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(seen[0]?.messages).toHaveLength(messages.length);
+      expect(seen[0]?.messages[1]?.role).toBe("assistant");
+      expect(JSON.stringify(seen[0]?.messages)).not.toContain("private");
+      expect(lineOf(sink.events, "coding-sidecar.gateway.request-validated")?.extra).toMatchObject({
+        droppedReasoningMessageCount: 0,
+      });
+    },
+  );
+
+  // A message that carries nothing at all is not a reasoning-only message: it was never dropped and
+  // stays exactly as before, so the drop is no wider than the rule it implements.
+  it("keeps an assistant message that carries nothing at all, as before", async () => {
+    const seen: GatewayRequest[] = [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "task" },
+          { role: "assistant", content: "" },
+          { role: "user", content: "continue" },
+        ],
+        tools: v2ModelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history-empty" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+  });
+
+  it("does not take a reasoning field on another role for a message to drop", async () => {
+    const seen: GatewayRequest[] = [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [
+          { role: "user", content: "task", reasoning_content: "private user-side field" },
+          { role: "tool", content: "", tool_call_id: "call-x", reasoning_content: "private" },
+        ],
+        tools: v2ModelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history-roles" } }),
+        (): ((request: GatewayRequest) => Promise<NormalizedResponse>) =>
+          (request: GatewayRequest): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(seen[0]?.messages.map((message) => message.role)).toEqual(["user", "tool"]);
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("private");
+  });
+
+  it("refuses a history that was nothing but reasoning-only messages as an empty one", async () => {
+    const sink = captureServerLog("info");
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "assistant", content: "", reasoning_content: "private thought" }],
+        tools: v2ModelVisibleTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-history-nothing" } }),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.reject(new Error("the gateway must not be reached")),
+      ),
+    );
+
+    expect(result).toMatchObject({ status: 400 });
+    expect(lineOf(sink.events, "coding-sidecar.gateway.rejected")?.extra).toMatchObject({
+      reason: "body-empty-messages",
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("private");
+  });
+});
+
+// #3873 review: while the gateway rides out a provider outage the turn waits silently, and the
+// Workbench's run status read "Waiting for the model" for the whole window. The route hands every
+// model call an observer of the gateway's retry loop; the first retry of an unavailable provider is
+// published to the run's event replay as `model-gateway-retrying`, and the answer that ends the
+// outage as `model-gateway-recovered`. Each publication leaves a body-free line on the Activity Log.
+describe("coding sidecar gateway retry facts (#3873 review)", () => {
+  afterEach(resetServerLogger);
+
+  const runningOrchestrator = {
+    getSnapshot: () => ({ state: "running", revision: 4 }),
+  } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+  const retrySurfaced = (events: readonly ServerLogEvent[]): readonly ServerLogEvent[] =>
+    events.filter((event) => event.op === "coding-sidecar.gateway.retry-surfaced");
+  const SCHEDULED = { kind: "scheduled", attempt: 1, retryPolicy: "outage-window" } as const;
+  const ANSWERED = { kind: "settled", outcome: "answered" } as const;
+
+  function replayedFacts(hub: CodingRuntimeEventHub, runId: string): readonly unknown[] {
+    const replay = hub.replay(runId);
+    return replay.ok
+      ? replay.events.map((event) =>
+          event.kind === "runtime-event" ? event.eventKind : event.kind,
+        )
+      : [];
+  }
+
+  // A streamed turn whose gateway call tells the observer what the real retry loop tells it. A step
+  // that is a function runs between the notices, as another frame of the run does in real time.
+  function streamingDeps(
+    runId: string,
+    hub: CodingRuntimeEventHub,
+    steps: readonly (GatewayRetryNotice | (() => void))[],
+    orchestrator: UiHandlerDeps["codingRuntimeOrchestrator"] = runningOrchestrator,
+    ending: "answer" | "failure" = "answer",
+  ): UiHandlerDeps {
+    return {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayCallRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (request): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            for (const step of steps) {
+              if (typeof step === "function") step();
+              else request.retryObserver?.(step);
+            }
+            if (ending === "failure") throw new TransportError("provider down");
+            yield { type: "delta", token: "answer" };
+            yield { type: "done", response: assistantResponse("azure-coding-model") };
+          },
+      ),
+      codingRuntimeEventHub: hub,
+      codingRuntimeOrchestrator: orchestrator,
+    };
+  }
+
+  function streamedContext(content: string): RouteContext {
+    return {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content }],
+        tools: modelVisibleTools(),
+      }),
+      res: mockResponse({ captureBody: true }).res,
+    };
+  }
+
+  it("publishes one retrying frame per outage and a recovered frame once the call is answered", async () => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const deps = streamingDeps("run-retry-streamed", hub, [
+      SCHEDULED,
+      { ...SCHEDULED, attempt: 2 },
+      { ...SCHEDULED, attempt: 3 },
+      ANSWERED,
+    ]);
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("ride out an outage"), deps),
+    ).toBe(STREAMING);
+
+    expect(replayedFacts(hub, "run-retry-streamed")).toEqual([
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+    ]);
+    const lines = retrySurfaced(sink.events);
+    expect(lines.map((line) => line.extra)).toEqual([
+      expect.objectContaining({
+        runId: "run-retry-streamed",
+        revision: 4,
+        state: "running",
+        fact: "retrying",
+        attempt: 1,
+        retryPolicy: "outage-window",
+        published: true,
+        publicationReason: "published",
+        completeness: "complete",
+        loss: "none",
+      }),
+      expect.objectContaining({
+        runId: "run-retry-streamed",
+        fact: "recovered",
+        published: true,
+        publicationReason: "published",
+      }),
+    ]);
+    expect(lines[1]?.extra).not.toHaveProperty("attempt");
+    expect(lines[1]?.extra).not.toHaveProperty("retryPolicy");
+    expect(lines[0]?.correlationId).toBe("run-retry-streamed");
+    expect(
+      expectActivityLogProof(
+        "coding-sidecar.gateway.retry-surfaced.emitted-line",
+        formatActivityLogProofLine(lines[0] ?? {}),
+      ),
+    ).toMatchObject({ fact: "retrying", attempt: 1, published: true });
+  });
+
+  // The whole path, with nothing replaced between the route and the provider: a coding turn's real
+  // gateway call meets an overloaded provider, rides it out under the outage policy, and the run's
+  // replay says so while it happens and when it ends.
+  it("surfaces the real retry loop of a gateway call that meets an overloaded provider", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    let providerCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        providerCalls += 1;
+        if (providerCalls <= 2) {
+          return Promise.resolve(new Response("overloaded", { status: 503 }));
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: "chatcmpl-retry",
+              object: "chat.completion",
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: "done" },
+                  finish_reason: "stop",
+                },
+              ],
+              usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    try {
+      const runtimeConfig = probeVerifiedGatewayConfig(
+        configValue(provider({ maxRetries: 3, retryBaseDelayMs: 1 }), capability()),
+      );
+      const deps = {
+        ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-retry-real" } })),
+        gatewayConfig: runtimeConfig,
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "ride out the overload" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(providerCalls).toBe(3);
+      expect(replayedFacts(hub, "run-retry-real")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(retrySurfaced(sink.events)[0]?.extra).toMatchObject({
+        fact: "retrying",
+        attempt: 1,
+        retryPolicy: "outage-window",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // One retry, two numbers, on purpose (review thread 6pydYN), through the whole path: an answer that
+  // spent its output budget gets the gateway's one steered repair, and the retry that follows an
+  // overloaded provider after it is scheduled as attempt 2 on the gateway's own ladder, which counts
+  // the repair, while the line surfaced to the run names it as the retry that follows provider
+  // attempt 1. Both lines join on the run's correlation id, so the difference is read, not guessed.
+  it("numbers a retry by its provider attempt on the surfaced line, apart from the scheduled line's ladder", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const answers: readonly Response[] = [
+      new Response(
+        JSON.stringify({
+          id: "chatcmpl-exhausted",
+          object: "chat.completion",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "" }, finish_reason: "length" },
+          ],
+          usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      new Response("overloaded", { status: 503 }),
+      new Response(
+        JSON.stringify({
+          id: "chatcmpl-answered",
+          object: "chat.completion",
+          choices: [
+            { index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" },
+          ],
+          usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    ];
+    let providerCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        const answer = answers[providerCalls];
+        providerCalls += 1;
+        return Promise.resolve(answer ?? new Response("unexpected", { status: 500 }));
+      }),
+    );
+    try {
+      const deps = {
+        ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-retry-numbers" } })),
+        gatewayConfig: probeVerifiedGatewayConfig(
+          configValue(provider({ maxRetries: 3, retryBaseDelayMs: 1 }), capability()),
+        ),
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "repair, then ride out the overload" }],
+            tools: modelVisibleTools(),
+          }),
+          correlationId: "corr-retry-numbers",
+        },
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(providerCalls).toBe(3);
+      const scheduled = sink.events.filter((event) => event.op === "gateway.retry.scheduled");
+      expect(scheduled.map((line) => [line.extra?.reason, line.extra?.attempt])).toEqual([
+        ["output-exhausted-repair", 1],
+        ["retryable-error", 2],
+      ]);
+      const [retrying] = retrySurfaced(sink.events);
+      expect(retrying?.extra).toMatchObject({ fact: "retrying", attempt: 1 });
+      expect(scheduled.map((line) => line.correlationId)).toEqual([
+        "corr-retry-numbers",
+        "corr-retry-numbers",
+      ]);
+      expect(retrying?.correlationId).toBe("corr-retry-numbers");
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  it("surfaces the retry of a buffered turn the same way", async () => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-retry-buffered" } }),
+        (): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => (request) => {
+          request.retryObserver?.(SCHEDULED);
+          request.retryObserver?.(ANSWERED);
+          return Promise.resolve(assistantResponse("azure-coding-model"));
+        },
+      ),
+      codingRuntimeEventHub: hub,
+      codingRuntimeOrchestrator: runningOrchestrator,
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "ride out an outage" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(replayedFacts(hub, "run-retry-buffered")).toEqual([
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+    ]);
+    expect(retrySurfaced(sink.events)).toHaveLength(2);
+  });
+
+  // A call that gives up publishes no recovery: its turn failure follows the retrying frame, and the
+  // status the operator reads ends on the failure.
+  it("publishes no recovered frame for a call that failed after its retries", async () => {
+    const hub = new CodingRuntimeEventHub();
+    const deps = streamingDeps(
+      "run-retry-failed",
+      hub,
+      [SCHEDULED, { kind: "settled", outcome: "failed" }],
+      runningOrchestrator,
+      "failure",
+    );
+
+    await handleCodingSidecarGatewayChatCompletions(streamedContext("give up"), deps);
+
+    expect(replayedFacts(hub, "run-retry-failed")).toEqual([
+      "model-gateway-retrying",
+      "failure-redacted",
+    ]);
+  });
+
+  // PR #3876 review: a call that queues behind an open breaker, a saturated probe or a provider
+  // cooldown before its first attempt follows no failed attempt, so only the gateway's admission
+  // wait can tell the Workbench that the gateway is the reason it is waiting.
+  describe("a call whose admission waits", () => {
+    const WAITING = {
+      kind: "admission-wait",
+      reason: "circuit-cooldown",
+      retryPolicy: "outage-window",
+    } as const;
+
+    it("publishes one retrying frame for the wait and a recovered frame once the call is answered", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps("run-wait-streamed", hub, [WAITING, ANSWERED]);
+
+      expect(
+        await handleCodingSidecarGatewayChatCompletions(streamedContext("queue behind"), deps),
+      ).toBe(STREAMING);
+
+      expect(replayedFacts(hub, "run-wait-streamed")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      const lines = retrySurfaced(sink.events);
+      expect(lines.map((line) => line.extra)).toEqual([
+        expect.objectContaining({
+          runId: "run-wait-streamed",
+          revision: 4,
+          state: "running",
+          fact: "retrying",
+          waitReason: "circuit-cooldown",
+          retryPolicy: "outage-window",
+          published: true,
+          publicationReason: "published",
+          completeness: "complete",
+          loss: "none",
+        }),
+        expect.objectContaining({ fact: "recovered", published: true }),
+      ]);
+      expect(lines[0]?.extra).not.toHaveProperty("attempt");
+      expect(lines[1]?.extra).not.toHaveProperty("waitReason");
+      expect(lines[1]?.extra).not.toHaveProperty("retryPolicy");
+      expect(lines[0]?.correlationId).toBe("run-wait-streamed");
+    });
+
+    it.each(["provider-cooldown", "circuit-cooldown", "probe-saturated"] as const)(
+      "records the %s that held it on a line the log's own proof accepts",
+      async (reason) => {
+        const sink = captureServerLog("info");
+        const hub = new CodingRuntimeEventHub();
+        const deps = streamingDeps(`run-wait-${reason}`, hub, [{ ...WAITING, reason }, ANSWERED]);
+
+        await handleCodingSidecarGatewayChatCompletions(streamedContext("held"), deps);
+
+        const [line] = retrySurfaced(sink.events);
+        expect(
+          expectActivityLogProof(
+            "coding-sidecar.gateway.retry-surfaced.emitted-line",
+            formatActivityLogProofLine(line ?? {}),
+          ),
+        ).toMatchObject({
+          fact: "retrying",
+          waitReason: reason,
+          retryPolicy: "outage-window",
+          published: true,
+        });
+      },
+    );
+
+    it("surfaces the wait of a buffered turn the same way", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-wait-buffered" } }),
+          (): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => (request) => {
+            request.retryObserver?.(WAITING);
+            request.retryObserver?.(ANSWERED);
+            return Promise.resolve(assistantResponse("azure-coding-model"));
+          },
+        ),
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "queue behind" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+
+      expect(result).toMatchObject({ status: 200 });
+      expect(replayedFacts(hub, "run-wait-buffered")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(retrySurfaced(sink.events)[0]?.extra).toMatchObject({
+        fact: "retrying",
+        waitReason: "circuit-cooldown",
+      });
+    });
+
+    // One outage of a call is one frame, whether it began with a wait or with a failed attempt and
+    // however many waits and retries follow: the first notice decides what the line says.
+    it("publishes one frame for an outage that mixes waits and retries, and names the first cause", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps("run-wait-mixed", hub, [WAITING, SCHEDULED, WAITING, ANSWERED]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("mixed"), deps);
+
+      expect(replayedFacts(hub, "run-wait-mixed")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      const [retrying] = retrySurfaced(sink.events);
+      expect(retrying?.extra).toMatchObject({ fact: "retrying", waitReason: "circuit-cooldown" });
+      expect(retrying?.extra).not.toHaveProperty("attempt");
+    });
+
+    it("names a failed attempt, not a wait, when the retry came first", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps("run-retry-then-wait", hub, [SCHEDULED, WAITING, ANSWERED]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("retry first"), deps);
+
+      const [retrying] = retrySurfaced(sink.events);
+      expect(retrying?.extra).toMatchObject({ fact: "retrying", attempt: 1 });
+      expect(retrying?.extra).not.toHaveProperty("waitReason");
+    });
+
+    // A call the window refused publishes no recovery: its turn failure follows the retrying frame,
+    // and the status the operator reads ends on the failure.
+    it("publishes no recovered frame for a call that failed after its wait", async () => {
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps(
+        "run-wait-failed",
+        hub,
+        [WAITING, { kind: "settled", outcome: "failed" }],
+        runningOrchestrator,
+        "failure",
+      );
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("refused"), deps);
+
+      expect(replayedFacts(hub, "run-wait-failed")).toEqual([
+        "model-gateway-retrying",
+        "failure-redacted",
+      ]);
+    });
+
+    // The observer runs inside the gateway's wait: a publication that threw is recorded on the
+    // operator diagnostic, never raised into the call, and the next wait surfaces the fact again.
+    it("surfaces the wait again when the first publication threw", async () => {
+      const sink = captureServerLog("info");
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const hub = new CodingRuntimeEventHub();
+      const publish = hub.publishModelGatewayFact.bind(hub);
+      vi.spyOn(hub, "publishModelGatewayFact")
+        .mockImplementationOnce(() => {
+          throw new Error("hub exploded");
+        })
+        .mockImplementation(publish);
+      const deps = {
+        ...streamingDeps("run-wait-twice", hub, [WAITING, WAITING, ANSWERED]),
+        diagnostics,
+      } as UiHandlerDeps;
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("again"), deps);
+
+      expect(retrySurfaced(sink.events).map((line) => line.extra?.fact)).toEqual([
+        "retrying",
+        "recovered",
+      ]);
+      expect(
+        diagnostics.record.mock.calls.filter(
+          ([entry]) => entry.source === "coding-sidecar-gateway.retry-observer",
+        ),
+      ).toHaveLength(1);
+    });
+  });
+
+  // PR #3876 review: the Workbench names the gateway phase only while the retrying fact is the NEWEST
+  // frame of the run's replay. A frame that follows the fact ends the phase on the client although the
+  // call keeps retrying, and a call that ended with neither an answer nor a failure frame of its own
+  // (the run cancelled it) left the fact standing while the model visibly generated again.
+  describe("a retrying fact the run's replay no longer shows", () => {
+    const FAILED = { kind: "settled", outcome: "failed" } as const;
+    const lineSummary = (events: readonly ServerLogEvent[]): readonly unknown[] =>
+      retrySurfaced(events).map((line) => [line.extra?.fact, line.extra?.attempt]);
+    // Another frame of the run, as a pause, a mode change or a research revoke publishes it.
+    const supersede =
+      (hub: CodingRuntimeEventHub, runId: string): (() => void) =>
+      (): void => {
+        hub.publish({ schemaVersion: "1", kind: "status", runId, state: "running", revision: 5 });
+      };
+
+    it("publishes the fact again once a later frame superseded it, and not while it is the newest", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const runId = "run-retry-superseded";
+      const deps = streamingDeps(runId, hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        supersede(hub, runId),
+        { ...SCHEDULED, attempt: 3 },
+        { ...SCHEDULED, attempt: 4 },
+        ANSWERED,
+      ]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("superseded"), deps);
+
+      expect(replayedFacts(hub, runId)).toEqual([
+        "model-gateway-retrying",
+        "status",
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(lineSummary(sink.events)).toEqual([
+        ["retrying", 1],
+        ["retrying", 3],
+        ["recovered", undefined],
+      ]);
+    });
+
+    it("publishes the fact again after the replay refused its first publication", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const publish = hub.publishModelGatewayFact.bind(hub);
+      vi.spyOn(hub, "publishModelGatewayFact")
+        .mockReturnValueOnce({ ok: false, reason: "capacity-pressure" })
+        .mockImplementation(publish);
+      const deps = streamingDeps("run-retry-refused", hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        ANSWERED,
+      ]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("refused first"), deps);
+
+      expect(replayedFacts(hub, "run-retry-refused")).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-recovered",
+      ]);
+      expect(
+        retrySurfaced(sink.events).map((line) => [
+          line.extra?.fact,
+          line.extra?.published,
+          line.extra?.publicationReason,
+          line.extra?.attempt,
+        ]),
+      ).toEqual([
+        ["retrying", false, "capacity-pressure", 1],
+        ["retrying", true, "published", 2],
+        ["recovered", true, "published", undefined],
+      ]);
+    });
+
+    // A fact the replay never took has nothing to recover from: an answer must not publish a
+    // `recovered` frame that follows no `retrying` one.
+    it("publishes no recovery for a call whose retrying fact the replay refused every time", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      vi.spyOn(hub, "publishModelGatewayFact").mockReturnValue({
+        ok: false,
+        reason: "capacity-pressure",
+      });
+      const deps = streamingDeps("run-retry-never-shown", hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        ANSWERED,
+      ]);
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("never shown"), deps);
+
+      expect(replayedFacts(hub, "run-retry-never-shown")).toEqual([]);
+      expect(lineSummary(sink.events)).toEqual([
+        ["retrying", 1],
+        ["retrying", 2],
+      ]);
+    });
+
+    // The gateway's own end of a cancelled call: the observer hears the call fail, then the call
+    // throws. Buffered and streamed turns end the same way. `started` settles once the call waits
+    // for its cancellation, which is when a test may end it.
+    function cancellableDeps(
+      runId: string,
+      hub: CodingRuntimeEventHub,
+      announced: readonly GatewayRetryNotice[] = [SCHEDULED],
+    ): { readonly deps: UiHandlerDeps; readonly started: Promise<void> } {
+      let markStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const held = (request: GatewayCallRequest): Promise<unknown> =>
+        new Promise((_resolve, reject) => {
+          for (const notice of announced) request.retryObserver?.(notice);
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              request.retryObserver?.(FAILED);
+              reject(new CancelledError("request cancelled during retry backoff"));
+            },
+            { once: true },
+          );
+          markStarted();
+        });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId } }),
+          (): ((request: GatewayCallRequest) => Promise<NormalizedResponse>) => async (request) => {
+            await held(request);
+            return assistantResponse("azure-coding-model");
+          },
+          createOpenCodeGatewayReadinessRegistry(),
+          (): ((request: GatewayCallRequest) => AsyncIterable<GatewayStreamChunk>) =>
+            async function* (request): AsyncGenerator<GatewayStreamChunk> {
+              await held(request);
+              yield* [] as GatewayStreamChunk[];
+            },
+        ),
+        codingRuntimeEventHub: hub,
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      return { deps, started };
+    }
+
+    function cancellableContext(shape: "buffered" | "streamed"): RouteContext {
+      return shape === "streamed"
+        ? streamedContext("cancel the retry")
+        : authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "cancel the retry" }],
+            tools: modelVisibleTools(),
+          });
+    }
+
+    it.each(["buffered", "streamed"] as const)(
+      "closes the retrying fact of a %s call the run cancelled, so a later call adds nothing to it",
+      async (shape) => {
+        const sink = captureServerLog("info");
+        const hub = new CodingRuntimeEventHub();
+        const runId = `run-retry-cancelled-${shape}`;
+        const context = cancellableContext(shape);
+        const { deps, started } = cancellableDeps(runId, hub);
+        const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+        await started;
+        expect(replayedFacts(hub, runId)).toEqual(["model-gateway-retrying"]);
+
+        context.res.emit("close");
+        await pending;
+
+        expect(replayedFacts(hub, runId)).toEqual([
+          "model-gateway-retrying",
+          "model-gateway-retry-stopped",
+        ]);
+        expect(hub.modelGatewayRetrying(runId)).toBe(false);
+        const lines = retrySurfaced(sink.events);
+        expect(lines.map((line) => line.extra?.fact)).toEqual(["retrying", "retry-stopped"]);
+        expect(lines[1]?.extra).toMatchObject({
+          runId,
+          revision: 4,
+          state: "running",
+          published: true,
+          publicationReason: "published",
+        });
+        for (const absent of ["attempt", "waitReason", "retryPolicy"]) {
+          expect(lines[1]?.extra).not.toHaveProperty(absent);
+        }
+        expect(lines[1]?.correlationId).toBe(runId);
+        expect(
+          expectActivityLogProof(
+            "coding-sidecar.gateway.retry-surfaced.emitted-line",
+            formatActivityLogProofLine(lines[1] ?? {}),
+          ),
+        ).toMatchObject({ fact: "retry-stopped", published: true });
+
+        // The next call answers on its first attempt, as it will once the breaker admits again.
+        await handleCodingSidecarGatewayChatCompletions(
+          streamedContext("answers at once"),
+          streamingDeps(runId, hub, []),
+        );
+        expect(replayedFacts(hub, runId)).toEqual([
+          "model-gateway-retrying",
+          "model-gateway-retry-stopped",
+        ]);
+      },
+    );
+
+    it("closes the fact of a call cancelled while its admission waited, as it does a retried call", async () => {
+      const hub = new CodingRuntimeEventHub();
+      const runId = "run-wait-cancelled";
+      const context = cancellableContext("streamed");
+      const { deps, started } = cancellableDeps(runId, hub, [
+        { kind: "admission-wait", reason: "probe-saturated", retryPolicy: "outage-window" },
+      ]);
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await started;
+      expect(replayedFacts(hub, runId)).toEqual(["model-gateway-retrying"]);
+
+      context.res.emit("close");
+      await pending;
+
+      expect(replayedFacts(hub, runId)).toEqual([
+        "model-gateway-retrying",
+        "model-gateway-retry-stopped",
+      ]);
+    });
+
+    it("publishes no closing fact for a cancelled call the Workbench was never told about", async () => {
+      const hub = new CodingRuntimeEventHub();
+      const sink = captureServerLog("info");
+      const context = cancellableContext("buffered");
+      const { deps, started } = cancellableDeps("run-quiet-cancel", hub, []);
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await started;
+
+      context.res.emit("close");
+      await pending;
+
+      expect(replayedFacts(hub, "run-quiet-cancel")).toEqual([]);
+      expect(retrySurfaced(sink.events)).toEqual([]);
+    });
+
+    // A call that failed for good leaves its turn-failure frame as the newest one: nothing is left
+    // open for the route to close.
+    it("closes nothing for a call that failed for good, whose turn-failure frame follows", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const deps = streamingDeps(
+        "run-failed-for-good",
+        hub,
+        [SCHEDULED, FAILED],
+        undefined,
+        "failure",
+      );
+
+      await handleCodingSidecarGatewayChatCompletions(streamedContext("give up"), deps);
+
+      expect(replayedFacts(hub, "run-failed-for-good")).toEqual([
+        "model-gateway-retrying",
+        "failure-redacted",
+      ]);
+      expect(lineSummary(sink.events)).toEqual([["retrying", 1]]);
+    });
+
+    it("records a closing fact the replay refused as a warning and never fails the call", async () => {
+      const sink = captureServerLog("info");
+      const hub = new CodingRuntimeEventHub();
+      const runId = "run-retry-stop-refused";
+      const publish = hub.publishModelGatewayFact.bind(hub);
+      vi.spyOn(hub, "publishModelGatewayFact").mockImplementation(
+        (id, state, revision, eventKind) =>
+          eventKind === "model-gateway-retry-stopped"
+            ? { ok: false, reason: "capacity-pressure" }
+            : publish(id, state, revision, eventKind),
+      );
+      const context = cancellableContext("buffered");
+      const { deps, started } = cancellableDeps(runId, hub);
+      const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+      await started;
+      expect(replayedFacts(hub, runId)).toEqual(["model-gateway-retrying"]);
+
+      context.res.emit("close");
+      await expect(pending).resolves.toMatchObject({ status: 503 });
+
+      const stopped = retrySurfaced(sink.events).at(-1);
+      expect(stopped).toMatchObject({ level: "warn", errorKind: "unavailable" });
+      expect(stopped?.extra).toMatchObject({
+        fact: "retry-stopped",
+        published: false,
+        publicationReason: "capacity-pressure",
+      });
+    });
+  });
+
+  it("surfaces a second outage of a later call, which has its own observer", async () => {
+    const hub = new CodingRuntimeEventHub();
+    for (const content of ["first outage", "second outage"]) {
+      const deps = streamingDeps("run-retry-twice", hub, [SCHEDULED, ANSWERED]);
+      await handleCodingSidecarGatewayChatCompletions(streamedContext(content), deps);
+    }
+    expect(replayedFacts(hub, "run-retry-twice")).toEqual([
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+      "model-gateway-retrying",
+      "model-gateway-recovered",
+    ]);
+  });
+
+  it.each([
+    { label: "has stopped", state: "stopping" as const },
+    { label: "is unknown to the orchestrator", state: undefined },
+  ])("surfaces nothing for a run that $label", async ({ state }) => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    const orchestrator = {
+      getSnapshot: (): { readonly state: string; readonly revision: number } | undefined =>
+        state === undefined ? undefined : { state, revision: 4 },
+    } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+    const deps = streamingDeps("run-retry-not-live", hub, [SCHEDULED, ANSWERED], orchestrator);
+
+    await handleCodingSidecarGatewayChatCompletions(streamedContext("not live"), deps);
+
+    expect(replayedFacts(hub, "run-retry-not-live")).toEqual([]);
+    expect(retrySurfaced(sink.events)).toEqual([]);
+  });
+
+  it("records a publication the replay refused as a warning and never fails the turn", async () => {
+    const sink = captureServerLog("info");
+    const hub = new CodingRuntimeEventHub();
+    hub.publish({
+      schemaVersion: "1",
+      kind: "runtime-event",
+      runId: "run-retry-settled",
+      state: "succeeded",
+      revision: 9,
+      eventKind: "runtime-stopped",
+    });
+    const deps = streamingDeps("run-retry-settled", hub, [SCHEDULED]);
+
+    expect(await handleCodingSidecarGatewayChatCompletions(streamedContext("settled"), deps)).toBe(
+      STREAMING,
+    );
+
+    const [line] = retrySurfaced(sink.events);
+    expect(line?.level).toBe("warn");
+    expect(line?.errorKind).toBe("unavailable");
+    expect(line?.extra).toMatchObject({
+      fact: "retrying",
+      published: false,
+      publicationReason: "terminal-run",
+    });
+  });
+
+  it("records an unavailable event hub as a refused publication", async () => {
+    const sink = captureServerLog("info");
+    const { codingRuntimeEventHub: _hub, ...withoutHub } = streamingDeps(
+      "run-retry-no-hub",
+      new CodingRuntimeEventHub(),
+      [SCHEDULED],
+    );
+
+    await handleCodingSidecarGatewayChatCompletions(streamedContext("no hub"), withoutHub);
+
+    expect(retrySurfaced(sink.events)[0]?.extra).toMatchObject({
+      published: false,
+      publicationReason: "event-hub-unavailable",
+    });
+  });
+
+  // The observer runs inside the gateway's retry loop: a failure to surface the fact is recorded on
+  // the operator diagnostic, never raised into the model call.
+  it("records a failing publication on the operator diagnostic instead of raising it", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const hub = new CodingRuntimeEventHub();
+    vi.spyOn(hub, "publishModelGatewayFact").mockImplementation(() => {
+      throw new Error("hub exploded with key sk-ABCDEFGHIJKLMNOPQRSTUV");
+    });
+    // A retry whose fact never reached the replay is surfaced again by the next retry, and an
+    // answer that follows it has no retrying fact to recover from.
+    const deps = {
+      ...streamingDeps("run-retry-throws", hub, [
+        SCHEDULED,
+        { ...SCHEDULED, attempt: 2 },
+        ANSWERED,
+      ]),
+      diagnostics,
+    };
+
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        streamedContext("throws"),
+        deps as UiHandlerDeps,
+      ),
+    ).toBe(STREAMING);
+
+    const records = diagnostics.record.mock.calls
+      .map(([entry]) => entry)
+      .filter((entry) => entry.source === "coding-sidecar-gateway.retry-observer");
+    expect(records).toHaveLength(2);
+    expect(records[0]?.correlationId).toBe("run-retry-throws");
+    expect(JSON.stringify(records)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
+    expect(JSON.stringify(records)).not.toContain("exploded");
   });
 });

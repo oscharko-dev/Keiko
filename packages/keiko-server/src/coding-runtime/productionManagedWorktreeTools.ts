@@ -68,7 +68,12 @@ import {
 } from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
-import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolEditOutcome,
+  CodingToolFacade,
+  CodingToolFacadeOptions,
+  CodingToolMutationGuard,
+} from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
   GovernedCodingToolResult,
@@ -548,6 +553,8 @@ export interface ProductionManagedWorktreeToolInput {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly editorAgentClient: CodingToolReadEditPortDeps["editorAgentClient"];
   readonly mutationLeaseCoordinator?: CodingToolReadEditPortDeps["mutationLeaseCoordinator"];
+  /** The server-wide record of the diff text the edit port renders itself (PR #3876 review). */
+  readonly materializedPatches?: CodingToolReadEditPortDeps["materializedPatches"];
   readonly invocationRegistry: CodingToolInvocationRegistry;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly skillCatalog?: SkillCatalog | undefined;
@@ -578,6 +585,8 @@ export interface ProductionManagedWorktreeToolInput {
    */
   readonly admitRunManifest?: (() => void) | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  /** Counts each call the run's facade answered, by action and status (#3873 run effort roll-up). */
+  readonly onToolSettled?: CodingToolFacadeOptions["onToolSettled"];
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Body-free activity-log sink for the H1 search handler; defaults to the process-wide log. */
   readonly activityLog?: ServerLogSink | undefined;
@@ -596,6 +605,11 @@ export interface ProductionManagedWorktreeToolInput {
   // and says so; it is never a denied call.
   readonly repositorySemanticSearch?:
     { readonly current: RepositorySemanticSearchResolver | undefined } | undefined;
+  /**
+   * F5 (#3873): told every applied or refused edit this run's facade answered, as the model received
+   * it, so the run's orchestration can bound consecutive refusals. Absent, nothing is reported.
+   */
+  readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -756,7 +770,11 @@ export function createProductionManagedWorktreeToolFacade(
       // lifecycle evidence too.
       ...(input.activityLog === undefined ? {} : { catalogActivityLog: input.activityLog }),
       ...(input.diagnostics === undefined ? {} : { catalogDiagnostics: input.diagnostics }),
+      ...(input.onToolSettled === undefined ? {} : { onToolSettled: input.onToolSettled }),
       unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
+      ...(input.observeEditOutcome === undefined
+        ? {}
+        : { observeEditOutcome: input.observeEditOutcome }),
     },
   );
 }
@@ -831,6 +849,7 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
     ...(input.mutationLeaseCoordinator
       ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }
       : {}),
+    ...(input.materializedPatches ? { materializedPatches: input.materializedPatches } : {}),
   });
 }
 

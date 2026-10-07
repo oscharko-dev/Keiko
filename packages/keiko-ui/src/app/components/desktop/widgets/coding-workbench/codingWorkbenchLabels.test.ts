@@ -16,18 +16,23 @@ import {
   type CodingWorkbenchResourceState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { translateCodingWorkbench, type CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import {
   activeRunState,
   changesetDeliveryAlert,
   eventDetail,
   eventTitle,
-  lifecycleAnnouncement,
+  generatingRunState,
   modelSourceLabel,
+  readinessAttentionFacts,
+  readinessFacts,
+  runPhaseIsAnnounced,
+  runStatusAnnouncement,
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
 } from "./codingWorkbenchLabels";
+import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 
 // Echo translator: announcements are asserted on their catalog keys so the tests pin the
 // branching logic without re-stating locale catalog text.
@@ -78,7 +83,7 @@ describe("modelSourceLabel", () => {
   });
 });
 
-describe("lifecycleAnnouncement source reason", () => {
+describe("readinessFacts source reason", () => {
   // "Model source unavailable." alone left the operator with no way to learn that a readiness
   // check would have fixed it (workbench end-to-end run, 2026-09-03).
   it("names the sidecar's unavailable reason next to the source announcement", () => {
@@ -97,7 +102,7 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    const announcement = lifecycleAnnouncement(state, t);
+    const announcement = readinessFacts(state, t);
     expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
     expect(announcement).toContain("codingWorkbench.source.unavailableReason.no-tool-calling");
   });
@@ -120,7 +125,7 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    const announcement = lifecycleAnnouncement(state, t);
+    const announcement = readinessFacts(state, t);
     expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
     expect(announcement).toContain(
       "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
@@ -143,7 +148,7 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.source.unavailableReason.tool-calling-unverified",
     );
   });
@@ -164,21 +169,21 @@ describe("lifecycleAnnouncement source reason", () => {
         },
       },
     };
-    expect(lifecycleAnnouncement(state, t)).not.toContain("unavailableReason");
+    expect(readinessFacts(state, t)).not.toContain("unavailableReason");
   });
 });
 
-describe("lifecycleAnnouncement authentication truth", () => {
+describe("readinessFacts authentication truth", () => {
   it("announces authentication as not selected outside the codex preference", () => {
     const state = createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway");
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationNotSelected",
     );
   });
 
   it("announces checking while the profile resource loads", () => {
     const state = codexState({ status: "loading", value: null, error: null });
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationChecking",
     );
   });
@@ -187,7 +192,7 @@ describe("lifecycleAnnouncement authentication truth", () => {
     "announces unavailability when the profile resource is %s",
     (status) => {
       const state = codexState({ status, value: null, error: null });
-      expect(lifecycleAnnouncement(state, t)).toContain(
+      expect(readinessFacts(state, t)).toContain(
         "codingWorkbench.announcement.authenticationUnavailable",
       );
     },
@@ -195,28 +200,26 @@ describe("lifecycleAnnouncement authentication truth", () => {
 
   it("announces readiness for a connected profile", () => {
     const state = codexState(ready(subscriptionProfile("connected")));
-    expect(lifecycleAnnouncement(state, t)).toContain(
-      "codingWorkbench.announcement.authenticationReady",
-    );
+    expect(readinessFacts(state, t)).toContain("codingWorkbench.announcement.authenticationReady");
   });
 
   it("announces a required sign-in for a missing profile", () => {
     const state = codexState(ready(subscriptionProfile("missing")));
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationRequired",
     );
   });
 
   it("treats any other server profile status as unavailable", () => {
     const state = codexState(ready(subscriptionProfile("revoked")));
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationUnavailable",
     );
   });
 
   it("announces the unchecked state before any profile truth exists", () => {
     const state = codexState({ status: "idle", value: null, error: null });
-    expect(lifecycleAnnouncement(state, t)).toContain(
+    expect(readinessFacts(state, t)).toContain(
       "codingWorkbench.announcement.authenticationNotChecked",
     );
   });
@@ -272,6 +275,52 @@ describe("eventDetail auxiliary outcome", () => {
     );
   });
 
+  // F9 (#3873): a failed run names the closed cause its settlement carries. The internal-error
+  // sentence belongs to `runtime-failed` alone; every bound and model-call cause has its own copy.
+  it.each([
+    ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
+    ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
+    ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],
+    ["provider-unavailable", "codingWorkbench.event.failure.provider-unavailable"],
+    ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
+    ["runtime-failed", "codingWorkbench.event.failure.runtime"],
+  ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
+    const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
+    expect(eventDetail(settled, t)).toBe(key);
+  });
+
+  it("keeps the internal-error sentence off every run cause but runtime-failed", () => {
+    for (const failureCode of [
+      "prompt-allowance-exhausted",
+      "envelope-duration-exhausted",
+      "output-exhausted-repeated",
+      "provider-unavailable",
+      "model-turn-failed",
+      "delivery-not-evidenced",
+      "authority-budget-exceeded",
+    ] as const) {
+      expect(
+        eventDetail(runtimeEvent({ kind: "status", state: "failed", failureCode }), t),
+      ).not.toBe("codingWorkbench.event.failure.runtime");
+    }
+  });
+
+  // F9 (#3873): a run that settles `cancelled` was stopped; its terminal entry says so and that
+  // nothing failed, and no other state borrows that sentence. #3873 review: the operator's Stop and
+  // `CodingRuntimeOrchestrator.shutdown()` settle identically, so the entry is one neutral sentence
+  // that never says who stopped the run — a restart must not read "You stopped this run".
+  it("says a stopped run was stopped, not that it failed, and never who stopped it", () => {
+    const stopped = runtimeEvent({ kind: "status", state: "cancelled" });
+    expect(eventTitle(stopped, t)).toBe("codingWorkbench.runState.cancelled");
+    expect(eventDetail(stopped, t)).toBe("codingWorkbench.event.stopped");
+    for (const state of ["taken-over", "succeeded", "running"] as const) {
+      expect(eventDetail(runtimeEvent({ kind: "status", state }), t)).not.toContain(
+        "codingWorkbench.event.stopped",
+      );
+    }
+  });
+
   it("appends the normalized outcome as a content-free sentence", () => {
     expect(eventDetail(runtimeEvent({ auxiliaryOutcome: "denied" }), t)).toBe(
       "codingWorkbench.event.detailOutcome",
@@ -286,6 +335,18 @@ describe("eventDetail auxiliary outcome", () => {
     expect(
       eventDetail(runtimeEvent({ failureCode: "runtime-crashed", auxiliaryOutcome: "stopped" }), t),
     ).toBe("codingWorkbench.event.failure.generic codingWorkbench.event.detailOutcome");
+  });
+
+  // F5 (#3873, live Gemma qualification): a run whose edits were refused again and again now
+  // settles with the refusal class; the Workbench names that class and its next step instead of
+  // the generic "could not be completed" sentence.
+  it.each([
+    ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
+    ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
+  ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
+    const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
+    expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
+    expect(eventDetail(settled, t)).toBe(key);
   });
 });
 
@@ -312,7 +373,7 @@ describe("eventDetail untrusted research content", () => {
   });
 });
 
-describe("lifecycleAnnouncement research grant", () => {
+describe("runStatusAnnouncement research grant", () => {
   const state: CodingWorkbenchRuntimeState = {
     ...createInitialCodingWorkbenchRuntimeState(),
     run: ready({
@@ -330,15 +391,374 @@ describe("lifecycleAnnouncement research grant", () => {
       domains: ["nodejs.org"],
       expiresAt: "2026-07-13T12:30:00.000Z",
     };
-    expect(lifecycleAnnouncement(state, t, grant)).toContain(
+    expect(runStatusAnnouncement(state, t, grant)).toContain(
       "codingWorkbench.announcement.researchActive",
     );
   });
 
   it("stays silent about research when no grant is present", () => {
-    expect(lifecycleAnnouncement(state, t, null)).not.toContain(
+    expect(runStatusAnnouncement(state, t, null)).not.toContain(
       "codingWorkbench.announcement.researchActive",
     );
+  });
+
+  // #3873 live review: the status region led with "Model source ready. …" before the run's own
+  // state. The run's status and the readiness facts are two separate texts now.
+  it("keeps every readiness fact out of the run's status and the run state out of readiness", () => {
+    const status = runStatusAnnouncement(state, t);
+    expect(status).toBe("codingWorkbench.announcement.runRevision");
+    const readiness = readinessFacts(state, t);
+    expect(readiness).toContain("codingWorkbench.announcement.modelSource.notChecked");
+    expect(readiness).toContain("codingWorkbench.announcement.workspace.notChecked");
+    expect(readiness).toContain("codingWorkbench.announcement.runtime.notChecked");
+    expect(readiness).toContain("codingWorkbench.announcement.authenticationNotSelected");
+    expect(readiness).not.toContain("codingWorkbench.announcement.runRevision");
+  });
+
+  it("states a ready Workbench without a run by its state alone, never by a revision", () => {
+    const idle: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      canStart: true,
+      run: ready({ schemaVersion: "1", state: "idle", revision: 0, updatedAt: AT }),
+    };
+    expect(runStatusAnnouncement(idle, t)).toBe("codingWorkbench.runState.idle");
+  });
+});
+
+// Review thread 6pydza: the phase the status line names was a span OUTSIDE the polite, atomic
+// status sentence, so a screen reader heard "Running" for the whole of a model gateway outage while
+// the visible line named it. The gateway phase — and only it — is part of the sentence now. The
+// other phases change with every tool call and would make the region chatter, so they stay visible
+// only; and a phase the sentence states is never shown a second time beside it.
+describe("runStatusAnnouncement run phase", () => {
+  const RUN_SENTENCE = "codingWorkbench.announcement.runRevision";
+  const GATEWAY_PHASE = "codingWorkbench.runStatus.phase.gateway";
+  // Keyed by the phase type, so a new phase cannot be added without deciding here whether it is
+  // announced.
+  const PHASES = {
+    decision: true,
+    gateway: true,
+    verifier: true,
+    tool: true,
+    model: true,
+  } as const satisfies Record<CodingWorkbenchRunPhase, true>;
+  const running: CodingWorkbenchRuntimeState = {
+    ...createInitialCodingWorkbenchRuntimeState(),
+    run: ready({
+      schemaVersion: "1",
+      state: "running",
+      revision: 4,
+      updatedAt: AT,
+      runId: "run-1",
+    }),
+  };
+
+  it("states a model gateway that is unavailable and being retried, right after the run itself", () => {
+    expect(runStatusAnnouncement(running, t, null, "gateway")).toBe(
+      `${RUN_SENTENCE}. ${GATEWAY_PHASE}.`,
+    );
+  });
+
+  it("reads as one sentence in the operator's language", () => {
+    const en: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench("en", key, values);
+    const de: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench("de", key, values);
+    expect(runStatusAnnouncement(running, en, null, "gateway")).toBe(
+      "Running. Revision 4. Model gateway unavailable, retrying.",
+    );
+    expect(runStatusAnnouncement(running, de, null, "gateway")).toBe(
+      "Wird ausgeführt. Revision 4. Modell-Gateway nicht erreichbar, neuer Versuch.",
+    );
+  });
+
+  it.each(["decision", "verifier", "tool", "model"] as const)(
+    "leaves the %s phase out of the sentence: it changes with every step and would chatter",
+    (phase) => {
+      expect(runStatusAnnouncement(running, t, null, phase)).toBe(
+        runStatusAnnouncement(running, t),
+      );
+    },
+  );
+
+  it("leaves a run without a known phase as it was", () => {
+    expect(runStatusAnnouncement(running, t, null, null)).toBe(RUN_SENTENCE);
+    expect(runStatusAnnouncement(running, t)).toBe(RUN_SENTENCE);
+  });
+
+  it("puts the phase before the research grant and the readiness attention facts", () => {
+    const grant: CodingWorkbenchRuntimeResearchGrant = {
+      grantId: "grant-1",
+      domains: ["nodejs.org"],
+      expiresAt: "2026-07-13T12:30:00.000Z",
+    };
+    const status = runStatusAnnouncement({ ...running, pairing: "unpaired" }, t, grant, "gateway");
+    const positions = [
+      RUN_SENTENCE,
+      GATEWAY_PHASE,
+      "codingWorkbench.announcement.researchActive",
+      "codingWorkbench.pairing.unpaired",
+    ].map((part) => status.indexOf(part));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+  });
+
+  it.each(Object.keys(PHASES) as CodingWorkbenchRunPhase[])(
+    "states the %s phase in the sentence exactly when the status line leaves it out",
+    (phase) => {
+      const stated = runStatusAnnouncement(running, t, null, phase).includes(
+        `codingWorkbench.runStatus.phase.${phase}`,
+      );
+      expect(runPhaseIsAnnounced(phase)).toBe(stated);
+    },
+  );
+
+  it("announces nothing for an absent phase", () => {
+    expect(runPhaseIsAnnounced(null)).toBe(false);
+  });
+});
+
+// #3873 review: b8ed267dc moved every readiness fact out of the polite, atomic run status into
+// collapsed details, which left an unavailable runtime and an unpaired window announced to no one.
+// The facts that say a part of the Workbench is missing or failing are the readiness attention
+// facts: they join the run status sentence after the run itself; every other fact stays in the
+// details. The two lists are derived from the same keys, so the status can only ever repeat a fact
+// the details hold.
+describe("readiness attention facts", () => {
+  const RUN_SENTENCE = "codingWorkbench.announcement.runRevision";
+
+  function runningState(
+    overrides: Partial<CodingWorkbenchRuntimeState>,
+  ): CodingWorkbenchRuntimeState {
+    return {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      run: ready({
+        schemaVersion: "1",
+        state: "running",
+        revision: 2,
+        updatedAt: AT,
+        runId: "run-1",
+      }),
+      ...overrides,
+    };
+  }
+
+  const healthy = (): Partial<CodingWorkbenchRuntimeState> => ({
+    source: ready({
+      runtimePreference: "managed-gateway" as const,
+      modelSource: "keiko-model-gateway" as const,
+      runtimeSource: "keiko-sidecar" as const,
+      available: true,
+      verification: "verified" as const,
+    }),
+    workspace: ready({ health: "healthy" as const, switching: false } as never),
+    runtime: ready({
+      schemaVersion: "1" as const,
+      requestedMode: "governed-assist" as const,
+      deploymentCeiling: "governed-assist" as const,
+      effectiveMode: "governed-assist" as const,
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified" as const,
+    } as never),
+  });
+
+  const failedResource = {
+    status: "error" as const,
+    value: null,
+    error: { code: "REFRESH_FAILED", message: "redacted", retryable: true },
+  };
+
+  it("is empty for a healthy Workbench, whose run status is the run itself", () => {
+    const state = runningState(healthy());
+    expect(readinessAttentionFacts(state, t)).toBe("");
+    expect(runStatusAnnouncement(state, t)).toBe(RUN_SENTENCE);
+  });
+
+  it.each([
+    ["an unpaired window", { pairing: "unpaired" as const }, "codingWorkbench.pairing.unpaired"],
+    [
+      "an unavailable model source",
+      {
+        source: ready({
+          runtimePreference: "managed-gateway" as const,
+          modelSource: "keiko-model-gateway" as const,
+          runtimeSource: "keiko-sidecar" as const,
+          available: false,
+          verification: "verified" as const,
+        }),
+      },
+      "codingWorkbench.announcement.modelSource.unavailable",
+    ],
+    [
+      "a model source whose refresh failed",
+      { source: failedResource },
+      "codingWorkbench.announcement.modelSource.refreshFailed",
+    ],
+    [
+      "an unhealthy workspace",
+      { workspace: ready({ health: "degraded" as const, switching: false } as never) },
+      "codingWorkbench.announcement.workspace.unavailable",
+    ],
+    [
+      "a workspace whose refresh failed",
+      { workspace: failedResource },
+      "codingWorkbench.announcement.workspace.refreshFailed",
+    ],
+    [
+      "an unavailable runtime",
+      {
+        runtime: ready({
+          schemaVersion: "1" as const,
+          requestedMode: "governed-assist" as const,
+          deploymentCeiling: "governed-assist" as const,
+          effectiveMode: "governed-assist" as const,
+          runtimeAvailable: false,
+        } as never),
+      },
+      "codingWorkbench.announcement.runtime.unavailable",
+    ],
+    [
+      "a runtime whose refresh failed",
+      { runtime: failedResource },
+      "codingWorkbench.announcement.runtime.refreshFailed",
+    ],
+    [
+      "an unavailable authentication setup plan",
+      { codexSetup: { status: "unavailable" as const, value: null, error: failedResource.error } },
+      "codingWorkbench.announcement.setupUnavailable",
+    ],
+  ] as const)("announces %s in the run status after the run itself", (_label, overrides, key) => {
+    const state = runningState({
+      ...healthy(),
+      ...overrides,
+    } as Partial<CodingWorkbenchRuntimeState>);
+    expect(readinessAttentionFacts(state, t)).toContain(key);
+    expect(readinessFacts(state, t)).toContain(key);
+    const status = runStatusAnnouncement(state, t);
+    expect(status.startsWith(RUN_SENTENCE)).toBe(true);
+    expect(status).toContain(key);
+  });
+
+  it.each([
+    [
+      "a subscription that is missing",
+      "missing",
+      "codingWorkbench.announcement.authenticationRequired",
+    ],
+    [
+      "a subscription that is expired",
+      "expired",
+      "codingWorkbench.announcement.authenticationUnavailable",
+    ],
+  ] as const)("announces %s when the subscription is the runtime", (_label, status, key) => {
+    const state = codexState(ready(subscriptionProfile(status)));
+    expect(readinessAttentionFacts(state, t)).toContain(key);
+  });
+
+  it("announces a subscription profile that could not be read", () => {
+    const state = codexState({
+      status: "error",
+      value: null,
+      error: { code: "PROFILE_REFRESH_FAILED", message: "redacted", retryable: true },
+    });
+    expect(readinessAttentionFacts(state, t)).toContain(
+      "codingWorkbench.announcement.authenticationUnavailable",
+    );
+  });
+
+  it("keeps the healthy facts out of the status while an unavailable one is announced", () => {
+    const state = runningState({ ...healthy(), pairing: "unpaired" });
+    const status = runStatusAnnouncement(state, t);
+    expect(status).toContain("codingWorkbench.pairing.unpaired");
+    expect(status).not.toContain("codingWorkbench.announcement.modelSource.ready");
+    expect(status).not.toContain("codingWorkbench.announcement.workspace.ready");
+    expect(status).not.toContain("codingWorkbench.announcement.runtime.ready");
+    expect(status).not.toContain("codingWorkbench.announcement.authenticationNotSelected");
+    // The details keep the complete list.
+    expect(readinessFacts(state, t)).toContain("codingWorkbench.announcement.modelSource.ready");
+  });
+
+  it("never announces what is merely not selected, not checked or being checked", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(readinessAttentionFacts(initial, t)).toBe("");
+    const checking = runningState({
+      source: { status: "loading", value: null, error: null },
+      workspace: { status: "loading", value: null, error: null },
+      runtime: { status: "loading", value: null, error: null },
+    });
+    expect(readinessFacts(checking, t)).toContain("codingWorkbench.announcement.runtime.checking");
+    expect(readinessAttentionFacts(checking, t)).toBe("");
+  });
+
+  // A reason is operator text that the composer and the details already carry; the status names the
+  // state and stays short.
+  it("announces the source as unavailable without its long reason", () => {
+    const state = runningState({
+      ...healthy(),
+      source: ready({
+        runtimePreference: "managed-gateway" as const,
+        modelSource: "keiko-model-gateway" as const,
+        runtimeSource: "keiko-sidecar" as const,
+        available: false,
+        unavailableReason: "no-tool-calling" as const,
+        verification: "verified" as const,
+      }),
+    });
+    expect(runStatusAnnouncement(state, t)).not.toContain(
+      "codingWorkbench.source.unavailableReason.no-tool-calling",
+    );
+    expect(readinessFacts(state, t)).toContain(
+      "codingWorkbench.source.unavailableReason.no-tool-calling",
+    );
+  });
+
+  // F-01: an evaluation runtime is a standing fact the details state plainly; it is no attention
+  // fact, and no "Runtime ready." replaces it in the status.
+  it("keeps the unverified evaluation runtime in the details and out of the status", () => {
+    const state = runningState({
+      ...healthy(),
+      runtime: ready({
+        schemaVersion: "1" as const,
+        requestedMode: "governed-assist" as const,
+        deploymentCeiling: "governed-assist" as const,
+        effectiveMode: "governed-assist" as const,
+        runtimeAvailable: true,
+        runtimeEvidenceClass: "functional-not-platform-qualified" as const,
+      } as never),
+    });
+    expect(runStatusAnnouncement(state, t)).toBe(RUN_SENTENCE);
+    expect(readinessFacts(state, t)).toContain("codingWorkbench.announcement.runtime.evaluation");
+    expect(readinessFacts(state, t)).not.toContain("codingWorkbench.announcement.runtime.ready");
+  });
+
+  it("is always a part of the readiness facts, in their order", () => {
+    const state = runningState({ ...healthy(), pairing: "unpaired", workspace: failedResource });
+    const attention = readinessAttentionFacts(state, t);
+    const all = readinessFacts(state, t);
+    expect(all).toContain(attention.split(". ")[0] ?? "");
+    expect(all.indexOf("codingWorkbench.pairing.unpaired")).toBeLessThan(
+      all.indexOf("codingWorkbench.announcement.workspace.refreshFailed"),
+    );
+    expect(attention.indexOf("codingWorkbench.pairing.unpaired")).toBeLessThan(
+      attention.indexOf("codingWorkbench.announcement.workspace.refreshFailed"),
+    );
+  });
+
+  // The header's "Not ready to start" has no closing full stop; the facts that follow it must not
+  // run into it when they are spoken or read.
+  it("separates the facts from a run sentence that lacks its full stop", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      canStart: false,
+      pairing: "unpaired",
+      run: ready({ schemaVersion: "1", state: "idle", revision: 0, updatedAt: AT }),
+    };
+    const real: CodingWorkbenchTranslate = (key, values) =>
+      translateCodingWorkbench("en", key, values);
+    expect(runStatusAnnouncement(state, real)).toBe(
+      "Not ready to start. Workbench is not paired. Open Keiko from the launcher.",
+    );
+    expect(runStatusAnnouncement(state, real)).not.toMatch(/start Workbench/u);
   });
 });
 
@@ -443,12 +863,12 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
 
   // ADR-0141: an unpaired window's run start is guaranteed to fail authority resolution, so the
   // narration must name pairing as the missing input instead of narrating full readiness.
-  it("names the unpaired window in the lifecycle narration", () => {
-    expect(lifecycleAnnouncement(unpairedState(), t)).toContain("codingWorkbench.pairing.unpaired");
+  it("names the unpaired window in the readiness facts", () => {
+    expect(readinessFacts(unpairedState(), t)).toContain("codingWorkbench.pairing.unpaired");
   });
 
   it("does not claim pairing truth while it is still unconfirmed", () => {
-    expect(lifecycleAnnouncement(createInitialCodingWorkbenchRuntimeState(), t)).not.toContain(
+    expect(readinessFacts(createInitialCodingWorkbenchRuntimeState(), t)).not.toContain(
       "codingWorkbench.pairing.unpaired",
     );
   });
@@ -528,6 +948,50 @@ describe("activeRunState", () => {
 
   it("treats an absent run state as inactive", () => {
     expect(activeRunState(undefined)).toBe(false);
+  });
+});
+
+// #3873 review: `streaming` removes code highlighting and the Copy button from an answer, and the
+// timeline derived it from `activeRunState`, so a finished answer lost both for as long as the run
+// waited for the operator. `generatingRunState` is the narrower fact: the model may still produce
+// text before its first turn, while it runs and while it is paused.
+//
+// Review thread 6pyds7 INVERTS this block's earlier pins on `paused` (they held that a paused run
+// takes no further turn, so an answer shown then is finished). Pausing refuses NEW work only — an
+// approval, a child tool mutation, a new model-call admission — and aborts nothing: the call the
+// run had already admitted keeps streaming into its message, and the safe-activity feed keeps
+// delivering it while the run reads `paused`. The inversion is deliberate; a future edit must not
+// restore the old expectation without a server change that aborts the admitted call on pause.
+describe("generatingRunState", () => {
+  it.each(CODING_WORKBENCH_RUNTIME_STATE_NAMES)(
+    "treats %s as generating only while the model may still produce text",
+    (state) => {
+      expect(generatingRunState(state)).toBe(
+        state === "starting" || state === "ready" || state === "running" || state === "paused",
+      );
+    },
+  );
+
+  it("never counts a run as generating that is not active", () => {
+    for (const state of CODING_WORKBENCH_RUNTIME_STATE_NAMES) {
+      if (generatingRunState(state)) expect(activeRunState(state)).toBe(true);
+    }
+  });
+
+  it("counts a paused run as generating: the call it had admitted keeps streaming", () => {
+    expect(activeRunState("paused")).toBe(true);
+    expect(generatingRunState("paused")).toBe(true);
+  });
+
+  it("does not count a run that waits for the operator or is stopping", () => {
+    for (const state of ["awaiting-approval", "stopping"] as const) {
+      expect(activeRunState(state)).toBe(true);
+      expect(generatingRunState(state)).toBe(false);
+    }
+  });
+
+  it("treats an absent run state as not generating", () => {
+    expect(generatingRunState(undefined)).toBe(false);
   });
 });
 
@@ -626,7 +1090,7 @@ describe("startBlockedReason readiness chain", () => {
  * the header pill's plain "Ready to start" is on screen. The evaluation sentence SUBSTITUTES the
  * generic one; it never rides alongside it.
  */
-describe("lifecycleAnnouncement runtime assurance", () => {
+describe("readinessFacts runtime assurance", () => {
   function runtimeState(
     runtimeAvailable: boolean,
     runtimeEvidenceClass?: "platform-qualified" | "functional-not-platform-qualified",
@@ -646,22 +1110,19 @@ describe("lifecycleAnnouncement runtime assurance", () => {
   }
 
   it("announces the evaluation runtime instead of a plain ready runtime", () => {
-    const announcement = lifecycleAnnouncement(
-      runtimeState(true, "functional-not-platform-qualified"),
-      t,
-    );
+    const announcement = readinessFacts(runtimeState(true, "functional-not-platform-qualified"), t);
     expect(announcement).toContain("codingWorkbench.announcement.runtime.evaluation");
     expect(announcement).not.toContain("codingWorkbench.announcement.runtime.ready");
   });
 
   it("keeps announcing a platform-qualified runtime as ready", () => {
-    const announcement = lifecycleAnnouncement(runtimeState(true, "platform-qualified"), t);
+    const announcement = readinessFacts(runtimeState(true, "platform-qualified"), t);
     expect(announcement).toContain("codingWorkbench.announcement.runtime.ready");
     expect(announcement).not.toContain("codingWorkbench.announcement.runtime.evaluation");
   });
 
   it("never claims the evaluation posture over an unavailable runtime", () => {
-    const announcement = lifecycleAnnouncement(
+    const announcement = readinessFacts(
       runtimeState(false, "functional-not-platform-qualified"),
       t,
     );

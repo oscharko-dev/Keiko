@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeStateName,
@@ -44,6 +45,16 @@ const ALTERNATE_MODEL: ModelCapability = {
   id: "gpt-5.5",
   reasoningEfforts: ["medium"],
 };
+
+const GEMMA_MODEL: ModelCapability = {
+  ...CODING_MODEL,
+  id: "gemma-4-31b-it",
+  reasoningEfforts: [],
+};
+
+// The composer is mounted on its own, outside any page landmark, and its listboxes portal to the
+// document body; the page-composition "region" rule says nothing about the controls themselves.
+const AXE_OPTIONS = { rules: { region: { enabled: false } } } as const;
 
 type ComposerProps = Parameters<typeof TaskStartSection>[0];
 
@@ -222,13 +233,59 @@ describe("Coding Workbench composer", () => {
 
     expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
 
-    await user.click(screen.getByRole("combobox", { name: "Coding model" }));
+    await user.click(screen.getByRole("combobox", { name: "Coding model: gpt-5.4" }));
     await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
     await user.click(screen.getByRole("option", { name: "Full access" }));
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  // #3873 live review: both listboxes exposed every option as a nameless "option" in the
+  // accessibility tree while showing "gpt-5.4" and "gemma-4-31b-it", so a screen reader announced
+  // nothing. Each option carries its visible text as its own accessible name.
+  it("names every coding model and run authority option by its visible text", async () => {
+    const user = userEvent.setup();
+    renderComposerWithOverrides({ models: [CODING_MODEL, GEMMA_MODEL] });
+
+    await user.click(screen.getByRole("combobox", { name: /^Coding model/u }));
+    for (const id of [CODING_MODEL.id, GEMMA_MODEL.id]) {
+      expect(screen.getByRole("option", { name: id })).toHaveAttribute("aria-label", id);
+    }
+    expect(screen.getByRole("option", { name: "gemma-4-31b-it" })).toHaveTextContent(
+      "gemma-4-31b-it",
+    );
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("combobox", { name: "Run authority" }));
+    for (const label of ["Ask for approval", "Supervised workspace", "Full access"]) {
+      expect(screen.getByRole("option", { name: label })).toHaveAttribute("aria-label", label);
+    }
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  // #3873 live review: the chip showed "gemma-4-…", and neither a tooltip nor the accessible name
+  // said which model was selected. Both now carry the full identifier, however long it is.
+  it("exposes the full selected model identifier through the chip's title and name", () => {
+    const longId = "qwen3-coder-480b-a35b-instruct-fp8-dynamic-preview-2026-10";
+    renderComposerWithOverrides({
+      models: [CODING_MODEL, { ...GEMMA_MODEL, id: longId }],
+      selectedModelId: longId,
+    });
+
+    const chip = screen.getByRole("combobox", { name: `Coding model: ${longId}` });
+    expect(chip).toHaveAttribute("title", `Coding model: ${longId}`);
+    expect(chip).toHaveTextContent(longId);
+  });
+
+  it("keeps the plain chip name and no title while no coding model is selected", () => {
+    renderComposerWithOverrides({ models: [], selectedModelId: null });
+
+    const chip = screen.getByRole("combobox", { name: "Coding model" });
+    expect(chip).not.toHaveAttribute("title");
+    expect(chip).toHaveTextContent("No coding model available");
   });
 
   // Same hiding rule applies regardless of the runtimePreference the state carries; the operator

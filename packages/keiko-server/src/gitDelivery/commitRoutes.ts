@@ -333,9 +333,11 @@ const COMMIT_DRAFT_INSTRUCTION_MAX_CHARS = 1_500;
 // gateway call -- including the gateway's own internal retries -- so a healthy but slow answer was
 // reported as GIT_DELIVERY_COMMIT_DRAFT_FAILED, indistinguishable from a real outage.
 // `latencyProfile: "coding-workbench"` on the built request (buildCommitDraftModelRequest) asks the
-// gateway to apply the coding-workbench PER-ATTEMPT floor; the route's own backstop is derived from
-// that same retry budget (`gatewayRouteDeadlineMs`, shared with the Coding Workbench route) so it
-// always sits BEHIND the gateway's clock and never becomes the shorter, primary timeout.
+// gateway to apply the coding-workbench PER-ATTEMPT floor — only the floor: the coding outage
+// window is the separate `outagePolicy` signal, which this route never sets (#3873) — and the
+// route's own backstop is derived from that same retry budget (`gatewayRouteDeadlineMs`, shared
+// with the Coding Workbench route) so it always sits BEHIND the gateway's clock and never becomes
+// the shorter, primary timeout.
 // A reasoning model (gpt-oss / gemma thinking) spends output tokens on its reasoning trace before
 // its first answer token. 700 was tight enough that the whole budget was consumed by reasoning,
 // leaving `finish_reason: "length"` and no usable content (#3591). 4,000 gives a reasoning model
@@ -892,6 +894,8 @@ function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCall
     logContext: { correlationId: input.correlationId },
     // Applies the gateway's coding-workbench provider-timeout floor (#3591) — see
     // COMMIT_DRAFT_MODEL_DEADLINE_MS above for why this route no longer sets its own flat cap.
+    // Deliberately no `outagePolicy` (#3873): a person waits on this draft, so a gateway outage
+    // keeps failing it fast (GIT_DELIVERY_COMMIT_DRAFT_FAILED) instead of riding the coding window.
     latencyProfile: "coding-workbench",
   };
 }

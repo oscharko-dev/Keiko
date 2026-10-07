@@ -21,6 +21,8 @@ import {
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+  CLIENT_CODING_RUN_RESTORE_SIZE_MAX,
+  CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
@@ -401,6 +403,130 @@ describe("isClientDiagnosticIngestRequest", () => {
         isClientDiagnosticIngestRequest({ ...validRequest(), knowledgeCatalog: invalid }),
       ).toBe(false);
     }
+  });
+});
+
+// #3876 review: a restored coding run reports where its messages went as counts — never a message,
+// a path or a run name — and the counts must describe one restoration.
+describe("client coding run restore evidence", () => {
+  const restore = {
+    timelineCount: 4,
+    transcriptCount: 2,
+    cutCount: 1,
+    turnCount: 2,
+    feedBytes: 50_000,
+    transcriptChars: 24_000,
+    historyTruncated: false,
+  };
+  const accepted = (value: unknown): boolean =>
+    isClientDiagnosticIngestRequest({
+      ...validRequest(),
+      correlationId: "run-12345678",
+      codingRunRestore: value,
+    });
+
+  it("accepts the counts of a restoration, with or without a run's id to join it to", () => {
+    expect(accepted(restore)).toBe(true);
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), codingRunRestore: restore })).toBe(
+      true,
+    );
+    // A restoration whose whole conversation fits the timeline has nothing in the transcript.
+    expect(accepted({ ...restore, transcriptCount: 0, transcriptChars: 0, cutCount: 0 })).toBe(
+      true,
+    );
+    // A conversation too large for the feed even cut leaves the timeline without a turn.
+    expect(
+      accepted({ ...restore, timelineCount: 0, turnCount: 0, cutCount: 0, historyTruncated: true }),
+    ).toBe(true);
+  });
+
+  it("accepts the largest counts the report bounds and refuses one more", () => {
+    expect(
+      accepted({
+        ...restore,
+        timelineCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
+        turnCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
+        cutCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
+        transcriptCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX,
+        feedBytes: CLIENT_CODING_RUN_RESTORE_SIZE_MAX,
+        transcriptChars: CLIENT_CODING_RUN_RESTORE_SIZE_MAX,
+      }),
+    ).toBe(true);
+    expect(accepted({ ...restore, timelineCount: CLIENT_CODING_RUN_RESTORE_COUNT_MAX + 1 })).toBe(
+      false,
+    );
+    expect(accepted({ ...restore, feedBytes: CLIENT_CODING_RUN_RESTORE_SIZE_MAX + 1 })).toBe(false);
+    expect(accepted({ ...restore, transcriptChars: CLIENT_CODING_RUN_RESTORE_SIZE_MAX + 1 })).toBe(
+      false,
+    );
+  });
+
+  it("refuses a missing, extra, mistyped or out-of-range field", () => {
+    const { turnCount: _omitted, ...missingField } = restore;
+    for (const invalid of [
+      missingField,
+      { ...restore, runName: "Repair the parser" },
+      { ...restore, timelineCount: -1 },
+      { ...restore, transcriptCount: 1.5 },
+      { ...restore, feedBytes: "50000" },
+      { ...restore, historyTruncated: "no" },
+      { ...restore, historyTruncated: undefined },
+      "timeline=4",
+      null,
+      [],
+    ]) {
+      expect(accepted(invalid), JSON.stringify(invalid)).toBe(false);
+    }
+  });
+
+  it("refuses counts that cannot describe one restoration", () => {
+    for (const invalid of [
+      // More cut messages than the timeline carries.
+      { ...restore, cutCount: 5 },
+      // More turns than messages, or turns without messages, or messages without a turn.
+      { ...restore, turnCount: 5 },
+      { ...restore, timelineCount: 0, turnCount: 1, cutCount: 0 },
+      { ...restore, turnCount: 0 },
+      // Messages in the transcript without bytes, bytes without messages, or fewer bytes than messages.
+      { ...restore, transcriptChars: 0 },
+      { ...restore, transcriptCount: 0 },
+      { ...restore, transcriptCount: 5, transcriptChars: 4 },
+      // A feed always has a size.
+      { ...restore, feedBytes: 0 },
+    ]) {
+      expect(accepted(invalid), JSON.stringify(invalid)).toBe(false);
+    }
+  });
+
+  it("is a closed report of its own: no other closed report or failure field rides along", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        codingRunRestore: restore,
+        knowledgeCatalog: {
+          podCount: 1,
+          readyPodCount: 1,
+          setCount: 0,
+          boundCount: 0,
+          missingCount: 0,
+          notReadyCount: 0,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        codingRunRestore: restore,
+        kind: "boundary",
+      }),
+    ).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        codingRunRestore: restore,
+        errorKind: "internal",
+      }),
+    ).toBe(false);
   });
 });
 

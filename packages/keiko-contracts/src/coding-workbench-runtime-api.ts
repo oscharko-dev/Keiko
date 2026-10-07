@@ -35,9 +35,16 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
-import type { CodingWorkbenchTurnFailureCode } from "./coding-workbench-runtime-constants.js";
+import type {
+  CodingWorkbenchGatewayEventKind,
+  CodingWorkbenchTurnFailureCode,
+} from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
-export type { CodingWorkbenchTurnFailureCode } from "./coding-workbench-runtime-constants.js";
+export {
+  CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
+  type CodingWorkbenchGatewayEventKind,
+  type CodingWorkbenchTurnFailureCode,
+} from "./coding-workbench-runtime-constants.js";
 import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
@@ -355,7 +362,8 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly runId: string;
       readonly state: CodingWorkbenchRuntimeStateName;
       readonly revision: number;
-      readonly eventKind: CodingWorkbenchRuntimeEventKind;
+      // An adapter event kind, or one of the SSE-only gateway facts (#3873 review).
+      readonly eventKind: CodingWorkbenchRuntimeEventKind | CodingWorkbenchGatewayEventKind;
       readonly failureCode?:
         CodingWorkbenchRuntimeFailureCode | CodingWorkbenchTurnFailureCode | undefined;
       /**

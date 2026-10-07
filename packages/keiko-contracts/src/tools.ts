@@ -540,7 +540,8 @@ export interface PatchHunk {
   readonly oldLines: number;
   readonly newStart: number;
   readonly newLines: number;
-  // Body lines including the leading marker (" ", "+", "-").
+  // Body lines including the leading marker (" ", "+", "-"), plus the verbatim
+  // `\ No newline at end of file` marker right after the body line it annotates.
   readonly lines: readonly string[];
 }
 

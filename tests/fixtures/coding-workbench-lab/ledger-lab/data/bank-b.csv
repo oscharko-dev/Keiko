@@ -1,0 +1,13 @@
+Kontoauszug Bank B
+Konto: Girokonto DE00 1234 5678 9000
+Zeitraum: 01.01.2026 - 31.03.2026
+
+Datum;Konto;Verwendungszweck;Betrag
+05.01.2026;giro;Gehalt;3.000,00
+09.01.2026;giro;Miete Januar;-1.200,00
+28.01.2026;karte;Lebensmittel;-84,50
+02.02.2026;karte;Bücher, Zeitschriften;-42,90
+15.02.2026;giro;Strom;-96,10
+01.03.2026;giro;Gehalt;3.000,00
+03.03.2026;karte;Bahnticket;-29,00
+17.03.2026;giro;Steuererstattung;1.234,50

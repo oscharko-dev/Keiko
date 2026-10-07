@@ -74,6 +74,27 @@ function isBinaryDiff(diff: string): boolean {
   );
 }
 
+/**
+ * How a diff's body lines are read for the literal text `\n+`, `\n-` and `\n ` (a backslash and an
+ * "n" before a diff marker).
+ *
+ * - `"reject"` (the default, and the reading of any other value) refuses such a diff as `malformed`:
+ *   it is the guard against a model that collapses a diff's lines into one and separates them with
+ *   escaped line breaks.
+ * - `"verbatim"` reads that text as two ordinary characters of a body line. Only a caller that
+ *   rendered the diff itself, from the bytes of a governed read of the real file, may pass it, and
+ *   never for model-authored diff text: there the guard is the only defence against the incident
+ *   it exists for (#3876 review). It lifts that one heuristic; every other check is unchanged.
+ */
+export type PatchLineBreakMarkers = "reject" | "verbatim";
+
+// The checks one inspection applies, resolved once from the caller's deps.
+interface InspectionPolicy {
+  readonly limits: PatchLimits;
+  readonly allowOverwrite: boolean;
+  readonly lineBreakMarkers: PatchLineBreakMarkers;
+}
+
 function hasEscapedDiffLineBreak(diff: string): boolean {
   return (
     diff.includes(String.raw`\n+`) ||
@@ -353,6 +374,11 @@ function alignFileHunks(file: PatchFileChange, current: string | undefined): Pat
   if (current === undefined) {
     return isCreateOnlyModify(file) ? { ...file, kind: "create" } : file;
   }
+  // A present but EMPTY file filled by a pure insertion (`@@ -0,0 +1,N @@`, what any diff tool
+  // writes for an empty pre-image) has exactly one anchor, the file's start: line 1 (#3873 review).
+  if (current === "" && isCreateOnlyModify(file)) {
+    return { ...file, hunks: file.hunks.map((hunk) => ({ ...hunk, oldStart: 1, newStart: 1 })) };
+  }
   const currentLines = toLines(current);
   const hunks = file.hunks.map((hunk, index) => {
     const preimage = hunkPreimageLines(file, index);
@@ -376,7 +402,9 @@ function isCreateOnlyModify(file: PatchFileChange): boolean {
   return (
     file.hunks.length > 0 &&
     file.hunks.every(
-      (hunk) => hunk.oldLines === 0 && hunk.lines.every((line) => line.startsWith("+")),
+      (hunk) =>
+        hunk.oldLines === 0 &&
+        hunk.lines.every((line) => line.startsWith("+") || line.startsWith("\\")),
     )
   );
 }
@@ -418,9 +446,10 @@ function sizeAndCountReasons(
   diff: string,
   files: readonly PatchFileChange[],
   totalChangedLines: number,
-  limits: PatchLimits,
+  policy: InspectionPolicy,
   totalBytes: number,
 ): PatchRejection[] {
+  const { limits, lineBreakMarkers } = policy;
   const reasons: PatchRejection[] = [];
   if (diff.trim().length > 0 && files.length === 0) {
     reasons.push({ code: "malformed", message: "diff does not contain any file changes" });
@@ -434,7 +463,8 @@ function sizeAndCountReasons(
   if (isBinaryDiff(diff)) {
     reasons.push({ code: "binary", message: "binary patches are not supported" });
   }
-  if (hasEscapedDiffLineBreak(diff)) {
+  // Only the exact word "verbatim" lifts the guard: any other value, however it got here, keeps it.
+  if (lineBreakMarkers !== "verbatim" && hasEscapedDiffLineBreak(diff)) {
     reasons.push({
       code: "malformed",
       message: "diff contains escaped newline markers; use real line breaks",
@@ -532,6 +562,9 @@ export interface ValidateDeps {
   // When true (set only after explicit user confirmation), a create whose target already exists is a
   // replacement rather than a conflict (Issue #1204 AC7/AC14). Default false = no-silent-overwrite.
   readonly allowOverwrite?: boolean | undefined;
+  // See PatchLineBreakMarkers: `"verbatim"` only for a diff the caller rendered itself from a governed
+  // read of the real file. Default `"reject"`.
+  readonly lineBreakMarkers?: PatchLineBreakMarkers | undefined;
 }
 
 export interface PatchInspectionFile {
@@ -627,7 +660,7 @@ function prepareValidationSources(
 function validationReasons(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
-  limits: PatchLimits,
+  policy: InspectionPolicy,
   parsed: ParsedDiff,
   totalChangedLines: number,
 ): PatchRejection[] {
@@ -637,7 +670,7 @@ function validationReasons(
       parsed.effectiveDiff,
       parsed.files,
       totalChangedLines,
-      limits,
+      policy,
       totalBytes,
     ),
     ...collectPathReasons(workspace, fs, parsed.files),
@@ -684,14 +717,14 @@ function rejectedInspection(
 function completeInspection(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
-  limits: PatchLimits,
+  policy: InspectionPolicy,
   diff: string,
   parsed: ParsedDiff,
-  allowOverwrite: boolean,
 ): PatchInspection {
+  const { allowOverwrite } = policy;
   const files = parsed.files;
   const totalChangedLines = files.reduce((sum, f) => sum + f.addedLines + f.removedLines, 0);
-  const initialReasons = validationReasons(workspace, fs, limits, parsed, totalChangedLines);
+  const initialReasons = validationReasons(workspace, fs, policy, parsed, totalChangedLines);
   if (initialReasons.length > 0) {
     return rejectedInspection(diff, parsed, totalChangedLines, initialReasons);
   }
@@ -724,16 +757,13 @@ export function inspectPatch(
   deps: ValidateDeps = {},
 ): PatchInspection {
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const limits = deps.limits ?? DEFAULT_PATCH_LIMITS;
+  const policy: InspectionPolicy = {
+    limits: deps.limits ?? DEFAULT_PATCH_LIMITS,
+    allowOverwrite: deps.allowOverwrite ?? false,
+    lineBreakMarkers: deps.lineBreakMarkers ?? "reject",
+  };
   try {
-    return completeInspection(
-      workspace,
-      fs,
-      limits,
-      diff,
-      parseDiffForValidation(diff),
-      deps.allowOverwrite ?? false,
-    );
+    return completeInspection(workspace, fs, policy, diff, parseDiffForValidation(diff));
   } catch (error) {
     return { validation: malformedValidation(diff, error), files: null };
   }
@@ -849,6 +879,7 @@ export function buildRestorePatch(
   const validation = validatePatch(workspace, diff, {
     fs,
     allowOverwrite,
+    lineBreakMarkers: deps.lineBreakMarkers,
     ...(deps.limits ? { limits: deps.limits } : {}),
   });
   if (!validation.ok) {
@@ -881,6 +912,9 @@ export interface ApplyDeps {
   // When true (set only after explicit user confirmation), a create whose target already exists is a
   // replacement rather than a conflict (Issue #1204 AC7/AC14). Default false = no-silent-overwrite.
   readonly allowOverwrite?: boolean | undefined;
+  // See PatchLineBreakMarkers: `"verbatim"` only for a diff the caller rendered itself from a governed
+  // read of the real file. Default `"reject"`.
+  readonly lineBreakMarkers?: PatchLineBreakMarkers | undefined;
 }
 
 interface PlannedWrite {
@@ -1018,6 +1052,7 @@ export function applyPatch(
   const validation = validatePatch(workspace, diff, {
     fs,
     allowOverwrite,
+    lineBreakMarkers: deps.lineBreakMarkers,
     ...(deps.limits ? { limits: deps.limits } : {}),
   });
   if (!validation.ok) {

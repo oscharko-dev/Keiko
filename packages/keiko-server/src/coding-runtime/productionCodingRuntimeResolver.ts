@@ -70,7 +70,11 @@ import type {
   CodingRuntimeManagerDeps,
 } from "./codingRuntimeManager.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type {
+  CodingRuntimeEditOutcomeObserver,
+  CodingToolEditOutcome,
+  CodingToolFacade,
+} from "./codingToolFacadePorts.js";
 import type { OpenCodeToolBridge } from "./opencodeRuntimeComposition.js";
 import {
   createExplicitSkillInvocationTracker,
@@ -135,6 +139,10 @@ import {
   createCodingRuntimeContextUsageRegistry,
   type CodingRuntimeContextUsageRegistry,
 } from "./codingRuntimeContextUsage.js";
+import {
+  createCodingRuntimeRunEffortRegistry,
+  type CodingRuntimeRunEffortRegistry,
+} from "./codingRuntimeRunEffort.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
@@ -200,6 +208,12 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
   readonly runtimeMutationLeaseBroker?:
     Pick<CodingRuntimeEditorMutationLeaseBroker, "attach"> | undefined;
+  /**
+   * The server-wide record of the diff text the edit port renders itself. The same instance reaches
+   * the editor route as `UiHandlerDeps.materializedPatches` (deps.ts), which is how a registered
+   * diff is read verbatim there and no other is (PR #3876 review).
+   */
+  readonly materializedPatches?: ProductionManagedWorktreeToolInput["materializedPatches"];
   readonly gatewayEgress?: ProductionManagedWorktreeToolInput["gatewayEgress"] | undefined;
   readonly childModelPortFactory?:
     ProductionManagedWorktreeToolInput["childModelPortFactory"] | undefined;
@@ -246,9 +260,15 @@ interface RunComposition {
   // Filled once by `deps.ts` after the deps graph exists; `undefined` until then, and on a server
   // that composes no semantic index -- which is what makes a lexical-only search the default.
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
+  // F5 (#3873): filled once by the control plane with the orchestrator's refusal bound; every run's
+  // facade reports its applied and refused edits through it. `undefined` until then.
+  readonly editOutcomes: { current: CodingRuntimeEditOutcomeObserver | undefined };
   readonly research: ResearchComposition;
   readonly skillCatalog: SkillCatalog;
   readonly contextUsage: CodingRuntimeContextUsageRegistry;
+  // #3873: each run's model calls and governed tool calls, counted where this composition sees
+  // them, for the effort roll-up on the run's settlement line.
+  readonly runEffort: CodingRuntimeRunEffortRegistry;
 }
 
 /** Wraps the manager's approval issuance with the #2387 research grant minting hook. */
@@ -303,8 +323,8 @@ export function resolveProductionRuntimeStartConfirmationClaim(
 // every child at once; beside it is the transient URL retention between "the model asked for this
 // URL" and "the operator approved it" (in memory only, invalidated with the run). The one
 // server-approved skill catalog (#3417) is what every run composes its tools from, and what the
-// operator's channel reads back.
-function sharedRunComposition(): RunComposition {
+// operator's channel reads back. The effort registry (#3873) times model calls on the server clock.
+function sharedRunComposition(input: ProductionCodingRuntimeResolverInput): RunComposition {
   const research: ResearchComposition = {
     grants: createResearchGrantRegistry(),
     pending: createPendingResearchApprovals(),
@@ -313,7 +333,9 @@ function sharedRunComposition(): RunComposition {
     research,
     skillCatalog: createServerApprovedSkillCatalog(),
     semanticSearch: { current: undefined },
+    editOutcomes: { current: undefined },
     contextUsage: createCodingRuntimeContextUsageRegistry(),
+    runEffort: createCodingRuntimeRunEffortRegistry({ nowMs: () => runtimeNow(input).getTime() }),
   };
 }
 
@@ -360,6 +382,25 @@ function fillsSlot<T>(slot: { current: T }): (value: T) => void {
   };
 }
 
+// The setter halves of the late-bound slots, each filled exactly once after this resolver exists.
+// #3401 CI-repair notify: `attachVerifiedHeadNotifier` is called by `codingRuntimeControlPlane.ts`
+// right after it builds the orchestrator that owns the real `notifyVerifiedHeadAdvanced`;
+// `attachRepositorySemanticSearch` by `deps.ts`; and F5's `attachEditOutcomeObserver` by the control
+// plane with the orchestrator's refusal bound (#3873).
+function lateBoundAttachers(
+  verifiedHeadNotifier: { current: (runId: string) => void },
+  shared: Pick<RunComposition, "semanticSearch" | "editOutcomes">,
+): Pick<
+  QualifiedProductionCodingRuntime,
+  "attachVerifiedHeadNotifier" | "attachRepositorySemanticSearch" | "attachEditOutcomeObserver"
+> {
+  return {
+    attachVerifiedHeadNotifier: fillsSlot(verifiedHeadNotifier),
+    attachRepositorySemanticSearch: fillsSlot(shared.semanticSearch),
+    attachEditOutcomeObserver: fillsSlot(shared.editOutcomes),
+  };
+}
+
 function composeRuntime(
   input: ProductionCodingRuntimeResolverInput,
 ): QualifiedProductionCodingRuntime {
@@ -386,7 +427,7 @@ function composeRuntime(
   // late-settling dispose can never clear a NEWER run's bridge).
   const toolFacadeBridge: { current: OpenCodeToolBridge | undefined } = { current: undefined };
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
-  const shared = sharedRunComposition();
+  const shared = sharedRunComposition(input);
   const { research, skillCatalog } = shared;
   return {
     createManager: (onRuntimeEvent): CodingRuntimeManager => {
@@ -418,16 +459,36 @@ function composeRuntime(
     permissionPort: createProductionRuntimePermissionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
     contextUsage: { read: shared.contextUsage.read },
-    runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs),
+    // The same verified secure-read helper every run's `keiko_workspace_read` goes through, so the
+    // control plane's repository-instructions loader never opens a second filesystem path.
+    secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+    ...runBoundFacts(authority, input, shared),
+    runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs, shared),
     ...deliveryAuthorityPorts(authority, input),
-    // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
-    // Called exactly once by `codingRuntimeControlPlane.ts` right after it builds the orchestrator
-    // that owns the real method.
-    attachVerifiedHeadNotifier: fillsSlot(verifiedHeadNotifier),
-    attachRepositorySemanticSearch: fillsSlot(shared.semanticSearch),
+    ...lateBoundAttachers(verifiedHeadNotifier, shared),
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
+  };
+}
+
+// F9 (#3873): the run-bound facts a run's settlement reports: the cause a failed run names, read
+// from the runtime authority that enforces both bounds on the composition's own clock, and the
+// run's effort roll-up from the shared run composition that counts it. Grouped here so
+// `composeRuntime` stays under AGENTS.md section 6's 50-line ceiling.
+function runBoundFacts(
+  authority: CodingRuntimeAuthorityService,
+  input: ProductionCodingRuntimeResolverInput,
+  { runEffort }: Pick<RunComposition, "runEffort">,
+): Pick<
+  QualifiedProductionCodingRuntime,
+  "runEffort" | "promptAllowanceExhausted" | "envelopeDurationExhausted"
+> {
+  return {
+    runEffort: { read: runEffort.read },
+    promptAllowanceExhausted: (runId) => authority.promptAllowanceExhausted(runId),
+    envelopeDurationExhausted: (runId) =>
+      authority.envelopeDurationExhausted(runId, runtimeNow(input).getTime()),
   };
 }
 
@@ -462,14 +523,26 @@ function composedMintLaunch(
 // yet, so the return type is widened with an explicit intersection instead of touching that shared
 // interface: the object literal below satisfies both the narrower contract every existing consumer
 // still reads and the wider one `coding-sidecar-gateway.ts`'s settlement call site expects.
+// #3873: the sidecar gateway is the one caller of this reservation pair, and it reserves a call's
+// prompt estimate immediately before dispatching it and settles it once the provider answered or
+// failed, so an admitted reservation and its settlement are the run's model call as `runEffort`
+// counts and times it. The admitted reservation answers the call's identity (`modelCallId`) and the
+// gateway hands it back with the settlement, so a call is timed from its own reservation and never
+// from another call's of the same size (#3873 review).
+type PromptReservation = ReturnType<CodingRuntimeAuthorityService["reservePromptTokens"]> & {
+  readonly modelCallId?: number;
+};
+
 function runtimeCapabilityAuthenticatorFor(
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
+  { runEffort }: Pick<RunComposition, "runEffort">,
 ): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> & {
   readonly settlePromptTokens: (
     capability: string,
     reservedPromptTokens: number,
     actualPromptTokens: number,
+    modelCallId?: number,
   ) => unknown;
   // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
   // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
@@ -481,15 +554,31 @@ function runtimeCapabilityAuthenticatorFor(
 } {
   return {
     authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
-    reservePromptTokens: (capability, promptTokens) =>
-      reservePromptWithCiRepair(
+    reservePromptTokens: (capability, promptTokens): PromptReservation => {
+      const reserved = reservePromptWithCiRepair(
         authority,
         (runId) => runs.get(runId)?.ciRepairBudget,
         capability,
         promptTokens,
-      ),
-    settlePromptTokens: (capability, reservedPromptTokens, actualPromptTokens) =>
-      authority.settlePromptTokens(capability, reservedPromptTokens, actualPromptTokens),
+      );
+      if (!reserved.ok) return reserved;
+      const modelCallId = runEffort.modelCallReserved(reserved.runId, promptTokens);
+      return modelCallId === undefined ? reserved : { ...reserved, modelCallId };
+    },
+    settlePromptTokens: (
+      capability,
+      reservedPromptTokens,
+      actualPromptTokens,
+      modelCallId,
+    ): ReturnType<CodingRuntimeAuthorityService["settlePromptTokens"]> => {
+      const settled = authority.settlePromptTokens(
+        capability,
+        reservedPromptTokens,
+        actualPromptTokens,
+      );
+      if (settled.ok) runEffort.modelCallSettled(settled.runId, modelCallId, actualPromptTokens);
+      return settled;
+    },
     unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),
   };
 }
@@ -571,7 +660,9 @@ function launchResolver(
           research: shared.research,
           skillCatalog: shared.skillCatalog,
           semanticSearch: shared.semanticSearch,
+          editOutcomes: shared.editOutcomes,
           contextUsage: shared.contextUsage,
+          runEffort: shared.runEffort,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
         });
@@ -795,7 +886,11 @@ interface RunToolSurfaceInput {
   // The server's late-bound repository semantic index (#3416). The SLOT travels, not a resolved
   // value: a run composed before `deps.ts` binds one still sees it the moment it is bound.
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
+  // F5 (#3873): the SLOT travels, like `semanticSearch`, so a run composed before the control plane
+  // attaches the refusal bound still reports to it.
+  readonly editOutcomes: { current: CodingRuntimeEditOutcomeObserver | undefined };
   readonly contextUsage: CodingRuntimeContextUsageRegistry;
+  readonly runEffort: CodingRuntimeRunEffortRegistry;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly signal: AbortSignal;
   readonly notifyVerifiedHeadAdvanced: (runId: string) => void;
@@ -855,8 +950,12 @@ function composeRunToolPorts(
     skillCatalog,
     explicitSkills: prepared.explicitSkills,
     semanticSearch: args.semanticSearch,
+    editOutcomes: args.editOutcomes,
     ...services,
     onRuntimeEvent,
+    onToolSettled: (action, status): void => {
+      args.runEffort.toolSettled(minted.authorityRef.runId, action, status);
+    },
     resolveWorkspaceRootAccess: prepared.resolveWorkspaceRootAccess,
     researchOptions,
     childModel,
@@ -1191,9 +1290,11 @@ interface ManagedToolFacadeInput {
   readonly researchOptions?: ReturnType<typeof managedResearchOptions> | undefined;
   readonly skillCatalog: SkillCatalog;
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
+  readonly editOutcomes: { current: CodingRuntimeEditOutcomeObserver | undefined };
   readonly explicitSkills: ExplicitSkillInvocationTracker;
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly onToolSettled?: ProductionManagedWorktreeToolInput["onToolSettled"];
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly childModel: ResolvedChildModelInput;
 }
@@ -1246,11 +1347,9 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     minted,
     authority,
     invocationRegistry,
-    leases,
     research,
     skillCatalog,
     explicitSkills,
-    codingToolApprovals,
     onRuntimeEvent,
     resolveWorkspaceRootAccess,
     childModel,
@@ -1276,19 +1375,60 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     editorAgentClient: input.editorAgentClient,
-    mutationLeaseCoordinator: leases,
+    ...mutationPortOptions(options),
     invocationRegistry,
     repositorySemanticSearch: options.semanticSearch,
-    approvalProofVerifier: codingToolApprovals,
+    observeEditOutcome: runEditOutcomeObserver(options.editOutcomes, minted.authorityRef.runId),
+    approvalProofVerifier: options.codingToolApprovals,
     ...runtimeGitFacadeOptions(options),
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
     ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
     ...managedVerificationOptions(input, minted, onRuntimeEvent),
     ...runManifestAdmission(input, context, minted, request.correlationId),
-    onRuntimeEvent,
+    ...runObservers(options),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+// The edit port's two mutation-side ports: this run's lease coordinator, and the server-wide record
+// of the diff text the port renders itself, which the editor route reads (PR #3876 review).
+function mutationPortOptions({
+  input,
+  leases,
+}: Pick<ManagedToolFacadeInput, "input" | "leases">): Pick<
+  ProductionManagedWorktreeToolInput,
+  "mutationLeaseCoordinator" | "materializedPatches"
+> {
+  return {
+    mutationLeaseCoordinator: leases,
+    ...(input.materializedPatches === undefined
+      ? {}
+      : { materializedPatches: input.materializedPatches }),
+  };
+}
+
+// The run's own observers on its tool facade: the runtime event sink, and the counter of the run's
+// governed tool calls for its effort roll-up (#3873).
+function runObservers(
+  options: Pick<ManagedToolFacadeInput, "onRuntimeEvent" | "onToolSettled">,
+): Pick<ProductionManagedWorktreeToolInput, "onRuntimeEvent" | "onToolSettled"> {
+  return {
+    onRuntimeEvent: options.onRuntimeEvent,
+    ...(options.onToolSettled === undefined ? {} : { onToolSettled: options.onToolSettled }),
+  };
+}
+
+// F5 (#3873): the run's facade reports each applied or refused edit with the run's own id through
+// the slot the control plane fills with the orchestrator's refusal bound. The slot is read at call
+// time, so a run composed before the slot was filled still reaches the bound.
+function runEditOutcomeObserver(
+  slot: { readonly current: CodingRuntimeEditOutcomeObserver | undefined },
+  runId: string,
+): (outcome: CodingToolEditOutcome) => void {
+  return (outcome): void => {
+    slot.current?.(runId, outcome);
+  };
 }
 
 // The run-scoped manifest admission (ADR-0147 D3, autonomous-delivery amendment), bound to this

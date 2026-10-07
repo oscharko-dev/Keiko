@@ -24,7 +24,7 @@ import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { selectCodingIssueMode } from "./coding-issue-browser.js";
 import {
   assertObservedRuntimeReady,
-  LIFECYCLE_STATUS,
+  RUN_READINESS,
   observedDiagnosis,
   observedRun,
   observedRunState,
@@ -447,10 +447,10 @@ async function displayedChatModelIds(page: Page): Promise<readonly string[]> {
 // Generous on purpose: a false negative here does not cost time, it costs MONEY -- the whole
 // readiness probe set and a gateway save against an environment that was already fine.
 async function usableModelSource(page: Page, timeoutMs = 120_000): Promise<boolean> {
-  const status = workbenchSurface(page).locator(LIFECYCLE_STATUS);
+  const readiness = workbenchSurface(page).locator(RUN_READINESS);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (((await status.textContent()) ?? "").includes("Model source ready.")) return true;
+    if (((await readiness.textContent()) ?? "").includes("Model source ready.")) return true;
     if (Date.now() > deadline) return false;
     await page.waitForTimeout(1_000);
   }
@@ -594,10 +594,11 @@ async function controlName(locator: Locator, kind: string): Promise<string> {
   return name;
 }
 
+// #3873: the readiness facts sit in the run status's collapsed details, so they are read by text
+// content; a closed disclosure is attached but not visible.
 async function waitForWorkbenchResources(page: Page): Promise<void> {
-  const status = workbenchSurface(page)
-    .getByRole("status")
-    .filter({ hasText: "Model source ready." });
+  const status = workbenchSurface(page).locator(RUN_READINESS);
+  await expect(status).toContainText("Model source ready.", { timeout: 60_000 });
   await expect(status).toContainText("Workspace ready.", { timeout: 60_000 });
   // "Runtime available" appears in ONE string: the unsigned evaluation-runtime sentence. A
   // platform-qualified runtime announces "Runtime ready." instead, so requiring the former made a
@@ -609,8 +610,8 @@ async function waitForWorkbenchResources(page: Page): Promise<void> {
 }
 
 async function waitForWorkbenchWorkspace(page: Page): Promise<void> {
-  const status = workbenchSurface(page).getByRole("status").filter({ hasText: "Workspace ready." });
-  await expect(status).toBeVisible({ timeout: 60_000 });
+  const status = workbenchSurface(page).locator(RUN_READINESS);
+  await expect(status).toContainText("Workspace ready.", { timeout: 60_000 });
 }
 
 function taskWorkspaceControl(page: Page): Locator {

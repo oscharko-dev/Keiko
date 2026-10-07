@@ -1411,6 +1411,7 @@ export type {
   sameGitHubOwnerAndRepo,
 } from "./github-issue-reference.js";
 export type {
+  CodingWorkbenchGatewayEventKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchContextCompaction,
@@ -1440,6 +1441,7 @@ export type {
   CodingWorkbenchRuntimeUnavailableReason,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS,
@@ -2079,6 +2081,7 @@ export type {
   NormalizedToolCall,
   UsageMetadata,
   NormalizedResponse,
+  GatewayOutputRepairOutcome,
   FinishReason,
   StreamDelta,
   StreamEvent,

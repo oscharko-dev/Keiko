@@ -126,6 +126,7 @@ export {
   type ApplyDeps,
   type PatchInspection,
   type PatchInspectionFile,
+  type PatchLineBreakMarkers,
   type ValidateDeps,
 } from "./patch.js";
 export { normalizeUnifiedDiffHunks } from "./patch-normalize.js";

@@ -291,6 +291,63 @@ describe("opencode registration set", () => {
     expect(matchesCatalogSchema(schema as never, "a".repeat(64))).toBe(true);
     expect(matchesCatalogSchema(schema as never, "not-a-hash")).toBe(false);
   });
+
+  // #3873 follow-up: the model deletes and moves files through the same closed changeset object.
+  // The managed-runtime dialect requires every member, so a call that only edits still names both
+  // as empty arrays, and a call that only renames or deletes names no edits at all.
+  it("requires deletions and renames as closed changeset members that may be empty (#3873 follow-up)", () => {
+    const changeset = toolProperties("keiko_changeset_edit").changeset as {
+      required: readonly string[];
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(changeset.required).toEqual(["deletions", "edits", "files", "renames", "selectedFiles"]);
+    expect(changeset.properties.edits).not.toHaveProperty("minItems");
+    expect(changeset.properties.deletions).toEqual({
+      type: "array",
+      maxItems: 50,
+      items: { type: "string", minLength: 1, maxLength: 512 },
+    });
+    expect(changeset.properties.renames).toEqual({
+      type: "array",
+      maxItems: 50,
+      items: {
+        type: "object",
+        properties: {
+          from: { type: "string", minLength: 1, maxLength: 512 },
+          to: { type: "string", minLength: 1, maxLength: 512 },
+        },
+        required: ["from", "to"],
+        additionalProperties: false,
+      },
+    });
+    const files = [{ file: "src/a.ts", expectedContentHash: "a".repeat(64) }];
+    const renameOnly = {
+      edits: [],
+      deletions: [],
+      renames: [{ from: "src/a.ts", to: "src/b.ts" }],
+      files,
+      selectedFiles: ["src/a.ts"],
+    };
+    expect(matchesCatalogSchema(changeset as never, renameOnly)).toBe(true);
+    const withoutDeletions = {
+      edits: [],
+      renames: renameOnly.renames,
+      files,
+      selectedFiles: renameOnly.selectedFiles,
+    };
+    expect(matchesCatalogSchema(changeset as never, withoutDeletions)).toBe(false);
+    expect(
+      matchesCatalogSchema(changeset as never, {
+        ...renameOnly,
+        renames: [{ from: "src/a.ts", to: "src/b.ts", mode: "move" }],
+      }),
+    ).toBe(false);
+    const description = opencodeRegistrationSet().entries.find(
+      (entry) => entry.alias === "keiko_changeset_edit",
+    )?.descriptor.description;
+    expect(description).toContain("renames first, then edits");
+    expect(description).toContain("then deletions");
+  });
 });
 
 describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {

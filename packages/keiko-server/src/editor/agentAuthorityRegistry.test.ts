@@ -724,3 +724,51 @@ describe("EditorAgentAuthorityRegistry.settleRuntimePromptTokens", () => {
     ).toEqual({ ok: false, reason: "authority-expired" });
   });
 });
+
+// F9 (#3873): `reserveRuntimePromptTokens` answers `authority-budget-exceeded` both when the
+// cumulative prompt allowance cannot hold a call and when the runtime's time budget is spent. Only
+// the first is an exhausted prompt allowance; the Workbench must not name it for the second.
+describe("EditorAgentAuthorityRegistry.runtimePromptAllowanceExhausted (F9)", () => {
+  const budget = {
+    maxRuntimeMs: 60_000,
+    maxToolCalls: 20,
+    maxPromptTokens: 1_000,
+    maxPatchBytes: 1,
+  };
+
+  it("names the allowance only when the booked usage leaves no room for the refused call", () => {
+    const { registry, reference } = registeredRuntime({ budget });
+    expect(registry.reserveRuntimePromptTokens(reference, 900, NOW)).toEqual({ ok: true });
+    expect(registry.runtimePromptAllowanceExhausted(reference, 100, NOW)).toBe(false);
+    expect(registry.reserveRuntimePromptTokens(reference, 101, NOW)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+    expect(registry.runtimePromptAllowanceExhausted(reference, 101, NOW)).toBe(true);
+    // Asking books nothing: the 100 tokens the allowance still holds are still there.
+    expect(registry.reserveRuntimePromptTokens(reference, 100, NOW)).toEqual({ ok: true });
+  });
+
+  it("does not name the allowance when the runtime's time budget refused the call", () => {
+    const { registry, reference } = registeredRuntime({ budget });
+    const afterRuntimeBudget = "2026-07-09T12:01:00.001Z";
+    expect(registry.reserveRuntimePromptTokens(reference, 2_000, afterRuntimeBudget)).toEqual({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    });
+    expect(registry.runtimePromptAllowanceExhausted(reference, 2_000, afterRuntimeBudget)).toBe(
+      false,
+    );
+  });
+
+  it("answers no for a malformed count, a revoked record and an unknown run", () => {
+    const { registry, reference } = registeredRuntime({ budget });
+    expect(registry.runtimePromptAllowanceExhausted(reference, -1, NOW)).toBe(false);
+    expect(registry.runtimePromptAllowanceExhausted(reference, Number.NaN, NOW)).toBe(false);
+    expect(
+      registry.runtimePromptAllowanceExhausted({ ...reference, runId: "run-unknown" }, 5_000, NOW),
+    ).toBe(false);
+    registry.revoke(reference);
+    expect(registry.runtimePromptAllowanceExhausted(reference, 5_000, NOW)).toBe(false);
+  });
+});

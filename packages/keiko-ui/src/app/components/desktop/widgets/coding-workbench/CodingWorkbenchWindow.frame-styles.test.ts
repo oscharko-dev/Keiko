@@ -24,3 +24,15 @@ describe("Coding Workbench window frame styles", () => {
     expect(block).not.toContain("overflow: hidden");
   });
 });
+
+describe("Coding Workbench composer model chip styles", () => {
+  // #3873 live review: a fixed 9rem chip ellipsized "gemma-4-31b-it" to "gemma-4-…". The chip grows
+  // with its identifier up to a readable bound; only an identifier beyond that bound is ellipsized.
+  it("sizes the coding model chip to its identifier up to a bound", () => {
+    const block = cssBlock(".composerConfiguration > .modelControl");
+
+    expect(block).toContain("flex: 0 1 auto;");
+    expect(block).toMatch(/max-width: min\(\d+rem, 100%\);/u);
+    expect(css).not.toMatch(/\.modelControl \{\s*flex: 0 0 9rem;/u);
+  });
+});

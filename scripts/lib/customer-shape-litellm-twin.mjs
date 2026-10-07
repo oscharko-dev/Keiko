@@ -3,6 +3,8 @@ import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
+// The governed tool shim renders results for the model; its owner also owns the decoder (#3873).
+import { decodeGovernedToolModelContent } from "../../packages/keiko-server/dist/coding-runtime/governedToolModelContent.js";
 
 export const CUSTOMER_SHAPE_MODEL = "gemma-4-31b-it";
 export const CUSTOMER_SHAPE_REPLY = "Synthetic Workbench reply.";
@@ -84,7 +86,7 @@ function plannedWorkspaceDiscovery(body, behavior) {
 function completedDiscoveryResult(content) {
   if (typeof content !== "string") return false;
   try {
-    const result = JSON.parse(content);
+    const result = decodeGovernedToolModelContent(content);
     return (
       result?.status === "completed" &&
       typeof result.read?.text === "string" &&

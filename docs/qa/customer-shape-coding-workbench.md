@@ -56,3 +56,7 @@ On failure, the qualifier prints a bounded summary of registered Activity Log op
 start or handshake codes, and local twin request flags before deleting its temporary state. Values
 outside the reviewed vocabularies are redacted. An empty request list means the turn did not reach
 the local LiteLLM twin; inspect the runtime start or handshake code before changing the gateway.
+
+The live counterpart of this gate — real coding tasks completed by a self-hosted Gemma model behind
+LiteLLM — is the manual lab in
+[`coding-workbench-gemma-litellm-lab.md`](coding-workbench-gemma-litellm-lab.md).

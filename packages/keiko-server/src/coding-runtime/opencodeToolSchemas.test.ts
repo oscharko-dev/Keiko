@@ -18,6 +18,7 @@ import {
   opencodeGatewayOfferLifetimeMs,
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
+import { OPENCODE_GOVERNED_SYSTEM_PROMPT } from "./opencodeLaunchProfile.js";
 
 /** Minimal, independently-constructed `CompiledCatalogTool` fixture -- built here, not through
  * `createToolDescriptor`, since the point of this test is to exercise `handlerRequirement` shapes
@@ -95,23 +96,10 @@ describe("OpenCode visible tool contract", () => {
     expect(hasExactOpenCodeVisibleToolContract(OPENCODE_MODEL_VISIBLE_TOOLS)).toBe(false);
   });
 
-  it("requires strict unified headers or the bounded single-file raw-index fallback", () => {
-    const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
-    const pattern = edit?.parameters.properties.changeset.properties.patch.pattern;
-    if (pattern === undefined) throw new Error("Expected changeset patch pattern.");
-    const accepted = new RegExp(pattern, "u");
-
-    expect(accepted.test("--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n")).toBe(true);
-    expect(
-      accepted.test(
-        "diff --git a/README.md b/README.md\nindex 1d9d46e..9a35d11 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
-      ),
-    ).toBe(true);
-    expect(accepted.test(":100644 100644 1d9d46e 0000000 M README.md\n@@ -1 +1 @@\n")).toBe(true);
-    expect(accepted.test(":100644 100644 1d9d46e 0000000 A README.md\n@@ -1 +1 @@\n")).toBe(false);
-    expect(accepted.test(":100644 100644 1d9d46e 0000000 M README.md\n-old\n+new\n")).toBe(false);
-  });
-
+  // Added by 672387e (#3521): a projected verification schema that lost its verifier enum or its
+  // required verifier must never pass the exact-set trust check again, or a model could name an
+  // arbitrary verifier id on the native wire. Restored verbatim after #3873's edit-form change had
+  // removed it along with the retired patch-pattern test (review, AGENTS.md §7).
   it.each([
     [
       "the verifier enum",
@@ -138,6 +126,121 @@ describe("OpenCode visible tool contract", () => {
       expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
     },
   );
+
+  // The same pin for the edit form: a projected changeset that reintroduces the retired `patch`
+  // member, or whose edits no longer require their strings, is not the pinned contract.
+  it.each([
+    [
+      "a reintroduced patch member",
+      (changeset: Record<string, unknown>): Record<string, unknown> => ({
+        ...changeset,
+        properties: {
+          ...(changeset.properties as Record<string, unknown>),
+          patch: { type: "string", maxLength: 65_536 },
+        },
+      }),
+    ],
+    [
+      "edits that do not require their strings",
+      (changeset: Record<string, unknown>): Record<string, unknown> => {
+        const properties = changeset.properties as Record<string, unknown>;
+        const edits = properties.edits as Record<string, unknown>;
+        return {
+          ...changeset,
+          properties: {
+            ...properties,
+            edits: {
+              ...edits,
+              items: { ...(edits.items as Record<string, unknown>), required: [] },
+            },
+          },
+        };
+      },
+    ],
+  ])("denies a projected changeset-edit schema with %s", (_name, mutate) => {
+    const tools = projectedTools().map((tool) => {
+      if (tool.name !== "keiko_changeset_edit") return tool;
+      const properties = tool.parameters.properties as Record<string, unknown>;
+      const changeset = properties.changeset as Record<string, unknown>;
+      return {
+        ...tool,
+        parameters: { ...tool.parameters, properties: { changeset: mutate(changeset) } },
+      };
+    });
+    expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
+  });
+
+  // #3873 review: the system prompt and this schema must describe one edit form. Every changeset
+  // property the prompt names must be one the schema declares, and the retired diff form (a patch,
+  // a /dev/null source) must not come back into the prompt, or the model receives two contracts.
+  it("names in the system prompt no changeset property the schema does not declare, and no diff form", () => {
+    const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
+    const changeset = edit?.parameters.properties.changeset;
+    if (changeset === undefined) throw new Error("Expected the changeset schema.");
+    const declared = new Set(Object.keys(changeset.properties));
+    const named = [...OPENCODE_GOVERNED_SYSTEM_PROMPT.matchAll(/changeset\.([A-Za-z]+)/gu)].map(
+      (match) => match[1] ?? "",
+    );
+
+    expect(named.length).toBeGreaterThan(0);
+    for (const property of named) expect(declared).toContain(property);
+    expect(OPENCODE_GOVERNED_SYSTEM_PROMPT).not.toMatch(
+      /unified diff|\/dev\/null|changeset\.patch/u,
+    );
+  });
+
+  it("offers exact replacements as the only model-visible edit form (#3873)", () => {
+    const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
+    const changeset = edit?.parameters.properties.changeset;
+    if (changeset === undefined) throw new Error("Expected the changeset schema.");
+
+    expect(changeset.required).toEqual(["edits", "files"]);
+    expect(Object.keys(changeset.properties)).toEqual([
+      "edits",
+      "deletions",
+      "renames",
+      "files",
+      "selectedFiles",
+    ]);
+    expect(changeset.properties.edits.items.required).toEqual(["file", "oldString", "newString"]);
+    expect(Object.keys(changeset.properties.edits.items.properties)).toEqual([
+      "file",
+      "oldString",
+      "newString",
+      "replaceAll",
+    ]);
+  });
+
+  // #3873 follow-up: deletions and renames ride the same closed changeset object. A call that only
+  // deletes or moves carries no edits, so `edits` no longer demands an item; both new members are
+  // bounded by the same 50 entries and the same workspace-relative path pattern as every other path.
+  it("offers deletions and renames beside the edits, bounded like every other path (#3873 follow-up)", () => {
+    const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
+    const changeset = edit?.parameters.properties.changeset;
+    if (changeset === undefined) throw new Error("Expected the changeset schema.");
+    const path = changeset.properties.files.items.properties.file;
+
+    expect(changeset.properties.edits).not.toHaveProperty("minItems");
+    expect(changeset.properties.deletions).toEqual({
+      type: "array",
+      maxItems: 50,
+      uniqueItems: true,
+      items: path,
+      description: expect.stringContaining("after edits") as string,
+    });
+    expect(changeset.properties.renames).toMatchObject({
+      type: "array",
+      maxItems: 50,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { from: { ...path }, to: { ...path } },
+        required: ["from", "to"],
+      },
+    });
+    expect(changeset.properties.renames.description).toContain("before edits");
+    expect(new RegExp(path.pattern, "u").test(".git/../escape")).toBe(false);
+  });
 
   it("requires a bounded targetPath sentinel on the native provider wire", () => {
     const verification = OPENCODE_MODEL_VISIBLE_TOOLS.find(

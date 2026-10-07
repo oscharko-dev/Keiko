@@ -2,6 +2,7 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -10,6 +11,11 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import {
+  createOpenCodeV2LiveText,
+  type LiveTextKind,
+  type OpenCodeV2LiveText,
+} from "./opencodeV2LiveText.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
@@ -25,6 +31,25 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     eventCount: { type: "integer", dataClass: "count", required: true },
     signalCount: { type: "integer", dataClass: "count", required: true },
     emptyTextCount: { type: "integer", dataClass: "count", required: true },
+    // #3878: how many of the signals carried model reasoning to the live timeline; a count only.
+    // `required: false`: lines written before this field existed lack it.
+    reasoningSignalCount: { type: "integer", dataClass: "count", required: false },
+    // #3873 review (PR #3876): the runtime event stream's events that did not cost a history read of
+    // their own, because a read already queued or a later control hint's read covered them
+    // (`coalescedSyncHints`), since the previous line. Each one is a read saved; when a run's timeline
+    // lags or skips an update, this says how many events one read stood for. Absent when the composition
+    // reports none (a projection built without the stream).
+    mergedEventCount: { type: "integer", dataClass: "count", required: false },
+    // #3873 review (PR #3876): OpenCode 2.0.10 persists a streamed text or reasoning part only empty
+    // and complete, so the live timeline grows from the event stream's ephemeral deltas
+    // (`opencodeV2LiveText.ts`). Counts since the previous line, never text: the deltas appended to a
+    // live part; the deltas that extended nothing (the part was never seen starting, its stream was
+    // interrupted since, or it is full); the parts whose complete text did not extend what the
+    // timeline had already shown, which keeps the shown text. `required: false` because a line written
+    // before these fields existed lacks them.
+    liveDeltaCount: { type: "integer", dataClass: "count", required: false },
+    liveDroppedCount: { type: "integer", dataClass: "count", required: false },
+    liveDivergedCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -68,6 +93,11 @@ interface HistoryActivity {
   readonly captureMessages?: ((messages: readonly CodingHistoryMessage[]) => boolean) | undefined;
   readonly runId: string;
   readonly activityLog: ServerLogSink | undefined;
+  /**
+   * The runtime events merged into earlier history reads since the previous projection line, which
+   * resets (#3873 review). Absent for a projection that is not fed by the event stream.
+   */
+  readonly takeMergedEventCount?: (() => number) | undefined;
 }
 
 interface Candidate {
@@ -76,6 +106,9 @@ interface Candidate {
   readonly kind: OpenCodeReconciliationEvent["kind"];
   readonly signal?: CodingSafeActivitySignal | undefined;
   readonly emptyText?: true;
+  // A text part's own text as the runtime persisted it. Coding History is built from this, never from
+  // the live text the timeline shows while the part streams: partial answers are not captured.
+  readonly capturedText?: string;
 }
 
 interface PendingProjection {
@@ -158,6 +191,17 @@ export interface OpenCodeV2HistoryProjection {
   ): readonly OpenCodeReconciliationEvent[];
   takeSignal(event: OpenCodeReconciliationEvent): CodingSafeActivitySignal | undefined;
   clearSignals(): void;
+  /**
+   * Notes one event of the runtime's event stream. A streamed part is persisted only empty and
+   * complete, so the text and reasoning deltas the stream carries are what the next `project` shows
+   * of a part that is still streaming (`opencodeV2LiveText.ts`). Everything else is ignored.
+   */
+  observeLiveEvent(sessionId: string, event: Readonly<Record<string, unknown>>): void;
+  /**
+   * The event stream was interrupted: the parts it was feeding missed events, so none is extended
+   * again, and each shows what it has until the history shows it complete.
+   */
+  freezeLiveText(): void;
 }
 
 function digest(value: unknown): string {
@@ -228,15 +272,66 @@ function candidate(
   return { key, kind, digest: digest([key, data]), ...(signal === undefined ? {} : { signal }) };
 }
 
-function textCandidate(id: string, index: number, text: string, occurredAt: string): Candidate {
+// `text` is what the timeline shows; `capturedText` is the part's persisted text (the same, unless
+// the part is still streaming and the history shows it empty).
+function textCandidate(
+  id: string,
+  index: number,
+  text: string,
+  occurredAt: string,
+  capturedText: string = text,
+): Candidate {
   if (Buffer.byteLength(text, "utf8") > 65_536) throw new Error("opencode-v2-text-oversized");
   const key = `${id}:text:${String(index)}`;
   // V2 starts streaming with an empty part. Reconcile its identity, but publish no empty text.
-  if (text.length === 0) return { ...candidate(key, "observation", text), emptyText: true };
-  return candidate(key, "observation", text, {
-    kind: "text",
+  if (text.length === 0) {
+    return { ...candidate(key, "observation", text), emptyText: true, capturedText };
+  }
+  return {
+    ...candidate(key, "observation", text, {
+      kind: "text",
+      messageId: id,
+      text,
+      occurredAt,
+    }),
+    capturedText,
+  };
+}
+
+// #3878: the live timeline shows at most CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES of a
+// message's reasoning, so a reasoning part is read up to twice that and no further: a long reasoner
+// neither fails the history read like an oversized answer nor costs a digest of its whole text on
+// every pull. The prefix grows with the part until the bound and then stays fixed.
+const MAX_PROJECTED_REASONING_UTF8_BYTES = 2 * CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES;
+
+function projectedReasoning(text: string): string {
+  if (Buffer.byteLength(text, "utf8") <= MAX_PROJECTED_REASONING_UTF8_BYTES) return text;
+  let used = 0;
+  let end = 0;
+  for (const character of text) {
+    used += Buffer.byteLength(character, "utf8");
+    if (used > MAX_PROJECTED_REASONING_UTF8_BYTES) break;
+    end += character.length;
+  }
+  return text.slice(0, end);
+}
+
+// OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content part. It
+// grows by suffix like text and is projected into its own live signal; Coding History never
+// captures it (conversationMessages keeps text only). An empty part reconciles its identity only.
+function reasoningCandidate(
+  id: string,
+  index: number,
+  text: string,
+  occurredAt: string,
+): Candidate {
+  const key = `${id}:reasoning:${String(index)}`;
+  const shown = projectedReasoning(text);
+  if (shown.length === 0) return candidate(key, "observation", shown);
+  return candidate(key, "observation", shown, {
+    kind: "reasoning",
     messageId: id,
-    text,
+    text: shown,
     occurredAt,
   });
 }
@@ -306,6 +401,7 @@ function displayToolState(status: unknown): "pending" | "running" | "succeeded" 
 function assistantCandidates(
   message: Readonly<Record<string, unknown>>,
   parentMessageId: string,
+  live: OpenCodeV2LiveText,
 ): readonly Candidate[] {
   const id = messageId(message);
   const occurredAt = eventTime(message);
@@ -319,10 +415,49 @@ function assistantCandidates(
     }),
   ];
   if (!Array.isArray(message.content)) throw new Error("opencode-v2-content-invalid");
+  // The runtime numbers the text blocks, and apart from them the reasoning blocks, of one assistant
+  // message from zero in the order they start: the ordinal of a delta is the part's position among
+  // the same-kind parts of the message.
+  const ordinals: PartOrdinals = { text: 0, reasoning: 0 };
   for (const [index, value] of message.content.entries()) {
-    result.push(...assistantPartCandidates(value, id, index, occurredAt));
+    result.push(...assistantPartCandidates(value, id, index, occurredAt, { live, ordinals }));
   }
   return result;
+}
+
+interface PartOrdinals {
+  text: number;
+  reasoning: number;
+}
+
+interface LivePartContext {
+  readonly live: OpenCodeV2LiveText;
+  readonly ordinals: PartOrdinals;
+}
+
+// The text a part shows. The history shows a streamed part empty until it ends, so while it streams
+// the timeline shows the text the runtime's event stream delivered (`opencodeV2LiveText.ts`); once
+// the history shows the part complete, its own text, which extends what was shown, takes over and
+// the live text is spent, so nothing is appended twice. The shown text never shrinks and is always a
+// prefix of the next one: a complete text that does not extend what was already shown keeps the
+// shown text (counted), because the timeline cannot take words back.
+function shownPartText(
+  context: LivePartContext,
+  messageId: string,
+  kind: LiveTextKind,
+  durable: string,
+): string {
+  const ordinal = context.ordinals[kind];
+  context.ordinals[kind] += 1;
+  const liveText = context.live.textOf(messageId, kind, ordinal);
+  if (liveText === undefined || liveText.length === 0) return durable;
+  if (durable.length === 0) return liveText;
+  if (durable.startsWith(liveText)) {
+    context.live.retire(messageId, kind, ordinal);
+    return durable;
+  }
+  if (!liveText.startsWith(durable)) context.live.markDiverged(messageId, kind, ordinal);
+  return liveText;
 }
 
 function assistantPartCandidates(
@@ -330,10 +465,17 @@ function assistantPartCandidates(
   messageId: string,
   index: number,
   occurredAt: string,
+  context: LivePartContext,
 ): readonly Candidate[] {
   const part = record(value);
-  if (part?.type === "text" && typeof part.text === "string")
-    return [textCandidate(messageId, index, part.text, occurredAt)];
+  if (part?.type === "text" && typeof part.text === "string") {
+    const shown = shownPartText(context, messageId, "text", part.text);
+    return [textCandidate(messageId, index, shown, occurredAt, part.text)];
+  }
+  if (part?.type === "reasoning" && typeof part.text === "string") {
+    const shown = shownPartText(context, messageId, "reasoning", part.text);
+    return [reasoningCandidate(messageId, index, shown, occurredAt)];
+  }
   if (part?.type !== "tool") return [];
   const signal = toolState(part, messageId);
   return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
@@ -342,13 +484,14 @@ function assistantPartCandidates(
 function messageCandidates(
   message: Readonly<Record<string, unknown>>,
   parentMessageId: string | undefined,
+  live: OpenCodeV2LiveText,
 ): readonly Candidate[] {
   assertMessageShape(message);
   const id = messageId(message);
   const occurredAt = eventTime(message);
   if (message.type === "assistant") {
     if (parentMessageId === undefined) throw new Error("opencode-v2-parent-message-missing");
-    return assistantCandidates(message, parentMessageId);
+    return assistantCandidates(message, parentMessageId, live);
   }
   if (message.type === "user" && typeof message.text === "string") {
     return [
@@ -376,19 +519,23 @@ function messageCandidates(
 function allCandidates(
   sessionId: string,
   messages: readonly Readonly<Record<string, unknown>>[],
+  live: OpenCodeV2LiveText,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
   let parentMessageId: string | undefined;
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
-    result.push(...messageCandidates(message, parentMessageId));
+    result.push(...messageCandidates(message, parentMessageId, live));
   }
   return result;
 }
 
+// Coding History records what the runtime persisted: a text part's own text, never the live text the
+// timeline shows while the part streams, so a turn cut short does not leave a partial answer behind
+// and a streaming turn does not rewrite the stored message on every delta.
 function conversationMessages(candidates: readonly Candidate[]): readonly CodingHistoryMessage[] {
   const messages = new Map<string, CodingHistoryMessage>();
-  for (const { signal } of candidates) {
+  for (const { signal, capturedText } of candidates) {
     if (signal?.kind === "message")
       messages.set(signal.messageId, {
         messageId: signal.messageId,
@@ -398,7 +545,10 @@ function conversationMessages(candidates: readonly Candidate[]): readonly Coding
     if (signal?.kind !== "text") continue;
     const message = messages.get(signal.messageId);
     if (message !== undefined)
-      messages.set(signal.messageId, { ...message, content: message.content + signal.text });
+      messages.set(signal.messageId, {
+        ...message,
+        content: message.content + (capturedText ?? signal.text),
+      });
   }
   return [...messages.values()];
 }
@@ -433,9 +583,17 @@ function makePending(
   return { nextKnown, events, signals, emptyTextCount };
 }
 
+type GrowingTextSignal = Extract<CodingSafeActivitySignal, { readonly kind: "text" | "reasoning" }>;
+
+// Answer text and model reasoning both grow by suffix and are projected by their new characters.
+function growingTextSignal(item: Candidate): GrowingTextSignal | undefined {
+  const signal = item.signal;
+  return signal?.kind === "text" || signal?.kind === "reasoning" ? signal : undefined;
+}
+
 function candidateText(item: Candidate): string | undefined {
   if (item.emptyText) return "";
-  return item.signal?.kind === "text" ? item.signal.text : undefined;
+  return growingTextSignal(item)?.text;
 }
 
 function incrementalSignal(
@@ -447,7 +605,8 @@ function incrementalSignal(
   if (text === undefined || offset === undefined) return item.signal;
   if (offset > text.length || digest([item.key, text.slice(0, offset)]) !== previous?.digest)
     throw new OpenCodeV2HistoryError("reason=text-prefix-invalid");
-  return item.signal?.kind === "text" ? { ...item.signal, text: text.slice(offset) } : item.signal;
+  const growing = growingTextSignal(item);
+  return growing === undefined ? item.signal : { ...growing, text: text.slice(offset) };
 }
 
 function recordNativeQuestions(
@@ -474,12 +633,17 @@ function recordNativeQuestions(
   }
 }
 
+// A pass that produced nothing writes no line, and the counts it accumulated wait for the next one.
 function recordHistoryProjection(
   activity: HistoryActivity | undefined,
   pending: PendingProjection,
+  live: OpenCodeV2LiveText,
 ): void {
   if (pending.events.length === 0) return;
-  activity?.activityLog?.write(
+  if (activity?.activityLog === undefined) return;
+  const counts = live.takeCounts();
+  const merged = activity.takeMergedEventCount?.();
+  activity.activityLog.write(
     activityLogEvent(
       HISTORY_PROJECTION_OPERATION,
       { correlationId: activity.runId },
@@ -487,6 +651,13 @@ function recordHistoryProjection(
         eventCount: pending.events.length,
         signalCount: pending.signals.size,
         emptyTextCount: pending.emptyTextCount,
+        reasoningSignalCount: [...pending.signals.values()].filter(
+          (signal) => signal.kind === "reasoning",
+        ).length,
+        ...(merged === undefined ? {} : { mergedEventCount: merged }),
+        liveDeltaCount: counts.applied,
+        liveDroppedCount: counts.dropped,
+        liveDivergedCount: counts.diverged,
       },
     ),
   );
@@ -514,6 +685,7 @@ export function createOpenCodeV2HistoryProjection(
   let pendingStart = -1;
   const capture = conversationCapture(activity);
   const activeSignals = new Map<string, CodingSafeActivitySignal>();
+  const live = createOpenCodeV2LiveText();
   return {
     project(sessionId, messages, checkpoint): readonly OpenCodeReconciliationEvent[] {
       const position = checkpoint ?? -1;
@@ -525,10 +697,10 @@ export function createOpenCodeV2HistoryProjection(
         throw new Error("opencode-v2-checkpoint-invalid");
       }
       if (pending === undefined) {
-        const candidates = allCandidates(sessionId, messages);
+        const candidates = allCandidates(sessionId, messages, live);
         pending = makePending(sessionId, position, known, candidates);
         capture(candidates);
-        recordHistoryProjection(activity, pending);
+        recordHistoryProjection(activity, pending, live);
         recordNativeQuestions(activity, pending);
       }
       pendingStart = position;
@@ -543,6 +715,12 @@ export function createOpenCodeV2HistoryProjection(
     },
     clearSignals(): void {
       activeSignals.clear();
+    },
+    observeLiveEvent(sessionId, event): void {
+      live.observe(sessionId, event);
+    },
+    freezeLiveText(): void {
+      live.freeze();
     },
   };
 }

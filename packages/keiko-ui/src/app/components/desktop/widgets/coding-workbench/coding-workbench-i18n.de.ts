@@ -294,6 +294,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.resume": "Lauf fortsetzen",
   "codingWorkbench.composer.send": "Rückfrage senden",
   "codingWorkbench.composer.model.label": "Coding-Modell",
+  "codingWorkbench.composer.model.selected": "Coding-Modell: {model}",
   "codingWorkbench.composer.model.menu": "Coding-Modell auswählen",
   "codingWorkbench.composer.model.none": "Kein Coding-Modell verfügbar",
   "codingWorkbench.composer.source.label": "Modellquelle",
@@ -395,6 +396,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
+  "codingWorkbench.repository.deniedHelp":
+    "Keiko darf diesen Ordner nicht lesen: Sein Ort ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen, etwa weil er im eigenen Zustandsordner eines Werkzeugs liegt, oder der Zugriff wurde verweigert. Das ist eine Richtlinienentscheidung, kein fehlendes Git-Repository. Wähle ein Repository außerhalb dieses Orts oder öffne Git, um die Ablehnung zu sehen.",
   "codingWorkbench.repository.loadError":
     "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
   "codingWorkbench.repository.retryLoad": "Erneut versuchen",
@@ -522,7 +525,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.previousPath": " (zuvor {path})",
   "codingWorkbench.changes.diff.elevatedReview": "Erweiterte Prüfung",
   "codingWorkbench.activity.reasoningBoundary":
-    "Diese Zeitleiste zeigt beobachtbare Konversation und Arbeitsaktivität. Private Gedankengänge werden niemals offengelegt.",
+    "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, die Überlegungen des Modells. Diese Überlegungen sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
+  "codingWorkbench.activity.reasoning.title": "Überlegungen des Modells",
+  "codingWorkbench.activity.reasoning.badge": "Ungeprüft",
+  "codingWorkbench.activity.reasoning.note":
+    "Ungeprüfte Überlegungen des Modells: So ist es an diesen Schritt herangegangen. Sie können falsch sein; für dich zählen die Antwort und die Änderungen.",
   "codingWorkbench.activity.status.idle": "Noch kein Lauf gestartet.",
   "codingWorkbench.activity.status.loading": "Aktivität wird verbunden…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -943,6 +950,17 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runState.cancelled": "Angehalten",
   "codingWorkbench.runState.taken-over": "Übernommen",
   "codingWorkbench.runState.recovery-required": "Wiederherstellung erforderlich",
+  "codingWorkbench.runStatus.elapsed": "Läuft seit {duration}",
+  "codingWorkbench.runStatus.duration": "Dauer {duration}",
+  "codingWorkbench.runStatus.duration.seconds": "{seconds} s",
+  "codingWorkbench.runStatus.duration.minutes": "{minutes} Min. {seconds} s",
+  "codingWorkbench.runStatus.duration.hours": "{hours} Std. {minutes} Min.",
+  "codingWorkbench.runStatus.phase.model": "Wartet auf das Modell",
+  "codingWorkbench.runStatus.phase.gateway": "Modell-Gateway nicht erreichbar, neuer Versuch",
+  "codingWorkbench.runStatus.phase.verifier": "Führt eine Prüfung aus",
+  "codingWorkbench.runStatus.phase.tool": "Führt ein Werkzeug aus",
+  "codingWorkbench.runStatus.phase.decision": "Wartet auf deine Entscheidung",
+  "codingWorkbench.runStatus.readiness": "Bereitschaftsdetails",
   "codingWorkbench.resourceStatus.unavailable": "Nicht verfügbar",
   "codingWorkbench.announcement.runChecking": "Laufstatus wird geprüft.",
   "codingWorkbench.announcement.noActiveRun": "Kein aktiver Coding-Lauf.",
@@ -997,12 +1015,31 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Unteragent abgeschlossen",
   "codingWorkbench.event.operator-decision": "Deine Entscheidung nötig",
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
+  "codingWorkbench.event.model-gateway-retrying": "Modell-Gateway nicht erreichbar, neuer Versuch",
+  "codingWorkbench.event.model-gateway-recovered": "Modell-Gateway antwortet wieder",
+  "codingWorkbench.event.model-gateway-retry-stopped": "Wiederholung beim Modell-Gateway beendet",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Fehler: {failure}",
+  "codingWorkbench.event.failure.edits-blocked":
+    "Keiko hat den Lauf beendet, weil seine Änderungen mehrmals hintereinander aus einem Grund abgelehnt wurden, den das Modell durch eine andere Änderung nicht beheben kann: etwa weil keine Coding Workbench für diesen Arbeitsbereich verbunden ist, der Zugriff auf den Arbeitsbereich verloren ging oder der Pfad durch eine Richtlinie geschützt ist. Behebe diese Ursache, halte zum Beispiel die Coding Workbench für diesen Arbeitsbereich geöffnet, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.failure.edit-retries-exhausted":
+    "Keiko hat den Lauf beendet, weil die Änderungen des Modells mehrmals hintereinander abgelehnt wurden, etwa weil sie nicht mehr zur Datei passten. Starte die Aufgabe erneut, formuliere sie um oder teile sie auf, oder wähle ein anderes Modell; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.failure.runtime":
     "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
+  "codingWorkbench.event.failure.prompt-allowance-exhausted":
+    "Der Lauf hat sein Prompt-Kontingent aufgebraucht – die Prompt-Tokens, die ein Lauf insgesamt an das Modell senden darf –, deshalb hat Keiko seinen nächsten Modellaufruf abgelehnt. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Kontingent erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Kontingent mit KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS bis höchstens 20.000.000 Tokens erhöhen. Keiko liest die Einstellung nur beim Start: Nach einer Änderung muss Keiko neu gestartet werden.",
+  "codingWorkbench.event.failure.envelope-duration-exhausted":
+    "Der Lauf hat sein Zeitlimit aufgebraucht – wie lange ein Lauf arbeiten darf –, deshalb endete er, bevor die Aufgabe erledigt war. Das ist ein Limit, kein Fehler. Deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich: Starte die Aufgabe als neuen Lauf mit frischem Zeitlimit erneut oder teile sie in kleinere Aufgaben auf. Ein Betreiber kann das Limit mit KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES bis höchstens 480 Minuten verlängern. Keiko liest die Einstellung nur beim Start: Nach einer Änderung muss Keiko neu gestartet werden.",
+  "codingWorkbench.event.failure.output-exhausted-repeated":
+    "Der Lauf wurde beendet, weil das Modell sein gesamtes Ausgabebudget erneut verbraucht hat, ohne ein Werkzeug aufzurufen oder zu antworten – auch nach einem Reparaturversuch. Meist verbraucht das Modell dieses Budget mit Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.stopped":
+    "Dieser Lauf wurde gestoppt. Nichts ist fehlgeschlagen, und deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
+  "codingWorkbench.event.failure.provider-unavailable":
+    "Der Lauf wurde beendet, weil der Modellanbieter nicht erreichbar war oder aufgehört hat zu antworten – auch nachdem Keiko gewartet und es erneut versucht hat. Abgelehnt wurde nichts. Prüfe, ob das Modell-Gateway und sein Anbieter laufen, und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich. Ein Betreiber kann die Wartezeit mit der Gateway-Einstellung codingOutageWindowMs verlängern.",
+  "codingWorkbench.event.failure.model-turn-failed":
+    "Der Lauf wurde beendet, weil sein letzter Modellschritt fehlgeschlagen ist – den Grund zeigt dieser Schritt oben. Behebe diesen Grund und starte die Aufgabe dann erneut; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.runFailed": "Coding-Lauf fehlgeschlagen",
   "codingWorkbench.event.turnFailure.provider-failed":
     "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",

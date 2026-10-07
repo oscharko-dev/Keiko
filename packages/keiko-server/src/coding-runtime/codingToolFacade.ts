@@ -40,9 +40,11 @@ import {
   CODING_TOOL_MAX_READ_BYTES,
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
+  declaredCodingToolAction,
   dependencyBootstrapFailureSummary,
   isPermissionObservation,
   parseCodingToolRequest,
+  type CodingToolAction,
   type CodingToolActionRequest,
   type CodingToolEgressReadResult,
   type CodingToolReadResult,
@@ -54,12 +56,17 @@ import {
   GOVERNED_ASK_DECLINED_REASON_CODE,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
-import type {
-  CodingToolAdmission,
-  CodingToolFacade,
-  CodingToolFacadeInput,
-  CodingToolFacadeOptions,
-  CodingToolFacadePorts,
+import {
+  EDIT_PREPARE_CAUSES,
+  EDIT_READ_REASONS,
+  type CodingToolAdmission,
+  type CodingToolEditOutcome,
+  type CodingToolFacade,
+  type CodingToolFacadeInput,
+  type CodingToolFacadeOptions,
+  type CodingToolFacadePorts,
+  type EditPrepareCause,
+  type EditReadReason,
 } from "./codingToolFacadePorts.js";
 import {
   VERIFICATION_RUNNER_ERROR_CODES,
@@ -96,7 +103,9 @@ const EDIT_PORT_REFUSAL_REASON_CODES = [
   "WORKSPACE_ACCESS_LOST",
   "EDIT_MUTATION_FAILED",
 ] as const;
-const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
+// Exported so the run's edit refusal bound (codingRuntimeRefusalEscalation.ts) can pin that it
+// classifies every code this facade forwards to the model (F5, #3873).
+export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   ...EDITOR_AGENT_CONFLICT_CODES,
   ...EDITOR_AGENT_FAILURE_CODES,
   ...EDIT_TRANSPORT_REASON_CODES,
@@ -185,6 +194,8 @@ export function createCodingToolFacade(
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
     catalogBridge: options.catalogBridge,
+    onToolSettled: options.onToolSettled,
+    observeEditOutcome: options.observeEditOutcome,
     inFlight: { count: 0 },
   };
   return {
@@ -199,6 +210,8 @@ interface ExecutionContext {
   readonly invocationRegistry: CodingToolInvocationRegistry | undefined;
   readonly requireInvocationRegistryForEdits: boolean;
   readonly catalogBridge: CanonicalCatalogFacadeBridge | undefined;
+  readonly onToolSettled: CodingToolFacadeOptions["onToolSettled"];
+  readonly observeEditOutcome: ((outcome: CodingToolEditOutcome) => void) | undefined;
   readonly inFlight: { count: number };
 }
 
@@ -237,25 +250,90 @@ async function execute(
   if (hasOrigin(input.headers)) return empty("denied");
   if (isPermissionObservation(input.body, context.maxBodyBytes)) return empty("observed");
   const request = parseCodingToolRequest(input.body, context.maxBodyBytes);
-  if (request === undefined) return empty("invalid");
+  if (request === undefined) {
+    const action = declaredCodingToolAction(input.body, context.maxBodyBytes);
+    return answered(context, action, empty("invalid"));
+  }
+  return answered(context, request.action, await executeParsed(context, input, request));
+}
+
+// #3873: the run's effort roll-up counts each call the facade answered by its closed action and the
+// status of the answer — never the request or the result.
+function answered(
+  context: ExecutionContext,
+  action: CodingToolAction | undefined,
+  result: CodingToolResult,
+): CodingToolResult {
+  context.onToolSettled?.(action, result.status);
+  return result;
+}
+
+async function executeParsed(
+  context: ExecutionContext,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+): Promise<CodingToolResult> {
   if (input.signal?.aborted === true) return empty("cancelled");
   if (context.inFlight.count >= context.maxInFlight) return empty("busy");
   context.inFlight.count += 1;
   try {
-    if (context.catalogBridge?.covers(request) === true) {
-      return await executeCatalogRequest(context, input, request);
-    }
-    context.catalogBridge?.recordUnbound(request, input);
-    return await executeAdmitted(
-      context.ports,
-      input,
-      request,
-      context.invocationRegistry,
-      context.requireInvocationRegistryForEdits,
-    );
+    const result = await routeParsed(context, input, request);
+    if (request.action === "edit") observeEditResult(context.observeEditOutcome, result);
+    return result;
   } finally {
     context.inFlight.count -= 1;
   }
+}
+
+// An admitted request's one path: the canonical catalog bridge for a covered action, else the
+// governed delegate.
+function routeParsed(
+  context: ExecutionContext,
+  input: CodingToolFacadeInput,
+  request: CodingToolActionRequest,
+): Promise<CodingToolResult> {
+  if (context.catalogBridge?.covers(request) === true) {
+    return executeCatalogRequest(context, input, request);
+  }
+  context.catalogBridge?.recordUnbound(request, input);
+  return executeAdmitted(
+    context.ports,
+    input,
+    request,
+    context.invocationRegistry,
+    context.requireInvocationRegistryForEdits,
+  );
+}
+
+// F5 (#3873): the run's refusal bound counts the edit as the model received it, whatever path
+// answered it — the catalog bridge or the admitted delegate.
+function observeEditResult(
+  observe: ((outcome: CodingToolEditOutcome) => void) | undefined,
+  result: CodingToolResult,
+): void {
+  if (observe === undefined) return;
+  const outcome = codingToolEditOutcome(result);
+  if (outcome !== undefined) observe(outcome);
+}
+
+/**
+ * An answered edit's outcome: applied, or refused under the closed code the model was given — the
+ * `reasonCode` the result exposes, else its governed-delegate evidence code, which carries the same
+ * closed vocabulary (`projectEditFailure`). A refusal whose code the facade withheld reads as
+ * `UNCLASSIFIED`; a human decision, cancellation or busy answer is not an outcome to count. An
+ * `EDIT_PREPARE_FAILED` refusal also reports the closed cause the edit port gave it, which the model
+ * never sees (`EDIT_REFUSAL_CAUSES`).
+ */
+function codingToolEditOutcome(result: CodingToolResult): CodingToolEditOutcome | undefined {
+  if (result.status === "completed") return { kind: "applied" };
+  if (result.status !== "failed") return undefined;
+  const code =
+    result.reasonCode ?? result.evidence.find((item) => item.kind === "governed-delegate")?.code;
+  return {
+    kind: "refused",
+    reasonCode: code === undefined || code === "failed" ? "UNCLASSIFIED" : code,
+    ...EDIT_REFUSAL_CAUSES.get(result),
+  };
 }
 
 async function executeAdmitted(
@@ -788,22 +866,27 @@ function validVerificationFailureLocations(
 // closed reason code -- never derived from content. Before this the model received the bare code
 // and, in the probe rehearsal of 2026-09-08, resent the same rejected patch six times and then
 // ended its run without delivering (#3390).
+// #3873: the model sees one edit form, exact replacements plus deletions and renames, so these
+// sentences name that form and never a patch the schema does not offer.
 const EDIT_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
   CONTENT_HASH_MISMATCH:
-    "The file changed after the read that produced expectedContentHash; an earlier successful edit of yours changes it too. Re-read the file with keiko_workspace_read and rebuild the patch against its current content and digest. Do not resend the same patch.",
+    "The file changed after the read that produced expectedContentHash; an earlier successful edit of yours changes it too. Re-read the file with keiko_workspace_read, copy its current text and digest, and submit a fresh edit. Do not resend the same edit.",
   INVALID_EDITS:
-    "The unified diff does not apply to the file as it is now: a hunk's context or line numbers no longer match, the header is malformed, or a listed file is missing from the patch. Re-read the file, copy its exact current lines as context, and submit one fresh patch that declares every file it touches.",
+    "The edit does not apply to the file as it is now: an oldString is missing or not unique, or a path is named twice, addressed after being renamed away, or missing from files or selectedFiles. Re-read the file, copy its exact current text into oldString, and submit one fresh call that declares every path it touches.",
   PRECONDITION_REQUIRED:
     "Read the file with keiko_workspace_read first and bind the edit to the digest that read returns.",
+  LIMIT_EXCEEDED:
+    "The edit is larger than the run or one changeset allows. Narrow replaceAll, split the call into smaller changesets, or finish with the changes already applied; do not resend it unchanged.",
   OUT_OF_SCOPE:
     "The path is outside the workspace or protected by policy. This is a decision, not a transient error; do not retry it.",
 };
-// The refusals whose route sentence is structural (paths, hunk indexes, line numbers) and therefore
-// safe to show; every other code keeps the code alone.
+// The refusals whose route sentence is structural (paths, hunk indexes, line numbers, sizes) and
+// therefore safe to show; every other code keeps the code alone.
 const EDIT_FAILURE_DETAIL_REASON_CODES: ReadonlySet<string> = new Set([
   "CONTENT_HASH_MISMATCH",
   "INVALID_EDITS",
   "PRECONDITION_REQUIRED",
+  "LIMIT_EXCEEDED",
   "OUT_OF_SCOPE",
 ]);
 // One printable ASCII line, bounded: anything else is not a route sentence and is dropped.
@@ -823,9 +906,44 @@ function projectEditFailure(
       ? reasonCode
       : undefined;
   const base = projected("failed", safeReasonCode, safeReasonCode === "ci-observation-required");
-  return safeReasonCode === undefined
-    ? base
-    : { ...base, ...editFailureCoaching(safeReasonCode, value.message) };
+  if (safeReasonCode === undefined) return base;
+  const result = { ...base, ...editFailureCoaching(safeReasonCode, value.message) };
+  const cause = safeReasonCode === "EDIT_PREPARE_FAILED" ? editRefusalCause(value) : undefined;
+  if (cause !== undefined) EDIT_REFUSAL_CAUSES.set(result, cause);
+  return result;
+}
+
+// The closed cause the edit port gave an `EDIT_PREPARE_FAILED` refusal (which preparation step
+// refused, and why a materialization read failed) rides BESIDE the model-facing result, keyed by the
+// result object, never in it: `JSON.stringify(result)` is what the model receives, and the run's
+// refusal bound is the only reader (`codingToolEditOutcome`). Every route that answers an edit
+// hands back the object `project` built — the admitted delegate and the catalog bridge alike — so
+// the key survives both. A word outside the closed vocabularies is dropped, and the refusal then
+// reads as the code alone, exactly as before.
+const EDIT_REFUSAL_CAUSES = new WeakMap<CodingToolResult, EditRefusalCause>();
+const EDIT_PREPARE_CAUSE_SET: ReadonlySet<unknown> = new Set(EDIT_PREPARE_CAUSES);
+const EDIT_READ_REASON_SET: ReadonlySet<unknown> = new Set(EDIT_READ_REASONS);
+
+interface EditRefusalCause {
+  readonly prepareCause?: EditPrepareCause;
+  readonly readReason?: EditReadReason;
+}
+
+function isEditPrepareCause(value: unknown): value is EditPrepareCause {
+  return EDIT_PREPARE_CAUSE_SET.has(value);
+}
+
+function isEditReadReason(value: unknown): value is EditReadReason {
+  return EDIT_READ_REASON_SET.has(value);
+}
+
+function editRefusalCause(value: Record<string, unknown>): EditRefusalCause | undefined {
+  const { prepareCause, readReason } = value;
+  const cause = {
+    ...(isEditPrepareCause(prepareCause) ? { prepareCause } : {}),
+    ...(isEditReadReason(readReason) ? { readReason } : {}),
+  };
+  return Object.keys(cause).length === 0 ? undefined : cause;
 }
 
 function editFailureCoaching(

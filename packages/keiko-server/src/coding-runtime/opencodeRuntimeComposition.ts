@@ -87,6 +87,8 @@ import {
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
+import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -201,6 +203,13 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
+  /**
+   * The run's envelope duration (`budget.maxRuntimeMs`), bounding one submitted task's whole agent
+   * loop in the adapter (#3873); absent keeps the adapter's default backstop.
+   */
+  readonly maxTurnWaitMs?: number | undefined;
+  /** The run correlation every governed tool result's model-facing rendering is recorded under. */
+  readonly toolResultCorrelationId?: string | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly onSandboxAttestation?: CodingRuntimeManagerDeps["onSandboxAttestation"];
   /**
@@ -320,11 +329,14 @@ export function createOpenCodeRuntimeComposition(
   const runs = new Map<string, PreparedRun>();
   const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
-    input.capabilities.toolFacadeCapability,
-    input.toolFacade,
+    {
+      capability: input.capabilities.toolFacadeCapability,
+      facade: input.toolFacade,
+      settleTool: input.safeActivity?.settleTool,
+      diagnostics: input.diagnostics,
+      renderedResults: renderedResultLog(input),
+    },
     input.toolBridge,
-    input.safeActivity?.settleTool,
-    input.diagnostics,
     input.toolFacadeOrigin,
     { approvals, runs },
   );
@@ -853,6 +865,7 @@ async function handshake(
     });
     const adapter = createOpenCodeRuntimeAdapter({
       correlationId: request.runId,
+      maxTurnWaitMs: input.maxTurnWaitMs,
       contextGeometry: input.contextGeometry,
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
       readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),
@@ -910,10 +923,17 @@ function readinessV2Ports(
   let sessionCreation: Promise<string> | undefined;
   let streamCount = 0;
   let startupRead = false;
+  // The events the coalescing pump absorbed since the history projection last wrote its line.
+  let mergedEvents = 0;
   const history = createOpenCodeV2HistoryProjection({
     runId: run.runId,
     activityLog: input.activityLog,
     captureMessages: input.safeActivity?.captureMessages,
+    takeMergedEventCount: (): number => {
+      const merged = mergedEvents;
+      mergedEvents = 0;
+      return merged;
+    },
   });
   const staged = new Map<
     string,
@@ -960,11 +980,26 @@ function readinessV2Ports(
             },
           ),
         );
+      // The stream this one replaces missed events while nobody listened. A text or reasoning part it
+      // was feeding is not extended by this stream: a gap in the middle of a text would show words
+      // the model never wrote in that order. Each such part shows what it has until the history
+      // shows it complete (#3873 review, PR #3876).
+      if (streamCount > 1) history.freezeLiveText();
       const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      for await (const event of client.events(combined)) {
-        yield v2SyncHint(event, fixedSessionId, input.onQuestionObserved);
-      }
+      const sessionId = fixedSessionId;
+      yield* coalescedSyncHints(
+        client.events(combined),
+        (event) => {
+          // Every event reaches the live text overlay as it arrives, before coalescing can fold it
+          // into a hint: the deltas are the content, and only the reads are coalesced.
+          history.observeLiveEvent(sessionId, event);
+          return v2SyncHint(event, sessionId, input.onQuestionObserved);
+        },
+        (merged) => {
+          mergedEvents += merged;
+        },
+      );
     },
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
       if (fixedSessionId === undefined) throw new Error("opencode-v2-session-missing");
@@ -1012,6 +1047,124 @@ function v2ExecutionState(type: unknown): "activity" | "terminal" | undefined {
   )
     return "terminal";
   return undefined;
+}
+
+function plainSyncHint(hint: OpenCodeSyncHint | undefined): boolean {
+  return hint !== undefined && !("id" in hint) && hint.control === undefined;
+}
+
+// A plain hint asks for one history read. One already queued covers the new one, and a control
+// hint's own read covers every plain hint queued before it; control hints keep their order. Returns
+// how many hints the call absorbed, each one a history read it saved: the new hint itself when a
+// queued plain hint covered it, or the queued plain hints a control hint's read replaced. Every
+// hint is yielded once or absorbed once, so a stream read to its end has as many events as hints
+// yielded plus hints absorbed.
+function enqueueSyncHint(pending: OpenCodeSyncHint[], hint: OpenCodeSyncHint): number {
+  if (plainSyncHint(hint)) {
+    if (plainSyncHint(pending.at(-1))) return 1;
+    pending.push(hint);
+    return 0;
+  }
+  let absorbed = 0;
+  while (plainSyncHint(pending.at(-1))) {
+    pending.pop();
+    absorbed += 1;
+  }
+  pending.push(hint);
+  return absorbed;
+}
+
+/**
+ * Lab ledger F2 (#3873): a live turn can emit a runtime event for every streamed token, and every
+ * hint costs one full history read, so a burst of events used to queue one read each and the live
+ * timeline fell further behind the model the longer it answered. Events are read as they arrive and
+ * the hints that pile up while a read runs collapse into one, since the next read sees the whole
+ * history anyway; control hints are never dropped and keep their order. A stream failure surfaces
+ * on the next pull, after the hints read before it.
+ *
+ * `onMerged` receives, each time events were absorbed, how many (#3873 review, PR #3876): the
+ * evidence that a read stood for more than one event, which the history projection's line carries
+ * as `mergedEventCount`. It sees the count only, never an event.
+ */
+export async function* coalescedSyncHints(
+  events: AsyncIterable<Readonly<Record<string, unknown>>>,
+  toHint: (event: Readonly<Record<string, unknown>>) => OpenCodeSyncHint,
+  onMerged?: (mergedEvents: number) => void,
+): AsyncGenerator<OpenCodeSyncHint> {
+  const pump: SyncHintPump = {
+    source: events[Symbol.asyncIterator](),
+    toHint,
+    onMerged,
+    pending: [],
+    ended: false,
+    stopped: false,
+  };
+  pullSyncHint(pump);
+  try {
+    // One pull per hint: the wait for the next one is the iterator's own, so no loop body awaits.
+    for await (const hint of queuedSyncHints(pump)) yield hint;
+  } finally {
+    // The read still in flight ends with the caller's abort signal, or closes the source once it
+    // resolves; nothing here waits on it.
+    pump.stopped = true;
+  }
+}
+
+// The hints the pump has queued, read one pull at a time. The iterator has no `return`: leaving it
+// early closes nothing, because the pump's own source is closed through `stopped` above.
+function queuedSyncHints(pump: SyncHintPump): AsyncIterable<OpenCodeSyncHint> {
+  return { [Symbol.asyncIterator]: () => ({ next: () => nextQueuedSyncHint(pump) }) };
+}
+
+// A queued hint at once; otherwise the failure of the source, which surfaces after every hint read
+// before it, or its end; otherwise the next wake, after which the pull starts over. A wake follows
+// every hint the pump queues and the end of its source, so a pull waits once, not repeatedly.
+async function nextQueuedSyncHint(pump: SyncHintPump): Promise<IteratorResult<OpenCodeSyncHint>> {
+  const hint = pump.pending.shift();
+  if (hint !== undefined) return { done: false, value: hint };
+  if (pump.failure !== undefined) throw pump.failure.error;
+  if (pump.ended) return { done: true, value: undefined };
+  await new Promise<void>((resolve) => {
+    pump.wake = resolve;
+  });
+  return nextQueuedSyncHint(pump);
+}
+
+interface SyncHintPump {
+  readonly source: AsyncIterator<Readonly<Record<string, unknown>>>;
+  readonly toHint: (event: Readonly<Record<string, unknown>>) => OpenCodeSyncHint;
+  readonly onMerged: ((mergedEvents: number) => void) | undefined;
+  readonly pending: OpenCodeSyncHint[];
+  ended: boolean;
+  stopped: boolean;
+  failure?: { readonly error: unknown };
+  wake?: () => void;
+}
+
+// Reads the next event without waiting for the consumer. A failure is kept for the consumer, who
+// receives it on its next pull, after every hint read before it.
+function pullSyncHint(pump: SyncHintPump): void {
+  const settle = (error?: unknown): void => {
+    if (error !== undefined) pump.failure ??= { error };
+    pump.ended = true;
+    pump.wake?.();
+  };
+  const onNext = (next: IteratorResult<Readonly<Record<string, unknown>>>): void => {
+    if (next.done === true) {
+      settle();
+      return;
+    }
+    if (pump.stopped) {
+      settle();
+      void pump.source.return?.(undefined).then(undefined, settle);
+      return;
+    }
+    const absorbed = enqueueSyncHint(pump.pending, pump.toHint(next.value));
+    if (absorbed > 0) pump.onMerged?.(absorbed);
+    pump.wake?.();
+    pullSyncHint(pump);
+  };
+  void pump.source.next().then(onNext).then(undefined, settle);
 }
 
 function v2SyncHint(
@@ -1392,6 +1545,22 @@ interface ToolBridgeExecutionDeps {
   readonly facade: CodingToolFacade;
   readonly settleTool: SafeToolSettlement | undefined;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly renderedResults?: RenderedResultLog | undefined;
+}
+
+/** Where a delivered tool result's model-facing rendering is recorded (#3873). */
+interface RenderedResultLog {
+  readonly sink: ServerLogSink;
+  readonly correlationId: string;
+}
+
+function renderedResultLog(input: OpenCodeRuntimeCompositionInput): RenderedResultLog | undefined {
+  return input.toolResultCorrelationId === undefined
+    ? undefined
+    : {
+        sink: input.activityLog ?? processServerLogSink(),
+        correlationId: input.toolResultCorrelationId,
+      };
 }
 
 // #3390 (ADR-0043 D11-D14): the tool facade no longer opens its own loopback listener -- a second
@@ -1404,11 +1573,8 @@ interface ToolBridgeExecutionDeps {
 // fake sidecar) owns its OWN tiny listener wrapping this SAME `handle` -- never a second
 // production path (see opencodeFunctionalHarness/_support.ts).
 function createToolBridge(
-  capability: string,
-  facade: CodingToolFacade,
+  deps: ToolBridgeExecutionDeps,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
-  settleTool: SafeToolSettlement | undefined,
-  diagnostics: ServerDiagnosticSink | undefined,
   toolFacadeOrigin: string,
   v2: {
     readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
@@ -1419,7 +1585,6 @@ function createToolBridge(
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
-  const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
   const publicPort: OpenCodeToolBridge = {
@@ -1658,7 +1823,7 @@ function preflightToolRequest(
     return { outcome: "rejected", status: 401, body: "" };
   }
   const declaredLength = declaredBodyLength(headers.get("content-length"));
-  if (declaredLength === "invalid" || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
+  if (declaredLength === undefined || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
     return { outcome: "rejected", status: 413, body: "" };
   }
   if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
@@ -1667,11 +1832,12 @@ function preflightToolRequest(
   return { outcome: "admitted" };
 }
 
-function declaredBodyLength(value: string | null): number | "invalid" {
+// The declared Content-Length, or `undefined` for a malformed declaration.
+function declaredBodyLength(value: string | null): number | undefined {
   if (value === null) return 0;
-  if (!/^(?:0|[1-9]\d*)$/u.test(value)) return "invalid";
+  if (!/^(?:0|[1-9]\d*)$/u.test(value)) return undefined;
   const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : "invalid";
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 async function executeToolRequest(
@@ -1692,7 +1858,7 @@ async function executeToolRequest(
     const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
     if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
-    return responseForToolResult(result, settleTool, actionId);
+    return responseForToolResult(result, deps, actionId);
   } catch (error) {
     const reason = abortReason(admission.controller.signal);
     // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
@@ -1731,18 +1897,48 @@ function abortedToolResponse(
 
 function responseForToolResult(
   result: CodingToolResult,
-  settleTool: SafeToolSettlement | undefined,
+  deps: ToolBridgeExecutionDeps,
   actionId: string | undefined,
 ): { readonly status: number; readonly body: string } {
   if (result.status === "busy") {
-    settleSafeTool(settleTool, actionId, "failed");
+    settleSafeTool(deps.settleTool, actionId, "failed");
     return { status: 429, body: "" };
   }
-  settleSafeTool(settleTool, actionId, safeToolState(result));
+  settleSafeTool(deps.settleTool, actionId, safeToolState(result));
   const responseBody = JSON.stringify(result);
-  return Buffer.byteLength(responseBody, "utf8") <= CODING_TOOL_MAX_BODY_BYTES
-    ? { status: 200, body: responseBody }
-    : { status: 502, body: "" };
+  if (Buffer.byteLength(responseBody, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
+    return { status: 502, body: "" };
+  }
+  if (deps.renderedResults !== undefined) {
+    recordRenderedToolResult(deps.renderedResults, deps.diagnostics, actionId, result);
+  }
+  return { status: 200, body: responseBody };
+}
+
+// The rendering record is evidence about an answer the facade has already produced, and the facade
+// has by then executed the tool — an applied edit among them. A sink that cannot take the line (or a
+// line that fails its own validation) must therefore never reach `executeToolRequest`'s catch, which
+// answers 502 and settles the same action a second time as failed: the model would read a failure
+// for a completed action and could repeat it (PR #3876 review). The failure goes to the operator
+// diagnostic instead, content-free and correlated to the call, and the answer stands.
+function recordRenderedToolResult(
+  rendered: RenderedResultLog,
+  diagnostics: ServerDiagnosticSink | undefined,
+  actionId: string | undefined,
+  result: CodingToolResult,
+): void {
+  try {
+    recordGovernedToolModelContent(rendered.sink, rendered.correlationId, result);
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId: actionCorrelationId(actionId),
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.tool-bridge",
+      source: "opencode-runtime-composition.tool-result-render-log",
+      errorClass: contentFreeErrorClass(error),
+      message: "tool-result-render-log-failed",
+    });
+  }
 }
 
 // Invoking inside `.then` defers the call, so a facade that dies SYNCHRONOUSLY (before returning a

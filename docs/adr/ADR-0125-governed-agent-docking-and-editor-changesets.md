@@ -175,6 +175,79 @@ any file is eligible. Any unverifiable action or file precondition fails the who
 applies nothing. After selection, the selected subpatch is derived and revalidated before one atomic
 transaction; a selected transaction either applies every selected file or rolls back every file.
 
+**The governed sidecar's edit form (#3873 and its follow-up).** The managed OpenCode sidecar never
+writes a patch: `keiko_changeset_edit` takes ordered exact-text replacements (`changeset.edits`:
+`file`, `oldString` copied from the latest governed read, `newString`, `replaceAll`; an empty
+`oldString` creates a file), whole-file deletions (`changeset.deletions`) and moves
+(`changeset.renames`: `from`, `to`), and the server materializes them against the hash-bound current
+text into the unified-diff changeset this decision governs: a deletion as the file's full pre-image
+to `/dev/null`, a rename as that deletion plus the creation of `to` with identical content. Within
+one call renames apply first, then edits (an edit addresses a moved file by its new path), then
+deletions. An edit or deletion of a path that no longer exists after the renames, a rename target
+that collides with another path in the call or already exists, a duplicate deletion, a deletion of
+an edited file, and a touched path missing from `files` or `selectedFiles` are refused closed with
+the existing `INVALID_EDITS`/`PRECONDITION_REQUIRED` codes before any editor action exists; a
+supplied `selectedFiles` must therefore cover every touched path, never select half a rename. The
+materialization reads are the same governed workspace reads the model's own `keiko_workspace_read`
+uses, logged with their purpose, and its preconditions use the digest those reads report. A created
+file and a rename target are paths that are not there, and the read answers that as `not-found`
+(recorded as the `absent` state of the read line). The native secure-read helper has no such
+status and answers every path it cannot open `access-denied`, so until 2026-10-07 (F27, #3876) every
+creation and every rename target was refused as `denied`. The secure read now settles the helper's
+refusal as `not-found` only when a no-follow walk under the live root proves the path absent: a
+missing component below real directories on the root's device. A path that exists, a link (a
+dangling one included), a file used as a directory, another device and an unusable root stay
+`denied`, and the always-on deny list (ADR-0005 D3) answers `denied` first, whether or not the path
+exists, so neither answer probes what the policy hides or what lies beyond a link. The walk's
+closed verdict rides out with the read result and is written as `absence` on the
+`coding-runtime.workspace-read` line, set only when the helper answered `access-denied`: `absent`
+(the path is proved missing), `exists`, `link`, `not-directory`, `foreign-device`, `probe-failed`
+(a metadata probe failed for a reason other than ENOENT), `root-unusable` and `aborted` (the request
+was aborted or timed out, which discards an absence the walk reached). A creation refused `denied`
+can therefore be told apart in the log, one closed word and never the path or an error text
+(#3873 review). `not-found`
+grants nothing: the apply path re-validates containment, aliasing and the deny list and refuses to
+overwrite a file that appeared in between. Every
+touched path, both halves of a rename included, counts against the 50-file cap; an edited file may
+not grow past the governed read ceiling, projected from the match count before any result is built;
+the rendered changeset is held to the 65,536-byte cap; and the run's `maxPatchBytes` is charged
+with the materialized diff, not merely with the replacement text the model sent. The rendered diff
+is also held to the editor route's changed-line limit before the budget is charged (#3873 review).
+A deletion or a rename renders its whole file and cannot be split, so a file whose rendering alone
+exceeds the byte cap or the 2,000 changed lines, or that the governed read cannot return as text
+(binary, or above the 65,536-byte read ceiling) cannot be moved or deleted with this tool; each is
+refused with a closed class (`whole-file-too-large`, or the read's own reason) and a message that
+tells the model to leave the file in place and report it, never to "split" the call. A charge the
+authority refuses for any reason other than an exhausted budget is recorded as the guard's denial,
+never as `patch-budget-exhausted`. The result travels through the same review decision,
+containment, denied-path and hash gates as any other `applyChangeset` — a deletion or a rename at
+the same `medium` risk as an edit (owner decision Q2, 2026-10-07, ADR-0138 D2) — and the settled
+and refused edit lines record the edit form with body-free deletion and rename counts and, for a
+refusal, its closed class.
+
+**Line-break text in a rendered diff (PR #3876 review).** `keiko-tools` refuses any diff whose text
+carries a literal backslash-n followed by `+`, `-` or a space: its guard against a model that
+collapses a diff's lines into one and separates them with escaped line breaks. A replacement
+changeset never reaches that guard as model text. The server renders its diff itself, from the bytes
+of a governed read of the real file, so a body line that spells a backslash and an "n" (a table
+header, an escaped string in a test) is file text, and refusing it refused ordinary edits, moves and
+deletions until the run ended with its edit retries exhausted. The patch operations therefore take
+`lineBreakMarkers: "reject" | "verbatim"` (default `"reject"`), which lifts that one heuristic and
+no other check. The edit port registers the SHA-256 of the exact patch text it renders in a
+server-owned, bounded registry once the run's budget has taken the diff (1,024 digests, each kept
+for the editor's review timeout plus one minute, so a changeset awaiting the human's decision never
+loses it), and the editor route validates and applies a changeset with `"verbatim"` only when its
+patch text is registered: at admission, again when the browser reports its review (a lookup does not
+consume a registration), and for the diff it projects from the selected files, which only drops
+files from a diff that was validated whole. The model and the browser never supply the provenance.
+A diff a caller wrote, a text that differs by one byte, an expired registration and a composition
+without the registry all keep the default heuristic, and a changeset whose registration ended during
+its review fails closed with the engine's own reason. Each decision writes one body-free
+`editor.agent.changeset-provenance` line (stage, what the registry answered, patch size and digest,
+and the registry's entry, eviction and expiry counts), so that refusal reads as an ended
+registration and not as an engine defect. The `escaped-line-break` refusal class and the
+pre-checks that raised it are removed.
+
 The server routes this through the existing `keiko-tools` patch validation and
 atomic apply/rollback path. Closed files may be changed by that governed server workspace
 transaction after the mode and Authority Envelope permit it. Open or dirty files remain governed by

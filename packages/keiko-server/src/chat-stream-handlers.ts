@@ -174,6 +174,9 @@ async function streamConversation(
       if (next.done === true) return undefined;
       const chunk = next.value;
       if (controller.signal.aborted) return undefined;
+      // #3878: the gateway hands reasoning only to the Coding Workbench; a conversation answer
+      // never shows it, so a reasoning chunk (none reaches this surface today) is passed over.
+      if (chunk.type === "reasoning") continue;
       if (chunk.type === "delta") {
         termination.tokenFrames += 1;
         writeOrDestroy(

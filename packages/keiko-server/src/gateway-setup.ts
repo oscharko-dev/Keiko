@@ -1316,6 +1316,19 @@ function rawProviderFromCurrent(
   };
 }
 
+// The operator's coding opt-outs (owner decision 2026-10-06: live streaming and the model
+// reasoning display are on unless switched off) are operator blocks no setup step produces: a
+// setup save keeps them verbatim, or an unrelated credential or capability update would silently
+// switch an operator back to the default.
+function codingOperatorSwitches(config: GatewayConfig | undefined): Record<string, unknown> {
+  return {
+    ...(config?.codingStreaming === undefined ? {} : { codingStreaming: config.codingStreaming }),
+    ...(config?.codingReasoningDisplay === undefined
+      ? {}
+      : { codingReasoningDisplay: config.codingReasoningDisplay }),
+  };
+}
+
 export function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
@@ -1337,15 +1350,21 @@ export function rawConfigFromCurrent(
     ...(config.reranker === undefined ? {} : { reranker: config.reranker }),
     ...(figmaAccessToken === undefined ? {} : { figma: { accessToken: figmaAccessToken } }),
     ...operatorPolicyBlocks(config),
+    ...codingOperatorSwitches(config),
   };
 }
 
 // Operator-declared blocks no setup step produces: they survive every rebuild verbatim, so a
-// capability update never drops the grounded-answer policy or the PR branding (PR #3678).
+// capability update never drops the grounded-answer policy, the PR branding (PR #3678) or the
+// coding outage window (#3873). Present-only, never truthy: an explicit `codingOutageWindowMs: 0`
+// is the operator's fail-fast opt-out and must survive a save as well.
 function operatorPolicyBlocks(config: GatewayConfig | undefined): Record<string, unknown> {
   return {
     ...(config?.groundedAnswers === undefined ? {} : { groundedAnswers: config.groundedAnswers }),
     ...(config?.branding === undefined ? {} : { branding: config.branding }),
+    ...(config?.codingOutageWindowMs === undefined
+      ? {}
+      : { codingOutageWindowMs: config.codingOutageWindowMs }),
   };
 }
 
@@ -5876,6 +5895,7 @@ function finalRawConfigForSetup(
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
     ...operatorPolicyBlocks(input.current),
+    ...codingOperatorSwitches(input.current),
   };
   // Verbatim restoration reads the DURABLE stored view: restored values are what the FILE
   // holds, so a transient per-model env override neither hides a sharing relationship nor gets

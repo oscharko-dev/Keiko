@@ -640,6 +640,46 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     });
   });
 
+  // Lab ledger F2 (#3873): the profile was hard-coded as non-streaming, so the sidecar buffered every
+  // answer of a provider that streams and a slow self-hosted model showed only "Working" until the
+  // whole answer existed. Owner decision 2026-10-06: streaming is the default wherever the model
+  // streams, and `codingStreaming: "off"` is the operator's opt-out.
+  describe("streaming", () => {
+    function streamingProfile(
+      capability: Partial<ModelCapability>,
+      codingStreaming?: GatewayConfig["codingStreaming"],
+    ): ReturnType<typeof resolveCodingSafeSidecarGatewayProfile> {
+      return resolveCodingSafeSidecarGatewayProfile({
+        ...config(["streaming-coder"], [codingSidecarCapability("streaming-coder", capability)]),
+        ...(codingStreaming === undefined ? {} : { codingStreaming }),
+      });
+    }
+
+    it("streams by default when the coding model's capability streams", () => {
+      expect(streamingProfile({ streaming: true })).toMatchObject({
+        status: "available",
+        supportsStreaming: true,
+      });
+      expect(streamingProfile({ streaming: true }, "on")).toMatchObject({
+        supportsStreaming: true,
+      });
+    });
+
+    it("stays buffered for a model whose capability does not stream", () => {
+      expect(streamingProfile({ streaming: false })).toMatchObject({
+        status: "available",
+        supportsStreaming: false,
+      });
+    });
+
+    it("stays buffered when the operator switched coding streaming off", () => {
+      expect(streamingProfile({ streaming: true }, "off")).toMatchObject({
+        status: "available",
+        supportsStreaming: false,
+      });
+    });
+  });
+
   it("preserves the independent input ceiling in the coding sidecar projection", () => {
     const result = resolveCodingSafeSidecarGatewayProfile(
       config(
@@ -686,7 +726,8 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       profileId: "coding-safe-openai-compatible",
       modelAlias: "azure-coding-model",
       localEndpointPath: "/api/coding-sidecar/gateway",
-      supportsStreaming: false,
+      // The capability streams and no operator switched it off (lab ledger F2).
+      supportsStreaming: true,
       supportsToolCalling: true,
       runMetadata: {
         maxPromptTokens: 128_000,
@@ -957,5 +998,43 @@ describe("resolveCodingSafeSidecarGatewayProfile — tool-calling proof age", ()
     expect(
       resolveCodingSafeSidecarGatewayProfile(laneConfig(), { modelId: "mistral-large" }),
     ).toMatchObject({ status: "unavailable", reason: "non-coding-capable" });
+  });
+});
+
+// #3873 (F17): the coding turn's output allowance. Gemma 4 31B behind LiteLLM declared no output
+// limit, so the run reserved the shared chat profile's 8k of its 128k window and spent all of it on
+// reasoning before the tool call; a coding turn now reserves 16k where the provider declares no
+// limit, the declared limit where it does, and never more than a quarter of the window.
+describe("resolveCodingSafeSidecarGatewayProfile — coding output allowance (#3873 F17)", () => {
+  function outputAllowance(overrides: Partial<ModelCapability>): number {
+    const result = resolveCodingSafeSidecarGatewayProfile(
+      config(["reasoning-coder"], [codingSidecarCapability("reasoning-coder", overrides)]),
+    );
+    if (result.status !== "available") throw new Error("expected an available profile");
+    return result.runMetadata.maxOutputTokens;
+  }
+
+  it("reserves 16k for an undeclared output limit on a 128k window, up from the chat profile's 8k", () => {
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 0 })).toBe(16_384);
+    expect(outputAllowance({ contextWindow: 128_000, maxOutputTokens: 0 })).toBe(16_384);
+  });
+
+  it("keeps the provider-declared output limit when the window can hold it", () => {
+    expect(outputAllowance({ contextWindow: 128_000, maxOutputTokens: 4_096 })).toBe(4_096);
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 32_768 })).toBe(32_768);
+  });
+
+  it("bounds a large declared limit to a quarter of the window so the prompt keeps three quarters", () => {
+    expect(outputAllowance({ contextWindow: 131_072, maxOutputTokens: 131_072 })).toBe(32_768);
+  });
+
+  it("never reserves more than a quarter of a small undeclared window", () => {
+    expect(outputAllowance({ contextWindow: 32_000, maxOutputTokens: 0 })).toBe(8_000);
+    expect(outputAllowance({ contextWindow: 4_096, maxOutputTokens: 0 })).toBe(1_024);
+  });
+
+  it("never reserves less than the shared chat profile does for a very large undeclared window", () => {
+    // The shared profile scales its reserve with the window (62,500 of a million tokens).
+    expect(outputAllowance({ contextWindow: 1_000_000, maxOutputTokens: 0 })).toBe(62_500);
   });
 });

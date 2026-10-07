@@ -58,6 +58,9 @@ afterEach(() => {
   // behind an empty catch is what turns one bad suite into an unexplained cascade elsewhere.
   if (typeof window !== "undefined" && typeof window.localStorage?.removeItem === "function") {
     window.localStorage.removeItem("keiko.locale");
+    // The Coding Workbench restores the operator's saved coding model (#3873); a choice one test
+    // made must not elect the model another test renders.
+    window.localStorage.removeItem("keiko.codingWorkbench.model");
   }
   if (typeof document !== "undefined") {
     document.documentElement.removeAttribute("lang");

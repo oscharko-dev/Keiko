@@ -2745,12 +2745,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts",
-      "owner": "executeRead",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts",
       "owner": "hasLiveWorkspaceAccess",
       "kind": "unregistered-catch",
       "count": 1

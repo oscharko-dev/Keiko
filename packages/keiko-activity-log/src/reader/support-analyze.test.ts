@@ -1261,6 +1261,47 @@ describe("analyzeLogText — extra fields and frames", () => {
     });
   });
 
+  // #3873 review (PR #3876): a creation refused `denied` could not be told apart from a link, a mount
+  // or an unprobeable directory in a support export. The secure read's closed verdict rides on the
+  // failed read line as `absence`, and the analysis keeps each closed word under its own timeline.
+  it.each(["link", "foreign-device", "probe-failed"])(
+    "keeps the closed %s verdict of a refused workspace read in its timeline",
+    (absence) => {
+      const correlationId = `originating-workspace-read-${absence}`;
+      const op = "coding-runtime.workspace-read";
+      const targetPathSha256 = "d".repeat(64);
+      const serialized = serializedActivityLog("keiko-support-workspace-read-verdict-", (sink) => {
+        sink.write({
+          category: productionLogCategory(op),
+          op,
+          level: "warn",
+          errorKind: "authority-denied",
+          correlationId,
+          extra: {
+            state: "failed",
+            purpose: "edit-materialization",
+            reason: "denied",
+            absence,
+            targetPathSha256,
+          },
+        });
+      });
+
+      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+
+      expect(timeline?.lines[1]).toMatchObject({
+        op,
+        extra: {
+          state: "failed",
+          purpose: "edit-materialization",
+          reason: "denied",
+          absence,
+          targetPathSha256,
+        },
+      });
+    },
+  );
+
   it("omits extra entirely when no unknown key survives (never emits an empty object)", () => {
     const plain = line({ ts: T0, category: "http", op: "a", correlationId: "req-plain" });
 

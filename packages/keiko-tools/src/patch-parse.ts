@@ -192,12 +192,24 @@ function consumeBudget(hunk: HunkAccumulator, line: string): void {
   }
 }
 
+// `\ No newline at end of file` annotates the body line right before it. It is kept in the hunk so
+// application can honour it (#3873; it used to be dropped, which gave every patched file a final
+// line break), and it draws no line budget. Anywhere else it is malformed.
+function attachNoNewlineMarker(hunk: HunkAccumulator | undefined, line: string): void {
+  const previous = hunk?.lines.at(-1);
+  if (hunk === undefined || previous === undefined || !isHunkBodyLine(previous)) {
+    throw new PatchParseError("no-newline marker must follow a hunk body line");
+  }
+  hunk.lines.push(line);
+}
+
 function handleBodyLine(file: FileAccumulator, line: string): void {
+  if (line.startsWith("\\")) {
+    attachNoNewlineMarker(file.current, line);
+    return;
+  }
   if (file.current === undefined) {
     return; // lines outside a hunk (e.g. `diff --git`, `index …`) are ignored
-  }
-  if (line.startsWith("\\")) {
-    return; // "\ No newline at end of file" marker
   }
   // Only genuine body lines (context/add/remove) belong to the hunk. An empty trailing line
   // (the split artifact of a final newline) or any other token ends the hunk so it is not

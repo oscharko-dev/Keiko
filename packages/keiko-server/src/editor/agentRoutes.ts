@@ -97,6 +97,7 @@ import {
   validatePatch,
   type PatchInspection,
   type PatchInspectionFile,
+  type PatchLineBreakMarkers,
   type PatchValidation,
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
@@ -128,6 +129,7 @@ import {
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
 import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+import { changesetLineBreakMarkers } from "./changesetLineBreakProvenance.js";
 
 // How this route ends a runtime mutation: applied, failed, or rejected in its review.
 type RuntimeMutationCompletion = "succeeded" | "failed" | "rejected";
@@ -158,6 +160,7 @@ import {
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
   | "autonomousDeliveryDeploymentCeiling"
+  | "materializedPatches"
   | "runtimeMutationLease"
   | "workspaceLifecycle"
   | "workspaceRootAccessResolver"
@@ -420,6 +423,9 @@ interface ChangesetProjection {
   readonly kind: "ready";
   readonly diff: string;
   readonly selectedPaths: readonly string[];
+  // The reading the whole diff was validated with. The projected diff is that diff minus the
+  // unselected files, so it is validated and applied with the same reading, never a looser one.
+  readonly lineBreakMarkers: PatchLineBreakMarkers;
 }
 
 type ChangesetProjectionOutcome =
@@ -713,11 +719,12 @@ function inspectChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  lineBreakMarkers: PatchLineBreakMarkers = "reject",
 ): ChangesetInspection {
   const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
-    { fs },
+    { fs, lineBreakMarkers },
   );
   const validation = inspection.validation;
   const issues = firstChangesetIssueGroup(action, snapshot, inspection);
@@ -1085,9 +1092,10 @@ function inspectAdmissionAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  lineBreakMarkers: PatchLineBreakMarkers = "reject",
 ): AdmissionInspection {
   if (action.type === "applyChangeset") {
-    return { changeset: inspectChangeset(action, snapshot, fs) };
+    return { changeset: inspectChangeset(action, snapshot, fs, lineBreakMarkers) };
   }
   if (action.type === "applyPatch") {
     // The SAME port the changeset branch above uses. Hardcoding the node port here inspected a
@@ -1110,6 +1118,7 @@ function preflight(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  lineBreakMarkers: PatchLineBreakMarkers = "reject",
 ): PreflightOutcome {
   if (snapshot === undefined) {
     return {
@@ -1119,7 +1128,7 @@ function preflight(
   }
   const targetConflict = activeBufferTargetConflict(action, snapshot);
   if (targetConflict !== null) return { ok: false, result: targetConflict };
-  const inspection = inspectAdmissionAction(action, snapshot, fs);
+  const inspection = inspectAdmissionAction(action, snapshot, fs, lineBreakMarkers);
   const structural = structuralWriteConflict(action, snapshot, inspection);
   if (structural !== null) return { ok: false, result: structural };
   if (!editorAgentRegistry.hasLiveBridge(action.sessionId)) {
@@ -1892,6 +1901,7 @@ function projectChangeset(
   snapshot: EditorAgentSessionSnapshot,
   validation: PatchValidation,
   fs: WorkspaceFs = nodeWorkspaceFs,
+  lineBreakMarkers: PatchLineBreakMarkers = "reject",
 ): ChangesetProjectionOutcome {
   const selectedPaths = selectedChangesetPaths(action);
   try {
@@ -1899,10 +1909,11 @@ function projectChangeset(
     const projected = projectedAction(action, diff, selectedPaths);
     const projectedValidation = validatePatch(workspaceInfoFromRoot(snapshot.workspaceRoot), diff, {
       fs,
+      lineBreakMarkers,
     });
     const issues = projectedChangesetIssues(projected, projectedValidation);
     return issues.length === 0
-      ? { kind: "ready", diff, selectedPaths }
+      ? { kind: "ready", diff, selectedPaths, lineBreakMarkers }
       : { kind: "conflict", result: changesetConflict(action, issues) };
   } catch (error) {
     const message =
@@ -1944,6 +1955,7 @@ function applyChangeset(
       applyEnabled: true,
       signal: new AbortController().signal,
       fs,
+      lineBreakMarkers: projection.lineBreakMarkers,
       ...(editorAgentPatchWriterForTests === undefined
         ? {}
         : { writer: editorAgentPatchWriterForTests }),
@@ -2195,11 +2207,19 @@ function projectApprovedChangeset(
   if (inspectionFs === undefined) {
     return { kind: "conflict", result: runtimeMutationLeaseDeniedResult(action) };
   }
-  const inspection = inspectChangeset(action, snapshot, inspectionFs);
+  // Asked again here, not remembered from admission: the human's review may have outlasted the
+  // registration, and a diff whose provenance ended is validated by the default reading.
+  const lineBreakMarkers = changesetLineBreakMarkers({
+    action,
+    registry: deps?.materializedPatches,
+    stage: "result",
+    correlationId: actionCorrelationId(action),
+  });
+  const inspection = inspectChangeset(action, snapshot, inspectionFs, lineBreakMarkers);
   if (inspection.result !== null) {
     return { kind: "conflict", result: inspection.result };
   }
-  return projectChangeset(action, snapshot, inspection.validation, inspectionFs);
+  return projectChangeset(action, snapshot, inspection.validation, inspectionFs, lineBreakMarkers);
 }
 
 function finishRuntimeChangeset(
@@ -3610,7 +3630,13 @@ function admitAndReserveAction(
       403,
     );
   }
-  const admission = preflight(action, snapshot, inspectionFs);
+  const lineBreakMarkers = changesetLineBreakMarkers({
+    action,
+    registry: deps?.materializedPatches,
+    stage: "admission",
+    correlationId: actionCorrelationId(action),
+  });
+  const admission = preflight(action, snapshot, inspectionFs, lineBreakMarkers);
   if (!admission.ok) {
     return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
   }

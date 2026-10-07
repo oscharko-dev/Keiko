@@ -6,6 +6,7 @@ import { createCodingToolInvocationRegistry } from "../coding-runtime/codingTool
 import { createCodingRuntimeEditorMutationLeaseCoordinator } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createCodingToolReadEditPorts } from "../coding-runtime/codingToolReadEditPorts.js";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
+import { secureWorkspaceTextDigest } from "../coding-runtime/secureWorkspaceTextRead.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { createCanonicalCatalogFacadeBridge } from "./catalogToolFacadeBridge.js";
 
@@ -16,13 +17,19 @@ const binding = {
   workspaceRootDigest: "b".repeat(64),
   expiresAt: "2099-01-01T00:00:00.000Z",
 };
+// #3873: through the catalog boundary the edit is the replacement form with every member present;
+// the port materializes it against the governed read of `a.ts` below, bound to that read's digest.
+const CURRENT_TEXT = "old\n";
 const request: Extract<CodingToolActionRequest, { action: "edit" }> = {
   action: "edit",
   actionId: "edit-1",
   idempotencyKey: "edit-key-1",
   changeset: {
-    patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
-    files: [{ file: "a.ts", expectedContentHash: "c".repeat(64) }],
+    edits: [{ file: "a.ts", oldString: "old", newString: "new", replaceAll: false }],
+    deletions: [],
+    renames: [],
+    files: [{ file: "a.ts", expectedContentHash: secureWorkspaceTextDigest(CURRENT_TEXT) }],
+    selectedFiles: ["a.ts"],
   },
 };
 const leaseRequest = {
@@ -76,7 +83,10 @@ function fixture(): {
   const queued = deferred();
   const ports = createCodingToolReadEditPorts({
     activityLog: log,
-    secureWorkspaceTextRead: { readText: vi.fn() },
+    secureWorkspaceTextRead: {
+      readText: () => Promise.resolve({ ok: true as const, text: CURRENT_TEXT }),
+    },
+    resolveRepositoryReadContext: () => binding,
     editorAgentClient: {
       action: (action) => {
         queued.resolve();

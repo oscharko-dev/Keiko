@@ -18,16 +18,21 @@ The plan starts an isolated UI/BFF/Next stack on ports 32353–32355, installs a
 runtime fixture, and verifies in every matrix cell:
 
 - the profile response validates as `redistribution-unapproved` with no runtime/setup capability;
-- the Workbench exposes the server-confirmed `Keiko Gateway` context;
+- the Workbench exposes the server-confirmed `Keiko Gateway` context, which since #3494 sits in its
+  Information popover (under Details): the run opens the popover, reads the fact and closes it
+  again, so every capture shows the Workbench as a reader first meets it;
 - no Codex source selector, login, or local-install affordance is exposed;
 - the contextual `role=status` announcement is polite and atomic;
 - axe reports zero serious or critical WCAG 2.0/2.1/2.2 A/AA violations.
 
 The final two reflow cells render the native 304px outer Workbench frame at zoom 1: once at a 320px
-viewport, and once inside a 1280px desktop viewport. Both assert that the document, outer frame,
-Workbench, and confirmed source context have no horizontal overflow. The recorded bounding
+viewport, and once inside a 1280px desktop viewport. Both assert that the document, outer frame, and
+Workbench have no horizontal overflow, and that the text of the confirmed source context, read from
+the Information popover, stays inside the viewport and the outer frame. The recorded bounding
 rectangles must stay inside the viewport and outer frame; the `.win-body` scroll owner must also
-have no horizontal scroll range.
+have no horizontal scroll range. The popover itself is a floating layer sized by the viewport: at a
+1280px viewport it is wider than the 304px frame and the frame clips it, so this matrix measures the
+confirmed source's text and makes no claim that the popover fits the frame.
 
 ## Regenerating tracked evidence
 
@@ -55,8 +60,9 @@ run leaves the evidence directory unchanged.
 - `a11y-proof.json`
 - `manifest.json`
 
-Each desktop PNG captures the labelled Workbench and its server-confirmed Gateway context. The two
-reflow PNGs capture that surface at 320px and within a 304px frame on a 1280px desktop viewport.
+Each desktop PNG captures the labelled Workbench with its Information popover closed; the
+server-confirmed Gateway context is read from that popover for the proof files. The two reflow PNGs
+capture that surface at 320px and within a 304px frame on a 1280px desktop viewport.
 The proof files contain only deterministic product copy, source hashes, capture metadata, and
 accessibility counts. They contain no credentials, local paths, endpoints, profile runtime output,
 or user data.

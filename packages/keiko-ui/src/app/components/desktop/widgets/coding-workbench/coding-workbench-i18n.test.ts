@@ -4,7 +4,10 @@ import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
 import { DE_CODING_WORKBENCH_MESSAGES } from "./coding-workbench-i18n.de";
-import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
+import {
+  EN_CODING_WORKBENCH_MESSAGES,
+  type CodingWorkbenchMessageKey,
+} from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
   it.each([
@@ -87,6 +90,36 @@ describe("Coding Workbench translations", () => {
     expect(en).not.toMatch(/\bverified\b(?!\s*evaluation)/u);
   });
 
+  // #3878: the timeline shows the model's reasoning now, so its boundary copy says what is shown
+  // instead of promising that reasoning is never exposed, and the reasoning is called unverified.
+  it("describes the timeline's model reasoning as unverified in both catalogs", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.activity.reasoningBoundary");
+    const de = translateCodingWorkbench("de", "codingWorkbench.activity.reasoningBoundary");
+    expect(en).not.toContain("never exposes private reasoning");
+    expect(en).toContain("model's own reasoning");
+    expect(en).toContain("unverified");
+    expect(de).not.toContain("niemals offengelegt");
+    expect(de).toContain("ungeprüft");
+  });
+
+  it.each([
+    "codingWorkbench.activity.reasoning.title",
+    "codingWorkbench.activity.reasoning.badge",
+    "codingWorkbench.activity.reasoning.note",
+  ] as const)("localizes the reasoning label %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  it("addresses the reader informally in the German reasoning note", () => {
+    const note = translateCodingWorkbench("de", "codingWorkbench.activity.reasoning.note");
+    expect(note).toMatch(/\bdich\b/u);
+    expect(note).not.toMatch(/\b(?:Ihnen|Ihre?)\b/u);
+  });
+
   it("interpolates runtime state and revision in both catalogs", () => {
     expect(
       translateCodingWorkbench("en", "codingWorkbench.announcement.runRevision", {
@@ -144,6 +177,48 @@ describe("Coding Workbench translations", () => {
     );
     expect(translateCodingWorkbench("de", "codingWorkbench.setup.branchConflict")).toBe(
       "Der Aufgabenbranch für diesen Coding-Lauf existiert bereits. Entferne den früheren Branch oder den zugehörigen verwalteten Arbeitsbereich. Alternativ kannst du einen anderen Zielbranch wählen.",
+    );
+  });
+
+  // #3873 F1: a repository whose location the server's read surface excludes is a policy decision,
+  // and both catalogs say so instead of suggesting the folder is not a Git repository.
+  it("names a read-surface refusal as a policy decision in both catalogs", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.repository.deniedHelp");
+    const de = translateCodingWorkbench("de", "codingWorkbench.repository.deniedHelp");
+    expect(en).toContain("excluded from the read surface");
+    expect(en).toContain("not a missing Git repository");
+    expect(en).not.toMatch(/may not be a Git repository/iu);
+    expect(de).toContain("von der Leseoberfläche ausgeschlossen");
+    expect(de).toContain("kein fehlendes Git-Repository");
+    expect(de).not.toMatch(/möglicherweise ist er kein Git-Repository/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  // F5 (#3873): a run its repeated edit refusals ended names the refusal class with a next step in
+  // both catalogs, German in the informal du-form, and never as an internal error.
+  it.each([
+    "codingWorkbench.event.failure.edits-blocked",
+    "codingWorkbench.event.failure.edit-retries-exhausted",
+  ] as const)("explains %s with a next step and never as an internal error", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).not.toBe(key);
+    expect(de).not.toBe(key);
+    expect(en).toMatch(/refused several times in a row/iu);
+    expect(de).toMatch(/mehrmals hintereinander/iu);
+    expect(en).toMatch(/start the task again/iu);
+    expect(de).toMatch(/starte die Aufgabe/iu);
+    expect(en).not.toMatch(/internal error/iu);
+    expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("names the missing Workbench among the causes an edit block has", () => {
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.failure.edits-blocked")).toContain(
+      "no Coding Workbench is connected for this workspace",
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.failure.edits-blocked")).toContain(
+      "keine Coding Workbench für diesen Arbeitsbereich verbunden",
     );
   });
 
@@ -231,6 +306,114 @@ describe("Coding Workbench translations", () => {
     expect(en.length).toBeGreaterThan(0);
     expect(de.length).toBeGreaterThan(0);
     expect(de).not.toBe(en);
+  });
+
+  // F9 (#3873, live Gemma qualification): a budget-exhausted run read "The coding run ended with an
+  // internal error". Each terminal model-call cause is plain language with a next step in both
+  // catalogs, German in the informal du-form, and only `runtime-failed` speaks of an internal error.
+  it.each([
+    "codingWorkbench.event.failure.prompt-allowance-exhausted",
+    "codingWorkbench.event.failure.envelope-duration-exhausted",
+    "codingWorkbench.event.failure.output-exhausted-repeated",
+    "codingWorkbench.event.failure.provider-unavailable",
+    "codingWorkbench.event.failure.model-turn-failed",
+  ] as const)("explains %s with a next step and never as an internal error", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).not.toBe(key);
+    expect(de).not.toBe(key);
+    expect(de).not.toBe(en);
+    expect(en).not.toMatch(/internal error/iu);
+    expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(en).toMatch(/start the task again/iu);
+    expect(de).toMatch(/starte die Aufgabe/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("names the exhausted allowance and the outage window an operator can raise", () => {
+    for (const locale of ["en", "de"] as const) {
+      expect(
+        translateCodingWorkbench(
+          locale,
+          "codingWorkbench.event.failure.prompt-allowance-exhausted",
+        ),
+      ).toContain("KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS");
+      expect(
+        translateCodingWorkbench(
+          locale,
+          "codingWorkbench.event.failure.envelope-duration-exhausted",
+        ),
+      ).toContain("KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES");
+      expect(
+        translateCodingWorkbench(locale, "codingWorkbench.event.failure.provider-unavailable"),
+      ).toContain("codingOutageWindowMs");
+      expect(
+        translateCodingWorkbench(locale, "codingWorkbench.event.failure.output-exhausted-repeated"),
+      ).toContain("max_output_tokens");
+    }
+    expect(
+      translateCodingWorkbench("en", "codingWorkbench.event.failure.prompt-allowance-exhausted"),
+    ).toMatch(/prompt allowance/iu);
+    expect(
+      translateCodingWorkbench("en", "codingWorkbench.event.failure.provider-unavailable"),
+    ).toMatch(/could not be reached/iu);
+  });
+
+  // #3873 review: both settings are read once when Keiko starts and both have a hard cap, so an
+  // operator who sets the variable in a running Keiko, or past its cap, saw the same limit again.
+  // Each message states the cap and that Keiko must be restarted, in both languages. The caps are
+  // pinned against the server's own constants by tests/qa/coding-limit-message-parity.test.ts.
+  it.each([
+    [
+      "codingWorkbench.event.failure.prompt-allowance-exhausted",
+      "20,000,000 tokens",
+      "20.000.000 Tokens",
+    ],
+    ["codingWorkbench.event.failure.envelope-duration-exhausted", "480 minutes", "480 Minuten"],
+  ] as const)("states the cap and the restart in %s", (key, enCap, deCap) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain(`up to ${enCap}`);
+    expect(en).toMatch(/reads the setting only when it starts/iu);
+    expect(en).toMatch(/restart Keiko after changing it/iu);
+    expect(de).toContain(`bis höchstens ${deCap}`);
+    expect(de).toMatch(/liest die Einstellung nur beim Start/iu);
+    expect(de).toMatch(/muss Keiko neu gestartet werden/iu);
+  });
+
+  // #3873 review: a `cancelled` run does not record who stopped it — the operator's Stop and a
+  // Keiko shutdown (an update, a restart, a machine shutdown) settle identically — so the sentence
+  // says the run was stopped and that nothing failed, in both catalogs, and never attributes the
+  // stop to the operator.
+  it("says a stopped run was stopped and that nothing failed, without attributing the stop", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.event.stopped");
+    const de = translateCodingWorkbench("de", "codingWorkbench.event.stopped");
+    expect(en).not.toBe("codingWorkbench.event.stopped");
+    expect(de).not.toBe("codingWorkbench.event.stopped");
+    expect(de).not.toBe(en);
+    expect(en).toMatch(/this run was stopped/iu);
+    expect(en).toMatch(/nothing failed/iu);
+    expect(en).not.toMatch(/internal error/iu);
+    expect(en).not.toMatch(/\byou stopped\b|\bstopped by you\b|\boperator\b/iu);
+    expect(de).toMatch(/dieser Lauf wurde gestoppt/iu);
+    expect(de).not.toMatch(/interne[nr]? Fehler/iu);
+    expect(de).not.toMatch(/\bdu hast\b|\bvon dir\b|\bBetreiber\b/iu);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+  });
+
+  it("no longer carries the operator-attributed stop key", () => {
+    for (const catalog of [EN_CODING_WORKBENCH_MESSAGES, DE_CODING_WORKBENCH_MESSAGES]) {
+      expect(Object.keys(catalog)).not.toContain("codingWorkbench.event.stopped.operator");
+    }
+  });
+
+  it("keeps the internal-error sentence for a genuine internal failure", () => {
+    expect(translateCodingWorkbench("en", "codingWorkbench.event.failure.runtime")).toMatch(
+      /internal error/iu,
+    );
+    expect(translateCodingWorkbench("de", "codingWorkbench.event.failure.runtime")).toMatch(
+      /internen Fehler/iu,
+    );
   });
 
   it("keeps every Coding Workbench key out of eager locale catalogs", () => {

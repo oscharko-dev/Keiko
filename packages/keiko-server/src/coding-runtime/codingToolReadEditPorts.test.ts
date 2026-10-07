@@ -26,11 +26,17 @@ import {
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import type { CodingToolMutationGuard, MaterializedPatchCharge } from "./codingToolFacadePorts.js";
 import {
   createCodingToolReadEditPorts,
   NO_ACTIVE_SESSION_MESSAGE,
 } from "./codingToolReadEditPorts.js";
-import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
+import type {
+  SecureWorkspaceTextReadPort,
+  SecureWorkspaceTextReadResult,
+} from "./secureWorkspaceTextRead.js";
+import { WORKSPACE_PATH_ABSENCE_VERDICTS } from "./secureWorkspaceTextReadAbsence.js";
 
 const DIGEST = "a".repeat(64);
 const SENTINEL = "RAW_PATH_CONTENT_PATCH_CAPABILITY_SENTINEL";
@@ -201,6 +207,73 @@ describe("workspace read refusal codes", () => {
   );
 });
 
+// #3873 review (PR #3876): a creation refused `denied` could not be told apart in the log. The
+// secure read refines the helper's single `access-denied` into `not-found` or `denied` and says why
+// with the closed verdict of its walk, which the governed read writes on the `coding-runtime.
+// workspace-read` line it already writes: one closed word, never the path or an error text.
+describe("the walk's verdict on the workspace-read line", () => {
+  async function failedReadLine(
+    answer: SecureWorkspaceTextReadResult,
+  ): Promise<{ readonly event: ServerLogEvent | undefined; readonly result: unknown }> {
+    const binding = { ...liveDiscoveryBinding(), runId: "run-read-verdict" };
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve(answer) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => binding,
+      activityLog: { write: (event): void => void events.push(event) },
+      enforceProducerBinding: true,
+    });
+    const result = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-verdict",
+        idempotencyKey: "read-verdict-key",
+        relativePath: "build/out/private-name.md",
+      },
+      undefined,
+      { check: (): true => true, binding },
+    );
+    expect(events).toHaveLength(1);
+    return { event: events[0], result };
+  }
+
+  it.each(WORKSPACE_PATH_ABSENCE_VERDICTS)(
+    "writes the %s verdict of a refined denial on the failed read line, through the registered formatter",
+    async (absence) => {
+      const reason = absence === "absent" ? "not-found" : "denied";
+
+      const { event, result } = await failedReadLine({ ok: false, reason, absence });
+
+      expect(event).toMatchObject({
+        op: "coding-runtime.workspace-read",
+        correlationId: "run-read-verdict",
+        level: "warn",
+        extra: { state: "failed", purpose: "tool-result", reason, absence },
+      });
+      const persisted = expectActivityLogProof(
+        "coding-runtime.workspace-read.emitted-line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(persisted).toMatchObject({ state: "failed", reason, absence });
+      // The verdict is evidence for the operator, never for the model: it sees the refusal alone.
+      expect(result).toEqual({
+        status: "failed",
+        reasonCode: reason === "denied" ? "workspace-read-denied" : "workspace-read-not-found",
+      });
+      expect(JSON.stringify(event)).not.toContain("private-name");
+    },
+  );
+
+  it("writes no verdict for a failure the walk never ran for", async () => {
+    const { event } = await failedReadLine({ ok: false, reason: "process-failed" });
+
+    expect(event?.extra?.reason).toBe("process-failed");
+    expect(event?.extra).not.toHaveProperty("absence");
+  });
+});
+
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
   it("denies discovery when managed-root authority is revoked before postflight", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-revoked-discover-"));
@@ -336,7 +409,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "changeset-invalid",
+    });
     expect(action).not.toHaveBeenCalled();
     expect(editRefusedLines(events)).toEqual([
       expect.objectContaining({
@@ -402,7 +479,8 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           scenario.aborted === true ? AbortSignal.abort() : undefined,
           { check: (): boolean => scenario.guardAllows !== false },
         ),
-      ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+        // The cause rides out beside the code, so the run's refusal bound can classify it.
+      ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED", prepareCause });
       expect(action).not.toHaveBeenCalled();
       expect(editRefusedLines(events)).toEqual([
         expect.objectContaining({
@@ -565,6 +643,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           completeness: "complete",
           loss: "none",
           state: "completed",
+          purpose: "tool-result",
           targetPathSha256: createHash("sha256").update("src/a.ts").digest("hex"),
           startLine: 1,
           maxLines: 0,
@@ -1011,7 +1090,12 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         level: "warn",
         correlationId: "run-stale",
         errorKind: "conflict",
-        extra: { reasonCode: "CONTENT_HASH_MISMATCH", completeness: "complete", loss: "none" },
+        extra: {
+          reasonCode: "CONTENT_HASH_MISMATCH",
+          completeness: "complete",
+          loss: "none",
+          editForm: "unified-diff",
+        },
       }),
     ]);
     expect(records).toEqual([]);
@@ -1098,7 +1182,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "changeset-invalid",
+    });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1378,7 +1466,12 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         expect.objectContaining({
           correlationId: "run-message-1",
           errorKind: "unavailable",
-          extra: { reasonCode: "NO_ACTIVE_SESSION", completeness: "complete", loss: "none" },
+          extra: {
+            reasonCode: "NO_ACTIVE_SESSION",
+            completeness: "complete",
+            loss: "none",
+            editForm: "unified-diff",
+          },
         }),
       ]);
       expect(records).toEqual([]);
@@ -1473,7 +1566,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): false => false },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "guard-denied",
+    });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1498,7 +1595,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         undefined,
         { check: (): true => true, binding: admittedBinding },
       ),
-    ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "editor-context-unavailable",
+    });
     expect(editorAction).not.toHaveBeenCalled();
   });
 
@@ -1693,7 +1794,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
             undefined,
             bindingless,
           ),
-        ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+        ).resolves.toEqual({
+          status: "failed",
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "binding-unavailable",
+        });
         expect(editorAction).not.toHaveBeenCalled();
       } finally {
         rmSync(root, { recursive: true, force: true });
@@ -1729,5 +1834,576 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         ),
       ).resolves.toMatchObject({ status: "completed" });
     });
+  });
+});
+
+// #3873 follow-up: a replacement changeset that moves or deletes files records body-free deletion
+// and rename counts beside the edit form, on the settled line and on a refusal line, through the
+// real registered formatter. A unified-diff changeset records neither count: not measured, not zero.
+describe("CodingTool edit evidence for deletions and renames (#3873 follow-up)", () => {
+  const liveBinding = { ...admittedBinding, expiresAt: "2099-01-01T00:00:00.000Z" };
+  const TEXT = "a\n";
+  const TEXT_DIGEST = createHash("sha256").update(TEXT, "utf8").digest("hex");
+  const EMPTY_DIGEST = createHash("sha256").update("", "utf8").digest("hex");
+
+  function readText(request: {
+    readonly relativePath: string;
+  }): Promise<SecureWorkspaceTextReadResult> {
+    return Promise.resolve(
+      request.relativePath === "src/a.ts" || request.relativePath === "src/d.ts"
+        ? { ok: true, text: TEXT }
+        : { ok: false, reason: "not-found" },
+    );
+  }
+
+  function movingChangeset(deletions: readonly string[]): EditorChangesetInput {
+    return {
+      edits: [],
+      renames: [{ from: "src/a.ts", to: "src/b.ts" }],
+      deletions,
+      files: [
+        { file: "src/a.ts", expectedContentHash: TEXT_DIGEST },
+        { file: "src/b.ts", expectedContentHash: EMPTY_DIGEST },
+        { file: "src/d.ts", expectedContentHash: TEXT_DIGEST },
+      ],
+      selectedFiles: ["src/a.ts", "src/b.ts", "src/d.ts"],
+    };
+  }
+
+  type EditorChangesetInput = Parameters<
+    ReturnType<typeof createCodingToolReadEditPorts>["editorChangeset"]["execute"]
+  >[0]["changeset"];
+
+  function portsWith(
+    events: ServerLogEvent[],
+    read: SecureWorkspaceTextReadPort["readText"] = readText,
+  ): ReturnType<typeof createCodingToolReadEditPorts> {
+    return createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: read },
+      // The materialization reads are governed reads: they need the run's read context like the
+      // model's own reads do (#3873 review).
+      resolveRepositoryReadContext: () => liveBinding,
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: true as const,
+            value: {
+              result: {
+                schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                actionId: "edit-move",
+                sessionId: "session-2332",
+                status: "queued" as const,
+              },
+            },
+          }),
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: liveBinding.runId, envelopeDigest: liveBinding.envelopeDigest },
+        origin: "agent",
+        workspaceId: liveBinding.workspaceId,
+        workspaceRootDigest: liveBinding.workspaceRootDigest,
+        expiresAt: liveBinding.expiresAt,
+      }),
+      requiresEditorReview: () => true,
+      mutationLeaseCoordinator: {
+        register: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+        waitForMutation: () => Promise.resolve("succeeded"),
+      },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+  }
+
+  async function settledEdit(
+    changeset: EditorChangesetInput,
+    options: {
+      readonly read?: SecureWorkspaceTextReadPort["readText"];
+      readonly guard?: Partial<CodingToolMutationGuard>;
+      readonly signal?: AbortSignal;
+    } = {},
+  ): Promise<{ readonly events: readonly ServerLogEvent[]; readonly result: unknown }> {
+    const events: ServerLogEvent[] = [];
+    const result = await portsWith(events, options.read).editorChangeset.execute(
+      { action: "edit", actionId: "edit-move", idempotencyKey: "edit-move-key", changeset },
+      options.signal,
+      { check: (): true => true, binding: liveBinding, ...options.guard },
+    );
+    return { events, result };
+  }
+
+  function settledLine(events: readonly ServerLogEvent[]): ServerLogEvent | undefined {
+    return events.find((event) => event.op === "coding-runtime.editor-mutation.settled");
+  }
+
+  it("records the deletion and rename counts of a settled replacement edit, behind its governed reads", async () => {
+    const { events, result } = await settledEdit(movingChangeset(["src/d.ts"]));
+
+    expect(result).toEqual({ status: "completed" });
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-runtime.workspace-read",
+      "coding-runtime.workspace-read",
+      "coding-runtime.workspace-read",
+      "coding-runtime.editor-mutation.settled",
+    ]);
+    // The rename source, the rename target (absent, as a new path must be) and the deleted file:
+    // each read is on the timeline with its purpose and the path's digest, never the path.
+    expect(events.slice(0, 3).map((event) => event.extra)).toMatchObject([
+      { state: "completed", purpose: "edit-materialization" },
+      { state: "absent", purpose: "edit-materialization" },
+      { state: "completed", purpose: "edit-materialization" },
+    ]);
+    for (const event of events.slice(0, 3)) {
+      expect(event.correlationId).toBe(liveBinding.runId);
+      expect(JSON.stringify(event)).not.toContain("src/");
+    }
+    const persisted = expectActivityLogProof(
+      "coding-runtime.editor-mutation.settled.emitted-line",
+      formatActivityLogProofLine(events[3] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "succeeded",
+      actionKind: "edit",
+      editForm: "replacements",
+      deletionCount: 1,
+      renameCount: 1,
+    });
+  });
+
+  it("records the counts and the refusal class on a refusal the materializer raised before any read", async () => {
+    const { events, result } = await settledEdit(movingChangeset(["src/b.ts"]));
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "INVALID_EDITS",
+      message: "src/b.ts is named more than once in this call.",
+    });
+    expect(events.map((event) => event.op)).toEqual(["coding-runtime.edit.refused"]);
+    const persisted = expectActivityLogProof(
+      "coding-runtime.edit.refused.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      reasonCode: "INVALID_EDITS",
+      replacementRefusal: "path-conflict",
+      editForm: "replacements",
+      deletionCount: 1,
+      renameCount: 1,
+    });
+    expect(events[0]).toMatchObject({ level: "warn", errorKind: "validation-failed" });
+  });
+
+  it.each([
+    ["old-string-not-found", { file: "src/a.ts", oldString: "z", newString: "b" }],
+    ["old-string-ambiguous", { file: "src/d.ts", oldString: "a", newString: "b" }],
+    ["create-over-content", { file: "src/a.ts", oldString: "", newString: "b" }],
+    ["identical-strings", { file: "src/a.ts", oldString: "a", newString: "a" }],
+  ] as const)("records %s as the closed class of a refused replacement", async (refusal, edit) => {
+    const read: SecureWorkspaceTextReadPort["readText"] = ({ relativePath }) =>
+      Promise.resolve({ ok: true, text: relativePath === "src/d.ts" ? "a\na\n" : TEXT });
+    const { events, result } = await settledEdit(
+      {
+        edits: [edit],
+        files: [
+          { file: "src/a.ts", expectedContentHash: TEXT_DIGEST },
+          {
+            file: "src/d.ts",
+            expectedContentHash: createHash("sha256").update("a\na\n", "utf8").digest("hex"),
+          },
+        ],
+      },
+      { read },
+    );
+
+    expect(result).toMatchObject({ status: "failed", reasonCode: "INVALID_EDITS" });
+    const refused = events.find((event) => event.op === "coding-runtime.edit.refused");
+    expect(refused?.extra).toMatchObject({
+      reasonCode: "INVALID_EDITS",
+      replacementRefusal: refusal,
+    });
+    expect(JSON.stringify(refused)).not.toContain("src/");
+  });
+
+  // #3873 review: every non-`not-found` read failure collapsed into one `replacement-read-failed`
+  // with errorKind unavailable; a cancelled run's edit was logged as unavailable. The closed read
+  // reason rides the refusal, and the failed read itself is on the timeline with its purpose.
+  it("carries the governed read's closed reason into the refusal and logs the failed read", async () => {
+    const busy: SecureWorkspaceTextReadPort["readText"] = () =>
+      Promise.resolve({ ok: false, reason: "busy" });
+    const { events, result } = await settledEdit(movingChangeset(["src/d.ts"]), { read: busy });
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "replacement-read-failed",
+      readReason: "busy",
+    });
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-runtime.workspace-read",
+      "coding-runtime.edit.refused",
+    ]);
+    expect(events[0]).toMatchObject({
+      level: "warn",
+      extra: { state: "failed", purpose: "edit-materialization", reason: "busy" },
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.edit.refused.emitted-line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "replacement-read-failed",
+      readReason: "busy",
+      editForm: "replacements",
+    });
+    expect(events[1]).toMatchObject({ errorKind: "unavailable" });
+  });
+
+  it("records a cancelled materialization read as cancelled, not as unavailable", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { events, result } = await settledEdit(movingChangeset(["src/d.ts"]), {
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "cancelled",
+      readReason: "cancelled",
+    });
+    expect(events[0]).toMatchObject({
+      op: "coding-runtime.workspace-read",
+      errorKind: "cancelled",
+      extra: { state: "failed", purpose: "edit-materialization", reason: "cancelled" },
+    });
+    const refused = events.find((event) => event.op === "coding-runtime.edit.refused");
+    expect(refused).toMatchObject({
+      errorKind: "cancelled",
+      extra: { prepareCause: "cancelled", readReason: "cancelled" },
+    });
+  });
+
+  it("refuses a materialization read of a denied path at the governed preflight", async () => {
+    const readText = vi.fn();
+    const { events, result } = await settledEdit(
+      {
+        edits: [{ file: ".git/config", oldString: "a", newString: "b" }],
+        files: [{ file: ".git/config", expectedContentHash: TEXT_DIGEST }],
+      },
+      { read: readText },
+    );
+
+    expect(result).toEqual({
+      status: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      prepareCause: "replacement-read-failed",
+      readReason: "preflight-refused",
+    });
+    expect(readText).not.toHaveBeenCalled();
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-runtime.workspace-read",
+      "coding-runtime.edit.refused",
+    ]);
+    expect(events[0]?.extra).toMatchObject({ state: "failed", reason: "preflight-refused" });
+  });
+
+  // #3873 review: the digest a replacement edit is checked against is the one the governed read
+  // reports. The precondition is taken from a real `keiko_workspace_read` result here, not from a
+  // restated formula, so a change to the read's digest cannot leave these edits green over a
+  // product that refuses every one of them.
+  it("accepts an edit bound to the digest a governed read of the same file reported", async () => {
+    const events: ServerLogEvent[] = [];
+    const ports = portsWith(events);
+    const guard = { check: (): true => true, binding: liveBinding };
+
+    const read = await ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-a",
+        idempotencyKey: "read-a-key",
+        relativePath: "src/a.ts",
+      },
+      undefined,
+      guard,
+    );
+    if (read.status !== "completed" || read.read === undefined)
+      throw new Error(`expected a completed read, got ${read.status}`);
+    const result = await ports.editorChangeset.execute(
+      {
+        action: "edit",
+        actionId: "edit-a",
+        idempotencyKey: "edit-a-key",
+        changeset: {
+          edits: [{ file: "src/a.ts", oldString: "a", newString: "b" }],
+          files: [{ file: "src/a.ts", expectedContentHash: read.read.digest }],
+        },
+      },
+      undefined,
+      guard,
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-runtime.workspace-read",
+      "coding-runtime.workspace-read",
+      "coding-runtime.editor-mutation.settled",
+    ]);
+    expect(events[0]?.extra).toMatchObject({ purpose: "tool-result", state: "completed" });
+    expect(events[1]?.extra).toMatchObject({ purpose: "edit-materialization", state: "completed" });
+  });
+
+  // #3873 review: the materialized diff is charged against the run's patch budget through the
+  // guard, by its excess over the request payload admission already reserved; a refused charge
+  // refuses the edit before the editor sees it.
+  it("charges the materialized diff's excess over the payload through the guard, and refuses when it does not fit", async () => {
+    const accepted = vi.fn<(patchBytes: number) => MaterializedPatchCharge>(() => ({ ok: true }));
+    const { events, result } = await settledEdit(movingChangeset(["src/d.ts"]), {
+      guard: { chargeMaterializedPatch: accepted },
+    });
+    const refusing = vi.fn<(patchBytes: number) => MaterializedPatchCharge>(() => ({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    }));
+    const refused = await settledEdit(movingChangeset(["src/d.ts"]), {
+      guard: { chargeMaterializedPatch: refusing },
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    // The request payload admission reserved: the rename's two paths and the deleted path.
+    const payload = Buffer.byteLength("src/a.ts", "utf8") * 2 + Buffer.byteLength("src/d.ts");
+    expect(accepted).toHaveBeenCalledOnce();
+    const charged = accepted.mock.calls[0]?.[0] ?? 0;
+    expect(charged).toBeGreaterThan(0);
+    // delete a (2 lines), create b (2 lines), delete d (2 lines): the whole materialized diff.
+    expect(charged + payload).toBe(
+      Buffer.byteLength(
+        "--- a/src/a.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-a\n" +
+          "--- /dev/null\n+++ b/src/b.ts\n@@ -0,0 +1,1 @@\n+a\n" +
+          "--- a/src/d.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-a\n",
+        "utf8",
+      ),
+    );
+    expect(settledLine(events)?.extra).toMatchObject({ editForm: "replacements" });
+    expect(refused.result).toEqual({
+      status: "failed",
+      reasonCode: "LIMIT_EXCEEDED",
+      message:
+        "The materialized changeset does not fit the run's remaining patch budget; split it into smaller calls or finish with the changes already applied.",
+    });
+    expect(refused.events.map((event) => event.op)).not.toContain(
+      "coding-runtime.editor-mutation.settled",
+    );
+    expect(refused.events.at(-1)).toMatchObject({
+      op: "coding-runtime.edit.refused",
+      errorKind: "validation-failed",
+      extra: { reasonCode: "LIMIT_EXCEEDED", replacementRefusal: "patch-budget-exhausted" },
+    });
+  });
+
+  // #3873 review: the charge also fails for reasons that are not the budget — a run that stopped,
+  // an authority that expired, drifted or was replayed. Those are the guard's denial, never an
+  // exhausted budget, and the model is not told to split a call that cannot succeed.
+  it.each([
+    ["authority-resolution-failed", "guard-denied"],
+    ["authority-replayed", "guard-denied"],
+    ["workspace-drift", "workspace-access-lost"],
+  ] as const)(
+    "records a charge refused with %s as the guard's %s, never as an exhausted budget",
+    async (reason, prepareCause) => {
+      const refusing = vi.fn<(patchBytes: number) => MaterializedPatchCharge>(() => ({
+        ok: false,
+        reason,
+      }));
+      const refused = await settledEdit(movingChangeset(["src/d.ts"]), {
+        guard: { chargeMaterializedPatch: refusing },
+      });
+
+      expect(refused.result).toMatchObject({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+      expect(JSON.stringify(refused.result)).not.toContain("split");
+      const line = refused.events.at(-1);
+      expect(line).toMatchObject({
+        op: "coding-runtime.edit.refused",
+        extra: { reasonCode: "EDIT_PREPARE_FAILED", prepareCause },
+      });
+      expect(line?.extra).not.toHaveProperty("replacementRefusal");
+    },
+  );
+
+  it("records zero counts for a replacement edit that neither moves nor deletes", async () => {
+    const { events } = await settledEdit({
+      edits: [{ file: "src/a.ts", oldString: "a", newString: "b" }],
+      files: [{ file: "src/a.ts", expectedContentHash: TEXT_DIGEST }],
+    });
+
+    expect(settledLine(events)?.extra).toMatchObject({
+      editForm: "replacements",
+      deletionCount: 0,
+      renameCount: 0,
+    });
+  });
+
+  it("records no counts for a unified-diff changeset, where they were not measured", async () => {
+    const { events } = await settledEdit(changeset());
+
+    expect(events.map((event) => event.op)).toEqual(["coding-runtime.editor-mutation.settled"]);
+    expect(events[0]?.extra).toMatchObject({ editForm: "unified-diff" });
+    expect(events[0]?.extra).not.toHaveProperty("deletionCount");
+    expect(events[0]?.extra).not.toHaveProperty("renameCount");
+  });
+});
+
+// PR #3876 review: the editor route lifts keiko-tools' collapsed-diff heuristic only for a diff the
+// server rendered itself. This port is the one place that knows it did: it registers the exact patch
+// text it posts, once the run's budget is charged, and never the text a caller supplied.
+describe("CodingTool materialized patch provenance (#3873)", () => {
+  const liveBinding = { ...admittedBinding, expiresAt: "2099-01-01T00:00:00.000Z" };
+  const SOURCE =
+    'export const header = "Name  Amount\\n----  ------\\n";\nexport const total = 1;\n';
+  const SOURCE_DIGEST = createHash("sha256").update(SOURCE, "utf8").digest("hex");
+
+  interface Fixture {
+    readonly posted: EditorAgentAction[];
+    readonly registry: ReturnType<typeof createMaterializedPatchRegistry>;
+    readonly run: (
+      changeset: Parameters<
+        ReturnType<typeof createCodingToolReadEditPorts>["editorChangeset"]["execute"]
+      >[0]["changeset"],
+      guard?: Partial<CodingToolMutationGuard>,
+    ) => Promise<unknown>;
+  }
+
+  function fixture(): Fixture {
+    const posted: EditorAgentAction[] = [];
+    const registry = createMaterializedPatchRegistry();
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: {
+        readText: ({ relativePath }) =>
+          Promise.resolve(
+            relativePath === "src/table.ts"
+              ? { ok: true, text: SOURCE }
+              : { ok: false, reason: "not-found" },
+          ),
+      },
+      resolveRepositoryReadContext: () => liveBinding,
+      editorAgentClient: {
+        action: (action) => {
+          posted.push(action);
+          return Promise.resolve({
+            ok: true as const,
+            value: {
+              result: {
+                schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                actionId: action.actionId,
+                sessionId: action.sessionId,
+                status: "queued" as const,
+              },
+            },
+          });
+        },
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-provenance",
+        authorityRef: { runId: liveBinding.runId, envelopeDigest: liveBinding.envelopeDigest },
+        origin: "agent",
+        workspaceId: liveBinding.workspaceId,
+        workspaceRootDigest: liveBinding.workspaceRootDigest,
+        expiresAt: liveBinding.expiresAt,
+      }),
+      requiresEditorReview: () => true,
+      mutationLeaseCoordinator: {
+        register: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+        waitForMutation: () => Promise.resolve("succeeded"),
+      },
+      materializedPatches: registry,
+      activityLog: { write: vi.fn() },
+    });
+    return {
+      posted,
+      registry,
+      run: (changesetInput, guard = {}) =>
+        ports.editorChangeset.execute(
+          {
+            action: "edit",
+            actionId: "edit-provenance",
+            idempotencyKey: "edit-provenance-key",
+            changeset: changesetInput,
+          },
+          undefined,
+          { check: (): true => true, binding: liveBinding, ...guard },
+        ),
+    };
+  }
+
+  const replacement = {
+    edits: [{ file: "src/table.ts", oldString: "total = 1;", newString: "total = 2;" }],
+    files: [{ file: "src/table.ts", expectedContentHash: SOURCE_DIGEST }],
+  };
+
+  it("registers the exact patch it posts to the editor route, only after the budget is charged", async () => {
+    const { posted, registry, run } = fixture();
+    const registeredAtCharge: number[] = [];
+    const charge = vi.fn((): MaterializedPatchCharge => {
+      registeredAtCharge.push(registry.stats().entries);
+      return { ok: true };
+    });
+
+    const result = await run(replacement, { chargeMaterializedPatch: charge });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(charge).toHaveBeenCalledOnce();
+    // A refused charge must leave nothing behind, so the digest is not there while the charge runs.
+    expect(registeredAtCharge).toEqual([0]);
+    const patch = posted[0]?.changeset?.patch;
+    if (patch === undefined) throw new Error("expected the edit to reach the editor route");
+    expect(patch).toContain(String.raw`Amount\n----`);
+    expect(registry.lookup(patch).registered).toBe(true);
+    expect(registry.stats().entries).toBe(1);
+  });
+
+  it("registers nothing when the run's budget does not take the diff", async () => {
+    const { posted, registry, run } = fixture();
+    const refusing = vi.fn((): MaterializedPatchCharge => ({
+      ok: false,
+      reason: "authority-budget-exceeded",
+    }));
+
+    const result = await run(replacement, { chargeMaterializedPatch: refusing });
+
+    expect(result).toMatchObject({ status: "failed", reasonCode: "LIMIT_EXCEEDED" });
+    expect(posted).toEqual([]);
+    expect(registry.stats().entries).toBe(0);
+  });
+
+  it("registers nothing for a replacement the materializer refuses", async () => {
+    const { posted, registry, run } = fixture();
+
+    const result = await run({
+      edits: [{ file: "src/table.ts", oldString: "missing text", newString: "x" }],
+      files: [{ file: "src/table.ts", expectedContentHash: SOURCE_DIGEST }],
+    });
+
+    expect(result).toMatchObject({ status: "failed", reasonCode: "INVALID_EDITS" });
+    expect(posted).toEqual([]);
+    expect(registry.stats().entries).toBe(0);
+  });
+
+  // The provenance is the server's own rendering. A diff a caller wrote is model text to the engine,
+  // whatever it spells, and must keep meeting the guard that exists for it.
+  it("never registers a diff a caller supplied", async () => {
+    const { posted, registry, run } = fixture();
+    const supplied = {
+      patch:
+        '--- a/src/table.ts\n+++ b/src/table.ts\n@@ -1,2 +1,2 @@\n export const header = "Name  Amount\\n----  ------\\n";\n-export const total = 1;\n+export const total = 2;\n',
+      files: [{ file: "src/table.ts", expectedContentHash: SOURCE_DIGEST }],
+    };
+
+    const result = await run(supplied);
+
+    expect(result).toEqual({ status: "completed" });
+    expect(posted[0]?.changeset?.patch).toBe(supplied.patch);
+    expect(registry.lookup(supplied.patch).registered).toBe(false);
+    expect(registry.stats().entries).toBe(0);
   });
 });

@@ -151,6 +151,8 @@ export interface ProductionOpenCodeActivationInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Body-free lifecycle evidence for the chosen dev-lane outcome. */
   readonly activityLog?: ServerLogSink | undefined;
+  /** The configured Authority Envelope duration (ms) the backend's safe-activity retention follows. */
+  readonly runtimeMaxDurationMs?: number | undefined;
 }
 
 export type ProductionOpenCodeActivationResult =
@@ -207,6 +209,9 @@ function activatedPorts(
       ...(input.activityLog ? { activityLog: input.activityLog } : {}),
       ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
       ...(input.fetch ? { fetch: input.fetch } : {}),
+      ...(input.runtimeMaxDurationMs === undefined
+        ? {}
+        : { runtimeMaxDurationMs: input.runtimeMaxDurationMs }),
     }),
     secureWorkspaceTextRead,
     editorAgentClient:

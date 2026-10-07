@@ -15,12 +15,14 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeHost,
 } from "./productionCodingRuntimeHost.js";
 import { RESEARCH_GRANT_DEFAULT_MAX_TTL_MS } from "./researchGrantRegistry.js";
 import type { CodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type {
   CodingRuntimeStartConfirmationClaim,
   CodingRuntimeStartConfirmationConsumer,
@@ -37,6 +39,13 @@ const ciRepairNotifierCapture = vi.hoisted(() => ({
   current: undefined as ((runId: string) => void) | undefined,
 }));
 
+// #3873: a fixture without delivery storage composes the unavailable CI-repair budget, which refuses
+// every prompt charge. The one test that drives a run's model calls through the composed prompt
+// ledger replaces it with a budget that admits them; every other test composes the original.
+const ciRepairBudgetOverride = vi.hoisted(() => ({
+  current: undefined as CiRepairExecutionBudget | undefined,
+}));
+
 vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./productionCiRepairRuntime.js")>();
   return {
@@ -45,7 +54,32 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
       ...args: Parameters<typeof original.createProductionCiRepairBudget>
     ): ReturnType<typeof original.createProductionCiRepairBudget> => {
       ciRepairNotifierCapture.current = args[3];
-      return original.createProductionCiRepairBudget(...args);
+      return ciRepairBudgetOverride.current ?? original.createProductionCiRepairBudget(...args);
+    },
+  };
+});
+
+// F5 (#3873): the edit outcome observer the resolver hands each run's managed tool facade, captured
+// at the one production composition site so a test can play the facade's part.
+const editOutcomeCapture = vi.hoisted(() => ({
+  observers: [] as ((outcome: { readonly kind: "refused"; readonly reasonCode: string }) => void)[],
+}));
+
+// PR #3876 review: the registry of rendered diffs the resolver hands each run's managed tool facade,
+// captured at the same composition site.
+const materializedPatchesCapture = vi.hoisted(() => ({ registries: [] as unknown[] }));
+
+vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./productionManagedWorktreeTools.js")>();
+  return {
+    ...original,
+    createProductionManagedWorktreeToolFacade: (
+      ...args: Parameters<typeof original.createProductionManagedWorktreeToolFacade>
+    ): ReturnType<typeof original.createProductionManagedWorktreeToolFacade> => {
+      const observe = args[0].observeEditOutcome;
+      if (observe !== undefined) editOutcomeCapture.observers.push(observe);
+      materializedPatchesCapture.registries.push(args[0].materializedPatches);
+      return original.createProductionManagedWorktreeToolFacade(...args);
     },
   };
 });
@@ -53,6 +87,8 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
 const roots: string[] = [];
 
 afterEach(() => {
+  ciRepairBudgetOverride.current = undefined;
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -148,6 +184,28 @@ describe("production coding runtime resolver", () => {
 
     // The run composes its tools from that same catalog, so the operator's digest does not move.
     expect(host.approvedSkills?.().catalogDigest).toBe(composed?.catalogDigest);
+  });
+
+  // ADR-0137 D1: the control plane's repository-instructions loader reads AGENTS.md through the
+  // one secure read port the resolver was composed with — the port every run's governed
+  // `keiko_workspace_read` answers through — never a second filesystem path.
+  it("exposes the composed secure workspace read port to the control plane unchanged", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const secureWorkspaceTextRead = {
+      readText: () => Promise.resolve({ ok: false as const, reason: "denied" as const }),
+    };
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        vi.fn((input: ProductionRuntimeBackendInput) => backendRun(input.request.runId)),
+        confirmations.consumer,
+        undefined,
+        { secureWorkspaceTextRead },
+      ),
+    );
+
+    expect(host?.secureWorkspaceTextRead).toBe(secureWorkspaceTextRead);
   });
 
   it("starts an approved research grant lifetime at operator approval time", async () => {
@@ -332,6 +390,70 @@ describe("production coding runtime resolver", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledExactlyOnceWith("run-1");
+  });
+
+  // F5 (#3873, live Gemma qualification): every edit a run's facade answered stayed inside that
+  // facade, so eleven NO_ACTIVE_SESSION refusals reached nothing that could stop the run. The
+  // facade the resolver composes per run reports each outcome, with the run's own id, through the
+  // slot the control plane fills with the orchestrator's refusal bound.
+  it("routes a run's edit outcomes through the latest attached observer with the run's id", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const first = vi.fn();
+    const latest = vi.fn();
+    host.attachEditOutcomeObserver?.(first);
+    editOutcomeCapture.observers.length = 0;
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    host.attachEditOutcomeObserver?.(latest);
+
+    const outcome = { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" } as const;
+    expect(editOutcomeCapture.observers).toHaveLength(1);
+    editOutcomeCapture.observers[0]?.(outcome);
+
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
+  });
+
+  // PR #3876 review: a run's edit port registers the diff it renders in the one registry the editor
+  // route reads. A facade composed without the composition's registry would register nothing, and
+  // every edit beside a backslash-n would meet the engine's heuristic again, with no test red.
+  it.each([
+    ["hands the composition's registry to each run's tool facade", true],
+    ["composes the facade without a registry when the composition has none", false],
+  ] as const)("%s", (_name, supplied) => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const registry = createMaterializedPatchRegistry();
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        createRun,
+        confirmations.consumer,
+        undefined,
+        supplied ? { materializedPatches: registry } : {},
+      ),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    materializedPatchesCapture.registries.length = 0;
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    host.launchResolver.resolve(request);
+
+    expect(materializedPatchesCapture.registries).toHaveLength(1);
+    expect(materializedPatchesCapture.registries[0]).toBe(supplied ? registry : undefined);
   });
 
   it("is unavailable without a trusted confirmation consumer and causes no backend side effects", () => {
@@ -616,7 +738,127 @@ describe("production coding runtime resolver", () => {
     expect(createRun).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  // F9 (#3873): the composed host answers whether a run's Authority Envelope ran out of time, on the
+  // composition's own clock, so a run that reached its envelope's end (run
+  // `run-272120967981827964065820685403290179367`) settles under that cause, not an internal error.
+  it("answers a run's envelope end from its minted authority on the composition clock", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    const expiresAt = createRun.mock.calls[0]?.[0].context.expiresAt;
+    if (expiresAt === undefined) throw new Error("expected a composed run");
+
+    expect(host.envelopeDurationExhausted?.(request.runId)).toBe(false);
+    fixture.advanceNow(Date.parse(expiresAt) - fixture.nowMs() - 1);
+    expect(host.envelopeDurationExhausted?.(request.runId)).toBe(false);
+    fixture.advanceNow(1);
+    expect(host.envelopeDurationExhausted?.(request.runId)).toBe(true);
+    expect(host.envelopeDurationExhausted?.("run-other")).toBe(false);
+  });
+
+  // #3873: the composed host counts a run's model calls where the sidecar gateway admits and settles
+  // them — the model-gateway capability's prompt reservation — and its tool calls where the run's
+  // facade answers them, and answers both through `runEffort` for the run's settled line.
+  it("counts the run's admitted model calls and answered tool calls for its effort roll-up", async () => {
+    const fixture = workspaceFixture();
+    // The capability store and its authentication read the process clock; hold it on the fixture's
+    // clock from before the host is composed, so both judge the run's capabilities at one instant.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(fixture.nowMs());
+    ciRepairBudgetOverride.current = {
+      admitTool: () => undefined,
+      canChargePrompt: () => ({ accepted: true }),
+      chargePrompt: () => ({ accepted: true }),
+      observed: () => undefined,
+    };
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+      backendRun(input.request.runId),
+    );
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+    const backend = createRun.mock.calls[0]?.[0];
+    const ledger = host.runtimeCapabilityAuthenticator;
+    if (backend === undefined || ledger === undefined || !hasPromptSettlement(ledger)) {
+      throw new Error("expected a composed run and its prompt ledger");
+    }
+    const capability = backend.minted.modelGatewayCapability;
+
+    // One model call the gateway admitted and, 4 s later, settled with the provider's own count. The
+    // admitted reservation answers the call's identity and the settlement names it, as the gateway
+    // does, so the call is timed from its own reservation.
+    const reserved = ledger.reservePromptTokens?.(capability, 1_000);
+    expect(reserved).toMatchObject({ ok: true, modelCallId: expect.any(Number) as unknown });
+    fixture.advanceNow(4_000);
+    vi.setSystemTime(fixture.nowMs());
+    expect(
+      ledger.settlePromptTokens(capability, 1_000, 1_240, modelCallIdOf(reserved)),
+    ).toMatchObject({ ok: true });
+    // A reservation the run's allowance refused is no model call: nothing was dispatched.
+    expect(ledger.reservePromptTokens?.(capability, 10_000_000)).toMatchObject({ ok: false });
+    // A malformed edit the run's facade refused is still a refused edit.
+    await expect(
+      backend.toolFacade.execute({
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "action-1",
+          idempotencyKey: "idem-1",
+          changeset: {},
+        }),
+        capability: backend.minted.toolFacadeCapability,
+      }),
+    ).resolves.toMatchObject({ status: "invalid" });
+
+    expect(host.runEffort?.read(request.runId)).toEqual({
+      modelTurnCount: 1,
+      modelDurationMs: 4_000,
+      promptTokensTotal: 1_240,
+      toolInvocationCount: 1,
+      workspaceReadCount: 0,
+      editCount: 0,
+      editRefusedCount: 1,
+    });
+    expect(host.runEffort?.read("run-other")).toBeUndefined();
+  });
 });
+
+interface PromptSettlementPort {
+  readonly settlePromptTokens: (
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+    modelCallId?: number,
+  ) => unknown;
+}
+
+// The identity an admitted reservation answers beside its run, as the gateway reads it.
+function modelCallIdOf(reservation: unknown): number | undefined {
+  if (typeof reservation !== "object" || reservation === null) return undefined;
+  const id = (reservation as { readonly modelCallId?: unknown }).modelCallId;
+  return typeof id === "number" ? id : undefined;
+}
+
+// The settlement half of the gateway's prompt ledger is wired by the resolver but not declared on
+// the shared host interface (see `runtimeCapabilityAuthenticatorFor`); the gateway reads it the same
+// way.
+function hasPromptSettlement<T extends object>(value: T): value is T & PromptSettlementPort {
+  return "settlePromptTokens" in value && typeof value.settlePromptTokens === "function";
+}
 
 function researchUnavailable(
   host: ProductionCodingRuntimeHost,

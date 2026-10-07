@@ -5,6 +5,7 @@ import {
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
 import {
+  CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
@@ -112,13 +113,27 @@ export function validateSseEventFields(
   validateSafeId(value.runId, "runId", errors, idMaxChars);
   if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
   validateNonNegativeSafeInteger(value.revision, "revision", errors);
-  if (
-    value.kind === "runtime-event" &&
-    !isOneOf(value.eventKind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)
-  ) {
+  validateSseEventKind(value, errors);
+  validateSseOptionalEnums(value, errors);
+}
+
+// The `eventKind` of a runtime-event frame: an adapter event kind, or one of the SSE-only gateway
+// facts (#3873 review), which carry nothing else — no failure code, outcome or trust marker.
+function validateSseEventKind(value: Record<string, unknown>, errors: string[]): void {
+  if (value.kind !== "runtime-event") return;
+  if (isOneOf(value.eventKind, CODING_WORKBENCH_GATEWAY_EVENT_KINDS)) {
+    if (
+      value.failureCode !== undefined ||
+      value.auxiliaryOutcome !== undefined ||
+      value.contentTrust !== undefined
+    ) {
+      errors.push("a gateway fact carries no failureCode, auxiliaryOutcome or contentTrust");
+    }
+    return;
+  }
+  if (!isOneOf(value.eventKind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)) {
     errors.push("eventKind is invalid");
   }
-  validateSseOptionalEnums(value, errors);
 }
 
 // The redacted per-turn gateway causes. A Record over the union, so a new cause that is not listed

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type {
@@ -23,8 +25,10 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolProducerBinding,
+  MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import { changesetPayloadBytes } from "./codingToolReplacementEdits.js";
 import {
   createCodingToolGovernedDelegate,
   type CodingToolGovernedPorts,
@@ -343,7 +347,9 @@ function finishAdmission(
     if (isDraftToolRequest(request)) {
       const lease = approvalProofVerifier?.consumeDelivery?.(trusted.runId, request);
       if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
-      return guarded(authority, context, capability, request, binding, true, lease);
+      return guarded(authority, context, capability, request, binding, true, {
+        deliveryApproval: lease,
+      });
     }
     // #3384 F4 (executeApproved consumes before preflight): the one-use commit approval must
     // NOT be consumed here. `admissionPreflight`'s `approved()` already confirmed a matching,
@@ -354,7 +360,9 @@ function finishAdmission(
     // decides whether to spend it, only once that preflight has cleared (mirrors executeOne's
     // HTTP-route parity comment in verifiedCommitService.ts).
     const approval: CommitExecutionApproval = { claim: commitClaim(request) };
-    return guarded(authority, context, capability, request, binding, true, approval);
+    return guarded(authority, context, capability, request, binding, true, {
+      deliveryApproval: approval,
+    });
   }
   const stage = finishStageAdmission(input);
   if (stage !== undefined) return stage;
@@ -364,7 +372,12 @@ function finishAdmission(
     request,
     approvalProofVerifier,
   );
-  return guarded(authority, context, capability, request, binding, approvalVerified);
+  // An edit reaches this line only when its admission reserved the run's edit budget
+  // (`reserveEditDelegation`), so its guard may top that reservation up once the edit is
+  // materialized; a wiring that leaves edits to the editor route never arrives here.
+  return guarded(authority, context, capability, request, binding, approvalVerified, {
+    chargesMaterializedPatch: request.action === "edit",
+  });
 }
 
 function finishStageAdmission(
@@ -430,6 +443,12 @@ function approved(
   );
 }
 
+interface GuardExtras {
+  readonly deliveryApproval?: object | undefined;
+  /** True only for an edit whose admission reserved the run's edit budget (#3873 review). */
+  readonly chargesMaterializedPatch?: boolean | undefined;
+}
+
 function guarded(
   authority: CodingToolAuthorityService,
   context: CodingToolAuthorityContextProvider,
@@ -437,8 +456,9 @@ function guarded(
   request: CodingToolActionRequest,
   binding: CodingToolProducerBinding | undefined,
   approvalVerified: boolean,
-  deliveryApproval?: object,
+  extras: GuardExtras = {},
 ): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const { deliveryApproval, chargesMaterializedPatch } = extras;
   const mutationGuard = {
     ...(deliveryApproval === undefined ? {} : { deliveryApproval }),
     check: (): boolean => revalidate(authority, context, capability, request, approvalVerified),
@@ -447,6 +467,12 @@ function guarded(
     chargeDelegatedRead: (delegationId: string, idempotencyKey: string): boolean =>
       chargeDelegatedRead(authority, context, capability, delegationId, idempotencyKey),
     canChargeDelegatedRead: (): boolean => canChargeDelegatedRead(authority, context, capability),
+    ...(chargesMaterializedPatch === true
+      ? {
+          chargeMaterializedPatch: (patchBytes: number): MaterializedPatchCharge =>
+            chargeMaterializedPatch(authority, context, capability, request, patchBytes),
+        }
+      : {}),
     ...(binding === undefined ? {} : { binding }),
   };
   return {
@@ -454,6 +480,44 @@ function guarded(
     mutationGuard,
     ...(binding === undefined ? {} : { binding }),
   };
+}
+
+// #3873 review: the run's patch budget bounds what is applied, and a replacement changeset is only
+// known in that form once it is materialized. Admission reserved the request payload as the floor;
+// the materialized diff's excess is charged here as one more delegation on the same authority
+// record, identified by the action it belongs to and carrying no tool call of its own. A refused
+// charge refuses the edit before any editor action exists, with the authority's closed reason: only
+// `authority-budget-exceeded` is an exhausted budget (#3873 review).
+function chargeMaterializedPatch(
+  authority: Pick<CodingRuntimeAuthorityService, "resolveCapabilityForDelegation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+  request: CodingToolActionRequest,
+  patchBytes: number,
+): MaterializedPatchCharge {
+  if (!Number.isSafeInteger(patchBytes) || patchBytes < 0) {
+    return { ok: false, reason: "invalid-intent" };
+  }
+  if (patchBytes === 0) return { ok: true };
+  const trusted = context();
+  const resolved = authority.resolveCapabilityForDelegation({
+    capability,
+    adapterKind: trusted.adapterKind,
+    liveFacts: trusted.liveFacts,
+    delegationId: materializedPatchIdentity(request.actionId),
+    idempotencyKey: materializedPatchIdentity(request.idempotencyKey),
+    usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+    workspaceRoot: trusted.workspaceRoot,
+    deploymentCeiling: trusted.deploymentCeiling,
+    nowIso: trusted.nowIso,
+  });
+  return resolved.ok ? { ok: true } : { ok: false, reason: resolved.reason };
+}
+
+// Derived, bounded and collision-free: the registry holds a delegation identity to 256 characters
+// while an action identity may carry 512 bytes, so the suffix rides a digest, never the raw id.
+function materializedPatchIdentity(identity: string): string {
+  return `materialized-patch:${createHash("sha256").update(identity, "utf8").digest("hex")}`;
 }
 
 function producerBinding(
@@ -956,10 +1020,14 @@ function hasScope(actual: readonly string[], required: string): boolean {
   return actual.includes(required);
 }
 
+// The patch bytes reserved at admission are the request's own payload: the exact bytes of a unified
+// diff, or the replacement text and paths of the replacement form. For the replacement form that is
+// the floor and the request-size pre-check; the materialized diff's excess is charged through the
+// guard's `chargeMaterializedPatch` once it exists (#3873 review: the budget bounds what is applied).
 function delegationUsage(request: CodingToolActionRequest): CodingWorkbenchRuntimeDelegationUsage {
   return {
     toolCalls: 1,
-    patchBytes: request.action === "edit" ? Buffer.byteLength(request.changeset.patch, "utf8") : 0,
+    patchBytes: request.action === "edit" ? changesetPayloadBytes(request.changeset) : 0,
     promptTokens: 0,
   };
 }

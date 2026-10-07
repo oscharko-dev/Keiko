@@ -274,7 +274,8 @@ the root's own authority. Nothing has to be migrated; start the run again.
 **Symptom**
 
 The run inspects the repository normally, then the first substantial edit step ends the run:
-`Failed. Failure: runtime-failed`, no workspace change. The activity log shows a gateway fetch of
+`Failed. Failure: runtime-failed` (`model-turn-failed` on builds that name the model-call cause of a
+failed run, #3873), no workspace change. The activity log shows a gateway fetch of
 several tens of seconds (`http.gateway.fetch.completed` with a large `durationMs`) followed by
 `gateway.tool-catalog.rejected` with `reason: "invalid-arguments"` and
 `catalogReason: "expired-compatibility"`, `gateway.chat.failed` with `GATEWAY_MALFORMED_TOOL_CALL`,
@@ -463,8 +464,9 @@ untrack its IDE metadata to be delivered by the Workbench.
 
 **Symptom**
 
-The run starts, attaches the issue and ends within a minute: `Failed. Failure: runtime-failed`. The
-activity log shows, under one chat correlation id, `gateway.tool-catalog.rejected` with
+The run starts, attaches the issue and ends within a minute: `Failed. Failure: runtime-failed`
+(`model-turn-failed` on builds that name the model-call cause of a failed run, #3873). The activity
+log shows, under one chat correlation id, `gateway.tool-catalog.rejected` with
 `catalogReason: "invalid-shape"` three times, each followed by `gateway.tool-catalog.repair`
 (`state: "scheduled"`, `correctionMessageCount: 1`) and `gateway.retry.scheduled`, then
 `gateway.retry.exhausted` and `gateway.chat.failed` with `GATEWAY_MALFORMED_TOOL_CALL`,
@@ -561,6 +563,125 @@ Resolve the blocker the timeline names and start the run again; there is nothing
 run that already failed. For a trust refusal, see the entry below. Do not treat the failure code as
 the problem: a run that reports this has told the truth about delivering nothing, and suppressing it
 would restore the false green it replaced.
+
+---
+
+## A run fails on one of its bounds or on a failed model call
+
+| Field             | Value                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                             |
+| Surface           | Coding Workbench / coding sidecar gateway                                                          |
+| Stable identifier | `coding-runtime.run.settled` with `failureBasis`, `coding-sidecar.gateway.turn-failed`, `rejected` |
+
+**Symptom**
+
+A run ends as failed, and the Workbench names why instead of "The coding run ended with an internal
+error": the prompt allowance is used up (`prompt-allowance-exhausted`), the run's time limit is used
+up (`envelope-duration-exhausted`), the model used its whole output budget again after a repair
+attempt (`output-exhausted-repeated`), the model provider could not be reached or stopped answering
+(`provider-unavailable`), or the last model step failed for the reason the failed step above it
+names (`model-turn-failed`). The run's `coding-runtime.run.settled` line carries the same
+`failureCode`, a `failureBasis` and, when one is on record, the `modelCallFailure` of the run's last
+failed model call. A run that was stopped settles `cancelled` and reads "This run was stopped"; the
+Workbench does not say who stopped it, because the operator's Stop and a Keiko shutdown (an update,
+a restart, a machine shutdown) settle identically. A `coding-runtime.run.shutdown` line under the
+run's correlation names a shutdown.
+
+**Root Cause**
+
+The failed turn ended on one of the run's bounds or on a model call, not on a Keiko fault (#3873,
+F9; runs `run-65084062444586162471229658028402064666` and
+`run-272120967981827964065820685403290179367`). `failureBasis` names the fact the cause came from:
+
+- `prompt-allowance` — the run's cumulative prompt allowance (`maxPromptTokens` of the Authority
+  Envelope) refused its most recent model call. The gateway answered that call with
+  `coding-sidecar.gateway.rejected reason=runtime-prompt-budget-denied` and a `turn-rejected` turn
+  failure. The same cause names a call the run's CI-repair budget refused for its own
+  `prompt-budget-exhausted`, which counts the same `maxPromptTokens` over the repair; no other
+  reason of that budget does (see the last bullet). Failed model calls keep their reserved prompt
+  estimate, so a long provider outage spends the allowance too.
+- `envelope-duration` — the run's Authority Envelope ran out of time (`maxRuntimeMs` after minting,
+  or its `expiresAt`). A model call in flight at that moment ends with
+  `coding-sidecar.gateway.outcome outcome=cancelled cancellationCause=run-stopped`; a call started
+  after it is refused. The same cause names a call the run's CI-repair budget refused for its own
+  `deadline-exhausted`, which counts the same `maxRuntimeMs` over the repair.
+- `model-call-failure` — the coding sidecar gateway reported the run's most recent model call as
+  failed, and no later call of the run was answered. `stream-incomplete` (a timeout, a refused or
+  dropped connection, a stream that broke before the answer completed) settles
+  `provider-unavailable`, and so does `provider-failed` when the gateway also found that the provider
+  could not serve the call — a retryable provider status (408, 429, 5xx), a rate limit or an open
+  breaker that outlasted the gateway's outage window; that call's
+  `coding-sidecar.gateway.turn-failed` line carries `providerUnavailable: true`, and the settled line
+  names `modelCallFailure: provider-failed` beside `failureCode: provider-unavailable`.
+  `output-exhausted`, which ends a run only after the gateway's steered repair or the runtime's
+  retries exhausted the budget again, settles `output-exhausted-repeated`; every other cause,
+  including a `provider-failed` without that fact (a 4xx rejection, a refused credential, a
+  configuration or egress refusal), settles `model-turn-failed`.
+- `no-model-call-failure` — nothing on the bound or model-call path explains the failure; the run
+  settles `runtime-failed`: the runtime crashed or failed internally.
+
+A CI repair's budget refuses a model call before the authority is asked, and a refusal names no limit
+of the run unless it is the repair's own prompt allowance or runtime limit (#3873 review): a repair
+out of failed attempts (`attempt-budget-exhausted`), a withdrawn authority (`authority-denied`), a
+failed or full store (`storage-unavailable`, `storage-capacity`), a binding or clock fault
+(`invalid-binding`, `clock-drift`) and the rest settle `model-turn-failed` with
+`modelCallFailure: turn-rejected`, never `prompt-allowance-exhausted`, because no allowance setting
+can lift them. The closed reason is on the `git.ci-repair.budget` line of the refused call.
+
+A run that settles `provider-unavailable` on a `provider-failed` call still shows "The model provider
+rejected this turn" on its last failed step: the per-turn wording names the gateway's answer, while
+the run's own cause names the outage.
+
+**Diagnostic Steps**
+
+1. Reconstruct the run and read the `coding-runtime.run.settled` line's `failureCode`,
+   `failureBasis` and `modelCallFailure`.
+
+   ```bash
+   keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
+   ```
+
+2. For `prompt-allowance`, `coding-runtime.authority.minted` names the run's `maxPromptTokens`, and the
+   `coding-sidecar.gateway.usage-settled` lines under the run sum what each model call spent
+   (`promptSource` tells a provider-reported count from a kept estimate).
+3. For `envelope-duration`, compare the settled line's `wallDurationMs` with the envelope's duration
+   (`maxRuntimeMs` on `coding-runtime.authority.minted`, where the composition reports it).
+   A CI repair whose own limit ran out while the envelope still had time settles the same cause;
+   the `git.ci-repair.budget` line of the next step then carries `reason: deadline-exhausted`.
+4. For a call the run's CI-repair budget refused, read the `git.ci-repair.budget` line with
+   `phase: prompt-admission` and `status: blocked` under the run's correlation: its `reason` is the
+   closed reason the budget refused with (`prompt-budget-exhausted`, `deadline-exhausted`,
+   `attempt-budget-exhausted`, `authority-denied`, `storage-unavailable`, ...) and
+   `requestedPromptTokenCount` the estimate it was asked about. A check that refused the call and a
+   charge that refused it after the authority admitted it write the same line.
+5. For `model-call-failure`, the last `coding-sidecar.gateway.turn-failed` line before the settlement
+   names the cause (`failureCode`), whether the provider could not serve the call
+   (`providerUnavailable`) and whether the runtime could retry it (`runtimeRetry`); a
+   `gateway.retry.exhausted` or `gateway.circuit.wait outcome=budget-refused` under the same chat
+   correlation shows an outage that outlasted the window.
+
+**Resolution**
+
+- `prompt-allowance-exhausted`: start the task again as a new run, which gets a fresh allowance and the
+  changes already in the task workspace, or split the task. Where tasks of this size are routine, an
+  operator raises `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` before starting the server; see the
+  operator runbook. A run that spends its allowance on a loop of refused edits is a defect to report,
+  not a reason to raise it.
+- `envelope-duration-exhausted`: start the task again as a new run, which gets a fresh time limit and
+  the changes already in the task workspace, or split the task. Where slow models make tasks of this
+  size routine, an operator lengthens the envelope duration before starting the server (see the
+  operator runbook). When the `git.ci-repair.budget` line of the refused call says
+  `deadline-exhausted`, the limit that ran out is the repair's own: it is kept per pull request and
+  task, a new run inherits it and a longer setting does not extend it, so repair that pull request's
+  failing check by hand, or start the task for a new pull request.
+- `output-exhausted-repeated`: have the gateway declare a larger `max_output_tokens` for the model, or
+  choose a model with a smaller reasoning share, then start the task again.
+- `provider-unavailable`: check the model gateway's and the model server's health, then start the
+  task again. Where peak overloads last longer than ten minutes, raise the gateway configuration's
+  `codingOutageWindowMs` (see the LiteLLM production gateway entry).
+- `model-turn-failed`: follow the failed step's own sentence (provider configuration, the model's
+  output budget, a rephrased task or another model), then start the task again.
 
 ---
 
@@ -697,3 +818,101 @@ A `failed` line with a closed code is a defect in the named helper or a reposito
 fit; file it with the timeline. Do not widen the admission rule to admit a path the change list does
 not name: the candidate digest binds exactly the bytes reviewed, and a directory or an unlisted path
 would stage content nobody reviewed.
+
+---
+
+## A run fails with `edits-blocked` or `edit-retries-exhausted`
+
+| Field             | Value                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                            |
+| Surface           | Local server / Coding Workbench                                                                   |
+| Stable identifier | `edits-blocked`, `edit-retries-exhausted`, `coding-runtime.run.refusal-escalated`, `failureBasis` |
+
+**Symptom**
+
+A run ends as failed and the Workbench says Keiko stopped it because its edits were refused several
+times in a row. Before #3873 such a run never ended on its own: in the live Gemma qualification a
+run whose workspace had no connected Workbench logged eleven `coding-runtime.edit.refused
+reasonCode=NO_ACTIVE_SESSION` lines until the operator stopped it.
+
+**Root Cause**
+
+The run's orchestration counts each run's governed edit refusals since its last applied edit,
+whatever their closed reason codes: a model that alternates two refusals is bounded exactly like one
+that repeats one. Reads, searches and other tool calls between two refused edits do not interrupt the
+streak; an applied edit ends it; a human's rejection of a change in its review never counts
+(ADR-0124 D6), nor does an edit whose preparation was cancelled, nor a refusal that lands while the
+run is paused. When a bound is met the run writes one `coding-runtime.run.refusal-escalated` line and
+settles `failed` (ADR-0137 D3):
+
+- `edits-blocked` — three refusals in the streak that the model cannot repair by changing its edit:
+  no connected Workbench editor (`NO_ACTIVE_SESSION`, `NO_ACTIVE_BRIDGE`), lost workspace access, a
+  denied path or policy (`OUT_OF_SCOPE`, `POLICY_DENIED`, `APPROVAL_REQUIRED`), an editor buffer only
+  the operator can save (`DIRTY`), an editor or transport fault, and an edit the edit port refused
+  while preparing it (`EDIT_PREPARE_FAILED`) because the workspace or its guard no longer held, no
+  editor context or mutation lease could be had, or the governed read of a file the edit names did not
+  answer (a file that is not text or is too large, a denied path, an unavailable workspace).
+- `edit-retries-exhausted` — six refusals of any kind in the streak: edits that do not apply
+  (`INVALID_EDITS`), a stale base (`CONTENT_HASH_MISMATCH`, `VERSION_MISMATCH`), a missing
+  precondition, an invalid changeset (`EDIT_PREPARE_FAILED` with the cause `changeset-invalid`), or a
+  refusal without a closed code (`UNCLASSIFIED`), alone or mixed with the unrepairable ones above.
+
+**Diagnostic Steps**
+
+1. Reconstruct the run and read its `coding-runtime.run.refusal-escalated` line: `reasonCode` is the
+   latest refusal's code; `refusalClass` (`unrepairable` or `repairable`), `consecutiveCount` and
+   `bound` describe the count that met its bound; `refusalCount` and `unrepairableCount` give both
+   counts of the streak, so a mixed run shows how it mixed; `prepareCause` and `readReason` name why
+   a preparation refusal counted as it did.
+
+   ```bash
+   keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
+   ```
+
+2. The `coding-runtime.run.settled` line repeats the cause: `failureCode`, `failureBasis`
+   (`refusal-escalation`) and `refusalReasonCode`.
+3. The `coding-runtime.edit.refused` lines before the escalation show each refused edit; for
+   `EDIT_PREPARE_FAILED` their `prepareCause` names which preparation step refused.
+4. For `prepareCause` `replacement-read-failed` with `readReason` `denied`, the
+   `coding-runtime.workspace-read` line of that edit (same correlation, `state: failed`) carries the
+   walk's `absence` verdict, which tells a link, a mount, an unreadable directory and a path that is
+   already there apart; the resolution below reads it.
+
+**Resolution**
+
+- `edits-blocked` with `NO_ACTIVE_SESSION` or `NO_ACTIVE_BRIDGE`: edits are applied through the live
+  Coding Workbench editor in the browser. Keep the Workbench open for the run's workspace — a run
+  started over the API needs one too — then start the task again; the changes already made stay in
+  the task workspace.
+- `edits-blocked` with a policy or authority reason: the edit targets a path or action the run may
+  not change. Adjust the task, or start it in a workspace where the path is permitted.
+- `edits-blocked` with `EDIT_PREPARE_FAILED`: read `prepareCause` and `readReason`. With
+  `replacement-read-failed`, a file the edit names cannot be read as text (`not-text`, `too-large`),
+  is protected (`preflight-refused`, or `denied` when the path is denied by policy or its chain holds
+  a link, a file used as a directory or another device) or its workspace did not answer: leave that
+  file out of the task, or edit it yourself. A new file or a rename target that does not exist yet is
+  not a failure: it reads as absent (`not-found`, the `absent` state on its
+  `coding-runtime.workspace-read` line). Builds before F27 (#3876) refused it as `denied`, because
+  the native read helper cannot tell a missing path from a refused one. A `denied` the server
+  refined from the helper's refusal carries the walk's closed verdict as `absence` on that
+  `coding-runtime.workspace-read` line (`failed` state, `purpose: edit-materialization`), which says
+  which of the possible causes it was (#3873 review): `exists` (the path is already there: read it
+  and edit it instead of creating it), `link` (a component of the path is a link, a dangling one at
+  the final component included: create the file at its real location), `not-directory` (a file is
+  used as a directory), `foreign-device` (a directory in the chain is another device, such as a bind
+  mount: create the file elsewhere or keep the task out of that mount), `probe-failed` (the server
+  could not inspect a directory in the chain, for example one without the search permission or an
+  I/O error: fix the directory's permissions or the disk), `root-unusable` (the task workspace's own
+  root is not a usable directory: start the task again) or `aborted` (the run was stopped or timed
+  out while the path was checked). The word never carries the path or the system's error text, and a
+  denial that carries no `absence` (the always-on deny list, `preflight-refused`) was decided before
+  the filesystem was touched. With `workspace-access-lost`,
+  `guard-denied`, `binding-unavailable`, `editor-context-unavailable` or `lease-unavailable`, the
+  run's workspace or authority no longer held while the edit was prepared: start the task again.
+- `edit-retries-exhausted`: the model could not produce an edit that applies, or kept alternating
+  between edits that do not apply and stale re-reads. Start the task again, rephrase or split it, or
+  choose another model.
+
+The bounds are fixed and deliberately small: each refused attempt resends the run's growing context to
+the model, so a run that loops on a refusal spends its prompt allowance on nothing (ADR-0137).

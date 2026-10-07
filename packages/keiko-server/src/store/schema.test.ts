@@ -67,6 +67,75 @@ it("migrates existing chats to v39 and invalidates their history after an edit",
   db.close();
 });
 
+// F5 (#3873): a run whose governed edits were refused again and again settles with the refusal
+// class as its cause. SQLite cannot ALTER the table-level CHECK, so v40 rebuilds
+// `coding_runtime_snapshots`; every existing row, column value and index must survive the rebuild.
+describe("v40 migration — edit refusal causes (F5, #3873)", () => {
+  const causes = ["edits-blocked", "edit-retries-exhausted"] as const;
+
+  it("denies the refusal causes at v39 and admits each after v40 (failing-before/passing-after)", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 39);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v40");
+    const settle = (failureCode: string): void => {
+      db.exec(
+        `UPDATE coding_runtime_snapshots SET state = 'failed', failure_code = '${failureCode}' WHERE run_id = 'run-v40'`,
+      );
+    };
+    for (const cause of causes) {
+      expect(() => {
+        settle(cause);
+      }).toThrow(/CHECK constraint failed/);
+    }
+
+    runMigrations(db);
+
+    for (const cause of causes) {
+      settle(cause);
+      const row = db
+        .prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = 'run-v40'")
+        .get() as { failure_code: string };
+      expect(row.failure_code).toBe(cause);
+    }
+    expect(() => {
+      settle("NO_ACTIVE_SESSION");
+    }).toThrow(/CHECK constraint failed/);
+    db.close();
+  });
+
+  it("carries existing rows, column values and indexes through the v40 rebuild", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 39);
+    insertMinimalCodingRuntimeSnapshot(db, "run-before-v40");
+    db.exec(`
+      UPDATE coding_runtime_snapshots
+        SET state = 'failed', failure_code = 'delivery-not-evidenced', issue_purpose = 'context',
+            tool_call_count = 7, terminal_at = '2026-01-01T00:00:01.000Z'
+        WHERE run_id = 'run-before-v40'
+    `);
+    const before = db
+      .prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'")
+      .get();
+
+    runMigrations(db);
+
+    expect(
+      db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'").get(),
+    ).toEqual(before);
+    const indexes = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+      )
+      .all() as { name: string }[];
+    expect(indexes.map((index) => index.name)).toEqual([
+      "idx_coding_runtime_recent_active",
+      "idx_coding_runtime_settled_oldest",
+      "uniq_coding_runtime_active_slot",
+    ]);
+    db.close();
+  });
+});
+
 describe("v28 migration — relationships CHECK widening (Issue #3400)", () => {
   it("denies a git-change row at v27 and admits one after v28 (failing-before/passing-after)", () => {
     const db = openWithForeignKeys();
@@ -334,5 +403,80 @@ describe("forward migrations v21-v27, v29, v30 (Owner audit finding b1-20)", () 
       .prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = 'run-v30'")
       .get() as { failure_code: string };
     expect(row.failure_code).toBe("issue-context-unavailable");
+  });
+});
+
+// F9 (#3873): a failed run names the bound or model-call cause that ended it. SQLite cannot ALTER
+// the table-level CHECK, so v40 rebuilds `coding_runtime_snapshots`; every existing row and column
+// value must survive the rebuild unchanged.
+describe("v40 migration — terminal run causes (F9, #3873)", () => {
+  const causes = [
+    "prompt-allowance-exhausted",
+    "envelope-duration-exhausted",
+    "output-exhausted-repeated",
+    "provider-unavailable",
+    "model-turn-failed",
+  ];
+
+  it("denies the terminal causes at v39 and admits each after v40 (failing-before/passing-after)", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 39);
+    insertMinimalCodingRuntimeSnapshot(db, "run-v40");
+    const settle = (failureCode: string): void => {
+      db.exec(
+        `UPDATE coding_runtime_snapshots SET state = 'failed', failure_code = '${failureCode}' WHERE run_id = 'run-v40'`,
+      );
+    };
+    for (const cause of causes) {
+      expect(() => {
+        settle(cause);
+      }).toThrow(/CHECK constraint failed/);
+    }
+
+    runMigrations(db);
+
+    for (const cause of causes) {
+      settle(cause);
+      const row = db
+        .prepare("SELECT failure_code FROM coding_runtime_snapshots WHERE run_id = 'run-v40'")
+        .get() as { failure_code: string };
+      expect(row.failure_code).toBe(cause);
+    }
+    expect(() => {
+      settle("stream-incomplete");
+    }).toThrow(/CHECK constraint failed/);
+    db.close();
+  });
+
+  it("carries existing rows, column values and indexes through the v40 rebuild", () => {
+    const db = openWithForeignKeys();
+    applyMigrationsUpTo(db, 39);
+    insertMinimalCodingRuntimeSnapshot(db, "run-before-v40");
+    db.exec(`
+      UPDATE coding_runtime_snapshots
+        SET state = 'failed', failure_code = 'delivery-not-evidenced', issue_purpose = 'context',
+            tool_call_count = 7, terminal_at = '2026-01-01T00:00:01.000Z'
+        WHERE run_id = 'run-before-v40'
+    `);
+    const before = db
+      .prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'")
+      .get();
+
+    runMigrations(db);
+
+    expect(
+      db.prepare("SELECT * FROM coding_runtime_snapshots WHERE run_id = 'run-before-v40'").get(),
+    ).toEqual(before);
+    const indexes = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'coding_runtime_snapshots' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+      )
+      .all() as { name: string }[];
+    expect(indexes.map((index) => index.name)).toEqual([
+      "idx_coding_runtime_recent_active",
+      "idx_coding_runtime_settled_oldest",
+      "uniq_coding_runtime_active_slot",
+    ]);
+    db.close();
   });
 });

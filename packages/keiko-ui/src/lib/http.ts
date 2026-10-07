@@ -226,7 +226,10 @@ async function performBffFetch<T>(
 // `managed-root-session-authority-missing`), but so does a genuine refusal: an EACCES/EPERM file, a
 // denied sensitive path, an unclaimed managed root. The client cannot tell them apart. Every other
 // 403 code (`PATH_ESCAPE`, `HOT_EXIT_REF_MISMATCH`, …) is a refusal a session cannot change.
-function isDeniedError(error: unknown): error is ApiError {
+// Exported so a surface that reads a root names this refusal instead of re-deriving it: once the
+// one session repair below has run, a `DENIED` that still reaches the caller is the server's access
+// decision — the Git window shows its code, and the Coding Workbench names it (#3873 F1).
+export function isDeniedError(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 403 && error.code === "DENIED";
 }
 

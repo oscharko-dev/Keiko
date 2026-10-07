@@ -21,6 +21,7 @@ import {
 import type {
   CodingToolAuthorityPort,
   CodingToolDelegatePort,
+  CodingToolEditOutcome,
   CodingToolFacade,
   CodingToolMutationGuard,
 } from "./codingToolFacadePorts.js";
@@ -365,6 +366,44 @@ describe("CodingToolFacade", () => {
     ).resolves.toMatchObject({ status: "observed" });
     expect(ports.authority.admit).not.toHaveBeenCalled();
     expect(ports.delegate.execute).not.toHaveBeenCalled();
+  });
+
+  // #3873: the run's effort roll-up counts the calls the facade answered, by action and answer. A
+  // malformed edit is still a refused edit, so the closed action it names is reported with it.
+  it("tells its observer each answered call's closed action and status, never the call", async () => {
+    const settled: unknown[][] = [];
+    const onToolSettled = (...args: unknown[]): void => {
+      settled.push(args);
+    };
+    const subject = createCodingToolFacade(facade(), { onToolSettled });
+    const refusing = createCodingToolFacade(facade(false), { onToolSettled });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+    await refusing.execute({
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+    });
+    await subject.execute({ body: requestBody({ action: "edit", changeset: {} }), capability });
+    await subject.execute({ body: requestBody({ action: "constructor" }), capability });
+    await subject.execute({ body: "not a request", capability });
+    await subject.execute({
+      body: JSON.stringify({ action: "permission-event", requestId: "request-1" }),
+      capability,
+    });
+    await subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+      headers: { Origin: "http://127.0.0.1" },
+    });
+
+    expect(settled).toEqual([
+      ["edit", "completed"],
+      ["command", "denied"],
+      ["edit", "invalid"],
+      [undefined, "invalid"],
+      [undefined, "invalid"],
+    ]);
+    expect(JSON.stringify(settled)).not.toContain("src/file.ts");
   });
 
   it("delegates each closed governed action exactly once", async () => {
@@ -1004,6 +1043,9 @@ describe("CodingToolFacade", () => {
     "CONTENT_HASH_MISMATCH",
     "INVALID_EDITS",
     "PRECONDITION_REQUIRED",
+    // #3873 review: a replacement edit the materializer refuses as too large for the file, the
+    // changeset or the run's patch budget carries its own recovery instruction.
+    "LIMIT_EXCEEDED",
     "OUT_OF_SCOPE",
   ]);
   it("forwards every canonical contract EditorAgent conflict and failure code", async () => {
@@ -1667,6 +1709,296 @@ describe("CodingToolFacade", () => {
         op: "tool-catalog.invocation-settled",
         extra: { status: "failed", reason: "handler-failed" },
       });
+    });
+  });
+});
+
+// F5 (#3873, live Gemma qualification): a run whose edits were refused NO_ACTIVE_SESSION eleven
+// times was never stopped, because nothing above the edit port saw the refusals. The facade tells
+// the run's orchestration each applied or refused edit, as the model received it, so the run can
+// bound consecutive refusals; everything else it answers stays unobserved.
+describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
+  function observedFacade(
+    delegateOutcome: unknown,
+    admitted = true,
+  ): { readonly subject: CodingToolFacade; readonly outcomes: CodingToolEditOutcome[] } {
+    const ports = facade(admitted);
+    ports.delegate.execute = vi.fn(() => Promise.resolve(delegateOutcome));
+    const outcomes: CodingToolEditOutcome[] = [];
+    const subject = createCodingToolFacade(ports, {
+      observeEditOutcome: (outcome) => void outcomes.push(outcome),
+    });
+    return { subject, outcomes };
+  }
+
+  it("reports a refused edit under the closed code the model received", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "NO_ACTIVE_SESSION",
+      message: "no Coding Workbench is connected for this workspace; keep the Workbench open",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "NO_ACTIVE_SESSION" }]);
+  });
+
+  it("reports an applied edit", async () => {
+    const { subject, outcomes } = observedFacade({ outcome: "completed" });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "applied" }]);
+  });
+
+  it("reports the exposed reason of a CI observation refusal", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "ci-observation-required",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "ci-observation-required" }]);
+  });
+
+  it("reports a refusal whose code the facade withheld as UNCLASSIFIED, never the raw code", async () => {
+    const { subject, outcomes } = observedFacade({
+      outcome: "failed",
+      reasonCode: "SENTINEL_UNVETTED_CODE",
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "UNCLASSIFIED" }]);
+    expect(JSON.stringify(outcomes)).not.toContain("SENTINEL_");
+  });
+
+  it("does not report a human decision, a refused admission or a call that is not an edit", async () => {
+    const declined = observedFacade({ outcome: "failed", reasonCode: "CHANGE_REJECTED" });
+    await declined.subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+    const unadmitted = observedFacade(
+      { outcome: "failed", reasonCode: "NO_ACTIVE_SESSION" },
+      false,
+    );
+    await unadmitted.subject.execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+    const read = observedFacade({ outcome: "failed", reasonCode: "workspace-read-denied" });
+    await read.subject.execute({
+      body: requestBody({ action: "read", relativePath: "src/file.ts" }),
+      capability,
+    });
+
+    expect([...declined.outcomes, ...unadmitted.outcomes, ...read.outcomes]).toEqual([]);
+  });
+
+  it("reports an edit the catalog bridge answered", async () => {
+    const outcomes: CodingToolEditOutcome[] = [];
+    const subject = createCodingToolFacade(facade(), {
+      catalogBridge: {
+        covers: () => true,
+        recordUnbound: vi.fn(),
+        execute: () => Promise.resolve({ status: "failed", evidence: [] }),
+      },
+      observeEditOutcome: (outcome) => void outcomes.push(outcome),
+    });
+
+    await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+    expect(outcomes).toEqual([{ kind: "refused", reasonCode: "UNCLASSIFIED" }]);
+  });
+
+  // #3873 review (PR #3876): `EDIT_PREPARE_FAILED` covers causes the model can repair (an invalid
+  // changeset) and causes it cannot (a governed read of a denied or non-text file, a lost
+  // workspace). The code alone cannot tell them apart, so the outcome carries the closed words the
+  // edit port gave the refusal, which the run's refusal bound classifies by.
+  describe("the cause of an EDIT_PREPARE_FAILED refusal", () => {
+    const unreadable = {
+      outcome: "failed",
+      reasonCode: "EDIT_PREPARE_FAILED",
+      message: "src/private-notes.txt is not a UTF-8 text file; leave it in place and report it.",
+      prepareCause: "replacement-read-failed",
+      readReason: "not-text",
+    };
+
+    it("reports the closed prepare cause and read reason beside the code", async () => {
+      const { subject, outcomes } = observedFacade(unreadable);
+
+      await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+      expect(outcomes).toEqual([
+        {
+          kind: "refused",
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "replacement-read-failed",
+          readReason: "not-text",
+        },
+      ]);
+    });
+
+    it("reports a cause without a read reason for a refusal that read nothing", async () => {
+      const { subject, outcomes } = observedFacade({
+        outcome: "failed",
+        reasonCode: "EDIT_PREPARE_FAILED",
+        prepareCause: "guard-denied",
+      });
+
+      await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+      expect(outcomes).toEqual([
+        { kind: "refused", reasonCode: "EDIT_PREPARE_FAILED", prepareCause: "guard-denied" },
+      ]);
+    });
+
+    it("never hands the model the cause, the read reason or the port's message", async () => {
+      const { subject } = observedFacade(unreadable);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "edit", changeset }),
+        capability,
+      });
+
+      // The model-facing answer is exactly what it was before the outcome carried a cause.
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "EDIT_PREPARE_FAILED" }],
+      });
+      const wire = JSON.stringify(result);
+      expect(wire).not.toContain("replacement-read-failed");
+      expect(wire).not.toContain("not-text");
+      expect(wire).not.toContain("private-notes");
+    });
+
+    it("drops a word outside the closed vocabularies, never echoing it", async () => {
+      const { subject, outcomes } = observedFacade({
+        outcome: "failed",
+        reasonCode: "EDIT_PREPARE_FAILED",
+        prepareCause: "SENTINEL_UNVETTED_CAUSE",
+        readReason: "SENTINEL_UNVETTED_READ",
+      });
+
+      await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+      expect(outcomes).toEqual([{ kind: "refused", reasonCode: "EDIT_PREPARE_FAILED" }]);
+      expect(JSON.stringify(outcomes)).not.toContain("SENTINEL_");
+    });
+
+    it("attaches a cause to no refusal but EDIT_PREPARE_FAILED", async () => {
+      const { subject, outcomes } = observedFacade({
+        outcome: "failed",
+        reasonCode: "INVALID_EDITS",
+        prepareCause: "guard-denied",
+        readReason: "denied",
+      });
+
+      await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+      expect(outcomes).toEqual([{ kind: "refused", reasonCode: "INVALID_EDITS" }]);
+    });
+
+    it("reports it for the staged edit production answers, whose binding it needs", async () => {
+      const outcomes: CodingToolEditOutcome[] = [];
+      const ports = facade();
+      ports.authority.admit = vi.fn(() => ({
+        ok: true as const,
+        mutationGuard: { check: (): true => true },
+        binding: {
+          runId: "run-1",
+          envelopeDigest: "e".repeat(64),
+          workspaceId: "workspace-1",
+          workspaceRootDigest: "f".repeat(64),
+          expiresAt: "2030-01-01T00:00:00.000Z",
+        },
+      }));
+      ports.delegate.execute = vi.fn(() => Promise.resolve(unreadable));
+      const subject = createCodingToolFacade(ports, {
+        invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
+        requireInvocationRegistryForEdits: true,
+        observeEditOutcome: (outcome) => void outcomes.push(outcome),
+      });
+
+      await subject.execute({ body: requestBody({ action: "edit", changeset }), capability });
+
+      expect(outcomes).toEqual([
+        {
+          kind: "refused",
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "replacement-read-failed",
+          readReason: "not-text",
+        },
+      ]);
+    });
+
+    it("reports it for an edit the real catalog bridge answered", async () => {
+      const outcomes: CodingToolEditOutcome[] = [];
+      const logPort = createBufferedServerLogSink();
+      const catalogContext: CanonicalCatalogContext = {
+        runId: "run-1",
+        correlationId: "c".repeat(36),
+        workspaceRoot: "/workspace",
+        workspaceIdentity: "workspace-1",
+        workspaceRevision: "d".repeat(64),
+        authorityExpiresAt: "2030-01-01T00:00:00.000Z",
+        now: 0,
+      };
+      const bridge = createCanonicalCatalogFacadeBridge({
+        authority: {
+          admit: (): {
+            readonly ok: true;
+            readonly mutationGuard: { readonly check: () => boolean };
+          } => ({ ok: true, mutationGuard: { check: () => true } }),
+        },
+        previewAuthority: () => ({ ok: true }),
+        invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
+        context: () => catalogContext,
+        elapsedNow: () => catalogContext.now,
+        logPort: {
+          primary: logPort,
+          diagnostics: defaultServerDiagnosticSink,
+        },
+        approvalAvailable: true,
+      });
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() => Promise.resolve(unreadable));
+      const subject = createCodingToolFacade(ports, {
+        catalogBridge: bridge,
+        observeEditOutcome: (outcome) => void outcomes.push(outcome),
+      });
+
+      // The catalog's own edit form: exact replacements, as the model sends them.
+      const result = await subject.execute({
+        body: requestBody({
+          action: "edit",
+          changeset: {
+            edits: [{ file: "src/file.ts", oldString: "old", newString: "new", replaceAll: false }],
+            deletions: [],
+            renames: [],
+            files: [{ file: "src/file.ts", expectedContentHash: "a".repeat(64) }],
+            selectedFiles: ["src/file.ts"],
+          },
+        }),
+        capability,
+      });
+
+      expect(logPort.events.at(-1)).toMatchObject({ op: "tool-catalog.invocation-settled" });
+      expect(ports.delegate.execute).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "EDIT_PREPARE_FAILED" }],
+      });
+      expect(outcomes).toEqual([
+        {
+          kind: "refused",
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "replacement-read-failed",
+          readReason: "not-text",
+        },
+      ]);
     });
   });
 });

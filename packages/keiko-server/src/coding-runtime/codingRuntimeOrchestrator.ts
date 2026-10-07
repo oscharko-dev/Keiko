@@ -32,7 +32,18 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  type CodingWorkbenchTurnFailureCode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  classifyTerminalFailure,
+  terminalFailureErrorKind,
+  type CodingRuntimeTerminalFailure,
+  type CodingRuntimeTerminalFailureCode,
+} from "./codingRuntimeTerminalCause.js";
+import {
+  CodingRuntimeRunEffortLedger,
+  type CodingRuntimeRunEffortRollUp,
+} from "./codingRuntimeRunEffort.js";
 import type {
   CodingRuntimeApprovalIssueResult,
   CodingRuntimeFailureCode,
@@ -87,6 +98,18 @@ import {
   composeCodingRuntimeInitialContext,
   renderCodingRuntimeProjectMemoryContext,
 } from "./codingRuntimeProjectMemory.js";
+import {
+  repositoryInstructionsContentBudget,
+  withoutRepositoryInstructionsTags,
+} from "./codingRuntimeRepositoryInstructions.js";
+import {
+  CodingRuntimeEditRefusalStreaks,
+  EDIT_REFUSAL_REASON_CODES,
+  recordRefusalEscalated,
+  type CodingRuntimeRefusalEscalation,
+  type EditRefusalFailureCode,
+} from "./codingRuntimeRefusalEscalation.js";
+import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
 import type {
   CodingRuntimeDescriptionJobStore,
   WorkbenchDescriptionScope,
@@ -182,6 +205,13 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "delivery-not-evidenced",
     "model-unavailable",
     "workspace-unqualified",
+    "prompt-allowance-exhausted",
+    "envelope-duration-exhausted",
+    "output-exhausted-repeated",
+    "provider-unavailable",
+    "model-turn-failed",
+    "edits-blocked",
+    "edit-retries-exhausted",
   ],
 } as const;
 
@@ -593,6 +623,41 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
     ...CODING_RUNTIME_RUN_FIELDS,
     terminal: { type: "boolean", dataClass: "closed-enum", required: true },
     failureCode: CODING_RUNTIME_FAILURE_CODE_FIELD,
+    // F9 / F5 (#3873): on a failed task outcome, which fact named `failureCode` (a bound of the run,
+    // its last failed model call, or the escalation of its refused edits), the gateway's cause for
+    // the run's last failed model call, and for a run its refused edits ended, the closed reason
+    // those edits were refused with — so the classification is reconstructable from the log.
+    failureBasis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "prompt-allowance",
+        "envelope-duration",
+        "model-call-failure",
+        "no-model-call-failure",
+        "refusal-escalation",
+      ],
+    },
+    modelCallFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "provider-failed",
+        "stream-incomplete",
+        "turn-rejected",
+        "output-exhausted",
+        "empty-answer",
+        "invalid-tool-call",
+      ],
+    },
+    refusalReasonCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...EDIT_REFUSAL_REASON_CODES],
+    },
     taskOutcomeStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -608,6 +673,23 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
     diagnosticLineCount: { type: "integer", dataClass: "count", required: false },
     diagnosticDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     diagnosticTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // The run's effort roll-up (#3873), counted in process where each fact was observed
+    // (codingRuntimeRunEffort.ts): the wall time from creation to this line; the sidecar gateway's
+    // admitted-and-settled model calls, their summed duration and the prompt tokens the provider
+    // reported for them; the governed tool calls the run's facade answered; the verification
+    // summaries and human decisions this orchestrator settled, and the time the run waited on a
+    // human. A run this process did not start carries its wall time alone.
+    wallDurationMs: { type: "integer", dataClass: "duration", required: false },
+    modelTurnCount: { type: "integer", dataClass: "count", required: false },
+    modelDurationMs: { type: "integer", dataClass: "duration", required: false },
+    promptTokensTotal: { type: "integer", dataClass: "count", required: false },
+    toolInvocationCount: { type: "integer", dataClass: "count", required: false },
+    workspaceReadCount: { type: "integer", dataClass: "count", required: false },
+    editCount: { type: "integer", dataClass: "count", required: false },
+    editRefusedCount: { type: "integer", dataClass: "count", required: false },
+    verificationCount: { type: "integer", dataClass: "count", required: false },
+    operatorDecisionCount: { type: "integer", dataClass: "count", required: false },
+    operatorWaitMs: { type: "integer", dataClass: "duration", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -1354,11 +1436,12 @@ function isCompleteVerificationSummary(
   ].every((value) => value !== undefined);
 }
 
+// Whether the event was a complete verification summary, the one the run's roll-up counts (#3873).
 function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
-): void {
-  if (!isCompleteVerificationSummary(event)) return;
+): boolean {
+  if (!isCompleteVerificationSummary(event)) return false;
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION,
@@ -1388,15 +1471,18 @@ function recordRuntimeVerificationSummary(
       },
     ),
   );
+  return true;
 }
 
 function recordRuntimeRunSettled(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   state: CodingWorkbenchRuntimeStateName,
+  effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
   failureCode?: CodingWorkbenchRuntimeFailureCode,
+  cause?: RunSettlementCause,
 ): void {
-  const errorKind = runtimeRunSettledErrorKind(state);
+  const errorKind = settlementErrorKind(state, cause);
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_SETTLED_OPERATION,
@@ -1413,10 +1499,62 @@ function recordRuntimeRunSettled(
         modelSource: snapshot.modelSource,
         terminal: TERMINAL_STATES.has(state),
         ...(failureCode === undefined ? {} : { failureCode }),
+        ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
+        ...effort,
       },
     ),
   );
+}
+
+// The fact that named a failed run's cause: its own bounds or its last failed model call (F9), or
+// the escalation of its refused edits (F5), which wins over those facts (`settleTask`).
+type RunSettlementCause = CodingRuntimeTerminalFailure | CodingRuntimeRefusalEscalation;
+
+function isRefusalEscalation(cause: RunSettlementCause): cause is CodingRuntimeRefusalEscalation {
+  return "refusalClass" in cause;
+}
+
+// The settlement line's error class: the class of the cause that named the failure, if one did.
+function settlementErrorKind(
+  state: CodingWorkbenchRuntimeStateName,
+  cause: RunSettlementCause | undefined,
+): ActivityLogErrorKind | undefined {
+  if (cause === undefined) return runtimeRunSettledErrorKind(state);
+  return isRefusalEscalation(cause) ? cause.errorKind : terminalFailureErrorKind(cause);
+}
+
+// The classification evidence of a failed task outcome on the settlement line. Body-free.
+function settlementCauseLogFields(
+  cause: RunSettlementCause | undefined,
+): ReturnType<typeof terminalFailureLogFields> | ReturnType<typeof refusalEscalationLogFields> {
+  if (cause !== undefined && isRefusalEscalation(cause)) return refusalEscalationLogFields(cause);
+  return terminalFailureLogFields(cause);
+}
+
+// The classification evidence of a failed task outcome (F9): which fact named the cause, and the
+// gateway's closed cause of the last failed model call when one is on record. Body-free.
+function terminalFailureLogFields(failure: CodingRuntimeTerminalFailure | undefined): {
+  readonly failureBasis?: CodingRuntimeTerminalFailure["basis"];
+  readonly modelCallFailure?: CodingWorkbenchTurnFailureCode;
+} {
+  if (failure === undefined) return {};
+  return {
+    failureBasis: failure.basis,
+    ...(failure.modelCallFailure === undefined
+      ? {}
+      : { modelCallFailure: failure.modelCallFailure }),
+  };
+}
+
+// F5 (#3873): the cause of a run its refused edits ended, on the settlement line. Body-free.
+function refusalEscalationLogFields(escalation: CodingRuntimeRefusalEscalation | undefined): {
+  readonly failureBasis?: "refusal-escalation";
+  readonly refusalReasonCode?: CodingRuntimeRefusalEscalation["reasonCode"];
+} {
+  return escalation === undefined
+    ? {}
+    : { failureBasis: "refusal-escalation", refusalReasonCode: escalation.reasonCode };
 }
 
 function runtimeRunSettledErrorKind(
@@ -1531,6 +1669,18 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "failed",
   "cancelled",
   "taken-over",
+]);
+
+// The causes a finished turn settles `failed` with: an internal failure, or the refusal class its
+// run's escalated edit refusals name (F5, #3873).
+type TaskSettlementFailureCode = CodingRuntimeTerminalFailureCode | EditRefusalFailureCode;
+
+// F5 (#3873): the live states whose turn is still answering governed edits, and so the only ones whose
+// refused edits are counted and may settle the run (`observeEditOutcome`). A paused run is the
+// operator's to resume or stop, so a refusal that lands while it is paused is not counted.
+const REFUSAL_COUNTED_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "running",
+  "awaiting-approval",
 ]);
 
 function isTerminalRuntimeState(
@@ -1657,11 +1807,17 @@ export class CodingRuntimeOrchestrator {
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
+  // F5 (#3873): each live run's edit refusals since its last applied edit; dropped when the run
+  // settles.
+  private readonly editRefusals = new CodingRuntimeEditRefusalStreaks();
   /** Last accepted mode retained only for same-process post-terminal description work. */
   private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
   private readonly approvals = new Map<string, ApprovalChallenge>();
   private readonly queuedApprovals = new Map<string, ApprovalChallenge[]>();
   private readonly approvalExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // #3873: the verifications, human decisions and human waits of the runs this process started,
+  // rolled up with the run host's counts on the settlement line.
+  private readonly effort = new CodingRuntimeRunEffortLedger();
   private readonly operations: CodingRuntimeOperationCoordinator;
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
@@ -2121,6 +2277,7 @@ export class CodingRuntimeOrchestrator {
         challenge.permission.requestId,
         decision,
       );
+      this.effort.decision(live.runId);
       return this.promoteQueuedApproval(live);
     });
   }
@@ -2396,6 +2553,7 @@ export class CodingRuntimeOrchestrator {
           "settled",
           event.auxiliaryOutcome,
         );
+        this.countHumanDecision(current.runId, event.auxiliaryOutcome);
       }
       return resumed;
     }
@@ -2409,6 +2567,15 @@ export class CodingRuntimeOrchestrator {
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
+  // #3873: a wait that settled `accepted` or `denied` was a person's decision; one that settled
+  // `stopped`, `limit-reached` or `unavailable` ended without one, so it is not counted.
+  private countHumanDecision(
+    runId: string,
+    outcome: CodingWorkbenchAuxiliaryStatus | undefined,
+  ): void {
+    if (outcome === "accepted" || outcome === "denied") this.effort.decision(runId);
+  }
+
   private async ingestActiveEvent(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
@@ -2419,7 +2586,9 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
-    recordRuntimeVerificationSummary(this.deps.activityLog, event);
+    if (recordRuntimeVerificationSummary(this.deps.activityLog, event)) {
+      this.effort.verification(current.runId);
+    }
     return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
   }
 
@@ -2428,7 +2597,8 @@ export class CodingRuntimeOrchestrator {
    * stop passes through — `stopping` here; from every other live state this ingest rejects it, so
    * it used to fail closed SILENTLY — no transition, no evidence record, no SSE frame — and a dead
    * runtime kept presenting as `running` until the separate task-settlement wait gave up
-   * (OPEN_CODE_MAX_TURN_WAIT_MS, 30 minutes). A runtime that exits under a live run terminates that
+   * (the run's envelope duration, OPEN_CODE_MAX_TURN_WAIT_MS by default). A runtime that exits
+   * under a live run terminates that
    * run, the same terminal projection a non-zero exit already produces through `failure-redacted`;
    * the exit code itself reaches the operator diagnostic sink, not this content-free lifecycle
    * projection.
@@ -2666,25 +2836,78 @@ export class CodingRuntimeOrchestrator {
     );
   }
 
-  private async settleTask(runId: string, outcome: CodingRuntimeTaskOutcome): Promise<void> {
+  /**
+   * F5 (#3873): one governed edit of a live run was answered. The run's refusals since its last
+   * applied edit are counted, whatever their closed reason codes (`codingRuntimeRefusalEscalation.ts`);
+   * when a bound is met the escalation is logged once and the run settles `failed` with the cause
+   * that names the refusal class, through the same settlement a failed turn takes, instead of
+   * letting the model resend an edit that cannot apply until an operator stops the run.
+   */
+  observeEditOutcome(runId: string, outcome: CodingToolEditOutcome): void {
+    const current = this.current();
+    if (current?.runId !== runId || !REFUSAL_COUNTED_STATES.has(current.state)) return;
+    const escalation = this.editRefusals.observe(runId, outcome);
+    if (escalation === undefined) return;
+    recordRefusalEscalated(this.deps.activityLog, runId, escalation);
+    this.queueTaskSettlement(runId, "failed");
+  }
+
+  private async settleTask(runId: string, reported: CodingRuntimeTaskOutcome): Promise<void> {
     const current = this.current();
     if (current?.runId !== runId) return;
+    // An escalated run settles on its refusals, whatever its turn reported once it was stopped.
+    const escalation = this.editRefusals.escalation(runId);
+    const outcome = escalation === undefined ? reported : "failed";
     if (await this.continueForDelivery(current, outcome)) return;
+    // Read before the stop: the facts describe the model call that ended this turn (F9). An
+    // escalation of the run's refused edits wins over them: it names the run's cause (F5).
+    const cause = escalation ?? this.terminalFailure(runId, outcome);
     this.captureHistory(runId);
     const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
-    const terminalResult = this.deps.manager.result(runId);
-    if (!stopped || terminalResult?.status !== outcome) {
+    this.settleStoppedTask(live, outcome, stopped, cause);
+  }
+
+  // F26 (#3873 live qualification): an escalation is Keiko's own decision to end the run, so the
+  // stopped runtime's terminal result cannot contradict it — a runtime stopped mid-turn reports
+  // `cancelled`, and a run that demanded "recovery" for that lost its cause and blocked its
+  // repository. Only a runtime that did not stop needs an operator. A reported outcome, by
+  // contrast, must still agree with what the runtime recorded.
+  private settleStoppedTask(
+    live: CodingRuntimeSnapshot,
+    outcome: CodingRuntimeTaskOutcome,
+    stopped: boolean,
+    cause: RunSettlementCause | undefined,
+  ): void {
+    const terminalResult = this.deps.manager.result(live.runId);
+    const runtimeAgrees =
+      (cause !== undefined && isRefusalEscalation(cause)) || terminalResult?.status === outcome;
+    if (!stopped || !runtimeAgrees) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome));
+    const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome, cause));
     if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    this.transition(live, target.state, target.failureCode);
+    const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
+    this.transition(live, target.state, target.failureCode, undefined, settledCause);
+  }
+
+  /**
+   * F9 (#3873): the closed cause a failed task outcome settles the run with — an exhausted prompt
+   * allowance, an unreachable provider, a failed model call, or `runtime-failed` when none is on
+   * record. A success or a cancellation is never explained by an earlier model-call failure.
+   */
+  private terminalFailure(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+  ): CodingRuntimeTerminalFailure | undefined {
+    const facts = this.deps.terminalFacts;
+    if (outcome !== "failed" || facts === undefined) return undefined;
+    return classifyTerminalFailure(facts, runId);
   }
 
   /**
@@ -2878,7 +3101,7 @@ export class CodingRuntimeOrchestrator {
     live: CodingRuntimeSnapshot,
     target: {
       readonly state: "failed" | "succeeded";
-      readonly failureCode?: "runtime-failed" | undefined;
+      readonly failureCode?: TaskSettlementFailureCode | undefined;
     },
   ):
     | {
@@ -3102,6 +3325,7 @@ export class CodingRuntimeOrchestrator {
     this.activeRunId = runId;
     this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
+    this.effort.begin(runId);
     recordRuntimeRunStarted(
       this.deps.activityLog,
       selection.snapshot,
@@ -3341,11 +3565,31 @@ export class CodingRuntimeOrchestrator {
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
-    return composeCodingRuntimeInitialContext([
-      issueContext,
-      memoryContext,
-      this.deps.history?.initialContext(runId),
-    ]);
+    const historyContext = this.deps.history?.initialContext(runId);
+    // The repository's own AGENTS.md leads the context so its conventions frame the task; it is
+    // loaded last so it can yield to the parts above under the sidecar prompt ceiling. No other
+    // part can forge its frame: their `<repository-instructions` lookalikes are neutralized (#3873
+    // review), and the file is read only while this run's workspace is still the active one.
+    const otherParts = [issueContext, memoryContext, historyContext].map((part) =>
+      part === undefined ? undefined : withoutRepositoryInstructionsTags(part),
+    );
+    const repositoryInstructions = await this.deps.repositoryInstructions?.loadForRun({
+      runId,
+      contentByteBudget: repositoryInstructionsContentBudget(request.taskIntent, otherParts),
+      isRunWorkspace: (): boolean => this.isRunWorkspace(active),
+    });
+    return composeCodingRuntimeInitialContext([repositoryInstructions, ...otherParts]);
+  }
+
+  // Whether the workspace the global active pointer resolves to — the root every secure host read
+  // follows — is still the one this run started on (#3873 review). An identity proof that cannot
+  // run throws, and the reader records it as a refusal.
+  private isRunWorkspace(run: ActiveWorkspaceView): boolean {
+    const current = this.deps.workspaceLifecycle.getActive();
+    return (
+      current?.binding.workspaceId === run.binding.workspaceId &&
+      current.binding.activeRoot === run.binding.activeRoot
+    );
   }
 
   private async projectMemoryInitialContext(
@@ -3647,6 +3891,7 @@ export class CodingRuntimeOrchestrator {
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
     pauseReason?: CodingWorkbenchOperatorDecision,
+    cause?: RunSettlementCause,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
@@ -3657,7 +3902,7 @@ export class CodingRuntimeOrchestrator {
     if (this.shouldTransitionToRecoveryRequired(published, state)) {
       return this.transition(next, "recovery-required", "recovery-required");
     }
-    this.finalizeTransitionIfTerminal(next, state, failureCode);
+    this.finalizeTransitionIfTerminal(next, state, failureCode, cause);
     return { ok: true, snapshot: this.publicSnapshotWithDescription(next) };
   }
 
@@ -3692,6 +3937,7 @@ export class CodingRuntimeOrchestrator {
       state,
       ...(failureCode ? { failureCode } : {}),
     });
+    this.effort.waiting(next.runId, waitsOnPerson(next), next.updatedAt);
   }
 
   private shouldTransitionToRecoveryRequired(
@@ -3705,6 +3951,7 @@ export class CodingRuntimeOrchestrator {
     next: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
+    cause?: RunSettlementCause,
   ): void {
     if (state === "recovery-required") {
       this.deps.safeActivityProjection?.markUnavailable(next.runId);
@@ -3713,7 +3960,15 @@ export class CodingRuntimeOrchestrator {
     } else {
       this.purgeExplicitlyEndedActivity(next.runId, state);
     }
-    recordRuntimeRunSettled(this.deps.activityLog, next, state, failureCode);
+    recordRuntimeRunSettled(
+      this.deps.activityLog,
+      next,
+      state,
+      this.effort.rollUp(next, this.deps.runEffort?.(next.runId)),
+      failureCode,
+      cause,
+    );
+    if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);
     if (state === "succeeded") this.dispatchDescriptionIfEligible(next);
   }
@@ -4056,6 +4311,8 @@ export class CodingRuntimeOrchestrator {
     // Every settlement ends a run's continuation budget, not only the task-settlement path: a
     // continued run that is stopped, taken over or moved to recovery must not keep its entry.
     this.deliveryContinuations.delete(next.runId);
+    // Likewise its edit refusal streak and any escalation that has not settled it (F5).
+    this.editRefusals.clear(next.runId);
     this.operations.clear(next.runId);
     this.pruneSettled();
   }
@@ -4109,13 +4366,27 @@ export const DELIVERY_CONTINUATION_MAX = 2;
 export const DELIVERY_CONTINUATION_INTENT =
   "Delivery is not evidenced yet: this issue-bound run has no verified commit and no delivered draft pull request. Continue with the next action your last tool results named, such as staging the changed files, verifying the staged candidate, committing, pushing and opening the draft pull request. Stop only when the delivery is evidenced or a governed tool refuses.";
 
-function taskOutcomeState(outcome: CodingRuntimeTaskOutcome): {
+// A failed turn settles `runtime-failed` unless a cause named it: the escalation of its run's
+// refused edits (F5), or one of the run's bounds or its last failed model call (F9).
+function taskOutcomeState(
+  outcome: CodingRuntimeTaskOutcome,
+  cause: RunSettlementCause | undefined,
+): {
   readonly state: "failed" | "succeeded";
-  readonly failureCode?: "runtime-failed" | undefined;
+  readonly failureCode?: TaskSettlementFailureCode | undefined;
 } {
   return outcome === "succeeded"
     ? { state: "succeeded" }
-    : { state: "failed", failureCode: "runtime-failed" };
+    : { state: "failed", failureCode: cause?.failureCode ?? "runtime-failed" };
+}
+
+// #3873: a run awaiting an approval, or paused on a decision a governed tool waits for, is waiting
+// on a person. A pause the operator asked for names no decision, so the run is not waiting on one.
+function waitsOnPerson(snapshot: CodingRuntimeSnapshot): boolean {
+  return (
+    snapshot.state === "awaiting-approval" ||
+    (snapshot.state === "paused" && snapshot.pauseReason !== undefined)
+  );
 }
 
 function effectiveModeAfterResume(

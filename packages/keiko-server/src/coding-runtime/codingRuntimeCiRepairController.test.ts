@@ -11,6 +11,7 @@ import {
 import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import type {
+  CiRepairBudgetBlockReason,
   CiRepairBudgetContext,
   CiRepairBudgetRecord,
   CiRepairLimits,
@@ -164,8 +165,11 @@ describe("CI repair accounting around admitted model work", () => {
   it("allows a child using the last tool credit to reserve its bounded model prompt", () => {
     const test = fixture({ maxToolCalls: 1, maxPromptTokens: 10 });
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-    expect(test.controller.chargePrompt(8)).toBe(true);
-    expect(test.controller.chargePrompt(3)).toBe(false);
+    expect(test.controller.chargePrompt(8)).toEqual({ accepted: true });
+    expect(test.controller.chargePrompt(3)).toEqual({
+      accepted: false,
+      reason: "prompt-budget-exhausted",
+    });
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(false);
   });
   it("#3417: answers whether a delegated read fits without charging the repair ledger", () => {
@@ -231,8 +235,11 @@ describe("CI repair accounting around admitted model work", () => {
   it("charges accepted gateway prompt reservations exactly and forbids overflow before dispatch", () => {
     const test = fixture({ maxPromptTokens: 10 });
     expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
-    expect(test.controller.chargePrompt(10)).toBe(true);
-    expect(test.controller.chargePrompt(1)).toBe(false);
+    expect(test.controller.chargePrompt(10)).toEqual({ accepted: true });
+    expect(test.controller.chargePrompt(1)).toEqual({
+      accepted: false,
+      reason: "prompt-budget-exhausted",
+    });
     expect(test.store.read(test.context).record?.promptTokens).toBe(10);
   });
   it("counts three failed attempts cumulatively without counting repeated observations", () => {
@@ -382,6 +389,105 @@ describe("CI repair accounting around admitted model work", () => {
 
     expect(result).toEqual({ ok: false, reason: "authority-expired" });
     expect(test.store.read(test.context).record?.promptTokens).toBe(0);
+  });
+  // #3873 review (PR #3876): every refusal of a model prompt by the CI-repair budget was recorded as
+  // the run's prompt allowance, so a repair that ran past its runtime limit settled "prompt allowance
+  // exhausted" and sent the operator to a setting that cannot help. The record names the closed reason
+  // the budget itself refused with, through the real controller and a clock that moves.
+  describe("the closed reason a refused model prompt is recorded with", () => {
+    function recordedRefusals(
+      test: Pick<ReturnType<typeof fixture>, "controller">,
+      promptTokens: number,
+    ): readonly (readonly [string, CiRepairBudgetBlockReason])[] {
+      const recorded: (readonly [string, CiRepairBudgetBlockReason])[] = [];
+      const authority = {
+        authenticateCapability: (): RuntimeCapabilityResolution => ({
+          ok: true,
+          issuedAtMs: 0,
+          binding: {
+            runId: "run-1",
+            workspaceRootDigest: "a".repeat(64),
+            envelopeDigest: "b".repeat(64),
+            adapterKind: "model-gateway-sidecar",
+            audience: "model-gateway",
+            expiresAtMs: Date.parse("2026-09-05T12:00:00.000Z"),
+          },
+        }),
+        reservePromptTokens: (): { readonly ok: true; readonly runId: string } => ({
+          ok: true,
+          runId: "run-1",
+        }),
+        recordCiRepairPromptRefusal: (runId: string, reason: CiRepairBudgetBlockReason): void => {
+          recorded.push([runId, reason]);
+        },
+      };
+      expect(
+        reservePromptWithCiRepair(authority, () => test.controller, "capability", promptTokens),
+      ).toEqual({ ok: false, reason: "authority-budget-exceeded" });
+      return recorded;
+    }
+
+    it("names a repair that ran past its own runtime limit deadline-exhausted, not the allowance", () => {
+      const test = fixture({ maxRuntimeMs: 100, maxPromptTokens: 1000 });
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+      test.clock.now += 100;
+
+      expect(recordedRefusals(test, 1)).toEqual([["run-1", "deadline-exhausted"]]);
+    });
+
+    it("names a prompt the repair's allowance cannot fit prompt-budget-exhausted", () => {
+      const test = fixture({ maxPromptTokens: 10 });
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+
+      expect(recordedRefusals(test, 11)).toEqual([["run-1", "prompt-budget-exhausted"]]);
+    });
+
+    it("names a repair that spent its failed attempts attempt-budget-exhausted", () => {
+      const test = fixture();
+      for (let index = 1; index <= 3; index++) {
+        expect(test.readiness.complete(test.readiness.begin("run-1"), failed())).toBe(true);
+        test.controller.observed(failed());
+        test.controller.admitTool(verify(`verify-${String(index)}`))?.settle({ status: "failed" });
+      }
+
+      expect(recordedRefusals(test, 1)).toEqual([["run-1", "attempt-budget-exhausted"]]);
+    });
+
+    it("names a run whose authority was withdrawn authority-denied", () => {
+      const test = fixture();
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+      test.clock.live = false;
+
+      expect(recordedRefusals(test, 1)).toEqual([["run-1", "authority-denied"]]);
+    });
+
+    it("answers the closed reason itself, never a bare no", () => {
+      const test = fixture({ maxRuntimeMs: 100, maxPromptTokens: 10 });
+      expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+      expect(test.controller.canChargePrompt(10)).toEqual({ accepted: true });
+      expect(test.controller.canChargePrompt(11)).toEqual({
+        accepted: false,
+        reason: "prompt-budget-exhausted",
+      });
+      expect(test.controller.chargePrompt(11)).toEqual({
+        accepted: false,
+        reason: "prompt-budget-exhausted",
+      });
+      // A malformed estimate is no allowance either.
+      expect(test.controller.canChargePrompt(-1)).toEqual({
+        accepted: false,
+        reason: "invalid-input",
+      });
+      test.clock.now += 100;
+      expect(test.controller.canChargePrompt(1)).toEqual({
+        accepted: false,
+        reason: "deadline-exhausted",
+      });
+      expect(test.controller.chargePrompt(1)).toEqual({
+        accepted: false,
+        reason: "deadline-exhausted",
+      });
+    });
   });
   // #3401: a repaired head after CI repair must regenerate the run's automatic description, since
   // the orchestrator's one-time terminal dispatch already fired for the original (failing) head.

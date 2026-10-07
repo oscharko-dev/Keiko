@@ -147,10 +147,22 @@ function parsedProviderBody(init: RequestInit | undefined): Record<string, unkno
   return JSON.parse(init.body) as Record<string, unknown>;
 }
 
+// #3873: the catalog's changeset is the replacement form with every member required, so the
+// invalid call carries a schema-valid `edits` entry (and the empty `deletions`/`renames` the
+// dialect demands) while `files` and `selectedFiles` stay the two invalid properties the pins count.
 function invalidArguments(callId: string): Response {
   return providerResponse(callId, "keiko_changeset_edit", {
     changeset: {
-      patch: INVALID_ARGUMENT_SECRET,
+      edits: [
+        {
+          file: "src/a.ts",
+          oldString: INVALID_ARGUMENT_SECRET,
+          newString: INVALID_ARGUMENT_SECRET,
+          replaceAll: false,
+        },
+      ],
+      deletions: [],
+      renames: [],
       files: INVALID_ARGUMENT_SECRET,
       selectedFiles: [],
     },
@@ -215,8 +227,8 @@ describe("Gateway bounded tool-schema repair", () => {
     // Run 7 (2026-09-10): the correction names the declared properties that failed, in the
     // schema's vocabulary, so the model can fix the call instead of repeating it; the arguments
     // themselves are never quoted back.
-    // (`files` is a string, `selectedFiles` is empty against minItems 1; the producer's `patch`
-    // schema bounds only the length, so the secret string passes it.)
+    // (`files` is a string, `selectedFiles` is empty against minItems 1; the `edits` entry is
+    // schema-valid, its strings bounded only by length, so the secret passes it.)
     expect(serializedRepair).toContain(
       "Properties whose value does not match the schema: changeset.files, changeset.selectedFiles.",
     );
@@ -507,54 +519,159 @@ describe("schemaMismatchGuidance", () => {
   });
 });
 
-it("does not replay a tool-call-only stream rejected by the catalog", async () => {
-  const events: ModelGatewayLogEvent[] = [];
-  const delta = {
-    choices: [
-      {
-        index: 0,
-        delta: {
-          tool_calls: [
-            {
-              index: 0,
-              id: "call-invalid",
-              type: "function",
-              function: { name: "keiko_changeset_edit", arguments: "{}" },
-            },
-          ],
-        },
-        finish_reason: "tool_calls",
-      },
-    ],
-  };
-  const fetchImpl = vi.fn(() =>
-    Promise.resolve(
-      new Response(`data: ${JSON.stringify(delta)}\n\ndata: [DONE]\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      }),
-    ),
-  );
-  const gateway = new Gateway(config(), {
-    clock: clock(),
-    fetchImpl,
-    log: {
-      write: (event): void => {
-        events.push(event);
-      },
-    },
+// A streamed answer of one SSE frame, then [DONE].
+function streamedFrame(delta: Record<string, unknown>, finishReason: string): Response {
+  const frame = { choices: [{ index: 0, delta, finish_reason: finishReason }] };
+  return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+    headers: { "content-type": "text/event-stream" },
   });
-  const consume = async (): Promise<void> => {
-    for await (const chunk of gateway.chatStream(request())) expect(chunk).toBeUndefined();
-  };
-  await expect(consume()).rejects.toBeInstanceOf(GatewayToolCatalogError);
-  expect(fetchImpl).toHaveBeenCalledOnce();
-  expect(events.filter((event) => event.op === "gateway.retry.scheduled")).toEqual([]);
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      op: "gateway.stream.failed",
-      extra: expect.objectContaining({ chunkCount: 0 }) as unknown,
-    }),
+}
+
+function streamedToolCall(callId: string, name: string, args: unknown): Response {
+  return streamedFrame(
+    {
+      tool_calls: [
+        {
+          index: 0,
+          id: callId,
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        },
+      ],
+    },
+    "tool_calls",
   );
+}
+
+async function drainStream(gateway: Gateway): Promise<NormalizedResponse | undefined> {
+  let done: NormalizedResponse | undefined;
+  for await (const chunk of gateway.chatStream(request())) {
+    if (chunk.type === "done") done = chunk.response;
+  }
+  return done;
+}
+
+// #3873 review (PR #3876): coding turns stream by default, so the bounded tool-schema repair the
+// buffered path has always run now runs on the stream too. Tool calls are delivered only with the
+// terminal answer, so a rejected tool call was never handed to the caller: the next attempt sends
+// the original request plus ONE schema correction — never the identical request — on the
+// provider's attempt count, logged like the buffered repair.
+describe("Gateway streamed tool-schema repair (#3873 review)", () => {
+  it("sends one schema correction after a tool-call-only stream the catalog rejected", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    let providerCalls = 0;
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      random: (): number => 1,
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(parsedProviderBody(init));
+        providerCalls += 1;
+        return Promise.resolve(
+          providerCalls === 1
+            ? streamedToolCall("call-stream-1", "keiko_changeset_edit", {
+                changeset: {
+                  edits: [],
+                  deletions: [],
+                  renames: [],
+                  files: INVALID_ARGUMENT_SECRET,
+                  selectedFiles: [],
+                },
+              })
+            : streamedFrame({ content: "corrected" }, "stop"),
+        );
+      },
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(drainStream(gateway)).resolves.toMatchObject({ content: "corrected" });
+
+    expect(bodies).toHaveLength(2);
+    const [first, second] = bodies.map((body) => body.messages as unknown[]);
+    expect(second).toEqual([
+      ...(first ?? []),
+      { role: "system", content: expect.stringContaining("changeset.files") as unknown },
+    ]);
+    expect(JSON.stringify(second)).not.toContain(INVALID_ARGUMENT_SECRET);
+    expect(
+      events
+        .filter((event) => event.op === "gateway.tool-catalog.repair")
+        .map((event) => event.extra?.state),
+    ).toEqual(["scheduled"]);
+    expect(
+      events
+        .filter((event) => event.op === "gateway.retry.scheduled")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["retryable-error"]);
+  });
+
+  // Answer text the caller already received commits the stream: a preface sentence, then a
+  // malformed call, surfaces at once, because a repair would deliver the sentence a second time.
+  it("does not repair a rejected tool call that follows answer text the caller received", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const preface = { content: "I will edit the file." };
+    const call = {
+      tool_calls: [
+        {
+          index: 0,
+          id: "call-after-text",
+          type: "function",
+          function: {
+            name: "keiko_changeset_edit",
+            arguments: JSON.stringify({
+              changeset: {
+                edits: [],
+                deletions: [],
+                renames: [],
+                files: INVALID_ARGUMENT_SECRET,
+                selectedFiles: [],
+              },
+            }),
+          },
+        },
+      ],
+    };
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: preface }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: call, finish_reason: "tool_calls" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response(frames, { headers: { "content-type": "text/event-stream" } })),
+    );
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      fetchImpl,
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(drainStream(gateway)).rejects.toBeInstanceOf(GatewayToolCatalogError);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.op === "gateway.tool-catalog.repair")).toEqual([]);
+  });
+
+  // Without a correction there is nothing to repair: the stream is not replayed as it was.
+  it("does not replay a streamed catalog rejection that carries no repair", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(streamedToolCall("call-unoffered", "not_an_offered_tool", {})),
+    );
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      fetchImpl,
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(drainStream(gateway)).rejects.toBeInstanceOf(GatewayToolCatalogError);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(events.filter((event) => event.op === "gateway.retry.scheduled")).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.stream.failed",
+        extra: expect.objectContaining({ chunkCount: 0 }) as unknown,
+      }),
+    );
+  });
 });
 
 it("refuses a complete schema-bearing repair that overflows only after the first call", async () => {

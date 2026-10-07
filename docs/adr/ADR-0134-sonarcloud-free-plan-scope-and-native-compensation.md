@@ -55,8 +55,15 @@ Unclassified C, C++, header, or C# files fail closed.
 
 Tests include `tests/**`, `**/__tests__/**`, `**/*.test.*`, and `**/*.spec.*`. Dependencies, build
 and coverage outputs, generated evidence, temporary state, declarations, and binary/media assets
-are excluded. The scanner archive, installation, working directory, and full log all live under
-`RUNNER_TEMP`; the log pipeline preserves the scanner exit status.
+are excluded. One further class is excluded from test analysis (amended 2026-10-07, #3876):
+fixture data whose defects are intended and documented, such as a target repository that a live
+lab plants defects into for a model to find. The criterion is exact: the directory is fixture
+data, its README names every planted defect as intentional, the root tsconfig, ESLint and
+Prettier already leave it out, and it holds no product or test code of Keiko's own. Ordinary test
+code never qualifies. The instance is `tests/fixtures/coding-workbench-lab/ledger-lab/**`; each
+instance is listed in `sonar.test.exclusions` with its reason and re-pinned in
+`scripts/sonar-analysis-scope.mjs`. The scanner archive, installation, working directory, and
+full log all live under `RUNNER_TEMP`; the log pipeline preserves the scanner exit status.
 
 Scanner warnings are blocking. A future exception requires an exact, documented signature and a
 bounded count with a regression test. Wildcard warning suppression is forbidden.

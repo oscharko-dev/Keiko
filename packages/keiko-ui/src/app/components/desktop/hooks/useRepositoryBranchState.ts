@@ -9,12 +9,19 @@ import {
 } from "../widgets/cards/git-repository-state-events";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind, isDeniedError } from "@/lib/http";
 
 interface BranchReadState {
   readonly root: string | null;
   readonly response: GitBranchListResponse | null;
   readonly loading: boolean;
   readonly error: string | null;
+  /**
+   * The server refused the read as an access decision (403 `DENIED`: the root lies on a path its
+   * read surface excludes), the same refusal the Git window names — never a folder Git cannot serve
+   * (#3873 F1). Only a rejected read sets it.
+   */
+  readonly denied: boolean;
 }
 
 export interface RepositoryBranchState extends BranchReadState {
@@ -45,7 +52,27 @@ function useRepositoryInvalidation(root: string | null, refresh: () => Promise<v
 function stateForRoot(state: BranchReadState, root: string | null): BranchReadState {
   return state.root === root
     ? state
-    : { ...state, response: null, loading: root !== null, error: null };
+    : { ...state, response: null, loading: root !== null, error: null, denied: false };
+}
+
+// A rejected read, and whether the server refused it as an access decision (F1).
+function rejectedBranchRead(root: string, error: unknown): BranchReadState {
+  return {
+    root,
+    response: null,
+    loading: false,
+    error: "Git status could not be loaded.",
+    denied: isDeniedError(error),
+  };
+}
+
+// The closed error kind rides with the failure, so the log tells an access refusal (403 `DENIED`,
+// `authority-denied`) from a failed read without naming the path (F1).
+function reportBranchReadFailure(error: unknown): void {
+  reportClientDiagnostic(`[keiko] repository branch status failed: ${clientErrorSummary(error)}`, {
+    correlationId: correlationIdOf(error),
+    errorKind: bffRequestErrorKind(error),
+  });
 }
 
 export function useRepositoryBranchState(root: string | null): RepositoryBranchState {
@@ -54,12 +81,13 @@ export function useRepositoryBranchState(root: string | null): RepositoryBranchS
     response: null,
     loading: root !== null,
     error: null,
+    denied: false,
   });
   const sequenceRef = useRef(0);
   const refresh = useCallback(async (): Promise<void> => {
     const sequence = (sequenceRef.current += 1);
     if (root === null) {
-      setState({ root: null, response: null, loading: false, error: null });
+      setState({ root: null, response: null, loading: false, error: null, denied: false });
       return;
     }
     // #3506 review — do NOT stamp the NEW `root` into state here. The stale-response guard at
@@ -67,24 +95,16 @@ export function useRepositoryBranchState(root: string | null): RepositoryBranchS
     // if we stamped `root` synchronously the guard's else branch would be unreachable while a
     // fetch for the new root is in flight, so the previous repository's branch list would keep
     // showing (BranchSelector reads `currentBranch` before `loading`).
-    setState((current) => ({ ...current, loading: true, error: null }));
+    setState((current) => ({ ...current, loading: true, error: null, denied: false }));
     try {
       const response = await DEFAULT_GIT_CLIENT.listBranches(root);
       if (sequenceRef.current === sequence) {
-        setState({ root, response, loading: false, error: null });
+        setState({ root, response, loading: false, error: null, denied: false });
       }
     } catch (error) {
       if (sequenceRef.current === sequence) {
-        setState({
-          root,
-          response: null,
-          loading: false,
-          error: "Git status could not be loaded.",
-        });
-        reportClientDiagnostic(
-          `[keiko] repository branch status failed: ${clientErrorSummary(error)}`,
-          { correlationId: correlationIdOf(error) },
-        );
+        setState(rejectedBranchRead(root, error));
+        reportBranchReadFailure(error);
       }
     }
   }, [root]);

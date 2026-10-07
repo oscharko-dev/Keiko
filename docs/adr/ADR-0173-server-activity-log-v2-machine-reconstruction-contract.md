@@ -602,6 +602,18 @@ is not a successfully opened file. `rootCount` and `matchCount` explain the choi
 recording the fingerprint, file path, source label or citation text. The registered server
 projection retains these closed fields on the existing Activity Log timeline.
 
+`client.coding-run.restored` records, once per distinct restoration, how the Workbench rebuilt a
+settled coding run's conversation from Coding History after a reload, under the run's own id (the
+correlation its `coding-runtime.history` lines carry). The timeline carries the newest messages the
+safe-activity contract's bounds admit (`timelineCount`, `turnCount`, `feedBytes`); every older
+message the feed cannot carry stays in the transcript, whole (`transcriptCount`,
+`transcriptChars`), so no message of the run is shown in neither place. The restoration reads the
+run's messages from the newest end and only as far as the feed can still hold them; everything
+older is named for the transcript by position and never examined. `cutCount` counts timeline
+messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
+task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
+truncated.". Counts only — never a message, path or run name.
+
 The `grounded-pack-validation` diagnostic carries closed `validationReasons`, `violationCount`,
 `validatorThrew`, sanitized `originalCode`, optional `sourceIndex`, and `diagnosticOutcome`.
 `source-skipped` is a warning preserving independent healthy sources; `request-failed` retains the
@@ -1557,7 +1569,25 @@ including another failed model request at the same task revision, writes
 revision, state, a closed publication reason (published, unavailable hub, terminal run, invalid
 event, exhausted sequence, or capacity pressure), and `runtimeRetry`: `refused` when the provider
 rejected the turn in a way no retry can change (a 4xx other than 408/409/429, a refused credential,
-an invalid configuration — the gateway's own retry policy calls it terminal), `allowed` otherwise.
+an invalid configuration — the gateway's own retry policy calls it terminal) and when an
+`output-exhausted` or `empty-answer` turn's one steered gateway repair failed the same way again
+(`repairOutcome` `exhausted-again` or `empty-again`; #3873, F17, F23: the identical turn would run
+away identically), `allowed` otherwise. The line, and the turn's
+`coding-sidecar.gateway.outcome` line, carry `repairAttempted` and, when a repair ran, the closed
+`repairOutcome` (`recovered`, `exhausted-again`, `empty-again`, `failed`), read off the gateway's own
+marks on the response or the error (ADR-0003) and naming how the repaired attempt ended. An outcome
+line written before the gateway call settled — a turn cut at a byte bound, a cancellation mid-stream —
+cannot know whether a repair ran and omits both fields: absent means unknown, never "no repair"
+(#3873 review). So an
+exhausted turn is reconstructable from `chat.response.streamed outputExhausted=true`,
+`gateway.retry.scheduled reason=output-exhausted-repair`, the second read and these two lines alone,
+and a turn that ended empty after reasoning from `gateway.retry.scheduled reason=empty-answer-repair`
+(the closed `reason` of that line is `retryable-error`, `output-exhausted-repair` or
+`empty-answer-repair`), the second read and the same two lines. Prior reasoning is never resent
+upstream (#3873, F23): `coding-sidecar.gateway.request-validated` records
+`droppedReasoningMessageCount`, the number of prior assistant messages that carried nothing but
+reasoning and were dropped before the gateway request was built (the line's prompt estimate and
+`inputMessageCount` describe what is sent), a count and never the reasoning.
 A refused turn is answered to the runtime as a final 400 — an HTTP 400 before the stream opened, an
 error chunk with `code: 400` and `type: invalid_request_error` after it — which OpenCode 2.0.10
 reads as final; `finish_reason: "error"` or a 503, which it retries, stays the answer to everything
@@ -1582,9 +1612,21 @@ retains the pre-call reservation. Its closed settlement status distinguishes a s
 reconciliation from a reservation retained after an authority refusal, an unverified result, or a
 deployment without a settlement port. A refused or unverified settlement reports the retained
 reservation rather than the provider count requested by the caller.
+The usage line also records the turn's share of answer text and model reasoning as counts (#3878):
+`contentBytes` (the UTF-8 size of the answer text), `reasoningBytes` (the UTF-8 size of the
+`reasoning_content` the provider returned, also when the reasoning display discarded it) and, only
+when the provider reports it, its own `reasoningTokens`; the reasoning text itself is never recorded.
+When the gateway discarded attempts on its way to the answer (a steered repair's first answer, a
+catalog-rejected tool call, a stream that failed after its usage arrived), the line names them
+(`discardedAttemptCount`, `discardedPromptTokens`, `discardedCompletionTokens`), and its prompt-token
+count includes the discarded prompt tokens: the run's allowance counts every prompt the provider
+processed (#3873 review).
 `coding-sidecar.gateway.outcome`
 records the closed accepted, cancelled, failed, or output-limit result under that same request and
-run correlation; streamed acceptance is recorded after the terminal frame is written. These records
+run correlation; `reasoningFrames` and `forwardedReasoningBytes` count the frames and bytes that
+carried reasoning to the coding runtime, `limit` names the byte bound (`answer` or `reasoning`) that
+ended an `output-limit` turn, and `reasoningWithheld` marks a buffered answer delivered without its
+oversized reasoning; streamed acceptance is recorded after the terminal frame is written. These records
 contain request and run correlations, counts, closed states, and the source, without message bodies.
 Generic provider policy refusals remain terminal; an error
 that identifies the optional `stream_options` or `include_usage` field may take the bounded

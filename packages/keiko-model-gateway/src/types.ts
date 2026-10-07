@@ -199,9 +199,27 @@ export interface GroundedAnswersConfig {
   readonly ownAssessment?: OwnAssessmentPolicy | undefined;
 }
 
+// An operator switch for a coding-experience default (owner decision 2026-10-06): absent means
+// "on"; only an explicit "off" opts out.
+export type GatewayFeatureSwitch = "on" | "off";
+
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
+  // #3873: how long a coding-workbench call keeps retrying a transiently unavailable provider and
+  // waits through an open breaker, in milliseconds. Absent means GATEWAY_CODING_OUTAGE_WINDOW_MS
+  // (10 minutes); 0 switches the policy off, so coding calls keep the provider's attempt count and
+  // the fail-fast breaker like every other surface.
+  readonly codingOutageWindowMs?: number | undefined;
+  // #3873 (lab ledger F2): whether the Coding Workbench's sidecar model profile streams the answer
+  // to the coding runtime as the provider produces it. Absent means "on" wherever the model's
+  // capability streams; "off" restores the buffered answer.
+  readonly codingStreaming?: GatewayFeatureSwitch | undefined;
+  // #3878: whether a call that asks for reasoning delivery (`GatewayCallRequest.reasoningDelivery`,
+  // set by the coding sidecar route alone) forwards the model's reasoning (`reasoning_content`) so
+  // the Workbench can show it. Absent means "on"; with "off" the gateway still parses the
+  // reasoning and discards it. Every other surface always discards it.
+  readonly codingReasoningDisplay?: GatewayFeatureSwitch | undefined;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
   readonly reranker?: RerankerConfig | undefined;
@@ -214,11 +232,16 @@ export interface GatewayConfig {
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────
 
 // A single chunk emitted by the streaming chat path. Content deltas arrive as
-// `delta` chunks (one per provider token group); a terminal `done` chunk carries the
-// fully assembled, redacted NormalizedResponse. Tool-call streaming is out of scope
-// for Layer 1 — only content deltas are surfaced.
+// `delta` chunks (one per provider token group); the model's reasoning (`reasoning_content`,
+// #3878) arrives as separate `reasoning` chunks and never inside a `delta`; a terminal `done`
+// chunk carries the fully assembled, redacted NormalizedResponse. Tool calls are assembled from
+// their fragments and bound against the advertised catalog before they appear, on `done` only.
+// The gateway yields `reasoning` chunks only on a call that asks for reasoning delivery
+// (`GatewayCallRequest.reasoningDelivery`) while `GatewayConfig.codingReasoningDisplay` is not
+// "off"; every other consumer never sees one.
 export type GatewayStreamChunk =
   | { readonly type: "delta"; readonly token: string }
+  | { readonly type: "reasoning"; readonly token: string }
   | { readonly type: "done"; readonly response: NormalizedResponse };
 
 // The bounds of one streamed read (ADR-0003): `silenceMs` is the longest the provider may stay

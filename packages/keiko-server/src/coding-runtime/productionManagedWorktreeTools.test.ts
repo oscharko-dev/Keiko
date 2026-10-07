@@ -14,6 +14,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeAuthorityFacts,
+  EditorAgentAction,
   VerificationReport,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
@@ -27,6 +28,8 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
+import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
+import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
@@ -50,6 +53,7 @@ import {
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
 import { humanDecisionToolResult } from "./codingToolFacade.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
@@ -84,6 +88,18 @@ import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 
 const DIGEST = "a".repeat(64);
+// #3873: through the production facade an edit is the replacement form with every member present;
+// the port materializes it against the governed read of `src/a.ts`, bound to that read's digest.
+const EDITED_TEXT = "old\n";
+function replacementChangeset(): Record<string, unknown> {
+  return {
+    edits: [{ file: "src/a.ts", oldString: "old", newString: "new", replaceAll: false }],
+    deletions: [],
+    renames: [],
+    files: [{ file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(EDITED_TEXT) }],
+    selectedFiles: ["src/a.ts"],
+  };
+}
 const resolveWorkspaceRootAccess = (): WorkspaceRootAccess => ({
   kind: "managed-task" as const,
   canonicalRoot: "/managed/worktree",
@@ -489,8 +505,8 @@ describe("production managed worktree tools", () => {
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
-        canChargePrompt: () => true,
-        chargePrompt: () => true,
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt: () => ({ accepted: true }),
         observed: vi.fn(),
       },
       runToReport: async () => {
@@ -578,13 +594,46 @@ describe("production managed worktree tools", () => {
   // read reports, never a second formula.
   // Owner decision (ADR-0124 D6): contained routine edits use the medium-risk policy. Ask mode
   // reviews the diff; Supervised and Full access apply it through the same governed patch boundary.
-  it.each([
-    ["governed-assist", true],
-    ["supervised-coding", false],
-    ["autonomous-delivery", false],
-  ] as const)(
-    "derives editor review policy for %s (requiresReview=%s)",
-    async (effectiveMode: CodingWorkbenchMode, requiresReview: boolean) => {
+  // Owner decision Q2 (2026-10-07, ADR-0138 D2): a deletion and a rename take the SAME medium risk
+  // as an edit, so Supervised applies them without a review exactly like an edit; pinned per mode so
+  // a change of that decision is deliberate.
+  const REVIEW_CHANGESETS = {
+    edit: replacementChangeset(),
+    deletion: {
+      edits: [],
+      deletions: ["src/a.ts"],
+      renames: [],
+      files: [{ file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(EDITED_TEXT) }],
+      selectedFiles: ["src/a.ts"],
+    },
+    rename: {
+      edits: [],
+      deletions: [],
+      renames: [{ from: "src/a.ts", to: "src/b.ts" }],
+      files: [
+        { file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(EDITED_TEXT) },
+        { file: "src/b.ts", expectedContentHash: secureWorkspaceTextDigest("") },
+      ],
+      selectedFiles: ["src/a.ts", "src/b.ts"],
+    },
+  } as const;
+  it.each(
+    (
+      [
+        ["governed-assist", true],
+        ["supervised-coding", false],
+        ["autonomous-delivery", false],
+      ] as const
+    ).flatMap(([mode, review]) =>
+      (["edit", "deletion", "rename"] as const).map((kind) => [mode, review, kind] as const),
+    ),
+  )(
+    "derives editor review policy for %s (requiresReview=%s, %s)",
+    async (
+      effectiveMode: CodingWorkbenchMode,
+      requiresReview: boolean,
+      kind: keyof typeof REVIEW_CHANGESETS,
+    ) => {
       const order: string[] = [];
       const activity: ServerLogEvent[] = [];
       const register = vi.fn((): boolean => {
@@ -610,7 +659,12 @@ describe("production managed worktree tools", () => {
         deploymentCeiling: "autonomous-delivery",
         liveFacts: () => FACTS,
         secureWorkspaceTextRead: {
-          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+          readText: ({ relativePath }) =>
+            Promise.resolve(
+              relativePath === "src/a.ts"
+                ? { ok: true as const, text: EDITED_TEXT }
+                : { ok: false as const, reason: "not-found" as const },
+            ),
         },
         editorAgentClient: {
           action: (action) => {
@@ -646,10 +700,7 @@ describe("production managed worktree tools", () => {
             action: "edit",
             actionId: "edit-1",
             idempotencyKey: "edit-key-1",
-            changeset: {
-              patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
-              files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
-            },
+            changeset: REVIEW_CHANGESETS[kind],
           }),
         }),
       ).resolves.toMatchObject({ status: "completed" });
@@ -993,7 +1044,7 @@ describe("production managed worktree tools", () => {
       deploymentCeiling: "autonomous-delivery",
       liveFacts: () => FACTS,
       secureWorkspaceTextRead: {
-        readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        readText: () => Promise.resolve({ ok: true as const, text: EDITED_TEXT }),
       },
       // registerMutationLease requires a coordinator once a producer binding is present (it is,
       // via liveFacts) — its absence is a silent EDIT_PREPARE_FAILED before the mocked editor
@@ -1046,16 +1097,131 @@ describe("production managed worktree tools", () => {
           action: "edit",
           actionId: "edit-1",
           idempotencyKey: "edit-key-1",
-          changeset: {
-            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
-            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
-          },
+          changeset: replacementChangeset(),
         }),
       });
       expect(action).toHaveBeenCalledOnce();
       expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
     },
   );
+
+  // F5 (#3873, live Gemma qualification): the run's orchestration bounds consecutive refused edits,
+  // so the production facade reports every applied or refused edit — through the real edit port and
+  // the facade's own projection, as the model received it.
+  it("reports each applied or refused edit of the managed facade to the run's observer", async () => {
+    const outcomes: CodingToolEditOutcome[] = [];
+    const editorResult = (
+      status: "queued" | "conflict",
+    ): Awaited<ReturnType<ProductionManagedWorktreeToolInput["editorAgentClient"]["action"]>> => ({
+      ok: true as const,
+      value: {
+        result: {
+          schemaVersion: "1" as const,
+          actionId: "edit-1",
+          sessionId: "session-1",
+          status,
+          ...(status === "conflict"
+            ? { conflict: { code: "NO_ACTIVE_SESSION" as const, message: "no live session" } }
+            : {}),
+        },
+      },
+    });
+    const action = vi
+      .fn()
+      .mockResolvedValueOnce(editorResult("conflict"))
+      .mockResolvedValueOnce(editorResult("queued"));
+    // The model's edit form (#3873): exact replacements bound to the digest of the governed read.
+    const current = "export const value = 1;\n";
+    const facade = createProductionManagedWorktreeToolFacade({
+      ...baseEditAdmissionInput(),
+      secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: true, text: current }) },
+      editorAgentClient: { action },
+      onRuntimeEvent: vi.fn(),
+      observeEditOutcome: (outcome) => void outcomes.push(outcome),
+    });
+
+    const results: unknown[] = [];
+    for (const attempt of [1, 2]) {
+      results.push(
+        await facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "edit",
+            actionId: `edit-${String(attempt)}`,
+            idempotencyKey: `edit-key-${String(attempt)}`,
+            changeset: {
+              edits: [
+                {
+                  file: "src/a.ts",
+                  oldString: "value = 1",
+                  newString: "value = 2",
+                  replaceAll: false,
+                },
+              ],
+              deletions: [],
+              renames: [],
+              files: [
+                { file: "src/a.ts", expectedContentHash: secureWorkspaceTextDigest(current) },
+              ],
+            },
+          }),
+        }),
+      );
+    }
+
+    // What the model received, and what the run's orchestration was told: the same two outcomes.
+    expect(results).toMatchObject([
+      { status: "failed", evidence: [{ kind: "governed-delegate", code: "NO_ACTIVE_SESSION" }] },
+      { status: "completed" },
+    ]);
+    expect(action).toHaveBeenCalledTimes(2);
+    expect(outcomes).toEqual([
+      { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" },
+      { kind: "applied" },
+    ]);
+  });
+
+  // PR #3876 review: the managed facade's edit port registers the diff it renders in the registry the
+  // composition supplies, which is the one registry the editor route reads. A facade that dropped it
+  // would leave every edit beside a backslash-n to the engine's heuristic again.
+  it("registers the diff its edit port posts in the registry the composition supplies", async () => {
+    const registry = createMaterializedPatchRegistry();
+    const action = vi.fn((_action: EditorAgentAction) =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          result: {
+            schemaVersion: "1" as const,
+            actionId: "edit-1",
+            sessionId: "session-1",
+            status: "queued" as const,
+          },
+        },
+      }),
+    );
+    const facade = createProductionManagedWorktreeToolFacade({
+      ...baseEditAdmissionInput(),
+      editorAgentClient: { action },
+      materializedPatches: registry,
+      onRuntimeEvent: vi.fn(),
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "edit",
+        actionId: "edit-1",
+        idempotencyKey: "edit-key-1",
+        changeset: replacementChangeset(),
+      }),
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const posted = action.mock.calls[0]?.[0].changeset?.patch;
+    if (posted === undefined) throw new Error("expected the edit to reach the editor route");
+    expect(registry.lookup(posted).registered).toBe(true);
+    expect(registry.stats().entries).toBe(1);
+  });
 
   it("completes a governed command through production wiring", async () => {
     const execute = vi.fn((): Promise<CommandTaskRunResult> =>

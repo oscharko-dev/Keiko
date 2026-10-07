@@ -82,6 +82,10 @@ export default defineConfig(
       // example code with uninstalled deps (React, Testing Library, Playwright), held as data — not
       // product code subject to the repo's strict typed rules. Excluded from build and test collection.
       "tests/fixtures/frontend-test-generation/**",
+      // Baseline repository of the live Coding Workbench qualification lab (#3872): a standalone
+      // project with its own strict ESLint bar, deliberately carrying the findings the lint-bar
+      // task asks the agent to fix. It is data the lab edits inside a scratch copy, not product code.
+      "tests/fixtures/coding-workbench-lab/ledger-lab/**",
       // Design-system evidence reproduction harnesses (e.g. the #1293 computed-value equivalence
       // harness): standalone Node + Playwright scripts that mix Node and in-browser (page.evaluate)
       // globals and live outside any TypeScript program. They are committed evidence/repro artifacts,

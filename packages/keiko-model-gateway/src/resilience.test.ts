@@ -3,20 +3,31 @@ import {
   AuthenticationError,
   CancelledError,
   CircuitOpenError,
+  ProviderEmptyAnswerError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   CircuitBreaker,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
+  retryAnnouncer,
+  steeredAnswerRepair,
+  type GatewayRetryNotice,
+  type GatewayRetryObserver,
+  type RetryAnnouncer,
+  type RetryLogContext,
+  type RetryLogLabels,
 } from "./resilience.js";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
+import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { Clock } from "./types.js";
 import {
@@ -1013,4 +1024,924 @@ describe("circuit admission ownership", () => {
       expect(() => cb.assertAllowed()).toThrow(CircuitOpenError);
     },
   );
+});
+
+// #3873 (F17): a steered repair is one further attempt after a TERMINAL failure the caller can
+// correct (a model that spent its whole output budget without an answer). It is not a provider
+// retry: the attempt count and the outage window do not apply to it, the call's budget does, and it
+// is granted once per call, so a second failure of the same class surfaces to the caller.
+describe("executeWithRetry — steered repair (#3873 F17)", () => {
+  const repairable = (): Error =>
+    Object.assign(new AuthenticationError("terminal, but repairable once"), { repairable: true });
+  const repair = (error: Error): "output-exhausted-repair" | undefined =>
+    "repairable" in error ? "output-exhausted-repair" : undefined;
+
+  function recorder(): {
+    events: ModelGatewayLogEvent[];
+    sink: { write(e: ModelGatewayLogEvent): void };
+  } {
+    const events: ModelGatewayLogEvent[] = [];
+    return { events, sink: { write: (event): void => void events.push(event) } };
+  }
+
+  it("re-invokes the operation once with the failure, at once, under the attempt count 0", async () => {
+    const { clock, sleeps } = stubClock();
+    const log = recorder();
+    const seen: (Error | undefined)[] = [];
+    let calls = 0;
+    const value = await executeWithRetry(
+      (_attemptMs, _remainingMs, previousError) => {
+        seen.push(previousError);
+        calls += 1;
+        return calls === 1 ? Promise.reject(repairable()) : Promise.resolve("repaired");
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, timeoutMs: 60_000, repair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: log.sink, modelId: "m" },
+    );
+    expect(value).toBe("repaired");
+    expect(calls).toBe(2);
+    expect(seen[1]).toBeInstanceOf(AuthenticationError);
+    expect(sleeps).toEqual([0]);
+    const scheduled = log.events.filter((event) => event.op === "gateway.retry.scheduled");
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0]?.extra).toMatchObject({
+      attempt: 1,
+      maxRetries: 0,
+      delayMs: 0,
+      reason: "output-exhausted-repair",
+    });
+  });
+
+  it("surfaces the second failure of the repaired attempt without a third attempt", async () => {
+    const { clock } = stubClock();
+    const log = recorder();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(repairable());
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000, repair },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink },
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(calls).toBe(2);
+    expect(log.events.map((event) => event.op)).toEqual([
+      "gateway.retry.scheduled",
+      "gateway.retry.exhausted",
+    ]);
+    expect(log.events[1]?.extra).toMatchObject({ attempt: 2, reason: "terminal" });
+  });
+
+  it("labels an ordinary retry as a retryable error on its scheduled line", async () => {
+    const { clock } = stubClock();
+    const log = recorder();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new TransportError("upstream reset"))
+          : Promise.resolve("ok");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500, repair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: log.sink },
+    );
+    expect(log.events[0]?.extra).toMatchObject({ reason: "retryable-error" });
+  });
+
+  it("does not count the repair against the provider's attempts", async () => {
+    const { clock } = stubClock();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(repairable());
+        if (calls === 2) return Promise.reject(new TransportError("upstream reset"));
+        return Promise.resolve("recovered");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500, repair },
+      clock,
+      undefined,
+      () => 0.5,
+    );
+    // One repair plus the one configured retry: three attempts, the retry still available.
+    expect(value).toBe("recovered");
+    expect(calls).toBe(3);
+  });
+
+  it("refuses the repair when the budget is spent and reports the budget stop", async () => {
+    const { clock, advance } = stubClock();
+    const log = recorder();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(10_000);
+          return Promise.reject(repairable());
+        },
+        { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 10_000, repair },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: log.sink },
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(calls).toBe(1);
+    expect(log.events.map((event) => event.op)).toEqual(["gateway.retry.exhausted"]);
+    expect(log.events[0]?.extra).toMatchObject({ reason: "budget", delayMs: 0, remainingMs: 0 });
+  });
+});
+
+// #3873 (F17, F23): which failures of a model's own answer the gateway steers one repair for, and the
+// reason each one carries on its scheduled line. The classification is the single decision the
+// buffered path, the streamed startup and the stream resumed after forwarded reasoning all consult.
+describe("steeredAnswerRepair (#3873 F17, F23)", () => {
+  it.each([
+    [
+      "an exhausted output budget",
+      new ProviderOutputExhaustedError("m"),
+      "output-exhausted-repair",
+    ],
+    [
+      "an empty answer after reasoning",
+      new ProviderEmptyAnswerError("m", [], true),
+      "empty-answer-repair",
+    ],
+    ["an empty answer without reasoning", new ProviderEmptyAnswerError("m"), undefined],
+    ["a retryable transport failure", new TransportError("upstream reset"), undefined],
+    ["a refused credential", new AuthenticationError("refused"), undefined],
+    ["a plain provider error", new ProviderError("upstream", 200), undefined],
+  ] as const)("classifies %s", (_label, error, reason) => {
+    expect(steeredAnswerRepair(error)).toBe(reason);
+  });
+
+  // #3873 review: the steered repair is opt-in per call (`answerRepair: "steered"`, gateway.ts), so
+  // a provider's own retry configuration never carries it and no surface gets a hidden second
+  // generation it did not ask for.
+  it("is not part of a provider's own retry configuration", () => {
+    const config = providerRetryConfig({ timeoutMs: 30_000, maxRetries: 2, retryBaseDelayMs: 500 });
+    expect(config.repair).toBeUndefined();
+  });
+
+  it("names the empty-answer repair on its scheduled line, once, and never retries it as a provider error", async () => {
+    const { clock, sleeps } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new ProviderEmptyAnswerError("m", [], true));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+        clock,
+        undefined,
+        () => 0.5,
+        { sink: { write: (event): void => void events.push(event) }, modelId: "m" },
+      ),
+    ).rejects.toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([0]);
+    expect(events.map((event) => event.op)).toEqual([
+      "gateway.retry.scheduled",
+      "gateway.retry.exhausted",
+    ]);
+    expect(events[0]?.extra).toMatchObject({ reason: "empty-answer-repair", delayMs: 0 });
+    expect(
+      expectActivityLogProof(
+        "gateway.retry.scheduled.emitted-line",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ reason: "empty-answer-repair" });
+  });
+
+  it("resumes after an attempt that already ran, granting the empty-answer repair at once", async () => {
+    const { clock, sleeps } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    const seen: (Error | undefined)[] = [];
+    const failedAttempt = new ProviderEmptyAnswerError("m", [], true);
+    const value = await executeWithRetry(
+      (_attemptMs, _remainingMs, previousError) => {
+        seen.push(previousError);
+        return Promise.resolve("repaired");
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: { write: (event): void => void events.push(event) }, modelId: "m" },
+      { failedAttempt },
+    );
+    expect(value).toBe("repaired");
+    expect(seen).toEqual([failedAttempt]);
+    expect(sleeps).toEqual([0]);
+    expect(events[0]?.extra).toMatchObject({ reason: "empty-answer-repair", attempt: 1 });
+  });
+
+  // #3873 review: a stream can be resumed more than once (a provider retry after forwarded
+  // reasoning, then another), so the resumed loop continues the call's own attempt count and its
+  // one repair. Starting from attempt 1 with no repair would grant a second steered repair below.
+  it("continues the call's attempt count and its one repair when it resumes", async () => {
+    const { clock } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    const exhausted = new ProviderOutputExhaustedError("m");
+    let calls = 0;
+    const failure = await executeWithRetry(
+      () => {
+        calls += 1;
+        return Promise.reject(exhausted);
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      { sink: { write: (event): void => void events.push(event) }, modelId: "m" },
+      { failedAttempt: new TransportError("reset after reasoning"), attempts: 3, repairs: 1 },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBe(exhausted);
+    expect(calls).toBe(1);
+    const scheduled = events.filter((event) => event.op === "gateway.retry.scheduled");
+    expect(scheduled.map((event) => event.extra)).toEqual([
+      expect.objectContaining({ reason: "retryable-error", attempt: 3 }),
+    ]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 4,
+      reason: "terminal",
+    });
+  });
+});
+
+// #3873 review: a coding turn rides out a provider outage for minutes, and the Workbench's run
+// status read "Waiting for the model" for the whole window. The call's observer hears every retry
+// of a provider that says it is unavailable, and the end of a call it heard retry — so the caller
+// can tell an outage being ridden out from a slow generation. It hears nothing else.
+describe("executeWithRetry — retry observer (#3873 review)", () => {
+  function observed(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly context: { readonly announcer: RetryAnnouncer };
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return {
+      notices,
+      context: {
+        announcer: retryAnnouncer((notice: GatewayRetryNotice): void => void notices.push(notice)),
+      },
+    };
+  }
+
+  it("announces each scheduled provider retry with its attempt and policy, then the answer", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls < 3 ? Promise.reject(new TransportError("refused")) : Promise.resolve("ok");
+      },
+      { maxRetries: 3, retryBaseDelayMs: 500 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(value).toBe("ok");
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "scheduled", attempt: 2, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("names the outage-window policy a retry ran under", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1 ? Promise.reject(new TimeoutError("silent")) : Promise.resolve("ok");
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(notices[0]).toEqual({ kind: "scheduled", attempt: 1, retryPolicy: "outage-window" });
+  });
+
+  it("announces a call that gave up after its retries as failed", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    await expect(
+      executeWithRetry(
+        () => Promise.reject(new RateLimitError("overloaded")),
+        { maxRetries: 2, retryBaseDelayMs: 500 },
+        clock,
+        undefined,
+        () => 0.5,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "scheduled", attempt: 2, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+
+  it("stays silent for a call that was never retried, answered or failed", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    await executeWithRetry(
+      () => Promise.resolve("ok"),
+      RETRY_CONFIG,
+      clock,
+      undefined,
+      undefined,
+      context,
+    );
+    await expect(
+      executeWithRetry(
+        () => Promise.reject(new AuthenticationError("nope")),
+        RETRY_CONFIG,
+        clock,
+        undefined,
+        undefined,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(notices).toEqual([]);
+  });
+
+  // The model's own output is not an unavailable provider: a steered repair or a schema correction
+  // is the provider answering, so the Workbench must not say the gateway is down. The retry
+  // announcement has two guards, and each case below is decided by exactly one of them: the repair
+  // itself, and the failure class of a retry the loop grants without a repair (#3873 review).
+  it("does not announce the steered repair the production classifier grants an exhausted answer", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new ProviderOutputExhaustedError("m"))
+          : Promise.resolve("repaired");
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(value).toBe("repaired");
+    expect(calls).toBe(2);
+    expect(notices).toEqual([]);
+  });
+
+  // The repair guard on its own: a classifier willing to repair a failure that says the provider is
+  // unavailable (which the failure-class guard alone would let through). The repair is the loop
+  // answering the model's output, whatever the classifier maps, so it is never announced.
+  it("does not announce a steered repair, whatever failure the classifier is willing to repair", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1 ? Promise.reject(new TransportError("reset")) : Promise.resolve("ok");
+      },
+      {
+        maxRetries: 2,
+        retryBaseDelayMs: 500,
+        timeoutMs: 60_000,
+        repair: (): "output-exhausted-repair" => "output-exhausted-repair",
+      },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(value).toBe("ok");
+    expect(calls).toBe(2);
+    expect(notices).toEqual([]);
+  });
+
+  // The failure-class guard on its own: a rejected tool-call shape earns a schema-correction retry
+  // under the attempt count, with no repair granted. The provider answered every time, so the
+  // retry is never announced as an outage. `GatewayToolCatalogError` is the production carrier (its
+  // base class is not retryable); an answer that exhausted its output budget or ended empty is
+  // terminal without a repair, so it never reaches the announcement at all.
+  it("does not announce the schema-correction retry a rejected tool call gets", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    let calls = 0;
+    const value = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new GatewayToolCatalogError("invalid-arguments", undefined, true))
+          : Promise.resolve("corrected");
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(value).toBe("corrected");
+    expect(calls).toBe(2);
+    expect(notices).toEqual([]);
+  });
+
+  it("announces a retry after a repair as the provider attempt it follows", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    const failures = [new ProviderOutputExhaustedError("m"), new TransportError("reset")];
+    let index = 0;
+    await executeWithRetry(
+      () => {
+        const failure = failures[index];
+        index += 1;
+        return failure === undefined ? Promise.resolve("ok") : Promise.reject(failure);
+      },
+      { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000, repair: steeredAnswerRepair },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("announces the retry a resumed stream grants its failed first attempt", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    await executeWithRetry(
+      () => Promise.resolve("ok"),
+      { maxRetries: 2, retryBaseDelayMs: 500, timeoutMs: 60_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+      { failedAttempt: new TransportError("reset after reasoning"), attempts: 1, repairs: 0 },
+    );
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("announces a cancellation during the backoff as the call failing", async () => {
+    const { clock } = stubClock();
+    const { notices, context } = observed();
+    const controller = new AbortController();
+    await expect(
+      executeWithRetry(
+        () => {
+          controller.abort();
+          return Promise.reject(new TransportError("refused"));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500 },
+        clock,
+        controller.signal,
+        () => 0.5,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+});
+
+// #3873 review (PR #3876): one call, one conversation with its observer. A call that waits for the
+// breaker or a provider cooldown before its first attempt is owed the same settlement as a call that
+// was retried, from the same loop, so a streamed call's first admission (which precedes its loop)
+// and every admission inside it share one announcer.
+describe("retry announcer and admission waits (#3873 review)", () => {
+  function heard(): {
+    readonly notices: GatewayRetryNotice[];
+    readonly announcer: RetryAnnouncer;
+  } {
+    const notices: GatewayRetryNotice[] = [];
+    return { notices, announcer: retryAnnouncer((notice) => void notices.push(notice)) };
+  }
+
+  // One failure opens it, and its cooldown outlasts the 375 ms backoff a retry sleeps, so the
+  // admission of a retry after a failed probe is held again.
+  const OPEN_BREAKER = { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 };
+
+  function openBreaker(clock: Clock): CircuitBreaker {
+    const breaker = new CircuitBreaker("announcer-model", OPEN_BREAKER, clock);
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503));
+    return breaker;
+  }
+
+  it("owes a settlement only to a call it announced, and only once", () => {
+    const { notices, announcer } = heard();
+    announcer.settled("answered");
+    expect(notices).toEqual([]);
+    announcer.admissionWait("circuit-cooldown", "outage-window");
+    announcer.settled("answered");
+    announcer.settled("failed");
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("owes a later outage of the same call its own settlement", () => {
+    const { notices, announcer } = heard();
+    announcer.scheduled(1, "attempts");
+    announcer.settled("answered");
+    announcer.admissionWait("probe-saturated", "outage-window");
+    announcer.settled("failed");
+    expect(notices).toEqual([
+      { kind: "scheduled", attempt: 1, retryPolicy: "attempts" },
+      { kind: "settled", outcome: "answered" },
+      { kind: "admission-wait", reason: "probe-saturated", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+
+  it("settles a call heard waiting for admission as answered once its attempt answers", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    const value = await executeWithRetry(
+      async (_attemptMs, remainingMs, previousError) => {
+        const { admission } = await breaker.waitForAdmission({
+          remainingMs: remainingMs ?? 0,
+          previousError,
+          jitterMs: 1,
+          retryPolicy: "outage-window",
+          announcer,
+        });
+        admission.settle("success");
+        return "ok";
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      { announcer },
+    );
+    expect(value).toBe("ok");
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "answered" },
+    ]);
+  });
+
+  it("keeps one outage of a call, however many retries follow its wait, to one settlement", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    let calls = 0;
+    await executeWithRetry(
+      async (_attemptMs, remainingMs, previousError) => {
+        const { admission } = await breaker.waitForAdmission({
+          remainingMs: remainingMs ?? 0,
+          previousError,
+          jitterMs: 1,
+          retryPolicy: "outage-window",
+          announcer,
+        });
+        calls += 1;
+        if (calls === 1) {
+          const failure = new TransportError("refused");
+          admission.settle("failure", failure);
+          throw failure;
+        }
+        admission.settle("success");
+        return "ok";
+      },
+      { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+      clock,
+      undefined,
+      () => 0.5,
+      { announcer },
+    );
+    expect(notices.map((notice) => notice.kind)).toEqual([
+      "admission-wait",
+      "scheduled",
+      "admission-wait",
+      "settled",
+    ]);
+    expect(notices.at(-1)).toEqual({ kind: "settled", outcome: "answered" });
+  });
+
+  it("settles a call heard waiting for admission as failed when its attempt then fails for good", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    await expect(
+      executeWithRetry(
+        async (_attemptMs, remainingMs, previousError) => {
+          const { admission } = await breaker.waitForAdmission({
+            remainingMs: remainingMs ?? 0,
+            previousError,
+            jitterMs: 1,
+            retryPolicy: "outage-window",
+            announcer,
+          });
+          const failure = new AuthenticationError("rejected");
+          admission.settle("non-provider-fault", failure);
+          throw failure;
+        },
+        { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+        clock,
+        undefined,
+        () => 0.5,
+        { announcer },
+      ),
+    ).rejects.toBeInstanceOf(AuthenticationError);
+    expect(notices).toEqual([
+      { kind: "admission-wait", reason: "circuit-cooldown", retryPolicy: "outage-window" },
+      { kind: "settled", outcome: "failed" },
+    ]);
+  });
+
+  it("leaves a call whose admission was refused at once unannounced and unsettled", async () => {
+    const { clock } = stubClock();
+    const { notices, announcer } = heard();
+    const breaker = openBreaker(clock);
+    await expect(
+      executeWithRetry(
+        async (_attemptMs, remainingMs, previousError) => {
+          await breaker.waitForAdmission({
+            remainingMs: Math.min(remainingMs ?? 0, 50),
+            previousError,
+            jitterMs: 1,
+            retryPolicy: "outage-window",
+            announcer,
+          });
+          return "unreachable";
+        },
+        { maxRetries: 0, retryBaseDelayMs: 500, retryWindowMs: 600_000, timeoutMs: 700_000 },
+        clock,
+        undefined,
+        () => 0.5,
+        { announcer },
+      ),
+    ).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(notices).toEqual([]);
+  });
+});
+
+// #3873 review (PR #3876): the observer is the caller's code, and it runs inside the retry loop and
+// the admission wait. One that throws must neither hang the call (the settlement used to run ahead
+// of `resolve`/`reject`) nor replace its result with the observer's own error, and its throw must
+// never leave the loop as an unhandled rejection, which the CLI's process guard treats as fatal. The
+// announcer absorbs the throw at its one call site and records it on `gateway.retry.observer-failed`.
+describe("retry announcer — an observer that throws (#3873 review)", () => {
+  const CORRELATION_ID = "corr-observer-throws";
+  const FAILED = "gateway.retry.observer-failed";
+  const PROVIDER_ATTEMPTS = { maxRetries: 3, retryBaseDelayMs: 500 } as const;
+  const THROWN_TEXT = "observer exploded with key sk-ABCDEFGHIJKLMNOPQRSTUV";
+
+  interface ThrowingCall {
+    readonly events: ModelGatewayLogEvent[];
+    readonly context: RetryLogContext;
+    readonly labels: RetryLogLabels;
+  }
+
+  // An observer that throws on the given notices and hears the rest; its message is the kind of
+  // text a log line must never carry.
+  function throwingCall(throwsOn: ReadonlySet<GatewayRetryNotice["kind"]>): ThrowingCall {
+    const events: ModelGatewayLogEvent[] = [];
+    const labels: RetryLogLabels = {
+      sink: { write: (event): void => void events.push(event) },
+      modelId: "observer-model",
+      correlationId: CORRELATION_ID,
+    };
+    const observer: GatewayRetryObserver = (notice): void => {
+      if (throwsOn.has(notice.kind)) throw new Error(THROWN_TEXT);
+    };
+    return { events, labels, context: { ...labels, announcer: retryAnnouncer(observer, labels) } };
+  }
+
+  const failedNotices = (events: readonly ModelGatewayLogEvent[]): unknown[] =>
+    events.filter((event) => event.op === FAILED).map((event) => event.extra?.notice);
+
+  // The provider fails `failures` times with a retryable transport error, then answers.
+  function recovering(failures: number): {
+    readonly operation: () => Promise<string>;
+    readonly calls: () => number;
+  } {
+    let calls = 0;
+    return {
+      operation: (): Promise<string> => {
+        calls += 1;
+        return calls <= failures
+          ? Promise.reject(new TransportError("refused"))
+          : Promise.resolve("ok");
+      },
+      calls: (): number => calls,
+    };
+  }
+
+  const rateLimited = (): Promise<never> => Promise.reject(new RateLimitError("overloaded"));
+
+  it("answers a call whose observer throws when told the call was answered", async () => {
+    const { clock } = stubClock();
+    const { events, context } = throwingCall(new Set(["settled"]));
+    const provider = recovering(1);
+
+    const value = await executeWithRetry(
+      provider.operation,
+      PROVIDER_ATTEMPTS,
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+
+    expect(value).toBe("ok");
+    expect(provider.calls()).toBe(2);
+    expect(failedNotices(events)).toEqual(["settled"]);
+  });
+
+  it("fails a call with the provider's own error when its observer throws as the call fails", async () => {
+    const { clock } = stubClock();
+    const { events, context } = throwingCall(new Set(["settled"]));
+
+    await expect(
+      executeWithRetry(
+        rateLimited,
+        { maxRetries: 1, retryBaseDelayMs: 500 },
+        clock,
+        undefined,
+        () => 0.5,
+        context,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+
+    expect(failedNotices(events)).toEqual(["settled"]);
+  });
+
+  it("finishes a call whose observer throws on every notice, answered or failed", async () => {
+    const everyNotice = new Set<GatewayRetryNotice["kind"]>([
+      "scheduled",
+      "admission-wait",
+      "settled",
+    ]);
+    const answered = throwingCall(everyNotice);
+    const provider = recovering(2);
+
+    await expect(
+      executeWithRetry(
+        provider.operation,
+        PROVIDER_ATTEMPTS,
+        stubClock().clock,
+        undefined,
+        () => 0.5,
+        answered.context,
+      ),
+    ).resolves.toBe("ok");
+    expect(provider.calls()).toBe(3);
+    expect(failedNotices(answered.events)).toEqual(["scheduled", "scheduled", "settled"]);
+
+    const failed = throwingCall(everyNotice);
+    await expect(
+      executeWithRetry(
+        rateLimited,
+        { maxRetries: 2, retryBaseDelayMs: 500 },
+        stubClock().clock,
+        undefined,
+        () => 0.5,
+        failed.context,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(failedNotices(failed.events)).toEqual(["scheduled", "scheduled", "settled"]);
+  });
+
+  it("retries a failed attempt exactly as an unobserved call does when the observer throws on the retry", async () => {
+    const observed = stubClock();
+    const plain = stubClock();
+    const { events, context } = throwingCall(new Set(["scheduled"]));
+    const provider = recovering(1);
+
+    await expect(
+      executeWithRetry(
+        provider.operation,
+        PROVIDER_ATTEMPTS,
+        observed.clock,
+        undefined,
+        () => 0.5,
+        context,
+      ),
+    ).resolves.toBe("ok");
+    await executeWithRetry(
+      recovering(1).operation,
+      PROVIDER_ATTEMPTS,
+      plain.clock,
+      undefined,
+      () => 0.5,
+    );
+
+    expect(provider.calls()).toBe(2);
+    expect(observed.sleeps).toEqual(plain.sleeps);
+    expect(failedNotices(events)).toEqual(["scheduled"]);
+  });
+
+  // The admission wait runs inside the breaker's own try block, which turned a throw into a failed
+  // wait and rethrew it: the call failed on the observer's error instead of waiting out the cooldown.
+  it("holds an admission for its cooldown when the observer throws as the wait begins", async () => {
+    const { clock } = stubClock();
+    const { events, labels } = throwingCall(new Set(["admission-wait"]));
+    const breaker = new CircuitBreaker(
+      "announcer-model",
+      { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 },
+      clock,
+      labels.sink,
+    );
+    breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503));
+    const observer: GatewayRetryObserver = (): void => {
+      throw new Error(THROWN_TEXT);
+    };
+
+    const { admission } = await breaker.waitForAdmission({
+      remainingMs: 600_000,
+      jitterMs: 1,
+      retryPolicy: "outage-window",
+      correlationId: CORRELATION_ID,
+      announcer: retryAnnouncer(observer, labels),
+    });
+    admission.settle("success");
+
+    const waits = events.filter((event) => event.op === "gateway.circuit.wait");
+    expect(waits.map((line) => line.extra?.outcome)).toEqual(["started", "timer"]);
+    expect(failedNotices(events)).toEqual(["admission-wait"]);
+  });
+
+  it("records each throw as a body-free failure line under the call's correlation id", async () => {
+    const { clock } = stubClock();
+    const { events, context } = throwingCall(new Set(["scheduled", "settled"]));
+
+    await executeWithRetry(
+      recovering(1).operation,
+      PROVIDER_ATTEMPTS,
+      clock,
+      undefined,
+      () => 0.5,
+      context,
+    );
+
+    const lines = events.filter((event) => event.op === FAILED);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({
+      category: "gateway",
+      level: "error",
+      correlationId: CORRELATION_ID,
+      errorKind: "internal",
+      extra: { modelId: "observer-model", notice: "scheduled" },
+    });
+    expect(JSON.stringify(events)).not.toContain("exploded");
+    expect(JSON.stringify(events)).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUV");
+    expect(
+      expectActivityLogProof(
+        "gateway.retry.observer-failed.emitted-line",
+        formatActivityLogProofLine(lines[1] ?? {}),
+      ),
+    ).toMatchObject({ modelId: "observer-model", notice: "settled" });
+  });
+
+  it("labels the throw of an announcer built without a correlation id with the unknown one", () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const announcer = retryAnnouncer(
+      (): void => {
+        throw new Error(THROWN_TEXT);
+      },
+      { sink: { write: (event): void => void events.push(event) } },
+    );
+
+    announcer.admissionWait("circuit-cooldown", "attempts");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: FAILED,
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    });
+    expect(events[0]?.extra).not.toHaveProperty("modelId");
+  });
 });
