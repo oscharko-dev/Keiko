@@ -1984,6 +1984,13 @@ export class CodingRuntimeOrchestrator {
   hasLiveRun(): boolean {
     return this.current() !== undefined;
   }
+
+  blocksWorkspaceSelection(): boolean {
+    const current = this.current();
+    if (this.deps.manager.health().status !== "stopped") return true;
+    if (current === undefined) return false;
+    return current.state !== "recovery-required" || current.recoveryAcknowledgedAt === undefined;
+  }
   snapshot(): PublicSnapshot {
     const visibleRunId = this.activeRunId ?? this.settledRunId;
     return visibleRunId === undefined

@@ -1361,6 +1361,38 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.orchestrator.hasLiveRun()).toBe(true);
   });
 
+  it.each([
+    [false, "stopped", true],
+    [true, "stopped", false],
+    [true, "recovery-required", true],
+  ] as const)(
+    "keeps workspace selection bounded by acknowledgement=%s and host=%s",
+    (acknowledged, status, blocked) => {
+      const prior: CodingRuntimeSnapshot = {
+        ...settledRow("run-1", "2026-01-01T00:00:00.000Z", 2),
+        state: "recovery-required",
+        terminalAt: undefined,
+        result: undefined,
+        ...(acknowledged ? { recoveryAcknowledgedAt: "2026-01-01T00:00:01.000Z" } : {}),
+      };
+      const f = fixture(undefined, undefined, [prior]);
+      f.manager.health.mockReturnValue(
+        status === "stopped"
+          ? { status }
+          : {
+              status,
+              activeRunId: "run-1",
+              failureCode: "runtime-reap-unproven",
+              restartDenied: true,
+            },
+      );
+
+      expect(f.orchestrator.hasLiveRun()).toBe(true);
+      expect(f.orchestrator.blocksWorkspaceSelection()).toBe(blocked);
+      expect(f.orchestrator.snapshot().state).toBe("recovery-required");
+    },
+  );
+
   it.each(["stop", "takeover"] as const)(
     "aborts preparation on operator %s and never dispatches a late ready result",
     async (kind) => {

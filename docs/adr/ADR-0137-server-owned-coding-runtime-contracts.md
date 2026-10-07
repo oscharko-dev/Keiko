@@ -425,6 +425,13 @@ waits for the interruption's teardown result and never dispatches the initial ta
 terminal state. An unproven teardown or a late live host remains `recovery-required`; cancellation
 does not substitute for process-tree exit proof (F25, #3873).
 
+An acknowledged recovery row remains visible until a replacement starts, but no longer blocks
+workspace selection when the runtime manager reports `stopped`. Workspace activation uses that
+specific predicate rather than treating every retained recovery row as a running process. The
+checks before body parsing and immediately before checkout mutation remain; an unacknowledged row
+or a host in any other state still blocks selection. History and shutdown keep the broader live-row
+predicate, and acknowledgement never turns an unproven host into a stopped one.
+
 Supported platform names are not sufficient evidence that confinement exists. Runtime availability
 uses this release-qualified matrix:
 
