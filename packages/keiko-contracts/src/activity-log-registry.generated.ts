@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b0a05f392be7131583e0b821928494d5a97cfff6833387321bff8c96a74dfe2f" as const;
+  "debac50800a8da11ccca2c69275614eccc736b90c59229e8c68be76087055de9" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -21044,6 +21044,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "transport",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "unexpectedPropertyCount",
               type: "integer",
               dataClass: "count",
@@ -21176,6 +21182,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "opaque-id",
               required: true,
+            },
+            {
+              name: "transport",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "unexpectedPropertyCount",

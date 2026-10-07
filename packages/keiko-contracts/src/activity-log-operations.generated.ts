@@ -16876,6 +16876,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["projection", "response"],
       },
+      transport: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["assistant-text"],
+      },
       status: {
         type: "string",
         dataClass: "closed-enum",
@@ -17017,6 +17023,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: true,
         maxLength: 256,
+      },
+      transport: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["assistant-text"],
       },
       missingRequiredCount: {
         type: "integer",

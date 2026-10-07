@@ -44,6 +44,7 @@ import {
 import {
   createGatewayToolCatalogBridge,
   retainMeasuredCatalogFailureUsage,
+  type GatewayToolCatalogBridge,
 } from "./toolCatalogBridge.js";
 import {
   bindNormalizedToolCalls,
@@ -922,11 +923,12 @@ function providerReportedUsage(payload: unknown): boolean {
 function bindCatalogResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
-  bind: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[],
+  catalog: GatewayToolCatalogBridge,
   usageReported: boolean,
 ): NormalizedResponse {
   try {
-    return bindNormalizedToolCalls(redactResponse(response, secrets), bind);
+    catalog.assertNativeTransport(response);
+    return bindNormalizedToolCalls(redactResponse(response, secrets), catalog.bindCalls);
   } catch (error) {
     if (usageReported) retainMeasuredCatalogFailureUsage(error, response.usage);
     throw error;
@@ -1497,7 +1499,7 @@ interface StreamRead {
   readonly secrets: readonly string[];
   readonly signal: AbortSignal;
   readonly bounds: StreamReadBounds | undefined;
-  readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
+  readonly catalog: GatewayToolCatalogBridge;
   readonly start: number;
 }
 
@@ -1611,7 +1613,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         mapHttpError(response, config.modelId, secrets, errorPayload);
       }
       const payload = await this.readBody(response, config, secrets, dispatched.signal);
-      return this.finishedResponse(payload, request, config, secrets, catalog.bindCalls, start);
+      return this.finishedResponse(payload, request, config, secrets, catalog, start);
     } finally {
       dispatched.dispose();
     }
@@ -1659,7 +1661,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         secrets,
         signal: dispatched.signal,
         bounds,
-        bindCalls: catalog.bindCalls,
+        catalog,
         start,
       };
       yield* answeredWholeBody(response)
@@ -1763,7 +1765,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         read.request,
         read.config,
         read.secrets,
-        read.bindCalls,
+        read.catalog,
         read.start,
       );
     } catch (error) {
@@ -1781,7 +1783,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     request: GatewayRequest,
     config: ModelProviderConfig,
     secrets: readonly string[],
-    bindCalls: StreamRead["bindCalls"],
+    catalog: GatewayToolCatalogBridge,
     start: number,
   ): NormalizedResponse {
     const normalized = normalizeChatResponse(
@@ -1795,7 +1797,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       request.responseFormat?.type === "json_schema",
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return bindCatalogResponse(normalized, secrets, bindCalls, providerReportedUsage(payload));
+    return bindCatalogResponse(normalized, secrets, catalog, providerReportedUsage(payload));
   }
 
   // One line per streamed read, body-free (ADR-0003): how it ended, how many data events it had,

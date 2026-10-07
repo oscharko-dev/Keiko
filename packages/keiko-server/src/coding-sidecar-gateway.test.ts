@@ -4724,7 +4724,7 @@ describe("coding sidecar gateway turn failure projection", () => {
       routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
       deps,
     );
-    expect(result).toMatchObject({ status: 503 });
+    expect(result).toMatchObject({ status: code === "invalid-tool-call" ? 400 : 503 });
     const replay = eventHub.replay("run-gateway-test");
     expect(replay.ok && replay.events).toMatchObject([{ failureCode: code }]);
     expect(JSON.stringify(replay)).not.toContain(error.message);
@@ -4763,6 +4763,47 @@ describe("coding sidecar gateway turn failure projection", () => {
       events.find((event) => event.op === "coding-sidecar.gateway.turn-failed");
     const rejectionChunk =
       '"error":{"code":400,"type":"invalid_request_error","message":"The model provider rejected this turn."}';
+
+    it("ends a malformed invocation after delivered text without an identical runtime retry", async () => {
+      const sink = captureServerLog("warn");
+      const response = mockResponse({ captureBody: true });
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "I will search now." };
+        throw new MalformedToolCallError("private-malformed-invocation-canary");
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-malformed" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "synthetic" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain("I will search now.");
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(response.body()).not.toContain("private-malformed-invocation-canary");
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({
+        failureCode: "invalid-tool-call",
+        runtimeRetry: "refused",
+      });
+    });
 
     it.each([
       [rejection, 400, "refused"],

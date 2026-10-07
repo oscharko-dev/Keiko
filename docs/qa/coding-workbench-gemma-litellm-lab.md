@@ -32,14 +32,34 @@ the raw report file was not provided, so the numbers below are transcribed, not 
 | reranker                               | skipped: none configured                                                 | none                                                                    |
 | image input / document input           | unsupported (image accepted but not identified; PDF not accepted)        | not probed; the coding path is text-only                                |
 
-Two consequences for reading this ledger: the customer's long-context probe accepted 32,000 tokens
-in 4.65 s, a prefill rate about seventy times the lab's (from an approximate token count) (T4's 40,316-token compaction request waited
-421 s for its first byte here), so the model prefill and the time to first byte of every call in this ledger are upper bounds for that route;
-and `testedContextTokens=32000` is what the probe tested, not the route's declared window. The lab's
+The customer's 32,000-token sentinel probe completed in 4.65 s. That is a different request from
+the lab's 40,316-token compaction request (421 s to first byte), so it cannot establish a throughput
+ratio or an upper bound for customer coding latency. `testedContextTokens=32000` is what the probe
+tested, not the route's declared window. The lab's
 T4 run sent one 40,316-token request (the automatic compaction, F24) and regular turns of up to
 35,268 tokens; on a route whose `model_info` declares a 32k window, Keiko's compaction geometry is
 derived from that window and must trigger earlier. Verify the declared `context_window` of the
 customer route before the first long task.
+
+The readiness embedding probe selects the configured retrieval model through
+`selectConfiguredModel({ kind: "embedding" })`, independently of the report's chat-model id.
+The customer's 1,024-dimensional, unit-norm result therefore proves an available embedding route,
+not that Gemma itself produced embeddings. It proves vector shape and nonzero norm, not semantic
+retrieval quality. Streaming and forced tool calling are currently separate readiness probes;
+their individual success does not prove streamed tool-call parsing or a complete tool/result cycle.
+
+The current-helper small-task run `run-146041115310732789142352533186727803180` exposed that gap:
+one answer serialized a model tool invocation as assistant text, no governed tool executed, and
+the run incorrectly settled succeeded. The targeted transport regressions now reject that answer
+and exercise a bounded native-call correction before answer delivery. A rejection after text
+delivery ends the turn without OpenCode's identical unbounded retry. Live qualification of this
+repair and the combined streaming/tool-call readiness improvement remain pending.
+
+Targeted verification of the transport repair: four failing adapter/gateway regressions and two
+failing sidecar regressions before the fix; 482 tests across five affected suites after the fix,
+including literal-code controls and a genuine native tool call. Scoped TypeScript build, ESLint,
+Prettier and the generated Activity Log catalog check passed (97 catalog tests; zero registry
+violations). Full closeout gates remain deferred while engineering continues.
 
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations
