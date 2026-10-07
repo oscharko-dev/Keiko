@@ -502,8 +502,13 @@ which every server verification path uses, requires an enforcing backend and ref
 cannot confine; only a caller that explicitly selects the `inherit` compatibility mode lets steps
 inherit host network. The child receives the ephemeral empty HOME every
 governed command receives (C5), so only npm's default registry configuration applies, and a
-project-level `.npmrc` refuses the bootstrap outright (`refused`, `project npm config present`):
-a manifest cannot redirect the install to a registry nobody configured. An unreadable manifest
+project-level `.npmrc` permits only the closed guard settings `strict-allow-scripts=true`,
+`ignore-scripts=true` and `engine-strict=true`, plus blank and comment lines. Every other setting,
+unreadable or oversized config, interpolation or unsafe descriptor refuses the bootstrap
+(`refused`, `project npm config present`). Config admission is checked again immediately before
+the npm spawn and config identity participates in the process-owned installation receipt. The
+fixed `--ignore-scripts` invocation and registry-only egress remain in force; a manifest cannot
+redirect the install to a registry nobody configured. An unreadable manifest
 refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
 runs.
 

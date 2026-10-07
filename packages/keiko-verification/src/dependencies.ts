@@ -7,8 +7,8 @@
 // --ignore-scripts` executes no package or project code — it only resolves and unpacks what the
 // manifest declares — and the code it fetches runs solely inside the sandboxed, egress-denied steps
 // that follow. Only npm's own configuration applies: the child gets the ephemeral HOME every
-// governed command gets, and a project `.npmrc` refuses the bootstrap outright, so a manifest cannot
-// redirect the install to a registry nobody configured.
+// governed command gets. A project `.npmrc` may contain only explicit script-restricting flags;
+// source, credential, interpolation and execution overrides refuse the bootstrap.
 //
 // Host network makes every source npm would contact part of that boundary (CodeRabbit review, PR
 // #3452: CWE-918, CWE-494). Before npm runs, each specifier the root manifest and every workspace
@@ -80,7 +80,7 @@ export const DEPENDENCY_INSTALL_ARGS: readonly string[] = Object.freeze([
 
 /**
  * npm's default registry: the one origin a lockfile entry may be fetched from. The child's HOME is
- * ephemeral and a project `.npmrc` refuses the bootstrap, so no repository-controlled configuration
+ * ephemeral and a project `.npmrc` admits only script-restricting flags, so no repository-controlled configuration
  * can name another.
  */
 export const DEPENDENCY_APPROVED_REGISTRY = "https://registry.npmjs.org/";
@@ -102,6 +102,11 @@ const MAX_INSTALL_ENTRIES = 100_000;
 const SOURCE_LOCKFILES: readonly string[] = [...LOCKFILES, INSTALLED_TREE_MARKER];
 const LOCKFILE_VERSIONS: ReadonlySet<unknown> = new Set<unknown>([2, 3]);
 const PROJECT_NPM_CONFIG = ".npmrc";
+const SAFE_PROJECT_NPM_SETTINGS: ReadonlySet<string> = new Set([
+  "strict-allow-scripts=true",
+  "ignore-scripts=true",
+  "engine-strict=true",
+]);
 const DECLARATION_SECTIONS: readonly string[] = [
   "dependencies",
   "devDependencies",
@@ -496,7 +501,7 @@ function fingerprintInputs(
   fs: WorkspaceFs,
   hash: ReturnType<typeof createHash>,
 ): void {
-  for (const name of [MANIFEST, ...LOCKFILES]) {
+  for (const name of [MANIFEST, ...LOCKFILES, PROJECT_NPM_CONFIG]) {
     const path = join(root, name);
     if (!fs.exists(path)) hash.update(JSON.stringify([name, "absent"]));
     else fingerprintStat(hash, name, inspectionStat(fs, path));
@@ -555,7 +560,7 @@ export function planDependencyBootstrap(
     return { kind: "refused", reason: "manifest-unreadable", lockfile };
   }
   if (declaredDependencyCount(manifest) === 0) return { kind: "none" };
-  if (statOrUndefined(fs, join(root, PROJECT_NPM_CONFIG)) !== undefined) {
+  if (!projectNpmConfigApproved(root, fs)) {
     return { kind: "refused", reason: "project-npm-config", lockfile };
   }
   const refusal = sourceRefusal(root, manifest, fs);
@@ -567,6 +572,28 @@ export function planDependencyBootstrap(
   } catch (error) {
     reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
     return { kind: "refused", reason: "install-inspection-unavailable", lockfile };
+  }
+}
+
+function projectNpmConfigApproved(root: string, fs: WorkspaceFs): boolean {
+  const path = join(root, PROJECT_NPM_CONFIG);
+  const stat = statOrUndefined(fs, path);
+  if (stat === undefined) return true;
+  if (!stat.isFile || stat.isSymbolicLink || stat.size > 16_384) return false;
+  try {
+    const read = fs.readFileUtf8SameDescriptor?.(path, 16_384, "reject", stat);
+    if (read === undefined) return false;
+    return read.rawText.split(/\r?\n/u).every((raw) => {
+      const line = raw.trim();
+      return (
+        line === "" ||
+        line.startsWith("#") ||
+        line.startsWith(";") ||
+        SAFE_PROJECT_NPM_SETTINGS.has(line)
+      );
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -650,6 +677,9 @@ function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): Run
     spawn: (command, args, options): ReturnType<SpawnFn> => {
       // Recheck after executable/cwd resolution, immediately before handing paths to npm.
       assertInstallDirectory(deps.workspace.root, deps.fs);
+      if (!projectNpmConfigApproved(deps.workspace.root, deps.fs)) {
+        throw new InstallInspectionError("DEPENDENCY_PROJECT_NPM_CONFIG_UNSAFE");
+      }
       if (optionalInspectionStat(deps.fs, join(deps.workspace.root, "node_modules")) !== undefined)
         installationFingerprint(deps.workspace.root, deps.fs);
       return deps.spawn(command, args, options);

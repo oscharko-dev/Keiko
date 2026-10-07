@@ -209,6 +209,38 @@ describe("planDependencyBootstrap", () => {
     });
   });
 
+  it("admits script-restricting npm configuration without permitting source or credential overrides", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(
+      join(root, ".npmrc"),
+      "# repository script policy\nstrict-allow-scripts=true\nignore-scripts=true\n",
+      "utf8",
+    );
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
+      kind: "install",
+      lockfile: "absent",
+    });
+  });
+
+  it.each([
+    "strict-allow-scripts=false",
+    "ignore-scripts=false",
+    "registry=https://example.invalid",
+    "//registry.npmjs.org/:_authToken=synthetic-value",
+    "script-shell=/outside/executable",
+    "strict-allow-scripts=${UNTRUSTED_VALUE}",
+    "strict-allow-scripts=true\nregistry=https://example.invalid",
+  ])("refuses npm configuration outside the closed guard-only settings: %s", (configuration) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(join(root, ".npmrc"), configuration, "utf8");
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toMatchObject({
+      kind: "refused",
+      reason: "project-npm-config",
+    });
+  });
+
   it("plans 'install' when dependencies are declared and the installed-tree marker is absent", () => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
@@ -1090,6 +1122,24 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(outcome.summary.state).toBe("failed");
     expect(onFailure).toHaveBeenCalledWith({ stage: "command", error });
     expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("refuses a project config that becomes unsafe after planning and before npm spawn", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeFileSync(join(root, ".npmrc"), "strict-allow-scripts=true\n");
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => {
+        writeFileSync(join(root, ".npmrc"), "registry=https://example.invalid\n");
+        return Promise.resolve(fakeEgressProxy());
+      },
+    });
+
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary.state).toBe("failed");
+    expect(outcome.summary.completionRecorded).toBe(false);
   });
 
   it("runs npm behind the egress proxy, records its tunnels and closes it", async () => {
