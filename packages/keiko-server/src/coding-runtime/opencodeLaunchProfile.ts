@@ -82,7 +82,7 @@ Work in small read/edit/verify cycles, keep patches minimal, and never describe 
 
 export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
   "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
-  "1. Plan briefly, then act: when the accepted task requires workspace reads, edits or verification, include the next governed tool call in the same response as any short progress plan and continue the workflow. A plan alone does not complete that task. Return only a plan when the accepted task asks solely for planning; read-only questions may finish once you have enough evidence to answer them. Reserve the final answer for completed work or an accurately explained blocker.",
+  "1. Act on the accepted task: OpenCode ends the workflow when an assistant response has no native tool call. For repository implementation or verification work, begin with the next actual governed tool call and continue the read/edit/verify cycle; do not send a preliminary text-only acknowledgement, plan or progress update. You may accompany a native tool call with brief progress text. Reserve a text-only response for completed work or an accurately explained blocker. Return only a plan when the accepted task asks solely for planning; read-only questions may finish once you have enough evidence to answer them.",
 );
 export type OpenCodeLaunchProfileResult =
   | {
