@@ -45,6 +45,32 @@ accepted one read-only UI task, observed `starting`, and refused to signal becau
 already been recorded. The receipt remains not qualified, with zero signals, restarts,
 acknowledgements or task resubmissions. It cannot establish the missing before-spawn qualification.
 
+### F25: actual interruption before runtime spawn on `844576a7b556`
+
+Distinct case `b6a1dbbf-9db3-4366-ab2a-af97536cc986` passed using the same exact clean build,
+fresh helper and normal CLI launch against local LiteLLM/Gemma. It accepted one read-only UI task
+in the isolated full Keiko sandbox. The final process-table observation proved the original BFF
+identity, zero current descendants and absence of the previously sampled preparation-process PID;
+the complete historical identity inventory was retained. No canonical runtime-spawn event existed.
+The SIGKILL followed an authenticated `starting` observation with a 35 ms observation age.
+
+The original BFF and tracked process were absent before the single restart. The replacement
+retained the same unacknowledged recovery run. Both repository-selection guards returned 409
+before recovery acknowledgement and 200 afterward. Two fresh bounded stopped-host observations
+proved zero children, including immediately before the one acknowledgement (HTTP 200); no second
+task was submitted. The final retained recovery row was acknowledged, and sandbox fingerprints
+matched before and after. The canonical Activity Log independently confirms exactly one accepted
+run, zero `runtime.confinement.spawned` events, zero productive model requests and one recovery
+acknowledgement. This qualifies the named macOS before-spawn interruption case, not final-head,
+Linux or full native-tool parity.
+
+The earlier `68563e3b` case remains not qualified. Its same accepted read-only task subsequently
+succeeded without resubmission or sandbox changes. The corrected private observer retains
+historical identities and requires current absence; it also refuses live or reparented historical
+processes, PID reuse and an already observed native spawn. Six focused controls and the existing
+24 driver self-tests passed. This observation is bounded process evidence, not an atomic kernel
+guarantee. Idle-server cleanup is recorded separately from each interruption case.
+
 ## Deployment shape
 
 | Layer         | Lab                                                                                                                          | Customer                                          |
