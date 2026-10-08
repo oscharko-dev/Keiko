@@ -28,6 +28,9 @@
     },
     "gitlab-ai-provider@6.12.1": {
       "@ai-sdk/provider-utils": "4.0.33"
+    },
+    "@opencode/core@2.0.10": {
+      "@parcel/watcher": "2.6.0"
     }
   },
   "version": "0.0.0-private",

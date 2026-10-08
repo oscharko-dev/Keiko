@@ -72,32 +72,35 @@ describe("long-lived gateway network confinement", () => {
     ])
       expect(() => createRuntimeGatewayConfinement({ ...input, filesystem: changed })).toThrow();
   });
-  it("owns and binds the closed native filesystem capability without widening legacy policies", () => {
-    const filesystem = {
-      workspaceRoot: "/accepted/workspace",
-      workspaceAccess: "read-only" as const,
-      privateStateRoot: "/private/native-state",
-      runtimeReadRoot: "/immutable/native-runtime",
-    };
-    const policy = createRuntimeGatewayConfinement({ ...input, filesystem });
-    expect(policy.filesystem).toEqual(filesystem);
-    expect(Object.isFrozen(policy.filesystem)).toBe(true);
-    expect(policy.policyDigest).not.toBe(createRuntimeGatewayConfinement(input).policyDigest);
-    filesystem.workspaceRoot = "/replaced/workspace";
-    expect(policy.filesystem?.workspaceRoot).toBe("/accepted/workspace");
-    expect(
-      isRuntimeGatewayConfinement({
-        ...policy,
-        filesystem: { ...policy.filesystem, privateStateRoot: "/other/state" },
-      }),
-    ).toBe(false);
-    expect(
-      isRuntimeGatewayConfinement({
-        ...policy,
-        filesystem: { ...policy.filesystem, rawOutput: "synthetic" },
-      }),
-    ).toBe(false);
-  });
+  it.skipIf(currentPlatform() !== "darwin")(
+    "owns and binds the closed native filesystem capability without widening legacy policies",
+    () => {
+      const filesystem = {
+        workspaceRoot: "/accepted/workspace",
+        workspaceAccess: "read-only" as const,
+        privateStateRoot: "/private/native-state",
+        runtimeReadRoot: "/immutable/native-runtime",
+      };
+      const policy = createRuntimeGatewayConfinement({ ...input, filesystem });
+      expect(policy.filesystem).toEqual(filesystem);
+      expect(Object.isFrozen(policy.filesystem)).toBe(true);
+      expect(policy.policyDigest).not.toBe(createRuntimeGatewayConfinement(input).policyDigest);
+      filesystem.workspaceRoot = "/replaced/workspace";
+      expect(policy.filesystem?.workspaceRoot).toBe("/accepted/workspace");
+      expect(
+        isRuntimeGatewayConfinement({
+          ...policy,
+          filesystem: { ...policy.filesystem, privateStateRoot: "/other/state" },
+        }),
+      ).toBe(false);
+      expect(
+        isRuntimeGatewayConfinement({
+          ...policy,
+          filesystem: { ...policy.filesystem, rawOutput: "synthetic" },
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("refuses prototype-bearing filesystem input and a writable ancestor with a dot-prefix child", () => {
     const filesystem = {

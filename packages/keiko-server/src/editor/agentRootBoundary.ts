@@ -117,7 +117,12 @@ function manifestRow(
   const direct = store.findWorkspaceManifestRecordByProject(workspaceRoot);
   if (direct !== undefined) return direct;
   try {
-    return store.findWorkspaceManifestRecordByProject(realpathSync(workspaceRoot));
+    const canonicalRoot = realpathSync(workspaceRoot);
+    const canonicalProject = store.findWorkspaceManifestRecordByProject(canonicalRoot);
+    if (canonicalProject !== undefined) return canonicalProject;
+    return store.findWorkspaceManifestRecordByRoot(
+      inspectWorkspaceRootIdentity(canonicalRoot).rootRef,
+    );
   } catch {
     return undefined;
   }

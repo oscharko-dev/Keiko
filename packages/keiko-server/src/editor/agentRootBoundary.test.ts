@@ -44,6 +44,7 @@ import {
   handleEditorAgentSnapshot,
 } from "./agentRoutes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
+import { retainedDirtyTargets } from "./bufferSafetyTargets.js";
 import { handleEditorAgentProducerTurn } from "./agentProducerRoute.js";
 import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
 import type { ScriptTrustDecision, VerificationRunnerManager } from "./verificationRunner.js";
@@ -150,6 +151,18 @@ function snapshot(
     textMode: "none",
     updatedAt: 1,
   };
+}
+
+function aliasOnlyStore(): { aliasStore: UiStore; registered: WorkspaceManifest } {
+  const alias = join(temporaryRoot, "selected-alias");
+  symlinkSync(rootA, alias, "dir");
+  const aliasStore = createInMemoryUiStore();
+  aliasStore.createProject(alias, "Selected alias");
+  const registered = new WorkspaceManifestService(aliasStore).list()[0];
+  if (registered === undefined) throw new Error("missing alias manifest");
+  expect(aliasStore.findWorkspaceManifestRecordByProject(rootA)).toBeUndefined();
+  expect(registered.roots[0]?.canonicalRoot).toBe(rootA);
+  return { aliasStore, registered };
 }
 
 function authority(root: string, runId: string): CodingWorkbenchAuthorityEnvelope {
@@ -391,6 +404,93 @@ describe("editor agent root boundary", () => {
     ).toMatchObject({ ok: true, root: { workspaceRoot: rootB, binding: binding(1) } });
   });
 
+  it("resolves an alias-only manifest through the actual canonical root identity", () => {
+    const { aliasStore, registered } = aliasOnlyStore();
+    try {
+      const selected = snapshot(rootA, undefined, "runtime-canonical-alias");
+      const resolved = resolveEditorAgentRuntimeRoot(
+        selected,
+        createOrdinaryWorkspaceRootAccess(rootA),
+        aliasStore,
+      );
+      expect(resolved).toMatchObject({
+        ok: true,
+        root: {
+          workspaceRoot: rootA,
+          binding: {
+            manifestRef: registered.manifestRef,
+            manifestDigest: registered.manifestDigest,
+            rootRef: registered.roots[0]?.rootRef,
+            rootIdentityDigest: registered.roots[0]?.identityDigest,
+          },
+        },
+      });
+    } finally {
+      aliasStore.close();
+    }
+  });
+
+  it("refuses alias-root lookup when the stored object identity no longer matches", () => {
+    const { aliasStore } = aliasOnlyStore();
+    const changedStore: UiStore = {
+      ...aliasStore,
+      findWorkspaceManifestRecordByRoot: (rootRef) => {
+        const row = aliasStore.findWorkspaceManifestRecordByRoot(rootRef);
+        return row === undefined
+          ? undefined
+          : {
+              ...row,
+              rootProjects: row.rootProjects.map((root) => ({
+                ...root,
+                objectIdentityDigest: "f".repeat(64),
+              })),
+            };
+      },
+    };
+    try {
+      expect(
+        resolveEditorAgentRuntimeRoot(
+          snapshot(rootA, undefined, "runtime-alias-stale"),
+          createOrdinaryWorkspaceRootAccess(rootA),
+          changedStore,
+        ),
+      ).toEqual({ ok: false, reason: "root-binding-invalid" });
+    } finally {
+      aliasStore.close();
+    }
+  });
+
+  it("retains alias-owned dirty-buffer safety without publishing an agent session", () => {
+    const { aliasStore } = aliasOnlyStore();
+    const passive: EditorAgentSessionSnapshot = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      sessionId: "buffer-canonical-alias",
+      windowId: "window-buffer-canonical-alias",
+      workspaceRoot: rootA,
+      activePaneId: "pane-1",
+      panes: [{ paneId: "pane-1", activeFile: "src/file.ts", openFiles: ["src/file.ts"] }],
+      dirtyFiles: ["src/file.ts"],
+      activeFile: "src/file.ts",
+      cursor: null,
+      selection: null,
+      diagnosticsSummary: null,
+      textMode: "none",
+      updatedAt: 1,
+    };
+    try {
+      expect(editorAgentRegistry.registerBufferSnapshot(passive, HASH)).toBe(true);
+      expect(editorAgentRegistry.selectSnapshot(passive.sessionId)).toBeUndefined();
+      expect(editorAgentRegistry.hasLiveBridge(passive.sessionId)).toBe(false);
+      expect(
+        retainedDirtyTargets(rootA, ["src/file.ts"], aliasStore, () =>
+          grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(rootA)),
+        ),
+      ).toEqual(["src/file.ts"]);
+    } finally {
+      aliasStore.close();
+    }
+  });
+
   it("refuses an ordinary runtime when the granted root does not match the selected root", () => {
     expect(
       resolveEditorAgentRuntimeRoot(
@@ -430,6 +530,7 @@ describe("editor agent root boundary", () => {
     const noManifestStore: UiStore = {
       ...store,
       findWorkspaceManifestRecordByProject: () => undefined,
+      findWorkspaceManifestRecordByRoot: () => undefined,
     };
     expect(
       resolveEditorAgentRuntimeRoot(
@@ -811,6 +912,7 @@ describe("editor agent root boundary", () => {
     const noManifestStore: UiStore = {
       ...store,
       findWorkspaceManifestRecordByProject: () => undefined,
+      findWorkspaceManifestRecordByRoot: () => undefined,
     };
 
     expect(resolveEditorAgentSessionRoot(legacy, noManifestStore)).toEqual({

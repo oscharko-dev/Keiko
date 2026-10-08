@@ -30,8 +30,16 @@ import {
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
 } from "./chat-handlers.js";
-import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
-import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  currentConversationReady,
+  type UiHandlerDeps,
+} from "./deps.js";
+import {
+  ensureOnDemandConversationReadiness,
+  stopConfiguredConversationReadiness,
+} from "./gateway-readiness.js";
 // Final-audit F5 (#3400): the production-composition proof for the Chat apply path reuses the
 // SAME real fixture and route handlers prDescriptionRoutes.test.ts already proves a full
 // preview -> approve -> apply round trip against (a real git repo, a real GitHub-shaped body-only
@@ -228,9 +236,10 @@ function configureBreakerGateway(deps: UiHandlerDeps): void {
   runtimeConfig.recordVerifiedCapability(
     "breaker-chat",
     { conversationReady: true },
-    "2026-08-16T00:00:00.000Z",
+    new Date().toISOString(),
     runtimeConfig.generation(),
   );
+  expect(currentConversationReady(deps, "breaker-chat")).toBe(true);
 }
 
 async function createGatewayBreakerFixture(): Promise<GatewayBreakerFixture> {
@@ -352,6 +361,8 @@ describe("desktop chat production gateway reuse", () => {
   it("does not launch a readiness probe from a chat request with an unknown model observation", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {
+      // Isolate request admission from the configuration-owned background probe lifecycle.
+      await stopConfiguredConversationReadiness(fixture.deps);
       fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
       const fetchSpy = vi.fn();
       vi.stubGlobal("fetch", fetchSpy);
@@ -619,9 +630,10 @@ describe("desktop chat production gateway reuse", () => {
       runtimeConfig.recordVerifiedCapability(
         "ready-chat",
         { conversationReady: true },
-        "2026-08-16T00:00:00.000Z",
+        new Date().toISOString(),
         runtimeConfig.generation(),
       );
+      expect(currentConversationReady(fixture.deps, "ready-chat")).toBe(true);
 
       const created = await handleCreateDesktopChat(
         requestContext({ projectPath: fixture.projectPath, title: "defaulted model" }),
@@ -2051,9 +2063,10 @@ describe("window adoption during prompt preparation", () => {
       runtimeConfig.recordVerifiedCapability(
         ADOPT_MODEL,
         { conversationReady: true },
-        "2026-09-30T00:00:00.000Z",
+        new Date().toISOString(),
         runtimeConfig.generation(),
       );
+      expect(currentConversationReady(deps, ADOPT_MODEL)).toBe(true);
       deps.store.createProject(projectPath, "repo");
       const chat = deps.store.createChat(projectPath, "Adoption", ADOPT_MODEL);
       const content = "Wir planen die Migration der Kontoführung Schritt für Schritt. ".repeat(
@@ -2119,9 +2132,10 @@ describe("window adoption during prompt preparation", () => {
       runtimeConfig.recordVerifiedCapability(
         ADOPT_MODEL,
         { conversationReady: true },
-        "2026-09-30T00:00:00.000Z",
+        new Date().toISOString(),
         runtimeConfig.generation(),
       );
+      expect(currentConversationReady(deps, ADOPT_MODEL)).toBe(true);
       deps.store.createProject(projectPath, "repo");
       const chat = deps.store.createChat(projectPath, "Regenerate", ADOPT_MODEL);
       const stamped = { runId: undefined, workflowId: undefined, workflowStatus: undefined };

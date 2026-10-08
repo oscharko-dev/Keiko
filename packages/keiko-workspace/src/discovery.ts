@@ -717,7 +717,7 @@ async function retainStreamingDirectory(
   state.directoriesDiscovered += 1;
   await state.options?.onDirectory?.({
     relativePath: current.relativePath,
-    sizeBytes: current.stat.size,
+    sizeBytes: 0,
   });
   if (state.options?.recursive === false) return;
   if (

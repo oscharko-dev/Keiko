@@ -1201,7 +1201,9 @@ describe("verification edit revision evidence", () => {
     expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision: 0 }).ok).toBe(
       true,
     );
-    expect(validateCodingWorkbenchRuntimeEvent(event).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision: 7 }).ok).toBe(
+      true,
+    );
   });
   it.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
     "rejects invalid revision %s",

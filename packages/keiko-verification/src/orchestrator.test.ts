@@ -48,36 +48,39 @@ function depsWith(
 describe("runVerification — repository filesystem containment", () => {
   it("reports the original final project fault before refusing with zero spawns", async () => {
     const ws = makeWorkspace();
-    ws.writeFile("packages/ui/src/a.test.ts", "");
-    const cause = new TypeError("private nested cause");
-    const failure = new Error("private project fault", { cause });
-    const rec = recordingSpawn();
-    const observed: unknown[] = [];
-    const target = step({
-      kind: "targeted-test",
-      scriptName: undefined,
-      command: "npx",
-      args: ["vitest", "run", "--root", "packages/ui", "src/a.test.ts"],
-    });
-    const report = await runVerification(
-      planOf([target], ws.info.root),
-      depsWith(ws, rec.fn, {
-        fs: {
-          ...nodeWorkspaceFs,
-          stat: (path) => {
-            if (path === join(realpathSync(ws.root), "packages/ui")) throw failure;
-            return nodeWorkspaceFs.stat(path);
+    try {
+      ws.writeFile("packages/ui/src/a.test.ts", "");
+      const cause = new TypeError("private nested cause");
+      const failure = new Error("private project fault", { cause });
+      const rec = recordingSpawn();
+      const observed: unknown[] = [];
+      const target = step({
+        kind: "targeted-test",
+        scriptName: undefined,
+        command: "npx",
+        args: ["vitest", "run", "--root", "packages/ui", "src/a.test.ts"],
+      });
+      const report = await runVerification(
+        planOf([target], ws.info.root),
+        depsWith(ws, rec.fn, {
+          fs: {
+            ...nodeWorkspaceFs,
+            stat: (path) => {
+              if (path === join(realpathSync(ws.root), "packages/ui")) throw failure;
+              return nodeWorkspaceFs.stat(path);
+            },
           },
-        },
-        onTargetedProjectFailure: (error) => {
-          observed.push(error);
-        },
-      }),
-    );
-    expect(rec.calls()).toHaveLength(0);
-    expect(report.results[0]?.status).toBe("failed");
-    expect(observed).toEqual([failure]);
-    rmSync(ws.root, { recursive: true, force: true });
+          onTargetedProjectFailure: (error) => {
+            observed.push(error);
+          },
+        }),
+      );
+      expect(rec.calls()).toHaveLength(0);
+      expect(report.results[0]?.status).toBe("failed");
+      expect(observed).toEqual([failure]);
+    } finally {
+      rmSync(ws.root, { recursive: true, force: true });
+    }
   });
 
   it("runs one nested Vitest test with the repository still mounted as the execution root", async () => {

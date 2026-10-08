@@ -12,6 +12,7 @@ import {
   buildRuntimeGatewaySeatbeltCommand,
   currentPlatform,
   probeBackends,
+  planLongLivedRuntimeSandbox,
 } from "@oscharko-dev/keiko-sandbox";
 import {
   expectActivityLogProof,
@@ -191,6 +192,12 @@ describe("dev-lane runtime process backend", () => {
     const supervisor = createRuntimeProcessSupervisor({
       backend,
       qualifications: [request.qualification],
+      planSandbox: (sandboxRequest): ReturnType<typeof planLongLivedRuntimeSandbox> =>
+        planLongLivedRuntimeSandbox(
+          sandboxRequest,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
     });
 
     expect(supervisor.spawnOwnedTree(request).ok).toBe(true);

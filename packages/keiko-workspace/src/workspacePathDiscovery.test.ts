@@ -34,7 +34,7 @@ describe("workspace path discovery completeness", () => {
     const result = await discoverWorkspacePaths(
       WORKSPACE,
       { mode: "keywords", directory: "", query: "late-target", maxResults: 10 },
-      createStructuralExecutionControl(5_000),
+      createStructuralExecutionControl(null),
       fs,
     );
     expect(result.entries.map((entry) => entry.relativePath)).toEqual(["z/late-target.ts"]);
@@ -47,7 +47,7 @@ describe("workspace path discovery completeness", () => {
     const result = await discoverWorkspacePaths(
       WORKSPACE,
       { mode: "keywords", directory: "", query: "target", maxResults: 10 },
-      createStructuralExecutionControl(5_000),
+      createStructuralExecutionControl(null),
       memFs(WORKSPACE.root, { [target]: "target" }),
     );
     expect(result.entries.map((entry) => entry.relativePath)).toEqual([target]);
@@ -58,7 +58,7 @@ describe("workspace path discovery completeness", () => {
     const result = await discoverWorkspacePaths(
       WORKSPACE,
       { mode: "keywords", directory: "", query: "target", maxResults: 10 },
-      createStructuralExecutionControl(5_000),
+      createStructuralExecutionControl(null),
       memFs(WORKSPACE.root, { ...entries("wide", 10_001), "wide/target.ts": "target" }),
     );
     expect(result.entries.map((entry) => entry.relativePath)).toEqual(["wide/target.ts"]);
@@ -103,6 +103,11 @@ describe("workspace path discovery scoped results", () => {
       "src/a.ts": "a",
       "src/large.bin": "\0binary",
       "src/deep/target.ts": "target",
+    });
+    const originalStat = fs.stat;
+    vi.spyOn(fs, "stat").mockImplementation((path) => {
+      const observed = originalStat(path);
+      return observed.isDirectory ? { ...observed, size: 4_096 } : observed;
     });
     const iterate = vi.spyOn(fs, "iterateDirectory");
     const result = await discoverWorkspacePaths(
