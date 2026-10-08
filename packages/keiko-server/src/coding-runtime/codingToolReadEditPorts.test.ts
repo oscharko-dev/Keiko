@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type {
   EditorAgentAction,
@@ -36,10 +36,18 @@ import {
 } from "./codingToolReadEditPorts.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
 import type {
+  SecureWorkspaceNativeFileIO,
   SecureWorkspaceTextReadPort,
   SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
-import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
+import {
+  createSecureWorkspaceTextReadPort,
+  secureWorkspaceTextDigest,
+} from "./secureWorkspaceTextRead.js";
+import {
+  SecureWorkspaceReadProcessError,
+  type SecureWorkspaceTextReadProcess,
+} from "./secureWorkspaceTextReadProcess.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { WORKSPACE_PATH_ABSENCE_VERDICTS } from "./secureWorkspaceTextReadAbsence.js";
 
@@ -141,6 +149,240 @@ describe("production Coding Workbench discovery completeness", () => {
         status: "completed",
         read: { text: `${path}\n`, returnedPathCount: 1 },
       });
+    },
+  );
+});
+
+type NativePrimitiveMocks = {
+  readonly [K in keyof SecureWorkspaceNativeFileIO]: Mock<SecureWorkspaceNativeFileIO[K]>;
+};
+
+interface NativePrimitiveFixture {
+  readonly ports: ReturnType<typeof createCodingToolReadEditPorts>;
+  readonly guard: CodingToolMutationGuard;
+  readonly events: ServerLogEvent[];
+  readonly bytes: Uint8Array;
+  readonly io: NativePrimitiveMocks;
+  readonly revoke: () => void;
+  readonly moveRoot: () => void;
+}
+
+function nativePrimitiveFixture(secure?: SecureWorkspaceTextReadPort): NativePrimitiveFixture {
+  const binding = liveDiscoveryBinding();
+  const events: ServerLogEvent[] = [];
+  const bytes = new Uint8Array([0, 255, 128]);
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -2000 };
+  let allowed = true;
+  let root = "/native-primitive-fixture";
+  const io: NativePrimitiveMocks = {
+    readBytes: vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>(() =>
+      Promise.resolve({ ok: true, bytes, info }),
+    ),
+    stat: vi.fn<SecureWorkspaceNativeFileIO["stat"]>(() => Promise.resolve({ ok: true, info })),
+    list: vi.fn<SecureWorkspaceNativeFileIO["list"]>(() =>
+      Promise.resolve({ ok: true, entries: [], info: { ...info, type: "directory" } }),
+    ),
+  };
+  const guard = { binding, check: (): boolean => allowed };
+  const ports = createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: secure ?? { readText: vi.fn(), nativeFileIO: io },
+    editorAgentClient: { action: vi.fn() },
+    resolveEditorActionContext: vi.fn(),
+    resolveRepositoryReadContext: () => binding,
+    resolveWorkspaceRoot: () => root,
+    enforceProducerBinding: true,
+    activityLog: { write: (event): void => void events.push(event) },
+  });
+  return {
+    ports,
+    guard,
+    events,
+    bytes,
+    io,
+    revoke: (): void => {
+      allowed = false;
+    },
+    moveRoot: (): void => {
+      root = "/other-native-workspace";
+    },
+  };
+}
+
+describe("governed original native file primitives", () => {
+  const request = { relativePath: "src/a.bin", purpose: "native-tool-io" as const };
+
+  it("preserves native bytes and emits the existing body-free read proof", async () => {
+    const f = nativePrimitiveFixture();
+    const result = await f.ports.nativeFileIO.readBytes(request, undefined, f.guard);
+    expect(result).toMatchObject({ ok: true, bytes: f.bytes, info: { mtimeMs: -2000 } });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "completed", purpose: "native-tool-io" });
+    expect(JSON.stringify(persisted)).not.toContain(request.relativePath);
+  });
+
+  it("records an unavailable native capability without falling back to text IO", async () => {
+    const readText = vi.fn();
+    const f = nativePrimitiveFixture({ readText });
+    await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+      ok: false,
+      reason: "native-io-unavailable",
+    });
+    expect(readText).not.toHaveBeenCalled();
+    expect(f.events.at(-1)?.extra).toMatchObject({
+      state: "failed",
+      reason: "native-io-unavailable",
+    });
+  });
+
+  it("records thrown native IO through the same existing diagnostic owner", async () => {
+    const f = nativePrimitiveFixture();
+    f.io.readBytes.mockRejectedValueOnce(new Error(SENTINEL));
+    await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+      ok: false,
+      reason: "exception",
+    });
+    expect(f.events.at(-1)?.extra).toMatchObject({ state: "failed", reason: "exception" });
+    expect(JSON.stringify(f.events)).not.toContain(SENTINEL);
+  });
+
+  it("retains the native raw promise until settlement after cancellation", async () => {
+    const f = nativePrimitiveFixture();
+    const controller = new AbortController();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.io.readBytes.mockImplementationOnce(async () => {
+      await held;
+      return { ok: true, bytes: f.bytes, info: { type: "file", size: 3, mtimeMs: -2000 } };
+    });
+    let settled = false;
+    const pending = f.ports.nativeFileIO.readBytes(request, controller.signal, f.guard);
+    void pending.then(() => {
+      settled = true;
+    });
+    controller.abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(f.events).toHaveLength(0);
+    release?.();
+    await expect(pending).resolves.toEqual({ ok: false, reason: "postflight-refused" });
+    expect(f.bytes).toEqual(new Uint8Array(3));
+  });
+
+  it("preserves and logs a closed native wrong-kind result with its same-FD facts", async () => {
+    const f = nativePrimitiveFixture();
+    const info = { type: "directory" as const, size: 128, mtimeMs: -2000 };
+    f.io.readBytes.mockResolvedValueOnce({ ok: false, reason: "wrong-kind", info });
+    await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+      ok: false,
+      reason: "wrong-kind",
+      info,
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "failed", reason: "wrong-kind" });
+    expect(persisted).not.toHaveProperty("info");
+  });
+
+  it.each(["revoke", "moveRoot", "cancel"] as const)(
+    "wipes native bytes after %s during physical IO",
+    async (change) => {
+      const f = nativePrimitiveFixture();
+      const controller = new AbortController();
+      f.io.readBytes.mockImplementationOnce(() => {
+        if (change === "cancel") controller.abort();
+        else f[change]();
+        return Promise.resolve({
+          ok: true,
+          bytes: f.bytes,
+          info: { type: "file", size: 3, mtimeMs: -2000 },
+        });
+      });
+      await expect(
+        f.ports.nativeFileIO.readBytes(request, controller.signal, f.guard),
+      ).resolves.toEqual({ ok: false, reason: "postflight-refused" });
+      expect(f.bytes).toEqual(new Uint8Array(3));
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason: "postflight-refused",
+      });
+    },
+  );
+
+  it("passes root directory and long paths through the separately bounded native owner", async () => {
+    const f = nativePrimitiveFixture();
+    await expect(
+      f.ports.nativeFileIO.list({ ...request, relativePath: "" }, undefined, f.guard),
+    ).resolves.toMatchObject({ ok: true, entries: [] });
+    const relativePath = Array.from({ length: 7 }, () => "d".repeat(80)).join("/") + "/a.bin";
+    await expect(
+      f.ports.nativeFileIO.readBytes({ ...request, relativePath }, undefined, f.guard),
+    ).resolves.toMatchObject({ ok: true });
+    expect(f.io.readBytes).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ relativePath }),
+    );
+  });
+
+  it.each([".env", ".keiko/private/state.db"])(
+    "refuses %s before native IO",
+    async (relativePath) => {
+      const f = nativePrimitiveFixture();
+      await expect(
+        f.ports.nativeFileIO.readBytes({ ...request, relativePath }, undefined, f.guard),
+      ).resolves.toEqual({ ok: false, reason: "preflight-refused" });
+      expect(f.io.readBytes).not.toHaveBeenCalled();
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason: "preflight-refused",
+      });
+    },
+  );
+
+  it.each(["process-failed", "protocol-invalid"] as const)(
+    "records the actual private helper's %s closed refusal",
+    async (reason) => {
+      const response = new Uint8Array(Buffer.from(SENTINEL));
+      const secure = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => "/native-primitive-fixture",
+        artifact: {
+          target: "darwin-arm64",
+          installRelativePath: "runtime/native/keiko-secure-workspace-read",
+          sha256: DIGEST,
+          sourceCommit: "b".repeat(40),
+          sourceTreeSha256: DIGEST,
+          protocol: "KSR1/KSS1",
+          nativeProtocol: "KSR3/KSS3",
+          signed: true,
+        },
+        platform: { os: "darwin", arch: "arm64" },
+        artifactVerifier: { verify: () => true },
+        processFactory: {
+          create: (): SecureWorkspaceTextReadProcess => ({
+            run: () =>
+              reason === "process-failed"
+                ? Promise.reject(new SecureWorkspaceReadProcessError(reason))
+                : Promise.resolve(response),
+          }),
+        },
+      });
+      const f = nativePrimitiveFixture(secure);
+      await expect(f.ports.nativeFileIO.readBytes(request, undefined, f.guard)).resolves.toEqual({
+        ok: false,
+        reason,
+      });
+      const persisted = expectActivityLogProof(
+        "coding-runtime.workspace-read.emitted-line",
+        formatActivityLogProofLine(f.events.at(-1) ?? {}),
+      );
+      expect(persisted).toMatchObject({ state: "failed", purpose: "native-tool-io", reason });
+      expect(JSON.stringify(f.events)).not.toContain(SENTINEL);
+      if (reason === "protocol-invalid") expect(response).toEqual(new Uint8Array(response.length));
     },
   );
 });

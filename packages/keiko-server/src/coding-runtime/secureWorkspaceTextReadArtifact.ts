@@ -19,6 +19,8 @@ export interface SecureWorkspaceTextReadArtifact {
   readonly byteCap?: number;
   /** Server-pinned, digest-bound optional capability; absent on every current shipped helper. */
   readonly snapshotProtocol?: "KSR2/KSS2";
+  /** Separately digest-bound private bytes/range/stat/list capability. Never implied by text IO. */
+  readonly nativeProtocol?: "KSR3/KSS3";
 }
 
 export interface SecureWorkspaceTextReadArtifactVerifier {
@@ -60,10 +62,9 @@ export function isValidSecureWorkspaceTextReadArtifact(
       ? "runtime/native/keiko-secure-workspace-read.exe"
       : "runtime/native/keiko-secure-workspace-read";
   return (
-    artifact.target === target &&
-    artifact.installRelativePath === expectedPath &&
-    artifact.protocol === "KSR1/KSS1" &&
+    validInstallShape(artifact, target, expectedPath) &&
     validSnapshotCapability(artifact) &&
+    validNativeCapability(artifact, target) &&
     artifact.signed &&
     isSecureWorkspaceReadByteCap(secureWorkspaceReadArtifactByteCap(artifact)) &&
     /^[a-f0-9]{64}$/.test(artifact.sha256) &&
@@ -90,4 +91,26 @@ function snapshotProtocolApproved(protocol: unknown, byteCap: number): boolean {
     protocol === undefined ||
     (protocol === "KSR2/KSS2" && byteCap === SECURE_WORKSPACE_TEXT_READ_MAX_BYTES)
   );
+}
+
+function validNativeCapability(
+  artifact: SecureWorkspaceTextReadArtifact,
+  target: SecureWorkspaceReadTarget,
+): boolean {
+  return nativeProtocolApproved(artifact.nativeProtocol, target);
+}
+
+function validInstallShape(
+  artifact: SecureWorkspaceTextReadArtifact,
+  target: string,
+  expectedPath: string,
+): boolean {
+  return (
+    artifact.target === target &&
+    artifact.installRelativePath === expectedPath &&
+    artifact.protocol === "KSR1/KSS1"
+  );
+}
+function nativeProtocolApproved(protocol: unknown, target: SecureWorkspaceReadTarget): boolean {
+  return protocol === undefined || (protocol === "KSR3/KSS3" && target !== "win32-x64");
 }

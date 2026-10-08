@@ -79,6 +79,11 @@ import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   secureWorkspaceTextDigest,
+  type SecureWorkspaceNativeBytesRequest,
+  type SecureWorkspaceNativeBytesResult,
+  type SecureWorkspaceNativeFileIO,
+  type SecureWorkspaceNativeStatResult,
+  type SecureWorkspaceNativeListResult,
   type SecureWorkspaceTextReadPort,
   type SecureWorkspaceTextSnapshotResult,
   isSecureWorkspaceTextRelativePath,
@@ -147,6 +152,8 @@ const EDITOR_SESSION_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 3_000, 5_000] as
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
+  /** Same producer/authority/log owner; original native algorithms consume only these IO facts. */
+  readonly nativeFileIO: GovernedNativeFileIO;
   /** Server-private IO only; consumes the original authority owner's admitted guard. No host is enabled. */
   readonly nativeTextRead: {
     readTextSnapshot(
@@ -160,6 +167,39 @@ export interface CodingToolReadEditPorts {
   };
   readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
+}
+
+export interface GovernedNativeFileRequest {
+  readonly relativePath: string;
+  readonly purpose: "native-tool-io" | "native-instructions";
+  readonly range?: SecureWorkspaceNativeBytesRequest["range"];
+}
+
+type NativePrimitiveResult =
+  | SecureWorkspaceNativeBytesResult
+  | SecureWorkspaceNativeStatResult
+  | SecureWorkspaceNativeListResult;
+type NativePrimitiveRefusalReason =
+  "preflight-refused" | "postflight-refused" | "exception" | "native-io-unavailable";
+export type GovernedNativeFileResult<T extends NativePrimitiveResult> =
+  T | { readonly ok: false; readonly reason: NativePrimitiveRefusalReason };
+
+export interface GovernedNativeFileIO {
+  readBytes(
+    request: GovernedNativeFileRequest,
+    signal: AbortSignal | undefined,
+    guard: CodingToolMutationGuard,
+  ): Promise<GovernedNativeFileResult<SecureWorkspaceNativeBytesResult>>;
+  stat(
+    request: GovernedNativeFileRequest,
+    signal: AbortSignal | undefined,
+    guard: CodingToolMutationGuard,
+  ): Promise<GovernedNativeFileResult<SecureWorkspaceNativeStatResult>>;
+  list(
+    request: GovernedNativeFileRequest,
+    signal: AbortSignal | undefined,
+    guard: CodingToolMutationGuard,
+  ): Promise<GovernedNativeFileResult<SecureWorkspaceNativeListResult>>;
 }
 
 export type GovernedTextSnapshotResult =
@@ -225,6 +265,7 @@ export function createCodingToolReadEditPorts(
   deps: CodingToolReadEditPortDeps,
 ): CodingToolReadEditPorts {
   return {
+    nativeFileIO: createGuardedNativeFileIO(deps),
     nativeTextRead: {
       readTextSnapshot: (request, signal, mutationGuard) =>
         executeSnapshotRead(deps, request, signal, mutationGuard),
@@ -242,6 +283,86 @@ export function createCodingToolReadEditPorts(
         executeEdit(deps, request, signal, mutationGuard),
     },
   };
+}
+
+type NativePrimitiveRead<T extends NativePrimitiveResult> = (
+  io: SecureWorkspaceNativeFileIO,
+  request: SecureWorkspaceNativeBytesRequest & { readonly isCurrent: () => boolean },
+) => Promise<T>;
+
+function createGuardedNativeFileIO(deps: CodingToolReadEditPortDeps): GovernedNativeFileIO {
+  return Object.freeze<GovernedNativeFileIO>({
+    readBytes: (request, signal, guard) =>
+      executeNativePrimitive(deps, request, signal, guard, (io, input) => io.readBytes(input)),
+    stat: (request, signal, guard) =>
+      executeNativePrimitive(deps, request, signal, guard, (io, input) => io.stat(input)),
+    list: (request, signal, guard) =>
+      executeNativePrimitive(deps, request, signal, guard, (io, input) => io.list(input)),
+  });
+}
+
+async function executeNativePrimitive<T extends NativePrimitiveResult>(
+  deps: CodingToolReadEditPortDeps,
+  request: GovernedNativeFileRequest,
+  signal: AbortSignal | undefined,
+  guard: CodingToolMutationGuard,
+  invoke: NativePrimitiveRead<T>,
+): Promise<GovernedNativeFileResult<T>> {
+  const binding = safeMutationBinding(guard);
+  const captured = Object.freeze({
+    ...request,
+    ...(request.range === undefined ? {} : { range: Object.freeze({ ...request.range }) }),
+  });
+  try {
+    return await attemptNativePrimitive(deps, captured, signal, guard, binding, invoke);
+  } catch (error) {
+    return recordNativePrimitiveFailure(deps, captured, binding, "exception", error);
+  }
+}
+
+async function attemptNativePrimitive<T extends NativePrimitiveResult>(
+  deps: CodingToolReadEditPortDeps,
+  request: GovernedNativeFileRequest,
+  signal: AbortSignal | undefined,
+  guard: CodingToolMutationGuard,
+  binding: RuntimeProducerBinding | undefined,
+  invoke: NativePrimitiveRead<T>,
+): Promise<GovernedNativeFileResult<T>> {
+  const root = discoveryWorkspace(deps)?.root;
+  const current = (): boolean =>
+    root !== undefined &&
+    binding !== undefined &&
+    hasLiveWorkspaceAccess(deps) &&
+    discoveryPostflight(deps, root, binding, signal, guard);
+  if (isDenied(request.relativePath) || !current())
+    return recordNativePrimitiveFailure(deps, request, binding, "preflight-refused");
+  const io = deps.secureWorkspaceTextRead.nativeFileIO;
+  if (io === undefined)
+    return recordNativePrimitiveFailure(deps, request, binding, "native-io-unavailable");
+  const result = await invoke(io, {
+    relativePath: request.relativePath,
+    signal,
+    isCurrent: current,
+    ...(request.range === undefined ? {} : { range: request.range }),
+  });
+  if (!current()) {
+    if (result.ok && "bytes" in result) result.bytes.fill(0);
+    return recordNativePrimitiveFailure(deps, request, binding, "postflight-refused");
+  }
+  if (result.ok) recordSnapshotRead(deps, binding, request.relativePath, request.purpose);
+  else logFailedRead(deps, { ...result, binding }, request.relativePath, request.purpose);
+  return result;
+}
+
+function recordNativePrimitiveFailure(
+  deps: CodingToolReadEditPortDeps,
+  request: GovernedNativeFileRequest,
+  binding: RuntimeProducerBinding | undefined,
+  reason: NativePrimitiveRefusalReason,
+  error?: unknown,
+): { readonly ok: false; readonly reason: NativePrimitiveRefusalReason } {
+  logFailedRead(deps, { ok: false, reason, binding, error }, request.relativePath, request.purpose);
+  return { ok: false, reason };
 }
 
 async function executeDiscover(
@@ -856,7 +977,8 @@ function targetPathDigest(relativePath: string): string {
   return createHash("sha256").update(relativePath, "utf8").digest("hex");
 }
 
-type WorkspaceReadFailureReason = GovernedWorkspaceReadFailure | "snapshot-unavailable";
+type WorkspaceReadFailureReason =
+  GovernedWorkspaceReadFailure | "snapshot-unavailable" | "native-io-unavailable" | "wrong-kind";
 
 // #3873 review: which consumer a read served. Absent on lines written before the field existed.
 const READ_PURPOSES = [
@@ -878,7 +1000,7 @@ const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
   type: "string",
   dataClass: "closed-enum",
   required: false,
-  values: [...EDIT_READ_REASONS, "snapshot-unavailable"],
+  values: [...EDIT_READ_REASONS, "snapshot-unavailable", "native-io-unavailable", "wrong-kind"],
 } as const;
 
 // #3873 review (PR #3876): the closed verdict of the server's no-follow walk, set only when the native
@@ -1142,6 +1264,8 @@ const WORKSPACE_READ_ERROR_KINDS: Partial<
   "not-found": "unavailable",
   "workspace-unavailable": "unavailable",
   "snapshot-unavailable": "unavailable",
+  "native-io-unavailable": "unavailable",
+  "wrong-kind": "validation-failed",
   "too-large": "validation-failed",
   "response-too-large": "validation-failed",
   exception: "internal",
@@ -1243,7 +1367,13 @@ function readRefusal(reason: WorkspaceReadFailureReason): {
 
 function logFailedRead(
   deps: CodingToolReadEditPortDeps,
-  read: Extract<AnyGovernedRead, { readonly ok: false }>,
+  read: {
+    readonly ok: false;
+    readonly reason: WorkspaceReadFailureReason;
+    readonly binding: RuntimeProducerBinding | undefined;
+    readonly error?: unknown;
+    readonly absence?: WorkspacePathAbsence;
+  },
   relativePath: string,
   purpose: ReadPurpose,
 ): void {

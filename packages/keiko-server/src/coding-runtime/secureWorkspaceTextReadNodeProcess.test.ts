@@ -1,4 +1,9 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type, @typescript-eslint/unbound-method */
+import { spawn as spawnChild, execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +12,7 @@ import {
   createNodeSecureWorkspaceReadProcessFactory,
   type SecureWorkspaceReadNodeChild,
 } from "./secureWorkspaceTextReadNodeProcess.js";
+import { encodeSecureWorkspaceNativeRequest } from "./secureWorkspaceTextReadProtocol.js";
 import type { PortableSecureWorkspaceReadBinding } from "./secureWorkspaceTextReadPortable.js";
 
 const artifact = {
@@ -167,3 +173,94 @@ describe("secure helper snapshot identity", () => {
     expect(() => factory.create(artifact)).toThrow("secure-workspace-read-artifact-mismatch");
   });
 });
+
+it("refuses native capability substitution after binding a legacy helper", () => {
+  const factory = createNodeSecureWorkspaceReadProcessFactory({
+    binding,
+    safeCwd: "/verified/runtime",
+    spawn: vi.fn(),
+  });
+  const upgraded = { ...artifact };
+  Reflect.set(upgraded, "nativeProtocol", "KSR3/KSS3");
+  expect(() => factory.create(upgraded)).toThrow("secure-workspace-read-artifact-mismatch");
+});
+
+it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "reaps the actual paused native helper before settling cancellation",
+  async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "native-io-reap-")));
+    try {
+      const workspace = join(root, "workspace");
+      mkdirSync(workspace);
+      writeFileSync(join(workspace, "a.bin"), Buffer.from([0, 255]));
+      const executable = join(root, "paused-read");
+      execFileSync("cc", [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        process.platform === "linux" ? "-D_GNU_SOURCE" : "-D_DARWIN_C_SOURCE",
+        "-O2",
+        "-DKSR_TEST_PAUSE_AFTER_FINAL_OPEN",
+        fileURLToPath(
+          new URL(
+            "../../../../native/secure-workspace-read/secure_workspace_read.c",
+            import.meta.url,
+          ),
+        ),
+        "-o",
+        executable,
+      ]);
+      const candidate = { ...artifact, nativeProtocol: "KSR3/KSS3" as const };
+      let ready: (() => void) | undefined;
+      const opened = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      let closed = false;
+      let pid: number | undefined;
+      const factory = createNodeSecureWorkspaceReadProcessFactory({
+        binding: { ...binding, artifact: candidate, executable },
+        safeCwd: root,
+        spawn: (command, args, options) => {
+          const child = spawnChild(command, [...args], {
+            ...options,
+            stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+          });
+          pid = child.pid;
+          child.stdio[3]?.on("data", () => ready?.());
+          child.once("close", () => {
+            closed = true;
+          });
+          return {
+            stdin: child.stdin,
+            stdout: child.stdout,
+            stderr: child.stderr,
+            kill: child.kill.bind(child),
+            on: child.on.bind(child),
+            once: child.once.bind(child),
+          };
+        },
+      });
+      const controller = new AbortController();
+      const running = factory.create(candidate).run({
+        signal: controller.signal,
+        stdin: encodeSecureWorkspaceNativeRequest({
+          root: workspace,
+          relativePath: "a.bin",
+          operation: "read",
+        }),
+      });
+      const rejected = expect(running).rejects.toThrow("secure-workspace-read-aborted");
+      await opened;
+      expect(closed).toBe(false);
+      controller.abort();
+      await rejected;
+      expect(closed).toBe(true);
+      const ownedPid = pid;
+      if (ownedPid === undefined) throw new Error("helper-test-pid-missing");
+      expect(() => process.kill(ownedPid, 0)).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

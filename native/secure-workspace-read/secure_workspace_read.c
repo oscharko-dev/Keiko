@@ -13,6 +13,8 @@ _Static_assert(sizeof(double) == 8 && DBL_MANT_DIG == 53 && DBL_MAX_EXP == 1024,
 #define KSR_MAX_ROOT 32768u
 #define KSR_MAX_PATH 4096u
 #define KSR_CAP 1048576u
+#define KSR_NATIVE_CAP 67108864u
+#define KSR_SAFE_INTEGER 9007199254740991ull
 #define KSR_MAX_COMPONENTS 64u
 #define KSR_SUPERSCRIPT_ONE_UTF8 "\xC2\xB9"
 #define KSR_SUPERSCRIPT_TWO_UTF8 "\xC2\xB2"
@@ -26,20 +28,22 @@ enum ksr_status {
   KSR_OK = 0, KSR_MALFORMED_REQUEST = 1, KSR_UNSUPPORTED_PLATFORM = 2,
   KSR_INVALID_PATH = 3, KSR_ACCESS_DENIED = 4, KSR_NOT_REGULAR = 5,
   KSR_CONTENT_TOO_LARGE = 6, KSR_CONTENT_NOT_TEXT = 7,
-  KSR_CHANGED_DURING_READ = 8, KSR_IO_FAILURE = 9
+  KSR_CHANGED_DURING_READ = 8, KSR_IO_FAILURE = 9, KSR_WRONG_KIND = 10
 };
 
-struct request { char *root; char *path; uint32_t cap; uint16_t version; };
-struct snapshot_info { uint64_t size; double mtime_ms; };
+struct request { char *root; char *path; uint32_t cap; uint16_t version; uint16_t operation; uint64_t offset; uint64_t length; };
+struct snapshot_info { uint64_t size; double mtime_ms; uint16_t type; };
 
 static uint16_t le16(const unsigned char *p) { return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
 static uint32_t le32(const unsigned char *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 static void put16(unsigned char *p, uint16_t n) { p[0] = (unsigned char)n; p[1] = (unsigned char)(n >> 8); }
 static void put32(unsigned char *p, uint32_t n) { p[0] = (unsigned char)n; p[1] = (unsigned char)(n >> 8); p[2] = (unsigned char)(n >> 16); p[3] = (unsigned char)(n >> 24); }
 
+static uint64_t le64(const unsigned char *p) { uint64_t value = 0; for (unsigned int i = 0; i < 8; ++i) value |= (uint64_t)p[i] << (8u * i); return value; }
+
 static void put64(unsigned char *p, uint64_t n) { for (unsigned int i = 0; i < 8; ++i) p[i] = (unsigned char)(n >> (8u * i)); }
 
-static int valid_utf8(const unsigned char *s, size_t n) {
+static int valid_utf8_mode(const unsigned char *s, size_t n, int text) {
   size_t i = 0;
   while (i < n) {
     uint32_t cp; unsigned char c = s[i++];
@@ -52,10 +56,12 @@ static int valid_utf8(const unsigned char *s, size_t n) {
       cp = ((uint32_t)(c & 7) << 18) | ((uint32_t)(s[i] & 0x3f) << 12) | ((uint32_t)(s[i + 1] & 0x3f) << 6) | (s[i + 2] & 0x3f); i += 3;
       if (cp < 0x10000 || cp > 0x10ffff) return 0;
     } else return 0;
-    if (cp == 0 || cp == 0x7f || (cp < 0x20 && cp != '\t' && cp != '\n' && cp != '\r') || (cp >= 0x80 && cp <= 0x9f)) return 0;
+    if (cp == 0 || (text && (cp == 0x7f || (cp < 0x20 && cp != '\t' && cp != '\n' && cp != '\r') || (cp >= 0x80 && cp <= 0x9f)))) return 0;
   }
   return 1;
 }
+
+static int valid_utf8(const unsigned char *s, size_t n) { return valid_utf8_mode(s, n, 1); }
 
 #if defined(_WIN32)
 static int ascii_name_equals(const char *value, size_t length, const char *expected) {
@@ -111,37 +117,44 @@ static int valid_root(const char *root) {
 
 static void reply(enum ksr_status status, const unsigned char *content, uint32_t length, uint16_t version, const struct snapshot_info *info) {
   unsigned char header[12] = { 'K', 'S', 'S', '1', 0, 0, 0, 0, 0, 0, 0, 0 };
+  const int native = version == 3u, rich = version == 2u;
+  const int metadata_present = (rich && status == KSR_OK) || (native && (status == KSR_OK || status == KSR_WRONG_KIND));
+  const uint32_t metadata_length = native ? 20u : 16u;
   if (status != KSR_OK) { content = NULL; length = 0; }
-  unsigned char metadata[16] = {0}; uint64_t mtime_bits = 0;
-  const int rich = version == 2u;
-  if (rich) header[3] = '2';
-  if (rich && status == KSR_OK) {
-    put64(metadata, info->size); memcpy(&mtime_bits, &info->mtime_ms, sizeof(mtime_bits)); put64(metadata + 8, mtime_bits);
+  unsigned char metadata[20] = {0}; uint64_t mtime_bits = 0;
+  if (rich || native) header[3] = native ? '3' : '2';
+  if (metadata_present) {
+    const unsigned int shift = native ? 4u : 0u;
+    if (native) put16(metadata, info->type);
+    put64(metadata + shift, info->size); memcpy(&mtime_bits, &info->mtime_ms, sizeof(mtime_bits)); put64(metadata + shift + 8, mtime_bits);
   }
-  put16(header + 4, rich ? 2u : KSR_VERSION); put16(header + 6, (uint16_t)status); put32(header + 8, length + ((rich && status == KSR_OK) ? 16u : 0u));
+  put16(header + 4, native ? 3u : rich ? 2u : KSR_VERSION); put16(header + 6, (uint16_t)status); put32(header + 8, length + (metadata_present ? metadata_length : 0u));
   (void)fwrite(header, 1, sizeof(header), stdout);
-  if (rich && status == KSR_OK) (void)fwrite(metadata, 1, sizeof(metadata), stdout);
+  if (metadata_present) (void)fwrite(metadata, 1, metadata_length, stdout);
   if (content != NULL && length != 0) (void)fwrite(content, 1, length, stdout);
   (void)fflush(stdout);
 }
 
 static enum ksr_status parse_request(struct request *out) {
-  unsigned char header[20]; uint32_t root_len, path_len; size_t total;
-  memset(out, 0, sizeof(*out));
-  out->version = KSR_VERSION;
-  if (fread(header, 1, sizeof(header), stdin) != sizeof(header)) return KSR_MALFORMED_REQUEST;
-  if (memcmp(header, "KSR2", 4) == 0 && le16(header + 4) == 2u) out->version = 2u;
+  unsigned char header[36] = {0}; uint32_t root_len, path_len; size_t total;
+  memset(out, 0, sizeof(*out)); out->version = KSR_VERSION;
+  if (fread(header, 1, 20, stdin) != 20) return KSR_MALFORMED_REQUEST;
+  if (memcmp(header, "KSR3", 4) == 0 && le16(header + 4) == 3u) {
+    out->version = 3u; out->operation = le16(header + 6);
+    if (fread(header + 20, 1, 16, stdin) != 16) return KSR_MALFORMED_REQUEST;
+    out->offset = le64(header + 20); out->length = le64(header + 28);
+    if (out->operation < 1u || out->operation > 4u || out->length > KSR_NATIVE_CAP || out->offset > KSR_SAFE_INTEGER || out->length > KSR_SAFE_INTEGER - out->offset || (out->operation != 2u && (out->offset != 0 || out->length != 0))) return KSR_MALFORMED_REQUEST;
+  } else if (memcmp(header, "KSR2", 4) == 0 && le16(header + 4) == 2u) out->version = 2u;
   else if (memcmp(header, "KSR1", 4) != 0 || le16(header + 4) != KSR_VERSION) return KSR_MALFORMED_REQUEST;
-  if (le16(header + 6) != 0) return KSR_MALFORMED_REQUEST;
+  if (out->version != 3u && le16(header + 6) != 0) return KSR_MALFORMED_REQUEST;
   root_len = le32(header + 8); path_len = le32(header + 12); out->cap = le32(header + 16);
-  if (root_len == 0 || root_len > KSR_MAX_ROOT || path_len == 0 || path_len > KSR_MAX_PATH || out->cap != KSR_CAP) return KSR_MALFORMED_REQUEST;
-  total = (size_t)root_len + (size_t)path_len;
-  out->root = calloc(total + 2, 1);
+  if (root_len == 0 || root_len > KSR_MAX_ROOT || path_len > KSR_MAX_PATH || (path_len == 0 && out->version != 3u) || out->cap != (out->version == 3u ? KSR_NATIVE_CAP : KSR_CAP)) return KSR_MALFORMED_REQUEST;
+  total = (size_t)root_len + (size_t)path_len; out->root = calloc(total + 2, 1);
   if (out->root == NULL) return KSR_IO_FAILURE;
   out->path = out->root + root_len + 1;
-  if (fread(out->root, 1, root_len, stdin) != root_len || fread(out->path, 1, path_len, stdin) != path_len || fgetc(stdin) != EOF || memchr(out->root, 0, root_len) || memchr(out->path, 0, path_len) || !valid_utf8((unsigned char *)out->root, root_len) || !valid_utf8((unsigned char *)out->path, path_len)) return KSR_MALFORMED_REQUEST;
+  if (fread(out->root, 1, root_len, stdin) != root_len || fread(out->path, 1, path_len, stdin) != path_len || fgetc(stdin) != EOF || memchr(out->root, 0, root_len) || memchr(out->path, 0, path_len) || !valid_utf8_mode((unsigned char *)out->root, root_len, out->version != 3u) || !valid_utf8_mode((unsigned char *)out->path, path_len, out->version != 3u)) return KSR_MALFORMED_REQUEST;
   if (!valid_root(out->root)) return KSR_MALFORMED_REQUEST;
-  if (!valid_path(out->path)) return KSR_INVALID_PATH;
+  if (path_len != 0 && !valid_path(out->path)) return KSR_INVALID_PATH;
   return KSR_OK;
 }
 
@@ -155,6 +168,7 @@ static void clear_request(struct request *request) {
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dirent.h>
 
 #if defined(__APPLE__)
 #define KSR_MTIME(value) ((value)->st_mtimespec)
@@ -176,51 +190,161 @@ static void pause_after_final_open(void) {
 }
 #endif
 
-static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) {
-  int fds[KSR_MAX_COMPONENTS + 1], fd = -1, count = 0; char *copy = NULL, *part, *next; struct stat root_st, dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; ssize_t chunk; size_t got = 0, capacity = 0; int changed = 0;
-  *content = NULL; *length = 0;
+struct rooted_file {
+  int fds[KSR_MAX_COMPONENTS + 1], fd, count;
+  struct stat dirs[KSR_MAX_COMPONENTS + 1], before;
+};
+
+static void close_rooted(struct rooted_file *opened) {
+  if (opened->fd >= 0) close(opened->fd);
+  while (opened->count) close(opened->fds[--opened->count]);
+}
+
+/* Shared rooted acquisition for both unchanged text lanes and private native primitives. */
+static enum ksr_status open_rooted(const struct request *request, struct rooted_file *opened, int metadata) {
+  char *copy, *part, *next; int fd, flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+  memset(opened, 0, sizeof(*opened)); opened->fd = -1;
   fd = open(request->root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0) return KSR_ACCESS_DENIED;
-  fds[count] = fd;
-  if (fstat(fd, &root_st) != 0 || !S_ISDIR(root_st.st_mode)) { close(fd); return KSR_ACCESS_DENIED; }
-  dirs[count++] = root_st;
-  copy = strdup(request->path); if (copy == NULL) { close(fd); return KSR_IO_FAILURE; }
+  opened->fds[opened->count++] = fd;
+  if (fstat(fd, &opened->dirs[0]) != 0 || !S_ISDIR(opened->dirs[0].st_mode)) return KSR_ACCESS_DENIED;
+  copy = strdup(request->path); if (copy == NULL) return KSR_IO_FAILURE;
   part = copy;
   while ((next = strchr(part, '/')) != NULL) {
-    *next++ = '\0'; fd = openat(fds[count - 1], part, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) { free(copy); while (count) close(fds[--count]); return KSR_ACCESS_DENIED; }
-    if (fstat(fd, &dirs[count]) != 0 || !S_ISDIR(dirs[count].st_mode) || dirs[count].st_dev != root_st.st_dev) { close(fd); free(copy); while (count) close(fds[--count]); return KSR_ACCESS_DENIED; }
-    fds[count++] = fd; part = next;
+    *next++ = '\0'; fd = openat(opened->fds[opened->count - 1], part, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) { free(copy); return KSR_ACCESS_DENIED; }
+    if (fstat(fd, &opened->dirs[opened->count]) != 0 || !S_ISDIR(opened->dirs[opened->count].st_mode) || opened->dirs[opened->count].st_dev != opened->dirs[0].st_dev) { close(fd); free(copy); return KSR_ACCESS_DENIED; }
+    opened->fds[opened->count++] = fd; part = next;
   }
-  fd = openat(fds[count - 1], part, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
-  free(copy);
-  if (fd < 0) { while (count) close(fds[--count]); return KSR_ACCESS_DENIED; }
-  if (fstat(fd, &before) != 0) { close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
-  if (before.st_nlink == 0) { close(fd); while (count) close(fds[--count]); return KSR_CHANGED_DURING_READ; }
-  if (!S_ISREG(before.st_mode) || before.st_nlink != 1 || before.st_dev != root_st.st_dev || before.st_size < 0) { close(fd); while (count) close(fds[--count]); return KSR_NOT_REGULAR; }
-  if ((uintmax_t)before.st_size > request->cap) { close(fd); while (count) close(fds[--count]); return KSR_CONTENT_TOO_LARGE; }
+  if (metadata) {
+#if defined(__linux__)
+    flags = O_PATH | O_CLOEXEC | O_NOFOLLOW;
+#else
+    /* O_SYMLINK opens the link itself; combining O_NOFOLLOW fails with ELOOP on macOS. */
+    flags = O_RDONLY | O_CLOEXEC | O_SYMLINK | O_NONBLOCK;
+#endif
+  }
+  if (*part == '\0' && !(request->version == 3u && request->path[0] == '\0')) { free(copy); return KSR_INVALID_PATH; }
+  opened->fd = openat(opened->fds[opened->count - 1], *part == '\0' ? "." : part, flags); free(copy);
+  if (opened->fd < 0) return KSR_ACCESS_DENIED;
+  if (fstat(opened->fd, &opened->before) != 0) return KSR_IO_FAILURE;
+  if (opened->before.st_nlink == 0) return KSR_CHANGED_DURING_READ;
+  if (opened->before.st_dev != opened->dirs[0].st_dev || opened->before.st_size < 0 || (S_ISREG(opened->before.st_mode) && opened->before.st_nlink != 1)) return KSR_NOT_REGULAR;
+  return KSR_OK;
+}
+
+static int rooted_current(struct rooted_file *opened, struct stat *after) {
+  if (fstat(opened->fd, after) != 0 || !same_identity(&opened->before, after)) return 0;
+  for (int i = 0; i < opened->count; ++i) {
+    struct stat now; if (fstat(opened->fds[i], &now) != 0 || !same_identity(&opened->dirs[i], &now)) return 0;
+  }
+  return 1;
+}
+
+static uint16_t native_kind(mode_t mode) {
+  return S_ISREG(mode) ? 1u : S_ISDIR(mode) ? 2u : S_ISLNK(mode) ? 3u : 4u;
+}
+
+static int native_info(const struct stat *value, struct snapshot_info *info) {
+  if (value->st_size < 0 || (uintmax_t)value->st_size > KSR_SAFE_INTEGER) return 0;
+  info->type = native_kind(value->st_mode); info->size = (uint64_t)value->st_size;
+  info->mtime_ms = (double)KSR_MTIME(value).tv_sec * 1000.0 + (double)KSR_MTIME(value).tv_nsec / 1000000.0;
+  return isfinite(info->mtime_ms);
+}
+
+static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) {
+  struct rooted_file opened; struct stat after; size_t got = 0, capacity; ssize_t chunk; unsigned char *buffer;
+  enum ksr_status status = open_rooted(request, &opened, 0); *content = NULL; *length = 0;
+  if (status != KSR_OK) { close_rooted(&opened); return status; }
+  if (!S_ISREG(opened.before.st_mode)) { close_rooted(&opened); return KSR_NOT_REGULAR; }
+  if ((uintmax_t)opened.before.st_size > request->cap) { close_rooted(&opened); return KSR_CONTENT_TOO_LARGE; }
 #if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
   pause_after_final_open();
 #endif
-  capacity = (size_t)before.st_size + 1;
-  buffer = calloc(capacity, 1); if (buffer == NULL) { close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
+  capacity = (size_t)opened.before.st_size + 1; buffer = calloc(capacity, 1);
+  if (buffer == NULL) { close_rooted(&opened); return KSR_IO_FAILURE; }
   while (got < capacity) {
-    chunk = read(fd, buffer + got, capacity - got);
+    chunk = read(opened.fd, buffer + got, capacity - got);
     if (chunk < 0 && errno == EINTR) continue;
-    if (chunk < 0) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_IO_FAILURE; }
+    if (chunk < 0) { status = KSR_IO_FAILURE; break; }
     if (chunk == 0) break;
     got += (size_t)chunk;
   }
-  if (got > request->cap) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CONTENT_TOO_LARGE; }
-  if (fstat(fd, &after) != 0 || !same_identity(&before, &after) || got != (size_t)before.st_size) changed = 1;
-  for (int i = 0; i < count; ++i) { struct stat now; if (fstat(fds[i], &now) != 0 || !same_identity(&dirs[i], &now)) changed = 1; }
-  if (changed) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CHANGED_DURING_READ; }
-  close(fd); while (count) close(fds[--count]);
-  if (!valid_utf8(buffer, got)) { memset(buffer, 0, capacity); free(buffer); return KSR_CONTENT_NOT_TEXT; }
-  info->size = (uint64_t)after.st_size;
-  info->mtime_ms = (double)KSR_MTIME(&after).tv_sec * 1000.0 + (double)KSR_MTIME(&after).tv_nsec / 1000000.0;
-  if (!isfinite(info->mtime_ms)) { memset(buffer, 0, capacity); free(buffer); return KSR_IO_FAILURE; }
+  if (status == KSR_OK && got > request->cap) status = KSR_CONTENT_TOO_LARGE;
+  if (status == KSR_OK && (!rooted_current(&opened, &after) || got != (size_t)opened.before.st_size)) status = KSR_CHANGED_DURING_READ;
+  if (status == KSR_OK && !valid_utf8(buffer, got)) status = KSR_CONTENT_NOT_TEXT;
+  if (status == KSR_OK && !native_info(&after, info)) status = KSR_IO_FAILURE;
+  close_rooted(&opened);
+  if (status != KSR_OK) { memset(buffer, 0, capacity); free(buffer); return status; }
   *content = buffer; *length = (uint32_t)got; return KSR_OK;
+}
+
+static enum ksr_status native_bytes(const struct request *request, struct rooted_file *opened, unsigned char **content, uint32_t *length) {
+  const uint64_t size = (uint64_t)opened->before.st_size;
+  const uint64_t offset = request->operation == 2u ? request->offset : 0;
+  const uint64_t available = offset >= size ? 0 : size - offset;
+  const uint64_t wanted = request->operation == 2u && request->length < available ? request->length : available;
+  if (wanted > request->cap) return KSR_CONTENT_TOO_LARGE;
+  unsigned char *buffer = calloc((size_t)wanted + 1, 1); size_t got = 0;
+  if (buffer == NULL) return KSR_IO_FAILURE;
+  while (got < wanted) {
+    ssize_t chunk = pread(opened->fd, buffer + got, (size_t)wanted - got, (off_t)(offset + got));
+    if (chunk < 0 && errno == EINTR) continue;
+    if (chunk <= 0) { memset(buffer, 0, (size_t)wanted + 1); free(buffer); return chunk < 0 ? KSR_IO_FAILURE : KSR_CHANGED_DURING_READ; }
+    got += (size_t)chunk;
+  }
+  *content = buffer; *length = (uint32_t)got; return KSR_OK;
+}
+
+static enum ksr_status append_native_entry(unsigned char **buffer, uint32_t *length, size_t *capacity, const char *name, uint16_t type, uint32_t cap) {
+  const size_t size = strlen(name), required = (size_t)*length + size + 5u;
+  if (!valid_utf8_mode((const unsigned char *)name, size, 0)) return KSR_INVALID_PATH;
+  if (required > cap) return KSR_CONTENT_TOO_LARGE;
+  if (required >= *capacity) {
+    size_t next = *capacity * 2u; if (next <= required) next = required + 1u;
+    if (next > (size_t)cap + 1u) next = (size_t)cap + 1u;
+    unsigned char *grown = realloc(*buffer, next); if (grown == NULL) return KSR_IO_FAILURE;
+    *buffer = grown; *capacity = next;
+  }
+  (*buffer)[*length] = (unsigned char)type; put32(*buffer + *length + 1, (uint32_t)size);
+  memcpy(*buffer + *length + 5, name, size); *length = (uint32_t)required; return KSR_OK;
+}
+
+static enum ksr_status native_list(const struct request *request, struct rooted_file *opened, unsigned char **content, uint32_t *length) {
+  int copy = dup(opened->fd); if (copy < 0) return KSR_IO_FAILURE;
+  DIR *directory = fdopendir(copy); if (directory == NULL) { close(copy); return KSR_IO_FAILURE; }
+  size_t capacity = 256; unsigned char *buffer = calloc(capacity, 1); uint32_t count = 0;
+  enum ksr_status status = buffer == NULL ? KSR_IO_FAILURE : KSR_OK; *length = 4;
+  while (status == KSR_OK) {
+    errno = 0; struct dirent *entry = readdir(directory);
+    if (entry == NULL) { if (errno != 0) status = KSR_IO_FAILURE; break; }
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    struct stat info;
+    if (fstatat(opened->fd, entry->d_name, &info, AT_SYMLINK_NOFOLLOW) != 0) { status = KSR_CHANGED_DURING_READ; break; }
+    status = append_native_entry(&buffer, length, &capacity, entry->d_name, native_kind(info.st_mode), request->cap);
+    if (status == KSR_OK) count++;
+  }
+  closedir(directory);
+  if (status != KSR_OK) { if (buffer != NULL) { memset(buffer, 0, capacity); free(buffer); } *length = 0; return status; }
+  put32(buffer, count); *content = buffer; return KSR_OK;
+}
+
+static enum ksr_status secure_native(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) {
+  struct rooted_file opened; struct stat after; enum ksr_status status = open_rooted(request, &opened, request->operation == 3u);
+  *content = NULL; *length = 0;
+  if (status != KSR_OK) { close_rooted(&opened); return status; }
+  if (!native_info(&opened.before, info)) { close_rooted(&opened); return KSR_IO_FAILURE; }
+#if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)
+  pause_after_final_open();
+#endif
+  if ((request->operation < 3u && info->type != 1u) || (request->operation == 4u && info->type != 2u)) status = KSR_WRONG_KIND;
+  else if (request->operation < 3u) status = native_bytes(request, &opened, content, length);
+  else if (request->operation == 4u) status = native_list(request, &opened, content, length);
+  if ((status == KSR_OK || status == KSR_WRONG_KIND) && !rooted_current(&opened, &after)) status = KSR_CHANGED_DURING_READ;
+  if ((status == KSR_OK || status == KSR_WRONG_KIND) && !native_info(&after, info)) status = KSR_IO_FAILURE;
+  close_rooted(&opened);
+  if (status != KSR_OK && *content != NULL) { memset(*content, 0, (size_t)*length + 1); free(*content); *content = NULL; *length = 0; }
+  return status;
 }
 #elif defined(_WIN32)
 #include <windows.h>
@@ -360,6 +484,10 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
 static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) { (void)request; (void)content; (void)length; (void)info; return KSR_UNSUPPORTED_PLATFORM; }
 #endif
 
+#if !defined(__APPLE__) && !defined(__linux__)
+static enum ksr_status secure_native(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) { (void)request; (void)content; (void)length; (void)info; return KSR_UNSUPPORTED_PLATFORM; }
+#endif
+
 int main(void) {
 #if defined(_WIN32)
   /* /MT and /DEPENDENTLOADFLAG:0x800 protect implicit imports before main. This rejects a host
@@ -368,7 +496,7 @@ int main(void) {
   if (!binary_standard_io()) return 1;
 #endif
   struct request request; struct snapshot_info info = {0}; unsigned char *content = NULL; uint32_t length = 0; enum ksr_status status = parse_request(&request);
-  if (status == KSR_OK) status = secure_read(&request, &content, &length, &info);
+  if (status == KSR_OK) status = request.version == 3u ? secure_native(&request, &content, &length, &info) : secure_read(&request, &content, &length, &info);
   reply(status, content, length, request.version, &info);
   if (content != NULL) { memset(content, 0, (size_t)length + 1); free(content); }
   clear_request(&request);

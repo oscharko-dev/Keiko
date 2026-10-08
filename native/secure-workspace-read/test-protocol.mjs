@@ -31,6 +31,9 @@ import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   encodeSecureWorkspaceSnapshotRequest,
   decodeSecureWorkspaceSnapshotResponse,
+  encodeSecureWorkspaceNativeRequest,
+  decodeSecureWorkspaceNativeResponse,
+  decodeSecureWorkspaceNativeDirectory,
 } from "../../packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadProtocol.ts";
 
 const source = fileURLToPath(new URL("./secure_workspace_read.c", import.meta.url));
@@ -2514,6 +2517,102 @@ async function assertRichPrivateStateFlip(pausedBinary, fixture, path) {
   }
 }
 
+async function assertNativeFileIO(binary, pausedBinary, fixture) {
+  const chosen = process.env.KEIKO_NATIVE_IO_TEST_CASE ?? "all";
+  assert.ok(["all", "read", "range", "stat", "list"].includes(chosen));
+  const bytes = Buffer.from([0, 255, 128, 1, 0, 2, 3]);
+  await writeFile(join(fixture, "native.bin"), bytes);
+  await utimes(join(fixture, "native.bin"), new Date(-2000), new Date(-2000));
+  const ask = async (relativePath, operation, range) => {
+    const result = await run(
+      binary,
+      encodeSecureWorkspaceNativeRequest({
+        root: fixture,
+        relativePath,
+        operation,
+        ...(range === undefined ? {} : { range }),
+      }),
+    );
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr.length, 0);
+    return decodeSecureWorkspaceNativeResponse(result.stdout);
+  };
+  if (chosen === "all" || chosen === "read")
+    await assertNativeRead({ ask, bytes, fixture, pausedBinary });
+  if (chosen === "all" || chosen === "range")
+    await assertNativeRange({ ask, bytes, fixture, pausedBinary });
+  if (chosen === "all" || chosen === "stat")
+    await assertNativeStat({ ask, bytes, fixture, pausedBinary });
+  if (chosen === "all" || chosen === "list")
+    await assertNativeList({ ask, bytes, fixture, pausedBinary });
+}
+
+async function assertNativeRead({ ask, bytes }) {
+  const result = await ask("native.bin", "read");
+  assert.equal(result.status, "ok", "native binary content must not require UTF-8");
+  assert.deepEqual(result.bytes, bytes);
+  assert.equal(result.info.size, bytes.length);
+  assert.equal(result.info.mtimeMs, -2000);
+  const wrongKind = await ask("nested", "read");
+  assert.equal(wrongKind.status, "wrong-kind");
+  assert.equal(wrongKind.info.type, "directory");
+}
+
+async function assertNativeRange({ ask, bytes, fixture, pausedBinary }) {
+  const large = Buffer.alloc(2 * SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 17, 128);
+  bytes.copy(large, SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 3);
+  await writeFile(join(fixture, "large.bin"), large);
+  const result = await ask("large.bin", "read", {
+    offset: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 3,
+    length: bytes.length,
+  });
+  assert.equal(result.status, "ok");
+  assert.deepEqual(result.bytes, bytes);
+  assert.equal(result.info.size, large.length);
+  const eof = await ask("large.bin", "read", { offset: large.length + 100, length: 20 });
+  assert.equal(eof.status, "ok");
+  assert.equal(eof.bytes.length, 0);
+  if (pausedBinary !== undefined) {
+    const raced = await runPaused(
+      pausedBinary,
+      encodeSecureWorkspaceNativeRequest({
+        root: fixture,
+        relativePath: "large.bin",
+        operation: "read",
+        range: { offset: 0, length: 10 },
+      }),
+      () => writeFile(join(fixture, "large.bin"), bytes),
+    );
+    if (!raced.mutationDenied) {
+      assert.equal(raced.stdout.readUInt16LE(6), 8);
+      assert.equal(raced.stdout.length, 12, "unstable bytes must carry no data or metadata");
+    }
+  }
+}
+
+async function assertNativeStat({ ask, bytes }) {
+  const result = await ask("native.bin", "stat");
+  assert.equal(result.status, "ok");
+  assert.equal(result.info.size, bytes.length);
+  assert.equal(result.bytes.length, 0);
+  assert.equal(result.info.mtimeMs, -2000);
+  const root = await ask("", "stat");
+  assert.equal(root.status, "ok");
+  assert.equal(root.info.type, "directory");
+}
+
+async function assertNativeList({ ask }) {
+  const result = await ask("nested", "list");
+  assert.equal(result.status, "ok");
+  assert.equal(result.info.type, "directory");
+  assert.deepEqual(decodeSecureWorkspaceNativeDirectory(result.bytes), [
+    { name: "good.txt", type: "file" },
+  ]);
+  const wrongKind = await ask("native.bin", "list");
+  assert.equal(wrongKind.status, "wrong-kind");
+  assert.equal(wrongKind.info.type, "file");
+}
+
 function existingBinaryArgument(argv) {
   if (argv.length === 0) return undefined;
   if (argv.length !== 2 || argv[0] !== "--binary" || argv[1].length === 0)
@@ -2522,8 +2621,9 @@ function existingBinaryArgument(argv) {
 }
 
 const richOnly = process.argv.includes("--rich-only");
+const nativeOnly = process.argv.includes("--native-only");
 const externalBinary = existingBinaryArgument(
-  process.argv.slice(2).filter((arg) => arg !== "--rich-only"),
+  process.argv.slice(2).filter((arg) => arg !== "--rich-only" && arg !== "--native-only"),
 );
 // The platform restriction belongs to compile mode, not to the harness as a whole. Building the
 // helper needs MSVC on Windows or `xcrun clang -D_DARWIN_C_SOURCE` on macOS, and neither exists
@@ -2553,13 +2653,15 @@ try {
     ? "secure-workspace-read-paused.exe"
     : "secure-workspace-read-paused";
   const pausedBinary = binaryRoot === undefined ? undefined : join(binaryRoot, pausedBinaryName);
-  if (!richOnly) await assertWindowsSourceContract();
+  if (!richOnly && !nativeOnly) await assertWindowsSourceContract();
   if (externalBinary === undefined) {
     await compile(binary);
     await compile(pausedBinary, true);
   }
   await setupFixture(fixture, outside);
-  if (richOnly) {
+  if (nativeOnly) {
+    await assertNativeFileIO(binary, pausedBinary, fixture);
+  } else if (richOnly) {
     await assertRichSnapshot(binary, pausedBinary, fixture);
   } else {
     await assertProtocolCases(binary, fixture, outside);

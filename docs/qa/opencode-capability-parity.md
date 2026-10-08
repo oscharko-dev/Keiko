@@ -26,6 +26,12 @@ truthful gateway schema admission, contained filesystem/process/network executio
 redaction and evidence. The matrix records current mapped equivalents, narrower implementations,
 explicitly disabled surfaces and remaining native-service gaps. Chat repository search and its
 recursive search subsystem are retained unchanged.
+The inactive private byte/range/stat/list prerequisite now passes eight actual original Read
+output/error comparisons, including large-file paging, directories and media, through real helper
+executions. Its guarded read/edit port uses the existing current authority and body-free log owner.
+These are private seam controls; initial/global instruction discovery, invocation accounting,
+queued admission, complete platform coverage and production native service ingress remain open.
+T01 and the other production statuses below therefore remain incomplete native-parity acceptance.
 The owner requires complete functional parity with Standalone OpenCode. Every narrower, disabled
 or missing native capability is therefore an open acceptance item, including extension and
 configuration surfaces. A mapped equivalent or an inactive seam test does not close that item.

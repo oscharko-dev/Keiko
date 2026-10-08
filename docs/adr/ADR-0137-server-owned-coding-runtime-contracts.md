@@ -491,6 +491,22 @@ and receipt-only replay cannot recover text. Same-descriptor modification times 
 value, including dates before 1970. The private profile is never a model selector and leaves public
 direct/Code Mode projections and Chat read/search consumers unchanged.
 
+A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
+immediate directory entries to original native file consumers. Its collected output limit is
+64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused
+without partial entries. Existing public text/snapshot limits and consumers retain their contracts.
+The existing read/edit port owns its private primitive forwarding, with the same current producer,
+authority guard and accepted-root pre/postflight. It records closed outcomes on the existing
+`coding-runtime.workspace-read` line; response bytes and rejected content never enter evidence.
+It also supplies a private additional currentness veto for physical IO admission. A lost binding
+wipes returned bytes before refusal. This facet does not grant a model-visible tool or a native
+host ingress. Actual original Read controls retain paging, directory, image/PDF and binary handling;
+the original instruction service retains its own loading and deduplication. Initial/global
+instruction discovery, queued admission, parent invocation accounting and complete native service
+qualification remain separate requirements. Symlink content, hardlinks and cross-device content
+are still refused; Windows native IO and Linux/Intel execution are not qualified by the macOS
+controls. Those limits remain open native-parity work rather than permanent capability exclusions.
+
 An original Node service host has its own supplemental immutable artifact identity: final npm
 payload and archive, fixed Node executable and bootstrap, dependency lock, license inventory,
 SBOM and build-provenance evidence. Existing CLI archive approval neither approves nor selects

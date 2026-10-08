@@ -165,6 +165,18 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "Malformed rich helper frames become the closed protocol-invalid result and transient bytes are wiped. The governed read owner persists the failed coding-runtime.workspace-read line with its purpose and path hash, never response content.",
   ],
   [
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:SecureWorkspaceTextReadPortImpl.nativeRun",
+    "The private one-shot process failure becomes the existing closed processRunFailure result. The guarded native primitive owner in codingToolReadEditPorts records that actual refusal on coding-runtime.workspace-read; the new path has no model-facing or native-host ingress.",
+  ],
+  [
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:decodeNativeHelperResponse",
+    "Pure KSS3 frame validation becomes protocol-invalid, and response bytes are wiped. The guarded native primitive owner records the closed refusal on the existing coding-runtime.workspace-read line before returning it.",
+  ],
+  [
+    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts:nativeListResult",
+    "Pure directory payload validation becomes protocol-invalid with no partial entries, and bytes are wiped. The same guarded native primitive owner records the closed refusal through coding-runtime.workspace-read.",
+  ],
+  [
     "packages/keiko-contracts/src/observability.ts:activityLogEvent",
     "A validation failure becomes the rejection sentinel the sink drops with one bounded notice.",
   ],

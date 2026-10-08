@@ -184,6 +184,33 @@ Two-file lint, syntax and format checks pass. Refusal retains the existing body-
 This qualifies the entry's database convention and default session context, not BFF accepted-session
 Location validation, an active production host, native IO authority or full Standalone parity.
 
+The inactive private file-IO increment adds separately pinned `KSR3/KSS3` byte/range/stat/list
+primitives without changing public text/snapshot caps or Chat consumers. Root independently
+checks 189 frozen digest records and all twelve baseline owners, then reproduces four real
+unchanged-C failures with the final request producer/harness. New native, existing rich snapshot
+and legacy protocol/adversarial/load harnesses pass. The load control performs 1,000 sequential
+and 100 concurrent reads with no retained descriptor increase; it establishes bounded operation,
+not a comparative performance improvement.
+
+Root repeats eight actual original Read outputs/errors through these private primitives with
+26 real helper executions: small text, first and late large-file pages, directories, image/PDF,
+a legal long path and original binary refusal. Original direct context capture, pre-epoch metadata
+and instruction deduplication are retained. Its verifier and source-commit fixture are synthetic;
+actual helper/source digests are measured, but this is not release-signature or final-payload
+approval. There is no native spawner, model, BFF listener or initial/global instruction qualification.
+
+An independent package-cwd run exposes two test fixture assumptions about the repo cwd; root fixes
+them to locate the actual C source relative to their modules. The corrected six owning suites pass
+307 tests with one explicit Linux-only filename skip on macOS. Strict six-test types, the affected
+forced graph, scoped lint/format, 97 registry controls and all twelve actual error-observability
+sites pass. The existing read/edit owner now forwards private primitives using the same current
+producer/guard/root checks and existing body-free read log. Its missing ingress fails a real baseline
+control; actual process and frame-decoder refusals reach registered emitted-line evidence.
+Canceled, revoked or root-switched results are refused and bytes wiped after raw settlement.
+Three exact closed-result failure-path dispositions identify this concrete log owner, without
+expanding the legacy register. Shared private waiting, one-parent invocation accounting, links,
+initial instructions, Windows, fresh packed approval and production service activation remain open.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

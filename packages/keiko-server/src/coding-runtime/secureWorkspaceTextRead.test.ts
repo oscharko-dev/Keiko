@@ -1,8 +1,22 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  truncateSync,
+  readFileSync,
+  linkSync,
+  utimesSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 import {
@@ -15,12 +29,19 @@ import {
   createSecureWorkspaceTextReadPort,
   exactWorkspaceRead,
   type SecureWorkspaceTextReadResult,
+  type SecureWorkspaceNativeFileIO,
 } from "./secureWorkspaceTextRead.js";
+import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
 import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
-import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
+import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_LIVE,
+  type SecureWorkspaceTextReadProcessFactory,
+} from "./secureWorkspaceTextReadProcess.js";
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+  encodeSecureWorkspaceNativeRequest,
   encodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceReadRequest,
   encodeSecureWorkspaceReadResponse,
@@ -97,7 +118,7 @@ describe("SecureWorkspaceTextReadPort", () => {
     const port = createSecureWorkspaceTextReadPort({
       resolveWorkspaceRoot: () => "/server-owned/workspace",
       artifact: { ...artifact, byteCap: 65_536 },
-      artifactVerifier: { verify: () => true },
+      artifactVerifier: { verify: (): boolean => true },
       processFactory: { create: () => ({ run }) },
       platform: { os: "darwin", arch: "arm64" },
     });
@@ -121,7 +142,7 @@ describe("SecureWorkspaceTextReadPort", () => {
     const port = createSecureWorkspaceTextReadPort({
       resolveWorkspaceRoot: () => "/server-owned/workspace",
       artifact: { ...artifact, byteCap: 65_536 },
-      artifactVerifier: { verify: () => true },
+      artifactVerifier: { verify: (): boolean => true },
       processFactory: {
         create: () => ({
           run: (): Promise<Uint8Array> => Promise.resolve(response(0, Buffer.alloc(65_537, 0x61))),
@@ -339,7 +360,9 @@ describe("SecureWorkspaceTextReadPort", () => {
   });
 
   it("admits at most eight live helpers and returns busy immediately without a ninth process", async () => {
-    const pending = Array.from({ length: 8 }, () => deferred<Uint8Array>());
+    const pending = Array.from({ length: SECURE_WORKSPACE_TEXT_READ_MAX_LIVE }, () =>
+      deferred<Uint8Array>(),
+    );
     let next = 0;
     const { port, create } = createPort(() => {
       const current = pending[next];
@@ -698,7 +721,7 @@ describe("pinned rich secure text read", () => {
     return createSecureWorkspaceTextReadPort({
       resolveWorkspaceRoot: () => "/current/workspace",
       artifact: { ...artifact, snapshotProtocol: "KSR2/KSS2" },
-      artifactVerifier: { verify: () => true },
+      artifactVerifier: { verify: (): boolean => true },
       processFactory: { create: () => ({ run }) },
       platform: { os: "darwin", arch: "arm64" },
     });
@@ -823,3 +846,369 @@ describe("pinned rich secure text read", () => {
     expect(JSON.stringify(events)).not.toContain("src/a.ts");
   });
 });
+
+// The injected verifier proves fixture bytes only, not release signatures or production activation.
+function nativeFixturePort(
+  root: string,
+  executable: string,
+  overrides: Partial<SecureWorkspaceTextReadArtifact> = {},
+  legacy = false,
+): ReturnType<typeof createSecureWorkspaceTextReadPort> {
+  const target = process.platform === "darwin" ? `darwin-${process.arch}` : "linux-x64";
+  const candidate = {
+    ...artifact,
+    target,
+    nativeProtocol: "KSR3/KSS3" as const,
+    sha256: createHash("sha256").update(readFileSync(executable)).digest("hex"),
+    ...overrides,
+  };
+  if (legacy) Reflect.deleteProperty(candidate, "nativeProtocol");
+  return createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: () => root,
+    artifact: candidate,
+    artifactVerifier: { verify: (): boolean => true },
+    processFactory: createNodeSecureWorkspaceReadProcessFactory({
+      binding: {
+        executable,
+        artifact: candidate,
+        helperSizeBytes: readFileSync(executable).length,
+        resourceRoot: dirname(executable),
+      },
+      safeCwd: dirname(executable),
+    }),
+  });
+}
+
+function requireNativeFacet(
+  port: ReturnType<typeof createSecureWorkspaceTextReadPort>,
+): SecureWorkspaceNativeFileIO {
+  expect(port.nativeFileIO).toBeDefined();
+  if (port.nativeFileIO === undefined) throw new Error("native-io-facet-missing");
+  return port.nativeFileIO;
+}
+
+describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "private native file IO using the actual descriptor helper",
+  () => {
+    let base: string;
+    let root: string;
+    let executable: string;
+    beforeAll(() => {
+      base = realpathSync(mkdtempSync(join(tmpdir(), "native-io-port-")));
+      root = join(base, "workspace");
+      mkdirSync(root);
+      executable = join(base, "secure-read");
+      execFileSync("cc", [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        process.platform === "linux" ? "-D_GNU_SOURCE" : "-D_DARWIN_C_SOURCE",
+        "-O2",
+        fileURLToPath(
+          new URL(
+            "../../../../native/secure-workspace-read/secure_workspace_read.c",
+            import.meta.url,
+          ),
+        ),
+        "-o",
+        executable,
+      ]);
+      writeFileSync(join(root, "bytes.bin"), Buffer.from([0, 255, 128, 2, 0]));
+      utimesSync(join(root, "bytes.bin"), new Date(-2000), new Date(-2000));
+      mkdirSync(join(root, "nested"));
+      writeFileSync(join(root, "nested", "visible.ts"), "safe");
+      writeFileSync(join(root, ".env"), "synthetic fixture secret");
+    });
+    afterAll(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    it("preserves raw binary and finite pre-epoch metadata without text decoding", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      await expect(io.readBytes({ relativePath: "bytes.bin" })).resolves.toEqual({
+        ok: true,
+        bytes: Buffer.from([0, 255, 128, 2, 0]),
+        info: { type: "file", size: 5, mtimeMs: -2000 },
+      });
+      await expect(io.stat({ relativePath: "bytes.bin" })).resolves.toEqual({
+        ok: true,
+        info: { type: "file", size: 5, mtimeMs: -2000 },
+      });
+    });
+
+    it("keeps original large-file byte ranges and EOF semantics outside the text ceiling", async () => {
+      const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x61);
+      bytes.set([0, 255, 128], 1_300_000);
+      writeFileSync(join(root, "large.bin"), bytes);
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      const result = await io.readBytes({
+        relativePath: "large.bin",
+        range: { offset: 1_300_000, length: 3 },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        bytes: Buffer.from([0, 255, 128]),
+        info: { type: "file", size: bytes.length },
+      });
+      expect(
+        await io.readBytes({
+          relativePath: "large.bin",
+          range: { offset: bytes.length + 1, length: 3 },
+        }),
+      ).toMatchObject({ ok: true, bytes: Buffer.alloc(0) });
+    });
+
+    it("returns immediate directory entries while filtering sensitive names before disclosure", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      const rootResult = await io.list({ relativePath: "" });
+      expect(rootResult).toMatchObject({ ok: true, info: { type: "directory" } });
+      if (!rootResult.ok) throw new Error("directory-list-failed");
+      expect(rootResult.entries.map((entry) => entry.name)).not.toContain(".env");
+      await expect(io.list({ relativePath: "nested" })).resolves.toMatchObject({
+        ok: true,
+        entries: [{ name: "visible.ts", type: "file" }],
+      });
+      await expect(io.readBytes({ relativePath: "nested" })).resolves.toMatchObject({
+        ok: false,
+        reason: "wrong-kind",
+        info: { type: "directory" },
+      });
+    });
+
+    it("refuses sensitive, escaped and malformed paths without testing their presence", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      for (const relativePath of [
+        ".env",
+        ".env.local",
+        "../outside",
+        "/absolute",
+        "nested/",
+        "\ud800",
+      ])
+        await expect(io.stat({ relativePath })).resolves.toMatchObject({
+          ok: false,
+          reason: "denied",
+        });
+    });
+
+    it("does not grant content or directory access through links or hardlinks", async () => {
+      symlinkSync("bytes.bin", join(root, "symlink.bin"));
+      symlinkSync("nested", join(root, "symlink-dir"));
+      linkSync(join(root, "bytes.bin"), join(root, "hardlink.bin"));
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      await expect(io.stat({ relativePath: "symlink.bin" })).resolves.toMatchObject({
+        ok: true,
+        info: { type: "symlink" },
+      });
+      for (const relativePath of ["symlink.bin", "hardlink.bin"])
+        await expect(io.readBytes({ relativePath })).resolves.toMatchObject({ ok: false });
+      await expect(io.list({ relativePath: "symlink-dir" })).resolves.toMatchObject({ ok: false });
+    });
+
+    it("keeps whole-file bytes distinct from text caps and bounds native payloads honestly", async () => {
+      const content = Buffer.alloc(SECURE_WORKSPACE_TEXT_READ_MAX_BYTES + 1, 0);
+      const path = join(root, "whole.bin");
+      writeFileSync(path, content);
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      expect(await io.readBytes({ relativePath: "whole.bin" })).toMatchObject({
+        ok: true,
+        bytes: content,
+        info: { size: content.length },
+      });
+      writeFileSync(join(root, "empty.bin"), Buffer.alloc(0));
+      expect(await io.readBytes({ relativePath: "empty.bin" })).toMatchObject({
+        ok: true,
+        bytes: Buffer.alloc(0),
+      });
+      truncateSync(path, SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1);
+      await expect(io.readBytes({ relativePath: "whole.bin" })).resolves.toMatchObject({
+        ok: false,
+        reason: "too-large",
+      });
+      await expect(
+        io.readBytes({
+          relativePath: "whole.bin",
+          range: {
+            offset: SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+            length: 1,
+          },
+        }),
+      ).resolves.toMatchObject({ ok: true, bytes: Buffer.alloc(1) });
+    });
+
+    it.skipIf(process.platform !== "linux")(
+      "refuses an unrepresentable directory rather than dropping an entry",
+      async () => {
+        const folder = join(root, "invalid-entry");
+        mkdirSync(folder);
+        writeFileSync(join(folder, "valid.ts"), "safe");
+        writeFileSync(Buffer.concat([Buffer.from(`${folder}/`), Buffer.from([0xff])]), "synthetic");
+        const io = requireNativeFacet(nativeFixturePort(root, executable));
+        await expect(io.list({ relativePath: "invalid-entry" })).resolves.toMatchObject({
+          ok: false,
+          reason: "denied",
+        });
+      },
+    );
+
+    it("keeps original legal long paths above the public IPC path bound", async () => {
+      const folders = Array.from({ length: 8 }, (_, index) =>
+        `${String(index)}-`.concat("p".repeat(80)),
+      );
+      mkdirSync(join(root, ...folders), { recursive: true });
+      const path = folders.join("/").concat("/file:with-colon.ts");
+      writeFileSync(join(root, path), "long path text");
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      expect(Buffer.byteLength(path)).toBeGreaterThan(512);
+      await expect(io.readBytes({ relativePath: path })).resolves.toMatchObject({
+        ok: true,
+        bytes: Buffer.from("long path text"),
+      });
+    });
+
+    it("joins cancellation and workspace postflight before releasing actual helper bytes", async () => {
+      const frame = execFileSync(executable, {
+        input: encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "read",
+        }),
+      });
+      const work = deferred<Uint8Array>();
+      let current = root;
+      const run = vi.fn((): Promise<Uint8Array> => work.promise);
+      const port = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => current,
+        artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+        artifactVerifier: { verify: (): boolean => true },
+        platform: { os: "darwin", arch: "arm64" },
+        processFactory: { create: () => ({ run }) },
+      });
+      const reading = requireNativeFacet(port).readBytes({ relativePath: "nested/visible.ts" });
+      await vi.waitFor(() => {
+        expect(run).toHaveBeenCalledOnce();
+      });
+      current = `${root}-other`;
+      work.resolve(frame);
+      await expect(reading).resolves.toMatchObject({ ok: false, reason: "workspace-unavailable" });
+      expect(frame.every((byte) => byte === 0)).toBe(true);
+    });
+
+    it("rejects invalid ranges, cancellation and missing capability without a process", async () => {
+      const run = vi.fn(() => Promise.resolve(Buffer.alloc(0)));
+      const port = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => root,
+        artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+        artifactVerifier: { verify: (): boolean => true },
+        platform: { os: "darwin", arch: "arm64" },
+        processFactory: { create: () => ({ run }) },
+      });
+      const io = requireNativeFacet(port);
+      for (const range of [
+        { offset: -1, length: 1 },
+        { offset: 0, length: SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1 },
+        { offset: Number.MAX_SAFE_INTEGER, length: 1 },
+      ])
+        await expect(io.readBytes({ relativePath: "bytes.bin", range })).resolves.toMatchObject({
+          ok: false,
+          reason: "denied",
+        });
+      await expect(
+        io.stat({ relativePath: "bytes.bin", signal: AbortSignal.abort() }),
+      ).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it("shares existing physical capacity and retains cancellation slots until actual settlement", async () => {
+      const frame = execFileSync(executable, {
+        input: encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "stat",
+        }),
+      });
+      const pending = Array.from({ length: SECURE_WORKSPACE_TEXT_READ_MAX_LIVE }, () =>
+        deferred<Uint8Array>(),
+      );
+      let count = 0;
+      const run = vi.fn((): Promise<Uint8Array> => {
+        const work = pending[count++];
+        return work === undefined ? Promise.resolve(Buffer.from(frame)) : work.promise;
+      });
+      const port = createSecureWorkspaceTextReadPort({
+        resolveWorkspaceRoot: () => root,
+        artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+        artifactVerifier: { verify: (): boolean => true },
+        platform: { os: "darwin", arch: "arm64" },
+        processFactory: { create: () => ({ run }) },
+      });
+      const io = requireNativeFacet(port);
+      const controller = new AbortController();
+      const calls = pending.map(() =>
+        io.stat({ relativePath: "nested/visible.ts", signal: controller.signal }),
+      );
+      await vi.waitFor(() => {
+        expect(run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      controller.abort();
+      await expect(port.readText({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: false,
+        reason: "busy",
+      });
+      await expect(io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: false,
+        reason: "busy",
+      });
+      pending.forEach((work) => {
+        work.resolve(Buffer.from(frame));
+      });
+      const results = await Promise.all(calls);
+      expect(results.every((result) => !result.ok && result.reason === "cancelled")).toBe(true);
+      await expect(io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: true,
+      });
+    });
+
+    it("preserves the exact workspace wrapper and purges bytes after its guard changes", async () => {
+      const bytes = Buffer.from([0, 255, 1]);
+      let current = true;
+      const read = vi.fn(() => {
+        current = false;
+        return Promise.resolve({
+          ok: true as const,
+          bytes,
+          info: { type: "file" as const, size: 3, mtimeMs: 0 },
+        });
+      });
+      const wrapped = exactWorkspaceRead(
+        {
+          readText: (): Promise<SecureWorkspaceTextReadResult> =>
+            Promise.resolve({ ok: false, reason: "denied" }),
+          nativeFileIO: { readBytes: read, stat: vi.fn(), list: vi.fn() },
+        },
+        () => current,
+        "workspace-unavailable",
+      );
+      const io = requireNativeFacet(wrapped);
+      await expect(io.readBytes({ relativePath: "a.bin" })).resolves.toMatchObject({
+        ok: false,
+        reason: "workspace-unavailable",
+      });
+      expect(bytes).toEqual(Buffer.alloc(3));
+      await expect(io.readBytes({ relativePath: "a.bin" })).resolves.toMatchObject({
+        ok: false,
+        reason: "workspace-unavailable",
+      });
+      expect(read).toHaveBeenCalledOnce();
+    });
+
+    it("keeps native capability unavailable on currently pinned text helpers", async () => {
+      const io = requireNativeFacet(nativeFixturePort(root, executable, {}, true));
+      await expect(io.stat({ relativePath: "nested" })).resolves.toMatchObject({
+        ok: false,
+        reason: "native-io-unavailable",
+      });
+    });
+  },
+);

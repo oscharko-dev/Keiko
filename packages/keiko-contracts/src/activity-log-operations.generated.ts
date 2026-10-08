@@ -6217,6 +6217,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "preflight-refused",
           "response-too-large",
           "snapshot-unavailable",
+          "native-io-unavailable",
+          "wrong-kind",
         ],
       },
       replacementRefusal: {
@@ -9964,6 +9966,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "preflight-refused",
           "response-too-large",
           "snapshot-unavailable",
+          "native-io-unavailable",
+          "wrong-kind",
         ],
       },
       absence: {

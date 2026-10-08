@@ -124,3 +124,26 @@ it("admits only the exact signed rich capability at the existing point-of-use ve
   ).resolves.toBeUndefined();
   expect(verify).not.toHaveBeenCalled();
 });
+
+it("rejects an unapproved native capability before point-of-use verification", async () => {
+  const verify = vi.fn(() => true);
+  const candidate = artifact();
+  Reflect.set(candidate, "nativeProtocol", "unapproved-native");
+  await expect(
+    resolveSecureWorkspaceReadArtifact(candidate, { os: "darwin", arch: "arm64" }, { verify }),
+  ).resolves.toBeUndefined();
+  expect(verify).not.toHaveBeenCalled();
+});
+
+it("refuses native capability metadata on the unqualified Windows executor", async () => {
+  const verify = vi.fn(() => true);
+  const candidate = artifact({
+    target: "win32-x64",
+    installRelativePath: "runtime/native/keiko-secure-workspace-read.exe",
+  });
+  Reflect.set(candidate, "nativeProtocol", "KSR3/KSS3");
+  await expect(
+    resolveSecureWorkspaceReadArtifact(candidate, { os: "win32", arch: "x64" }, { verify }),
+  ).resolves.toBeUndefined();
+  expect(verify).not.toHaveBeenCalled();
+});

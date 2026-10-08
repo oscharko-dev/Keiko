@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ef6462eae76d46550db92de883be8d54289a82ab174464171550ca3e5681e743",
+    "catalogDigest": "fb0bdac42922cb663e78fc42702ca9a8ee14f37f9af9904d5cfa05395b315950",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6516,7 +6516,9 @@
               "postflight-refused",
               "preflight-refused",
               "response-too-large",
-              "snapshot-unavailable"
+              "snapshot-unavailable",
+              "native-io-unavailable",
+              "wrong-kind"
             ]
           },
           "replacementRefusal": {
@@ -6571,8 +6573,8 @@
         "failureClasses": ["coding-editor-mutation"],
         "proofIds": ["coding-runtime.edit.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1054",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1857"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1176",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1987"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6633,8 +6635,8 @@
         "failureClasses": ["coding-editor-mutation"],
         "proofIds": ["coding-runtime.editor-mutation.settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:967",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1697"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1089",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1827"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10402,8 +10404,8 @@
         "failureClasses": ["coding-workspace-discovery"],
         "proofIds": ["coding-runtime.workspace-discovery.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:365",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:463"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:486",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:584"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10462,7 +10464,9 @@
               "postflight-refused",
               "preflight-refused",
               "response-too-large",
-              "snapshot-unavailable"
+              "snapshot-unavailable",
+              "native-io-unavailable",
+              "wrong-kind"
             ]
           },
           "absence": {
@@ -10517,12 +10521,12 @@
         "failureClasses": ["coding-workspace-read"],
         "proofIds": ["coding-runtime.workspace-read.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:911",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1033",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:654",
-          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:842",
-          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1203",
-          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1253"
+          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:775",
+          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:963",
+          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1327",
+          "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1383"
         ]
       },
       {
@@ -89042,20 +89046,20 @@
     {
       "op": "coding-runtime.edit.refused",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1057",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1179",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.editor-changeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1833",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1963",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.editor-mutation.settled",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:970",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1092",
       "package": "keiko-server"
     },
     {
@@ -89514,27 +89518,27 @@
     {
       "op": "coding-runtime.workspace-discovery",
       "category": "search",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:368",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:489",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.workspace-discovery",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:537",
-      "sourceKind": "diagnostic-operation",
-      "package": "keiko-server"
-    },
-    {
-      "op": "coding-runtime.workspace-read",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1279",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:658",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.workspace-read",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:914",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1036",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.workspace-read",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.ts:1409",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {

@@ -325,3 +325,182 @@ function assertSnapshotInfo(info: SecureWorkspaceTextSnapshotInfo, byteLength: n
 function snapshotFileType(type: unknown): boolean {
   return type === "file";
 }
+
+/** Inactive native file lane: the original process-backed Files contract collects at most 64 MiB. */
+export const SECURE_WORKSPACE_NATIVE_MAX_BYTES = 64 * 1_024 * 1_024;
+export const SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES = SECURE_WORKSPACE_NATIVE_MAX_BYTES + 32;
+const NATIVE_REQUEST_BYTES = 36;
+const NATIVE_INFO_BYTES = 20;
+const NATIVE_TYPES = ["file", "directory", "symlink", "other"] as const;
+export type SecureWorkspaceNativeFileType = (typeof NATIVE_TYPES)[number];
+export interface SecureWorkspaceNativeFileInfo {
+  readonly type: SecureWorkspaceNativeFileType;
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+export interface SecureWorkspaceNativeDirEntry {
+  readonly name: string;
+  readonly type: SecureWorkspaceNativeFileType;
+}
+export type SecureWorkspaceNativeRequest = {
+  readonly root: string;
+  readonly relativePath: string;
+} & (
+  | {
+      readonly operation: "read";
+      readonly range?: { readonly offset: number; readonly length: number };
+    }
+  | { readonly operation: "stat" }
+  | { readonly operation: "list" }
+);
+export type SecureWorkspaceNativeResponse =
+  | {
+      readonly status: "ok";
+      readonly info: SecureWorkspaceNativeFileInfo;
+      readonly bytes: Uint8Array;
+    }
+  | { readonly status: "wrong-kind"; readonly info: SecureWorkspaceNativeFileInfo }
+  | { readonly status: SecureWorkspaceReadClosedStatus };
+
+export function encodeSecureWorkspaceNativeRequest(request: SecureWorkspaceNativeRequest): Buffer {
+  const root = encodeBoundedUtf8(request.root, SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES);
+  const path = Buffer.from(request.relativePath, "utf8");
+  try {
+    if (
+      path.byteLength > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES ||
+      path.includes(0) ||
+      path.toString("utf8") !== request.relativePath ||
+      root.toString("utf8") !== request.root
+    )
+      throw new Error("secure-workspace-read-invalid-request");
+    const range = request.operation === "read" ? request.range : undefined;
+    assertNativeRange(range);
+    const frame = Buffer.alloc(NATIVE_REQUEST_BYTES + root.length + path.length);
+    frame.write("KSR3", 0, "ascii");
+    frame.writeUInt16LE(3, 4);
+    frame.writeUInt16LE(nativeOperationCode(request), 6);
+    frame.writeUInt32LE(root.length, 8);
+    frame.writeUInt32LE(path.length, 12);
+    frame.writeUInt32LE(SECURE_WORKSPACE_NATIVE_MAX_BYTES, 16);
+    frame.writeBigUInt64LE(BigInt(range?.offset ?? 0), 20);
+    frame.writeBigUInt64LE(BigInt(range?.length ?? 0), 28);
+    root.copy(frame, NATIVE_REQUEST_BYTES);
+    path.copy(frame, NATIVE_REQUEST_BYTES + root.length);
+    return frame;
+  } finally {
+    root.fill(0);
+    path.fill(0);
+  }
+}
+
+function nativeOperationCode(request: SecureWorkspaceNativeRequest): number {
+  if (request.operation === "stat") return 3;
+  if (request.operation === "list") return 4;
+  return request.range === undefined ? 1 : 2;
+}
+
+function assertNativeRange(
+  range: { readonly offset: number; readonly length: number } | undefined,
+): void {
+  if (range === undefined) return;
+  if (
+    !Number.isSafeInteger(range.offset) ||
+    range.offset < 0 ||
+    !Number.isSafeInteger(range.length) ||
+    range.length < 0 ||
+    range.length > SECURE_WORKSPACE_NATIVE_MAX_BYTES ||
+    !Number.isSafeInteger(range.offset + range.length)
+  )
+    throw new Error("secure-workspace-read-invalid-request");
+}
+
+export function decodeSecureWorkspaceNativeResponse(
+  frame: Uint8Array,
+): SecureWorkspaceNativeResponse {
+  const bytes = bufferView(frame);
+  assertNativeResponseHeader(bytes);
+  const code = bytes.readUInt16LE(6);
+  if (code !== 0 && code !== 10) return nativeFailureResponse(bytes, code);
+  if (bytes.length < RESPONSE_HEADER_BYTES + NATIVE_INFO_BYTES)
+    throw new Error("secure-workspace-read-malformed-response");
+  const info = nativeInfo(bytes);
+  const content = bytes.subarray(RESPONSE_HEADER_BYTES + NATIVE_INFO_BYTES);
+  if (code === 10) {
+    if (content.length !== 0) throw new Error("secure-workspace-read-malformed-response");
+    return { status: "wrong-kind", info };
+  }
+  return { status: "ok", info, bytes: content };
+}
+
+function nativeFailureResponse(bytes: Buffer, code: number): SecureWorkspaceNativeResponse {
+  const status = CODE_TO_STATUS[code];
+  if (status === undefined || status === "ok" || bytes.length !== RESPONSE_HEADER_BYTES)
+    throw new Error("secure-workspace-read-malformed-response");
+  return { status };
+}
+
+function nativeInfo(bytes: Buffer): SecureWorkspaceNativeFileInfo {
+  const type = NATIVE_TYPES[bytes.readUInt16LE(12) - 1];
+  const size = Number(bytes.readBigUInt64LE(16));
+  const mtimeMs = bytes.readDoubleLE(24);
+  if (
+    type === undefined ||
+    bytes.readUInt16LE(14) !== 0 ||
+    !Number.isSafeInteger(size) ||
+    size < 0 ||
+    !Number.isFinite(mtimeMs)
+  )
+    throw new Error("secure-workspace-read-malformed-response");
+  return Object.freeze({ type, size, mtimeMs });
+}
+
+export function decodeSecureWorkspaceNativeDirectory(
+  bytes: Uint8Array,
+): readonly SecureWorkspaceNativeDirEntry[] {
+  const frame = bufferView(bytes);
+  if (frame.length < 4) throw new Error("secure-workspace-read-malformed-response");
+  const count = frame.readUInt32LE(0);
+  if (count > Math.floor((frame.length - 4) / 6))
+    throw new Error("secure-workspace-read-malformed-response");
+  const entries: SecureWorkspaceNativeDirEntry[] = [];
+  const names = new Set<string>();
+  let offset = 4;
+  for (let index = 0; index < count; index++) {
+    const entry = nativeDirectoryEntry(frame, offset);
+    if (names.has(entry.value.name)) throw new Error("secure-workspace-read-malformed-response");
+    names.add(entry.value.name);
+    entries.push(entry.value);
+    offset = entry.end;
+  }
+  if (offset !== frame.length) throw new Error("secure-workspace-read-malformed-response");
+  return Object.freeze(entries);
+}
+
+function nativeDirectoryEntry(
+  frame: Buffer,
+  offset: number,
+): {
+  readonly value: SecureWorkspaceNativeDirEntry;
+  readonly end: number;
+} {
+  if (offset + 5 > frame.length) throw new Error("secure-workspace-read-malformed-response");
+  const type = NATIVE_TYPES[frame.readUInt8(offset) - 1];
+  const end = offset + 5 + frame.readUInt32LE(offset + 1);
+  if (type === undefined || end > frame.length)
+    throw new Error("secure-workspace-read-malformed-response");
+  const name = decodeStrictUtf8(frame.subarray(offset + 5, end));
+  if (name === "." || name === ".." || name.includes("/"))
+    throw new Error("secure-workspace-read-malformed-response");
+  return { value: Object.freeze({ name, type }), end };
+}
+
+function assertNativeResponseHeader(bytes: Buffer): void {
+  if (
+    bytes.length < RESPONSE_HEADER_BYTES ||
+    bytes.length > SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES ||
+    bytes.subarray(0, 4).toString("ascii") !== "KSS3" ||
+    bytes.readUInt16LE(4) !== 3 ||
+    bytes.readUInt32LE(8) !== bytes.length - RESPONSE_HEADER_BYTES
+  )
+    throw new Error("secure-workspace-read-malformed-response");
+}

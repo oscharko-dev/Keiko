@@ -11,6 +11,7 @@ import {
   SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES,
   SECURE_WORKSPACE_TEXT_SNAPSHOT_MAX_RESPONSE_BYTES,
   encodeSecureWorkspaceSnapshotRequest,
+  encodeSecureWorkspaceNativeRequest,
 } from "./secureWorkspaceTextReadProtocol.js";
 
 type Listener = (code?: number | null) => void;
@@ -267,4 +268,22 @@ describe("fixed rich helper process ceiling", () => {
     expect(fake.kill).toHaveBeenCalledOnce();
     expect(fake.reap).toHaveBeenCalledOnce();
   });
+});
+
+it("refuses private native IO before spawning an unqualified legacy helper", async () => {
+  const fake = fakeChild();
+  const spawn = vi.fn(() => fake.child);
+  const port = processPort(spawn);
+  await expect(
+    port.run({
+      stdin: encodeSecureWorkspaceNativeRequest({
+        root: "/workspace",
+        relativePath: "large.bin",
+        operation: "read",
+        range: { offset: 10, length: 4 },
+      }),
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow("secure-workspace-read-protocol-invalid");
+  expect(spawn).not.toHaveBeenCalled();
 });

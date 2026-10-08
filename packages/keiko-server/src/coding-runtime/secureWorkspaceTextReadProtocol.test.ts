@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+  encodeSecureWorkspaceNativeRequest,
+  decodeSecureWorkspaceNativeResponse,
+  decodeSecureWorkspaceNativeDirectory,
   encodeSecureWorkspaceSnapshotRequest,
   encodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceSnapshotResponse,
@@ -302,5 +306,96 @@ describe("closed same-descriptor snapshot protocol", () => {
         }),
       ),
     ).toEqual({ status: "ok", bytes, info: { type: "file", size: MAX_TEXT_BYTES, mtimeMs: -1 } });
+  });
+});
+
+// A literal external wire fixture, not a copied response encoder: file, size 3, pre-epoch mtime.
+function nativeWireFixture(): Buffer {
+  return Buffer.from(
+    "4b53533303000000170000000100000003000000000000000000000000409fc000ff80",
+    "hex",
+  );
+}
+
+describe("separately pinned private native IO protocol", () => {
+  it("keeps binary, metadata and source frame ownership without text decoding", () => {
+    const frame = nativeWireFixture();
+    const response = decodeSecureWorkspaceNativeResponse(frame);
+    expect(response).toMatchObject({
+      status: "ok",
+      info: { type: "file", size: 3, mtimeMs: -2000 },
+      bytes: Buffer.from([0, 255, 128]),
+    });
+    frame.fill(0);
+    if (response.status !== "ok") throw new Error("expected-native-fixture");
+    expect(response.bytes).toEqual(Buffer.alloc(3));
+  });
+
+  it.each(["version", "kind", "reserved", "length", "size", "mtime", "status", "trailing"])(
+    "rejects malformed %s rather than returning partial native bytes",
+    (field) => {
+      let frame = nativeWireFixture();
+      if (field === "version") frame.writeUInt16LE(2, 4);
+      if (field === "kind") frame.writeUInt16LE(5, 12);
+      if (field === "reserved") frame.writeUInt16LE(1, 14);
+      if (field === "length") frame.writeUInt32LE(0, 8);
+      if (field === "size") frame.writeBigUInt64LE(9007199254740992n, 16);
+      if (field === "mtime") frame.writeDoubleLE(Number.NaN, 24);
+      if (field === "status") frame.writeUInt16LE(99, 6);
+      if (field === "trailing") frame = Buffer.concat([frame, Buffer.from([1])]);
+      expect(() => decodeSecureWorkspaceNativeResponse(frame)).toThrow(
+        "secure-workspace-read-malformed-response",
+      );
+    },
+  );
+
+  it("rejects cross-protocol frames and metadata on refusal responses", () => {
+    expect(() => decodeSecureWorkspaceReadResponse(nativeWireFixture())).toThrow();
+    const refused = nativeWireFixture();
+    refused.writeUInt16LE(4, 6);
+    expect(() => decodeSecureWorkspaceNativeResponse(refused)).toThrow();
+    refused.writeUInt16LE(10, 6);
+    expect(() => decodeSecureWorkspaceNativeResponse(refused)).toThrow();
+  });
+
+  it.each([
+    { offset: -1, length: 1 },
+    { offset: 0.5, length: 1 },
+    { offset: 0, length: -1 },
+    { offset: 0, length: SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1 },
+    { offset: Number.MAX_SAFE_INTEGER, length: 1 },
+  ])("refuses invalid native ranges %o", (range) => {
+    expect(() =>
+      encodeSecureWorkspaceNativeRequest({
+        root: "/root",
+        relativePath: "large.bin",
+        operation: "read",
+        range,
+      }),
+    ).toThrow("secure-workspace-read-invalid-request");
+  });
+
+  it("admits root metadata but refuses lossy Unicode and NUL request identities", () => {
+    expect(
+      encodeSecureWorkspaceNativeRequest({ root: "/root", relativePath: "", operation: "stat" }),
+    ).toBeInstanceOf(Buffer);
+    for (const relativePath of ["a\0b", "\ud800", "é".repeat(2049)])
+      expect(() =>
+        encodeSecureWorkspaceNativeRequest({ root: "/root", relativePath, operation: "stat" }),
+      ).toThrow();
+    expect(() =>
+      encodeSecureWorkspaceNativeRequest({ root: "/\ud800", relativePath: "a", operation: "stat" }),
+    ).toThrow();
+  });
+
+  it.each([
+    "00000000ff",
+    "0100000001010000002f",
+    "01000000000100000061",
+    "01000000010100000000",
+    "02000000010100000061010100000061",
+    "01000000010800000061",
+  ])("refuses malformed directory entries %s without silent omission", (hex) => {
+    expect(() => decodeSecureWorkspaceNativeDirectory(Buffer.from(hex, "hex"))).toThrow();
   });
 });
