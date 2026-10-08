@@ -552,6 +552,15 @@ approval checks retain their pre-build path; supplemental host checks require th
 canonical contract. These shape checks do not replace disk, platform, current-authority,
 network or process-lifetime qualification and do not activate native tools.
 
+The existing npm runtime builder also exposes a private, unapproved service-host candidate path.
+It retains the approved CLI members and copies fixed original host assets, locked installed
+dependencies and the artifact-owned Node distribution through the existing archive and tree owners.
+Final npm extraction precedes payload attestation; npm-excluded metadata is reported explicitly.
+The original npm SBOM root stays in its metadata exactly once, while the Node executable is added
+with its measured digest. Installed alias identities retain their actual manifests and license
+files. License-policy refusal remains in the private receipt and prevents production qualification;
+the candidate has no publish configuration and does not change public runtime pins or selectors.
+
 The inactive supplemental disk inspection matches declared canonical metadata to the server-owned
 target supplement, then obtains the complete tree and six fixed Node/bootstrap/lock/SBOM/license/
 provenance digests from one fresh stable pass through the existing attestation owner. Its immutable

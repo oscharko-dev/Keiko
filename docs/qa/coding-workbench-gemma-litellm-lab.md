@@ -1100,3 +1100,28 @@ bound explicitly for the instrumented producer import; the initial old-contract 
 incorrect proof working directory are retained as setup failures. Media snapshot normalization is stubbed in this comparison and model
 media acceptance remains unqualified. Native host/HTTP/profile advertisement, global/external
 instructions, contained symlinks and the full original Files surface remain acceptance work.
+
+### Private npm service-host package (ROOT qualification on 4e6b)
+
+ROOT independently verified the six frozen packaging owners and 45 input/evidence references,
+then reproduced the unchanged npm builder's missing-host failure through its actual CLI candidate.
+All six current source baselines matched the frozen baseline before the minimal source integration.
+The final owning checks pass 61 builder/archive tests, 23 affected portable-staging controls,
+four-script syntax/lint and six-file format. The new path produces a private unapproved candidate;
+ordinary CLI packaging, public runtime pins and release selectors retain their existing behavior.
+
+ROOT independently extracted the frozen 175,591,602-byte archive through the current production
+archive owner and measured the complete payload with the existing stable tree attestor. Its digest
+matches the frozen receipt. The retained host has 34,942 ordinary single-link files totaling
+466,463,641 bytes, with the locked original dependencies and Node 24.18.0. The SBOM retains its
+original root exactly once and includes Node; installed alias manifests and license files remain.
+This independently qualifies the named frozen candidate, not a fresh final-head release build.
+
+Three actual extracted-executable controls preserve original authenticated HTTP, SSE, session
+Location, canonical database, stdin-EOF/socket closure and stale-state refusal in direct/Code Mode,
+with no model requests. Thirty-six original host/entry/guard controls also pass against the actual
+extracted dependency modules. The PTY upgrade control uses a fixture attachment and does not prove
+real terminal execution. Production native IO authority, full tools and platform approval remain
+open. The exact spdx-exceptions 2.5.0 CC-BY-3.0 policy disposition remains open; the private receipt
+records its license refusal, without dropping that dependency or claiming approved distribution.
+Package size, final source-build provenance and fresh payload performance remain qualification work.

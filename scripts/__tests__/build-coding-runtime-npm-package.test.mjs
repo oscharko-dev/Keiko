@@ -12,12 +12,14 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import * as builder from "../build-coding-runtime-npm-package.mjs";
 
 import {
   buildCodingRuntimeNpmPackage,
@@ -476,3 +478,159 @@ describe("coding runtime npm package", () => {
     expect(JSON.parse(lines.log[0])).toMatchObject({ target: "macos-arm64" });
   });
 });
+
+describe.skipIf(process.platform === "win32")("inactive original service package candidate", () => {
+  it("binds current static source/producer assets, npm metadata omissions, and full license refusal", async () => {
+    const outDir = join(scratch(), "package");
+    const result = await builder.buildCodingRuntimeNpmServiceHostCandidate({
+      target: "macos-arm64",
+      version: "1.2.3",
+      outDir,
+      deps: serviceFixtureDeps(),
+    });
+    const root = join(outDir, "runtime/opencode-compatible/service-host/payload");
+    const adapter =
+      await import("../../packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js");
+    const artifact =
+      await import("../../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js");
+    expect(readFileSync(join(root, "keiko-governed-tools.mjs"), "utf8")).toBe(
+      adapter.createGeneratedOpenCodeV2HostFactory("direct"),
+    );
+    expect(readFileSync(join(root, "keiko-governed-tools-code-mode.mjs"), "utf8")).toBe(
+      adapter.createGeneratedOpenCodeV2HostFactory("code-mode"),
+    );
+    expect(readFileSync(join(root, "keiko-host-packet-data.mjs"), "utf8")).toBe(
+      artifact.createOpenCodeServiceHostPacketDataAsset(),
+    );
+    const manifest = JSON.parse(readFileSync(join(outDir, "package.json"), "utf8"));
+    expect(manifest.private).toBe(true);
+    expect(manifest.publishConfig).toBeUndefined();
+    expect(result.license).toEqual({
+      status: "blocked",
+      offenders: [{ id: "spdx-exceptions@2.5.0", license: "CC-BY-3.0" }],
+    });
+    expect(result.excludedNpmMetadata).toContain(
+      "runtime/opencode-compatible/service-host/payload/node_modules/spdx-exceptions/.npmignore",
+    );
+    expect(result.files.some(({ path }) => path.endsWith("/.npmignore"))).toBe(false);
+    const sbom = JSON.parse(readFileSync(join(root, "evidence/sbom.cdx.json"), "utf8"));
+    const refs = [
+      sbom.metadata.component["bom-ref"],
+      ...sbom.components.map((component) => component["bom-ref"]),
+    ];
+    expect(new Set(refs).size).toBe(refs.length);
+    expect(
+      sbom.dependencies.find((entry) => entry.ref === sbom.metadata.component["bom-ref"]).dependsOn,
+    ).toContain("node@24.18.0");
+    const provenance = JSON.parse(
+      readFileSync(join(root, "evidence/build-provenance.json"), "utf8"),
+    );
+    expect(provenance.sourceBuildProvenance).toBe("reference-only");
+    expect(
+      provenance.lockedInputs.find(({ path }) => path === "node_modules/spdx-exceptions").integrity,
+    ).toMatch(/^sha512-/u);
+    expect(result.finalPayload.treeSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(readFileSync(join(root, "evidence/THIRD-PARTY-NOTICES.md"), "utf8")).toContain(
+      "https://creativecommons.org/licenses/by/3.0/",
+    );
+    await expect(
+      packCodingRuntimeNpmCandidate(
+        {
+          target: "macos-arm64",
+          version: "1.2.3",
+          packageDir: outDir,
+          artifactDir: join(scratch(), "release"),
+        },
+        { loadApproval: async () => ({ packageName: result.name }) },
+      ),
+    ).rejects.toThrow("manifest, version or architecture mismatch");
+  });
+
+  it("refuses links in the installed module tree without issuing a private receipt", async () => {
+    const outDir = join(scratch(), "package");
+    const deps = serviceFixtureDeps();
+    const install = deps.installHost;
+    deps.installHost = async (root) => {
+      await install(root);
+      symlinkSync("README.md", join(root, "node_modules/spdx-exceptions/leak"));
+    };
+    await expect(
+      builder.buildCodingRuntimeNpmServiceHostCandidate({
+        target: "macos-arm64",
+        version: "1.2.3",
+        outDir,
+        deps,
+      }),
+    ).rejects.toThrow("ordinary single-link files");
+    expect(existsSync(join(dirname(outDir), "artifacts/service-host-private-receipt.json"))).toBe(
+      false,
+    );
+  });
+
+  it("retains the original six CLI members and adds the actual fixed original host", async () => {
+    const outDir = join(scratch(), "package");
+    const build = builder.buildCodingRuntimeNpmServiceHostCandidate ?? buildCodingRuntimeNpmPackage;
+    const result = await build({
+      target: "macos-arm64",
+      version: "1.2.3",
+      outDir,
+      deps: serviceFixtureDeps(),
+    });
+    expect(existsSync(join(outDir, "runtime/opencode-compatible/payload/bin/opencode"))).toBe(true);
+    expect(
+      existsSync(join(outDir, "runtime/opencode-compatible/service-host/payload/host.mjs")),
+    ).toBe(true);
+    expect(
+      existsSync(join(outDir, "runtime/opencode-compatible/service-host/payload/runtime/node")),
+    ).toBe(true);
+    expect(result.qualification).toBe("private-functional-unapproved");
+    expect(result.license.status).toBe("blocked");
+  });
+});
+
+function serviceFixtureDeps() {
+  return {
+    ...fakeDeps().deps,
+    installHost: async (root) => {
+      write(
+        join(root, "node_modules/spdx-exceptions/package.json"),
+        JSON.stringify({ name: "spdx-exceptions", version: "2.5.0", license: "CC-BY-3.0" }),
+      );
+      write(join(root, "node_modules/spdx-exceptions/README.md"), "upstream notice");
+      write(join(root, "node_modules/spdx-exceptions/index.json"), "[]");
+      write(join(root, "node_modules/spdx-exceptions/.npmignore"), "ignored metadata");
+    },
+    stageNode: async (_options, _target, staging) => {
+      write(join(staging, "runtime/node/bin/node"), "node executable");
+      chmodSync(join(staging, "runtime/node/bin/node"), 0o755);
+      write(join(staging, "runtime/node/LICENSE"), "Node license");
+      write(join(staging, "runtime/node/NOTICE"), "Node notice");
+      return "a".repeat(64);
+    },
+    hostSbom: () => ({
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      version: 1,
+      metadata: {
+        component: {
+          name: "keiko-opencode-service-host",
+          version: "0.0.0-private",
+          "bom-ref": "keiko-opencode-service-host@0.0.0-private",
+          licenses: [{ license: { id: "Apache-2.0" } }],
+        },
+      },
+      dependencies: [
+        { ref: "keiko-opencode-service-host@0.0.0-private", dependsOn: ["spdx-exceptions@2.5.0"] },
+      ],
+      components: [
+        {
+          type: "library",
+          name: "spdx-exceptions",
+          version: "2.5.0",
+          "bom-ref": "spdx-exceptions@2.5.0",
+          licenses: [{ license: { id: "CC-BY-3.0" } }],
+        },
+      ],
+    }),
+  };
+}

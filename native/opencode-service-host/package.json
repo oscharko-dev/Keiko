@@ -1,0 +1,22 @@
+{
+  "name": "keiko-opencode-service-host",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode/server": "2.0.10",
+    "@opencode/core": "2.0.10",
+    "@opencode/util": "2.0.10",
+    "effect": "4.0.0-rc.112",
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@effect/platform-node-shared": "4.0.0-rc.112"
+  },
+  "overrides": {
+    "effect": "4.0.0-rc.112",
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@effect/platform-node-shared": "4.0.0-rc.112",
+    "@effect/sql-sqlite-bun": "4.0.0-rc.112",
+    "@effect/opentelemetry": "4.0.0-rc.112"
+  },
+  "version": "0.0.0-private",
+  "license": "Apache-2.0"
+}

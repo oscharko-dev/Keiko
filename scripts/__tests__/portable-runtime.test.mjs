@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { URL } from "node:url";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,6 +50,7 @@ import {
 } from "../portable-runtime.mjs";
 import {
   appSurfaceFailures,
+  extractPackedRuntimePackage,
   assemblePortableStage,
   buildWindowsGenerationLauncher,
   isCrossDeviceError,
@@ -4310,4 +4312,56 @@ describe("reviewed staging entry", () => {
   it("refuses a missing entry", () => {
     expect(reviewedStagingEntryMatches(undefined, rootPackage, "v2.3.4", "linux-x64")).toBe(false);
   });
+});
+
+describe("fixed runtime npm archive extraction", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains ordinary nested bytes and executable permissions",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-fixed-pack-test-"));
+      try {
+        const source = join(root, "source");
+        mkdirSync(join(source, "package/runtime"), { recursive: true });
+        writeFileSync(join(source, "package/runtime/program"), "fixed program", { mode: 0o755 });
+        const archive = join(root, "package.tgz");
+        const packed = spawnSync("tar", ["-czf", archive, "-C", source, "package"], {
+          encoding: "utf8",
+        });
+        expect(packed.status).toBe(0);
+        const output = join(root, "extracted");
+        extractPackedRuntimePackage(archive, output);
+        expect(readFileSync(join(output, "runtime/program"), "utf8")).toBe("fixed program");
+        expect(statSync(join(output, "runtime/program")).mode & 0o777).toBe(0o755);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses links through the existing strict archive owner",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-fixed-pack-test-"));
+      try {
+        const source = join(root, "source");
+        mkdirSync(join(source, "package"), { recursive: true });
+        writeFileSync(join(source, "package/program"), "fixed");
+        symlinkSync("program", join(source, "package/link"));
+        const archive = join(root, "package.tgz");
+        expect(
+          spawnSync("tar", ["-czf", archive, "-C", source, "package"], { encoding: "utf8" }).status,
+        ).toBe(0);
+        const moduleURL = new URL("../stage-portable-runtime.mjs", import.meta.url).href;
+        const script = `import {extractPackedRuntimePackage} from ${JSON.stringify(moduleURL)}; extractPackedRuntimePackage(${JSON.stringify(archive)},${JSON.stringify(join(root, "output"))});`;
+        const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+          encoding: "utf8",
+        });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("unsupported link or special-file entries");
+        expect(existsSync(join(root, "output"))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

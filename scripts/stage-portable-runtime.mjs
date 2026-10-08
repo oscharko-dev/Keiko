@@ -52,6 +52,7 @@ import {
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import { NPM_PACK_STDIO_MAX_BUFFER } from "./package-surface-pack.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -897,7 +898,7 @@ export function bindMacosReleaseTeamIdentifier(appRoot, target, appleTeamId) {
   writeFileSync(modulePath, source.replace(MACOS_RELEASE_TEAM_IDENTIFIER_PLACEHOLDER, appleTeamId));
 }
 
-async function stageNodeRuntime(options, target, stageRoot) {
+export async function stageNodeRuntime(options, target, stageRoot) {
   const runtimeRoot = join(stageRoot, "runtime", "node");
   mkdirSync(runtimeRoot, { recursive: true });
   const archive = await resolveNodeArchive(options, target);
@@ -934,6 +935,18 @@ function extractNodeRuntime(archivePath, target, nodeVersion, runtimeRoot) {
     );
   } finally {
     rmSync(extractRoot, { recursive: true, force: true });
+  }
+}
+
+/** Fixed npm package root; links and special entries are refused by the existing archive owner. */
+export function extractPackedRuntimePackage(archivePath, destinationRoot) {
+  const scratch = mkdtempSync(join(tmpdir(), "keiko-packed-runtime-"));
+  try {
+    extractArchiveRoot(archivePath, "tar.gz", "package", scratch, destinationRoot, {
+      tarLinkPolicy: "reject",
+    });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 
@@ -978,7 +991,7 @@ function safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy) {
 }
 
 function archiveEntries(archivePath) {
-  return run("tar", ["-tzf", archivePath])
+  return run("tar", ["-tzf", archivePath], { maxBuffer: NPM_PACK_STDIO_MAX_BUFFER })
     .stdout.split(/\r?\n/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -1028,7 +1041,9 @@ function normalizeArchiveEntry(entry) {
 }
 
 function tarExtractionEntries(archivePath, entries, expectedRoot, linkPolicy) {
-  const lines = run("tar", ["-tvzf", archivePath]).stdout.split(/\r?\n/u).filter(Boolean);
+  const lines = run("tar", ["-tvzf", archivePath], { maxBuffer: NPM_PACK_STDIO_MAX_BUFFER })
+    .stdout.split(/\r?\n/u)
+    .filter(Boolean);
   if (lines.length !== entries.length) fail("tar archive listing is inconsistent");
   const extractable = [];
   for (let index = 0; index < lines.length; index += 1) {
