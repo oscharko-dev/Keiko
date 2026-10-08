@@ -2058,6 +2058,11 @@ function modelInfoAnswerIsUnusable(cause: unknown): boolean {
   );
 }
 
+interface LiteLlmModelInformation {
+  readonly models: GatewayDiscoveredModels;
+  readonly payload: unknown;
+}
+
 async function discoverLiteLlmModelInfo(
   baseUrl: string,
   apiKey: string,
@@ -2073,31 +2078,24 @@ async function discoverLiteLlmModelInfo(
     readonly deadlineAt: number;
     readonly trace: SetupDiscoveryTrace;
   },
-): Promise<GatewayDiscoveredModels | undefined> {
+): Promise<LiteLlmModelInformation | undefined> {
   const endpoints = modelInfoEndpointCandidates(baseUrl);
   for (const [index, endpoint] of endpoints.entries()) {
     trace.discoverySource = index === 0 ? "model-info" : "model-group-info";
     const outcomeKey = index === 0 ? "modelInfoOutcome" : "modelGroupInfoOutcome";
     try {
-      const discovered = parseModelDiscovery(
-        await fetchDiscoveryJson(
-          endpoint,
-          apiKey,
-          apiKeyHeaderName,
-          egress,
-          discoveryManagementSignal(signal, deadlineAt, endpoints.length - index),
-        ),
-        correlationId,
+      const payload = await fetchDiscoveryJson(
+        endpoint,
+        apiKey,
+        apiKeyHeaderName,
+        egress,
+        discoveryManagementSignal(signal, deadlineAt, endpoints.length - index),
       );
+      const discovered = parseModelDiscovery(payload, correlationId);
       trace[outcomeKey] = "available";
       return {
-        ...discovered,
-        modelMetadata: Object.fromEntries(
-          discovered.modelIds.map((id) => [
-            id,
-            { ...discovered.modelMetadata?.[id], tokenCounter: "litellm" as const },
-          ]),
-        ),
+        payload,
+        models: withLiteLlmTokenCounter(discovered),
       };
     } catch (cause) {
       trace[outcomeKey] = discoveryRouteOutcome(cause, signal);
@@ -2131,6 +2129,7 @@ async function defaultGatewayModelDiscovery(
   correlationId: string | undefined,
   trace: SetupDiscoveryTrace,
   callerSignal?: AbortSignal,
+  metadataOnly = false,
 ): Promise<GatewayDiscoveredModels> {
   const apiKeyHeaderName = requestedApiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
   // One existing discovery budget covers the management fallbacks and model list together.
@@ -2147,21 +2146,71 @@ async function defaultGatewayModelDiscovery(
     correlationId,
     { signal, deadlineAt, trace },
   );
-  if (litellmModels !== undefined) {
-    return litellmModels;
-  }
-  trace.discoverySource = "model-list";
+  // Explicit human deployment names remain authoritative on gateways without a models route.
+  if (litellmModels !== undefined && metadataOnly) return litellmModels.models;
+  if (litellmModels === undefined) trace.discoverySource = "model-list";
   try {
+    const payload = await fetchDiscoveryJson(
+      modelsEndpoint(baseUrl),
+      apiKey,
+      apiKeyHeaderName,
+      egress,
+      signal,
+    );
     const discovered = parseModelDiscovery(
-      await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress, signal),
+      litellmModels === undefined
+        ? payload
+        : listedCatalogWithMetadata(payload, litellmModels.payload),
       correlationId,
     );
     trace.modelListOutcome = "available";
-    return discovered;
+    return litellmModels === undefined ? discovered : withLiteLlmTokenCounter(discovered);
   } catch (cause) {
     trace.modelListOutcome = discoveryRouteOutcome(cause, signal);
     throw cause;
   }
+}
+
+function withLiteLlmTokenCounter(discovered: GatewayDiscoveredModels): GatewayDiscoveredModels {
+  return {
+    ...discovered,
+    modelMetadata: Object.fromEntries(
+      discovered.modelIds.map((id) => [
+        id,
+        { ...discovered.modelMetadata?.[id], tokenCounter: "litellm" as const },
+      ]),
+    ),
+  };
+}
+
+/** Management records enrich exact listed IDs; listing alone is not a live health proof. */
+function listedCatalogWithMetadata(serving: unknown, metadata: unknown): { data: unknown[] } {
+  const servingEntries = discoveryData(serving);
+  const byId = new Map<string, unknown[]>();
+  for (const entry of discoveryData(metadata)) {
+    const id = isRecord(entry) ? modelIdFromKnownFields(entry) : undefined;
+    if (id === undefined) continue;
+    const group = byId.get(id);
+    if (group === undefined) byId.set(id, [entry]);
+    else group.push(entry);
+  }
+  const seen = new Set<string>();
+  const data: unknown[] = [];
+  for (const entry of servingEntries) {
+    const id = isRecord(entry) ? modelIdFromKnownFields(entry) : undefined;
+    if (id === undefined) continue;
+    const group = byId.get(id);
+    if (group === undefined) data.push(entry);
+    else if (!seen.has(id)) data.push(...group);
+    seen.add(id);
+  }
+  return { data };
+}
+
+function discoveryData(payload: unknown): readonly unknown[] {
+  if (!isRecord(payload) || !Array.isArray(payload.data))
+    throw new Error("model discovery response must contain a data array");
+  return payload.data;
 }
 
 /** Refresh the active LiteLLM catalog using the same bounded, egress-checked discovery as setup. */
@@ -7820,7 +7869,7 @@ async function verifyAndSaveGatewaySetup(
     discovery:
       deps.gatewayModelDiscovery ??
       ((...args): Promise<GatewayModelDiscoveryOutput> =>
-        defaultGatewayModelDiscovery(...args, request.signal)),
+        defaultGatewayModelDiscovery(...args, request.signal, request.deploymentNames.length > 0)),
   };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
   if (figmaFailure !== undefined) {

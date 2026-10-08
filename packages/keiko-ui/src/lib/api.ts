@@ -547,12 +547,19 @@ let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
 
 export function resetModelRequestCache(): void {
   modelsRequest = undefined;
+  modelsRefreshRequest = undefined;
 }
 
-export async function fetchModels(correlationId?: string): Promise<{ models: ModelCapability[] }> {
-  if (modelsRequest === undefined) {
+let modelsRefreshRequest: Promise<{ models: ModelCapability[] }> | undefined;
+
+export async function fetchModels(
+  correlationId?: string,
+  refreshCatalog = false,
+): Promise<{ models: ModelCapability[] }> {
+  const active = refreshCatalog ? modelsRefreshRequest : (modelsRefreshRequest ?? modelsRequest);
+  if (active === undefined) {
     const pending = fetchJson<{ models: ModelCapability[] }>(
-      "/api/models",
+      refreshCatalog ? "/api/models?refresh=1" : "/api/models",
       {
         cache: "no-store",
       },
@@ -560,10 +567,13 @@ export async function fetchModels(correlationId?: string): Promise<{ models: Mod
       correlationId,
     ).finally(() => {
       if (modelsRequest === pending) modelsRequest = undefined;
+      if (modelsRefreshRequest === pending) modelsRefreshRequest = undefined;
     });
-    modelsRequest = pending;
+    if (refreshCatalog) modelsRefreshRequest = pending;
+    else modelsRequest = pending;
+    return pending;
   }
-  return modelsRequest;
+  return active;
 }
 
 // ---------------------------------------------------------------------------

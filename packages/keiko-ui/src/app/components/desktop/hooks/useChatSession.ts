@@ -1754,13 +1754,8 @@ function adoptBackgroundGatewayModels(models: readonly ModelCapability[]): void 
   const snapshot = JSON.stringify(models);
   const changed = snapshot !== backgroundGatewayModelSnapshot;
   backgroundGatewayFailureCount = 0;
-  const pending = models.some(
-    (model) =>
-      model.kind === "chat" &&
-      (model.conversationReady === false ||
-        (model.toolCalling === false && model.toolCallingVerification?.status !== "unsupported")),
-  );
-  const fast = changed || (pending && Date.now() < backgroundGatewayFastUntil);
+  // Ready cached models do not imply the reload's fresh gateway discovery has already settled.
+  const fast = changed || Date.now() < backgroundGatewayFastUntil;
   backgroundGatewayNextReadAt = Date.now() + (fast ? 5_000 : 60_000);
   invalidateSharedBootstrap();
   publishGatewayModelRefresh({ kind: "success", models });
@@ -2235,7 +2230,7 @@ function sharedRunSummaryPatch(
 }
 
 async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
-  const modelPayload = await fetchModels();
+  const modelPayload = await fetchModels(undefined, true);
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
   // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at

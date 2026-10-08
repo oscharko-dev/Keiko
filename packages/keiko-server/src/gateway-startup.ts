@@ -17,12 +17,16 @@ const STARTUP_RETRY_DELAY_MS = WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1;
 
 export function createGatewayStartupChecks(deps: UiHandlerDeps): {
   readonly start: (correlationId?: string) => void;
+  readonly refresh: (correlationId?: string) => void;
   readonly stop: () => Promise<void>;
 } {
   const checks = new GatewayStartupChecks(deps);
   return {
     start: (correlationId): void => {
       checks.start(correlationId);
+    },
+    refresh: (correlationId): void => {
+      checks.refresh(correlationId);
     },
     stop: (): Promise<void> => checks.stop(),
   };
@@ -32,6 +36,7 @@ class GatewayStartupChecks {
   private readonly controller = new AbortController();
   private readonly discovered = new Map<string, number>();
   private readonly tasks = new Set<Promise<void>>();
+  private readonly refreshingGenerations = new Set<number>();
   private retry: ReturnType<typeof setTimeout> | undefined;
   private startedGeneration = -1;
   private retryAttempt = 0;
@@ -46,7 +51,33 @@ class GatewayStartupChecks {
     if (this.startedGeneration === holder.generation()) return;
     this.startedGeneration = holder.generation();
     initializeConfiguredConversationReadiness(observedDeps, correlationId);
-    const task = this.run(observedDeps, correlationId, parentCorrelationId)
+    this.track(this.run(observedDeps, correlationId, parentCorrelationId), correlationId);
+  }
+
+  public refresh(parentCorrelationId?: string): void {
+    const holder = this.deps.gatewayConfig;
+    if (this.controller.signal.aborted || holder?.current() === undefined) return;
+    const generation = holder.generation();
+    if (this.refreshingGenerations.has(generation)) return;
+    this.refreshingGenerations.add(generation);
+    // A browser reload renews completed discovery; an in-flight query or retry backoff is shared.
+    for (const [key, retryAt] of this.discovered) {
+      if (retryAt === Infinity) this.discovered.delete(key);
+    }
+    const correlationId = newCorrelationId();
+    const deps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
+    const task = this.catalog(deps, correlationId)
+      .finally(() => {
+        this.refreshingGenerations.delete(generation);
+      })
+      .then((retryCatalog) =>
+        this.finishInitialization(deps, correlationId, parentCorrelationId, retryCatalog),
+      );
+    this.track(task, correlationId);
+  }
+
+  private track(pending: Promise<void>, correlationId: string): void {
+    const task = pending
       .catch((error: unknown): void => {
         emitServerDiagnostic(
           this.deps.diagnostics,
@@ -76,13 +107,26 @@ class GatewayStartupChecks {
     correlationId: string,
     parentCorrelationId: string | undefined,
   ): Promise<void> {
-    const retryCatalog = await refreshCatalogs(
+    const retryCatalog = await this.catalog(deps, correlationId);
+    await this.finishInitialization(deps, correlationId, parentCorrelationId, retryCatalog);
+  }
+
+  private catalog(deps: UiHandlerDeps, correlationId: string): Promise<boolean> {
+    return refreshCatalogs(
       deps,
       this.controller.signal,
       this.discovered,
       correlationId,
       this.retryDelay(),
     );
+  }
+
+  private async finishInitialization(
+    deps: UiHandlerDeps,
+    correlationId: string,
+    parentCorrelationId: string | undefined,
+    retryCatalog: boolean,
+  ): Promise<void> {
     if (this.controller.signal.aborted) return;
     initializeConfiguredConversationReadiness(deps, correlationId);
     const source =

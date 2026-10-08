@@ -152,6 +152,12 @@ function fetchInputUrl(url: Parameters<typeof fetch>[0]): string {
   return url instanceof URL ? url.href : url.url;
 }
 
+function requestModel(init: RequestInit | undefined): string | undefined {
+  const raw = init?.body ?? "{}";
+  if (typeof raw !== "string") throw new TypeError("expected JSON string request body");
+  return (JSON.parse(raw) as { model?: string }).model;
+}
+
 const NON_CONVERSATION_DEPLOYMENTS = new Set(["Mistral-Large-3", "text-embedding-3-large"]);
 
 function nonConversationRejection(modelId: string | undefined): Promise<Response> | undefined {
@@ -8821,11 +8827,20 @@ describe("handleGatewaySetup", () => {
             ),
           );
         }
+        if (href.endsWith("/models"))
+          return Promise.resolve(
+            Response.json({
+              data: [
+                "litellm-chat-large",
+                "litellm-vision-chat",
+                "litellm-embedding",
+                "litellm-image",
+                "litellm-unknown-mode",
+              ].map((id) => ({ id })),
+            }),
+          );
         expect(href).toContain("/chat/completions");
-        if (init?.body !== undefined && typeof init.body !== "string") {
-          throw new Error("expected JSON string request body");
-        }
-        const body = JSON.parse(init?.body ?? "{}") as { model?: string };
+        const body = { model: requestModel(init) };
         if (body.model !== undefined) {
           seenModels.push(body.model);
         }
@@ -8860,7 +8875,7 @@ describe("handleGatewaySetup", () => {
         expect(result.status).toBe(200);
         expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
         expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
-        expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
+        expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(!explicit);
         expect(seenModels).toEqual([
           "litellm-chat-large",
           "litellm-vision-chat",
@@ -9005,6 +9020,10 @@ describe("handleGatewaySetup", () => {
       const href = fetchInputUrl(url);
       seenUrls.push(href);
       if (href.endsWith("/model/info")) return Promise.resolve(new Response(null, { status: 403 }));
+      if (href.endsWith("/models"))
+        return Promise.resolve(
+          Response.json({ data: [{ id: "customer-chat" }, { id: "customer-whisper" }] }),
+        );
       if (href.endsWith("/model_group/info")) {
         return Promise.resolve(
           new Response(
@@ -9041,7 +9060,7 @@ describe("handleGatewaySetup", () => {
       );
       expect(result.status).toBe(200);
       expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model_group/info");
-      expect(seenUrls).not.toContain("https://llm-gateway.example.com/v1/models");
+      expect(seenUrls).toContain("https://llm-gateway.example.com/v1/models");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"modelId": "customer-whisper"');
       const config = JSON.parse(saved) as {
@@ -12163,6 +12182,71 @@ describe("selected metadata responsiveness", () => {
     vi.unstubAllGlobals();
     resetServerLogger();
   });
+  it.each(["removed-metadata", "new-runtime-model"] as const)(
+    "uses the current key-scoped model list during fresh onboarding: %s",
+    async (scenario) => {
+      const deps = await metadataResponsivenessDeps();
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const runtimeIds =
+        scenario === "new-runtime-model" ? ["current-chat", "new-chat"] : ["current-chat"];
+      const requested: string[] = [];
+      vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+        const endpoint = new URL(fetchInputUrl(url)).pathname;
+        requested.push(endpoint);
+        if (endpoint.endsWith("/models"))
+          return Promise.resolve(Response.json({ data: runtimeIds.map((id) => ({ id })) }));
+        return Promise.resolve(
+          Response.json({
+            data: ["removed-chat", "current-chat"].map((model_name) => ({
+              model_name,
+              model_info: { mode: "chat", max_input_tokens: 32_768 },
+            })),
+          }),
+        );
+      });
+      const result = await handleGatewaySetup(metadataContextForSelection(false), deps);
+      expect(result.status).toBe(200);
+      expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual(
+        runtimeIds,
+      );
+      expect(requested.filter((endpoint) => endpoint.endsWith("/models"))).toHaveLength(1);
+      expect(requiredCapability(requiredGatewayConfig(deps), "current-chat").contextWindow).toBe(
+        32_768,
+      );
+    },
+  );
+
+  it.each(["forbidden", "empty"] as const)(
+    "does not replace the %s serving catalog with successful management metadata",
+    async (scenario) => {
+      const deps = await metadataResponsivenessDeps();
+      Object.assign(deps, { gatewayModelDiscovery: undefined });
+      const tested: string[] = [];
+      Object.assign(deps, {
+        gatewaySetupTester: (
+          _config: unknown,
+          ids: readonly string[],
+        ): Promise<readonly string[]> => {
+          tested.push(...ids);
+          return Promise.resolve(ids);
+        },
+      });
+      vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+        if (fetchInputUrl(url).endsWith("/models"))
+          return Promise.resolve(
+            scenario === "forbidden"
+              ? new Response(null, { status: 403 })
+              : Response.json({ data: [] }),
+          );
+        return Promise.resolve(selectedMetadataResponse());
+      });
+      expect((await handleGatewaySetup(metadataContextForSelection(false), deps)).status).toBe(502);
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      expect(tested).toEqual([]);
+    },
+  );
+
   it("retains declared geometry from a management route responding after fourteen seconds", async () => {
     const deps = await metadataResponsivenessDeps();
     Object.assign(deps, { gatewayModelDiscovery: undefined });

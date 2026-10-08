@@ -284,6 +284,32 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("requests a server background catalog refresh when the workspace bootstraps", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchModels).toHaveBeenCalledWith(undefined, true);
+  });
+
+  it("continues quick projection reads during reload discovery even for already-ready models", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-live", conversationReady: true, toolCalling: true })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    const { unmount } = renderHook(() => useChatSession({ autoCreate: false }));
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(10_001));
+      const calls = vi.mocked(fetchModels).mock.calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(5_000));
+      expect(fetchModels).toHaveBeenCalledTimes(calls + 1);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps configured catalog presence distinct from conversation-ready selection", async () => {
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-unready", conversationReady: false })],

@@ -2167,6 +2167,18 @@ describe("files API helpers", () => {
 });
 
 describe("fetchModels", () => {
+  it("sends a reload refresh trigger even while a projection read is already in flight", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ models: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.all([
+      fetchModels(),
+      fetchModels("corr-reload", true),
+      fetchModels(undefined, true),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith("/api/models?refresh=1", expect.any(Object));
+  });
+
   afterEach(() => {
     resetModelRequestCache();
     vi.unstubAllGlobals();

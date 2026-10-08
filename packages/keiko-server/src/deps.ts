@@ -979,6 +979,8 @@ export interface UiHandlerDeps {
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
+  /** Starts a shared background catalog check; callers keep reading the current projection. */
+  readonly refreshGatewayCatalog?: ((correlationId?: string) => void) | undefined;
   // Test seam for first-run setup. Production uses the real OpenAI-compatible gateway call.
   readonly gatewaySetupTester?:
     | ((
@@ -4643,6 +4645,7 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
   });
   return {
     ...deps,
+    refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
       await startup.stop();

@@ -59,9 +59,10 @@ malformed observation timestamp never triggers it, so a dead gateway costs at mo
 per model per cooldown. This restores the 1.1.11 behavior that 1.1.13 removed together with the
 per-question checks: without it one conclusive answer at startup left the model not-ready until a
 restart or a Settings change. Visible model consumers read the local catalog every five seconds
-while startup readiness is settling (a two-minute fast window), then every minute for an unchanged
-catalog. Hidden tabs pause and catch up immediately on visibility or focus. Failed reads back off
-from five seconds to one minute and report one correlated transport failure per outage streak.
+through the initial two-minute window, including when cached models already look ready, then every
+minute for an unchanged catalog. Hidden tabs pause and catch up immediately on visibility or focus.
+Failed reads back off from five seconds to one minute and report one correlated transport failure
+per outage streak.
 A configured human selection remains remembered and unsendable while unready, then restores on
 recovery; an actual removal still permits the existing fallback. Background reads do not clear a
 usable selection. Only
@@ -77,12 +78,23 @@ Existing connections, policy, and configured models are retained. A bounded seri
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks retry after their one-minute
 cooldown, with exponential startup backoff capped at five minutes. Rejected credentials and
-conclusive invalid catalog responses stop discovery until the connection changes. Startup catalog
+conclusive invalid catalog responses stop scheduled discovery until the connection changes or a
+browser reload requests a new check. Startup catalog
 completion records the applied, unchanged, stale, cancelled or failed disposition and configured
 and changed-model counts under a fresh correlation linked to the triggering request. Catalog retries retain a connection-bound deadline across readiness refinements, so a
 successful probe cannot trigger immediate repeated discovery during a catalog outage. Successful
-discovery is reused until the connection changes. Disabled Coding and subscription sources never
-initiate these tool checks.
+discovery is reused until the connection changes or a browser reload requests a fresh background
+check. The initial workspace model request carries `refresh=1`; the BFF immediately returns its
+current projection and does not await gateway discovery or model probes. Concurrent reloads share
+in-flight discovery, retry deadlines remain effective, and ordinary background projection reads
+never trigger another gateway discovery. Completion uses the existing correlated, body-free
+catalog operation. Automatic onboarding treats the key-scoped `/models` listed IDs as the model
+inventory and uses management metadata only to enrich exact matching IDs; a successful management
+response cannot invent a selectable deployment or replace a forbidden or empty model list.
+This listing does not prove a live deployment: LiteLLM may retain names from key/team grants after
+a router deployment is removed. Live reachability remains a separate readiness observation.
+Explicit human deployment selections preserve their metadata-only setup path for gateways without
+a models route. Disabled Coding and subscription sources never initiate these tool checks.
 Disposal aborts active requests, clears retries, and unsubscribes
 the configuration listener.
 At most two probes run concurrently per configuration holder, including across replacements;

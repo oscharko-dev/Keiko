@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { handleModels } from "./read-handlers.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   isLiteLlmCodingReadinessPending,
@@ -117,6 +118,43 @@ function stubReadyChat(): void {
     ),
   );
 }
+
+it("refreshes on reload without waiting and shares concurrent reload catalog discovery", async () => {
+  stubReadyChat();
+  const pending = deferredValue<ReturnType<typeof discoveredCatalog>>();
+  const discovery = vi
+    .fn()
+    .mockResolvedValueOnce(discoveredCatalog())
+    .mockReturnValue(pending.promise);
+  const deps = startupDeps(discovery);
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.waitFor(() => {
+    expect(discovery).toHaveBeenCalledOnce();
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const context = {
+    correlationId: "corr-browser-reload",
+    url: new URL("http://127.0.0.1/api/models?refresh=1"),
+  } as RouteContext;
+  try {
+    const result = handleModels(context, deps);
+    expect(result).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
+    handleModels(context, deps);
+    await vi.waitFor(() => {
+      expect(discovery).toHaveBeenCalledTimes(2);
+    });
+    handleModels({ ...context, url: new URL("http://127.0.0.1/api/models") }, deps);
+    expect(discovery).toHaveBeenCalledTimes(2);
+  } finally {
+    pending.resolve(discoveredCatalog());
+  }
+  await pending.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  handleModels(context, deps);
+  await vi.waitFor(() => {
+    expect(discovery).toHaveBeenCalledTimes(3);
+  });
+});
 
 it("retries a failed startup catalog in the background and stops rediscovering after recovery", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
