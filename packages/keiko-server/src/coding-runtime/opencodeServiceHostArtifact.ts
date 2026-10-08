@@ -1,6 +1,7 @@
 import { isAbsolute, join, resolve } from "node:path";
 
 import {
+  OPENCODE_TOOL_PROFILES,
   copyOpenCodeServiceHostApproval,
   copyOpenCodeServiceHostApprovals,
   copyOpenCodeServiceHostStartPacket,
@@ -176,7 +177,8 @@ export async function reinspectPreparedOpenCodeServiceHost(
 export function createOpenCodeServiceHostPacketDataAsset(): string {
   return (
     `export const fields = Object.freeze(${JSON.stringify(OPENCODE_SERVICE_HOST_START_PACKET_FIELDS)});\n` +
-    `export const maxBytes = ${String(OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES)};\n`
+    `export const maxBytes = ${String(OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES)};\n` +
+    `export const profiles = Object.freeze(${JSON.stringify(OPENCODE_TOOL_PROFILES)});\n`
   );
 }
 

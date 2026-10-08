@@ -261,6 +261,20 @@ or production native advertisement/activation. Shared default tool projections r
 the original context capture gains read parameters/pagination, so no default-factory byte-identity
 claim follows from this increment.
 
+The next inactive fixed-host profile integration independently reproduces two selected-packet
+RED cases and two captured-composition RED cases before production changes. The actual original
+host advertisement passes its healthy direct control and fails Code Mode because the unchanged
+host always imports the direct factory. Root preserves the one-parent Read and Location groups
+while merging the new controls. After the fix, 511 tests across seven owning suites and 36 actual
+native host/entry/guard controls pass; strict nine-TypeScript-owner checking, scoped thirteen-file
+lint and the affected graph pass. The shared canonical producer now supplies eleven fields, two
+closed profiles and the 16 KiB ceiling to both fixed static assets. Current direct/Code Mode factory,
+default plugin and native context bytes match the independently saved current baseline exactly.
+Actual original Plugin activation, Location instance, Tool snapshot and OpenAI request serialization
+match both selected mapped profiles with zero model or facade requests. Code Mode reports seventeen
+managed handlers within nineteen inventory items; the two additional items remain unqualified.
+No final package approval, production activation, native workspace tool or complete parity follows.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

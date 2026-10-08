@@ -32,10 +32,19 @@ const profile = await import(
     import.meta.url,
   )
 );
+const artifact = await import(
+  new URL(
+    "../../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js",
+    import.meta.url,
+  )
+);
+const packetContract = await import(
+  new URL("../../packages/keiko-contracts/dist/opencode-service-host.js", import.meta.url)
+);
 const source = dirname(fileURLToPath(import.meta.url));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-function fixture() {
+function fixture(toolProfile = "direct") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fixed-entry-test-")));
   const workspace = join(root, "workspace");
   const stateRoot = join(workspace, ".keiko", "runtime-test");
@@ -50,12 +59,21 @@ function fixture() {
     generated.createGeneratedOpenCodeV2HostFactory(),
   );
   writeFileSync(
+    join(root, "keiko-governed-tools-code-mode.mjs"),
+    generated.createGeneratedOpenCodeV2HostFactory("code-mode"),
+  );
+  writeFileSync(
+    join(root, "keiko-host-packet-data.mjs"),
+    artifact.createOpenCodeServiceHostPacketDataAsset(),
+  );
+  writeFileSync(
     join(root, "keiko-native-context.mjs"),
     generated.createGeneratedOpenCodeV2Plugins().keiko_native_context,
   );
   const launch = profile.buildOpenCodeLaunchProfile({
     executable: process.execPath,
     stateRoot,
+    toolProfile,
     contextGeometry: {
       contextWindowTokens: 32768,
       maxInputTokens: 28672,
@@ -78,6 +96,7 @@ function fixture() {
     mode: "autonomous-delivery",
     runId: "run-fixed-entry-test",
     configDigest: sha(config),
+    toolProfile,
   };
   return {
     root,
@@ -183,8 +202,19 @@ for (const [name, packet] of [
   ["missing newline", (input) => JSON.stringify(input)],
   ["extra packet", (input) => JSON.stringify(input) + "\n{}\n"],
   ["invalid JSON", () => "{\n"],
-  ["oversized packet", () => "x".repeat(16385) + "\n"],
+  [
+    "oversized packet",
+    () => "x".repeat(packetContract.OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES + 1) + "\n",
+  ],
   ["module selector", (input) => JSON.stringify({ ...input, module: "untrusted.mjs" }) + "\n"],
+  ["unknown profile", (input) => JSON.stringify({ ...input, toolProfile: "invented" }) + "\n"],
+  [
+    "missing profile",
+    (input) => {
+      const { toolProfile: _profile, ...missing } = input;
+      return JSON.stringify(missing) + "\n";
+    },
+  ],
   [
     "wrong config digest",
     (input) => JSON.stringify({ ...input, configDigest: "0".repeat(64) }) + "\n",
@@ -366,6 +396,26 @@ test("the original native session and its echo retain the fixed entry's workspac
     assert.equal(echo.data.length, 1);
     assert.equal(echo.data[0].id, session.data.id);
     assert.equal(echo.data[0].location.directory, own.input.workspace);
+  } finally {
+    await finish(owned);
+    own.cleanup();
+  }
+});
+
+test("the sealed Code Mode packet preserves original service startup and EOF without native effect activation", async () => {
+  const own = fixture("code-mode");
+  const owned = start(own);
+  try {
+    owned.child.stdin.write(JSON.stringify(own.input) + "\n");
+    const url = await ready(owned);
+    const info = await fetch(url + "/api/info", { headers: authenticated(own.input) });
+    assert.equal(info.status, 200);
+    assert.equal(own.input.toolProfile, "code-mode");
+    const result = await finish(owned);
+    assert.equal(result.code, 0);
+    assert.equal(result.signal, null);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout.split("\n").filter(Boolean).length, 1);
   } finally {
     await finish(owned);
     own.cleanup();

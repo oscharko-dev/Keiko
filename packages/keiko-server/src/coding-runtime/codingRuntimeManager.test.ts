@@ -5505,6 +5505,7 @@ async function preparedHostFixture(workspace: string): Promise<PreparedOpenCodeS
       mode: "supervised-coding",
       runId: "run-1988",
       configDigest: "f".repeat(64),
+      toolProfile: "direct",
     },
     {},
   );

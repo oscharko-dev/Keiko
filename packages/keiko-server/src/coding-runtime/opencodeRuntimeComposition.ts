@@ -885,7 +885,14 @@ async function materializePrepare(
   const program =
     serviceHost === undefined
       ? undefined
-      : prepareCompositionServiceHost(serviceHost, request, runRoot, configDigest, result.env);
+      : prepareCompositionServiceHost(
+          serviceHost,
+          request,
+          runRoot,
+          configDigest,
+          result.env,
+          input.toolProfile ?? "direct",
+        );
   if (serviceHost !== undefined && program === undefined)
     throw new Error("host-preparation-invalid");
   persistPreparedRun(runs, request, runRoot, password, configDigest, program);
@@ -918,6 +925,7 @@ function prepareCompositionServiceHost(
   stateRoot: string,
   configDigest: string,
   env: Readonly<Record<string, string>>,
+  toolProfile: OpenCodeToolProfile,
 ): PreparedOpenCodeServiceHostLaunch | undefined {
   return prepareOpenCodeServiceHostLaunch(
     receipt,
@@ -932,6 +940,7 @@ function prepareCompositionServiceHost(
       mode: request.env.KEIKO_CODING_MODE,
       runId: request.runId,
       configDigest,
+      toolProfile,
     },
     env,
   );
@@ -944,7 +953,7 @@ async function prepare(
   request: OpenCodeLifecyclePrepareRequest,
   serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
-  if (serviceHost !== undefined && (input.toolProfile !== "direct" || runs.has(request.runId)))
+  if (serviceHost !== undefined && runs.has(request.runId))
     return { ok: false, reason: "host-preparation-unqualified" };
   if (!verifiedProtocol(request.verification, input.portable.verification)) {
     return { ok: false, reason: "target-attestation-failed" };

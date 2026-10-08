@@ -23,6 +23,9 @@ import { Tool } from "@opencode/core/tool";
 import { Plugin } from "@opencode/core/plugin";
 import { fromPromise } from "@opencode/plugin/promise/adapter";
 import createGovernedPlugin from "./keiko-governed-tools.mjs";
+import createGovernedCodeModePlugin from "./keiko-governed-tools-code-mode.mjs";
+import { fields, profiles } from "./keiko-host-packet-data.mjs";
+
 import nativeContextPlugin from "./keiko-native-context.mjs";
 import {
   fixedPostTransport,
@@ -31,11 +34,16 @@ import {
   decorateSnapshot,
 } from "./guard-seams.mjs";
 
+const governedFactories = Object.freeze({
+  direct: createGovernedPlugin,
+  "code-mode": createGovernedCodeModePlugin,
+});
+
 /**
  * Inactive fixed bootstrap API for a separately attested external payload. It is not a CLI/packet
  * selector or launch authorization. The existing manager, current-authority IO and real facade
  * drain must bind it before activation; the original service owns task execution and SQLite IO.
- * These two generated imports are fixed builder assets, never input/module locators.
+ * These generated imports are fixed builder assets, never input/module locators.
  */
 export function makeFixedOpenCodeServiceHost(input) {
   return Effect.gen(function* () {
@@ -127,22 +135,10 @@ function copyHostBinding(input) {
 }
 
 function copyHostFields(input) {
-  const names = [
-    "workspace",
-    "stateRoot",
-    "password",
-    "providerURL",
-    "providerCapability",
-    "facadeURL",
-    "facadeCapability",
-    "mode",
-    "runId",
-    "configDigest",
-  ];
-  if (!input || Reflect.ownKeys(input).length !== names.length)
+  if (!input || Reflect.ownKeys(input).length !== fields.length)
     throw new TypeError("host-input-invalid");
   return Object.fromEntries(
-    names.map((key) => {
+    fields.map((key) => {
       const descriptor = Object.getOwnPropertyDescriptor(input, key);
       if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string")
         throw new TypeError("host-input-invalid");
@@ -164,6 +160,7 @@ function validateHostScalars(binding) {
     binding.password.length < 32 ||
     binding.password.length > 128 ||
     !modes.has(binding.mode) ||
+    !profiles.includes(binding.toolProfile) ||
     !/^[A-Za-z0-9_-]{1,256}$/u.test(binding.runId)
   )
     throw new TypeError("host-input-invalid");
@@ -216,11 +213,13 @@ function fixedOverrides(binding, providerFetch, facadeFetch) {
     if (owner !== undefined) throw new Error("host-owner-already-bound");
     owner = value;
   });
-  const plugins = [createGovernedPlugin(runtime), nativeContextPlugin].map((plugin) => ({
-    ...fromPromise(plugin),
-    revision: "keiko-fixed-host-v1",
-    source: { type: "builtin" },
-  }));
+  const plugins = [governedFactories[binding.toolProfile](runtime), nativeContextPlugin].map(
+    (plugin) => ({
+      ...fromPromise(plugin),
+      revision: "keiko-fixed-host-v1",
+      source: { type: "builtin" },
+    }),
+  );
   return [
     providerOverride(providerFetch),
     toolOverride(() => {

@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  OPENCODE_TOOL_PROFILES,
   OPENCODE_SERVICE_HOST_START_PACKET_FIELDS,
   OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES,
   type OpenCodeServiceHostApproval,
@@ -567,6 +568,7 @@ function startBinding(): Record<string, unknown> {
     mode: "supervised-coding",
     runId: "accepted-run",
     configDigest: "f".repeat(64),
+    toolProfile: "direct",
   };
 }
 
@@ -633,10 +635,13 @@ describe("inactive artifact-owned fixed host packet", () => {
     )) as {
       readonly fields: readonly string[];
       readonly maxBytes: number;
+      readonly profiles: readonly string[];
     };
     expect(asset.fields).toEqual(OPENCODE_SERVICE_HOST_START_PACKET_FIELDS);
     expect(Object.isFrozen(asset.fields)).toBe(true);
     expect(asset.maxBytes).toBe(OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES);
+    expect(asset.profiles).toEqual(OPENCODE_TOOL_PROFILES);
+    expect(Object.isFrozen(asset.profiles)).toBe(true);
     expect(source).not.toContain("process.env");
   });
 });

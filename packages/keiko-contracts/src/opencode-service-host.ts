@@ -1,7 +1,12 @@
 import { UPDATE_PORTABLE_TARGETS, type UpdatePortableTarget } from "./update-session.js";
 import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
 
-/** Fixed bootstrap data only; no tool profile, executable, module or policy selector. */
+/** Server-selected fixed tool contract only; this value is never a model or module selector. */
+export const OPENCODE_TOOL_PROFILES = Object.freeze(["direct", "code-mode"] as const);
+export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
+const TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
+
+/** Fixed bootstrap data only; no executable, module, source or policy selector. */
 export const OPENCODE_SERVICE_HOST_START_PACKET_FIELDS = Object.freeze([
   "workspace",
   "stateRoot",
@@ -13,12 +18,13 @@ export const OPENCODE_SERVICE_HOST_START_PACKET_FIELDS = Object.freeze([
   "mode",
   "runId",
   "configDigest",
+  "toolProfile",
 ] as const);
 export const OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES = 16 * 1024;
 
 export type OpenCodeServiceHostStartPacket = Readonly<
   Record<(typeof OPENCODE_SERVICE_HOST_START_PACKET_FIELDS)[number], string>
-> & { readonly mode: CodingWorkbenchMode };
+> & { readonly mode: CodingWorkbenchMode; readonly toolProfile: OpenCodeToolProfile };
 
 /** Owned closed data; byte bounds and accepted root/transport bindings remain server-owned. */
 export function copyOpenCodeServiceHostStartPacket(
@@ -55,6 +61,7 @@ function boundedPacketString(value: unknown): value is string {
 function validPacketScalars(value: Record<string, unknown>): boolean {
   return (
     isCodingWorkbenchMode(value.mode) &&
+    TOOL_PROFILES.has(value.toolProfile) &&
     typeof value.configDigest === "string" &&
     SHA256.test(value.configDigest) &&
     typeof value.runId === "string" &&

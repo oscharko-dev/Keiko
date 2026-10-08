@@ -555,9 +555,21 @@ freshly reattest it and write its single bounded packet through the owned stdin 
 handshake. Unsupported or failed writes follow existing cleanup and recovery; a copied program or
 receipt cannot replace the artifact owner's binding. Host readiness remains unqualified before the
 ordinary CLI adapter can open, so this transport path does not activate the service. This prerequisite
-still needs actual platform/process-lifetime controls, sealed selected-profile assets, current native IO authority and
-fresh final-payload qualification before production selection or launch. EOF closure alone does
-not prove settlement of delegated effects.
+still needs actual platform/process-lifetime controls, current native IO authority and fresh
+final-payload qualification before production selection or launch. EOF closure alone does not prove
+settlement of delegated effects.
+
+The closed canonical startup packet now carries the same captured `direct` or `code-mode` profile
+as the immutable run configuration. The shared contracts package owns that enum and the eleven
+packet fields. A fixed generated data asset supplies those fields, profiles and the 16 KiB ceiling
+to the native host and executable entry. Static imports select the existing fixed direct or Code
+Mode factory; input cannot name a module, executable or source locator. Missing, copied, mutable or
+arbitrary profiles refuse rather than silently choosing direct. The existing factory algorithms
+and default model projections remain unchanged. Actual original Tool/Plugin/Location acquisition
+and provider request serialization qualify both selected mapped profiles, including the original
+Code Mode inventory. That inventory includes two additional native items beyond the seventeen
+managed handlers; these controls do not qualify those items or native workspace tools. They do
+not activate the service or replace final packaged-byte/platform qualification.
 
 Portable CLI discovery derives executable, license and SBOM digests from one fresh, bounded
 content pass over stable file descriptors. Those evidence digests and the payload digest belong

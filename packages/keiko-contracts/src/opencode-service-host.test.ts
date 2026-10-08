@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  OPENCODE_TOOL_PROFILES,
   copyOpenCodeServiceHostStartPacket,
   OPENCODE_SERVICE_HOST_START_PACKET_FIELDS,
   OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES,
@@ -117,11 +118,25 @@ function packetFixture(): Record<string, unknown> {
     mode: "supervised-coding",
     runId: "accepted-run",
     configDigest: "f".repeat(64),
+    toolProfile: "direct",
   };
 }
 
 describe("closed fixed-host start data", () => {
-  it("owns the exact ten fields and 16KiB transport ceiling without adding selectors", () => {
+  it.each(OPENCODE_TOOL_PROFILES)("owns selected closed tool profile %s", (toolProfile) => {
+    const output = copyOpenCodeServiceHostStartPacket({ ...packetFixture(), toolProfile });
+    expect(output).toMatchObject({ toolProfile });
+    expect(Object.isFrozen(output)).toBe(true);
+  });
+  it("refuses missing or arbitrary profiles rather than selecting direct", () => {
+    const missing = packetFixture();
+    Reflect.deleteProperty(missing, "toolProfile");
+    expect(copyOpenCodeServiceHostStartPacket(missing)).toBeUndefined();
+    expect(
+      copyOpenCodeServiceHostStartPacket({ ...packetFixture(), toolProfile: "invented" }),
+    ).toBeUndefined();
+  });
+  it("owns the exact closed fields and 16KiB transport ceiling without adding code locators", () => {
     const input = packetFixture();
     const output = copyOpenCodeServiceHostStartPacket(input);
     expect(output).toEqual(input);
@@ -147,7 +162,7 @@ describe("closed fixed-host start data", () => {
     expect(copyOpenCodeServiceHostStartPacket(accessor)).toBeUndefined();
     expect(reads).toBe(0);
   });
-  it.each(["module", "executable", "args", "toolProfile", "config", "lease"])(
+  it.each(["module", "executable", "args", "config", "lease"])(
     "refuses extra selector %s",
     (key) => {
       expect(

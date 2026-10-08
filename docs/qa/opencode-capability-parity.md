@@ -39,6 +39,11 @@ The private original-Read invocation now shares one actual canonical admission a
 across hidden text/instruction reads. It remains a text subset with the public parser's path bound;
 the guarded KSR3 primitives must join that same owner before native Read can be activated. Neither
 the default direct nor Code Mode gateway profile currently admits original native Read.
+The inactive fixed host now selects its static direct or Code Mode factory from the same captured
+canonical startup profile as the run configuration. Actual original Tool/Plugin/Location and
+provider request serialization match both current mapped profiles. Code Mode lists seventeen
+managed handlers plus two additional native inventory items; the latter remain unqualified. This
+selected-profile correction neither admits original native Read nor activates the host.
 T01 and the other production statuses below therefore remain incomplete native-parity acceptance.
 The owner requires complete functional parity with Standalone OpenCode. Every narrower, disabled
 or missing native capability is therefore an open acceptance item, including extension and

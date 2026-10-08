@@ -40,10 +40,30 @@ const { HttpTraceContext, HttpRouter } = await import(
   pathToFileURL(join(moduleRoot, "effect/dist/unstable/http/index.js"))
 );
 const { fixedPostTransport } = await import("./guard-seams.mjs");
+const artifact = await import(
+  new URL(
+    "../../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js",
+    import.meta.url,
+  )
+);
+const contract = await import(
+  new URL("../../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js", import.meta.url)
+);
+const { Tool } = await import(pathToFileURL(join(moduleRoot, "@opencode/core/dist/tool.js")));
+const { LocationServiceMap } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/core/dist/location-services.js"))
+);
+const { Plugin } = await import(pathToFileURL(join(moduleRoot, "@opencode/core/dist/plugin.js")));
+const { Location } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/core/dist/location.js"))
+);
+const nativeChat = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/ai/dist/protocols/openai-chat.js"))
+);
 const source = dirname(fileURLToPath(import.meta.url));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-async function fixture() {
+async function fixture(toolProfile = "direct") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fixed-host-test-")));
   const workspace = join(root, "workspace");
   const stateRoot = join(workspace, ".keiko", "runtime-test");
@@ -63,19 +83,32 @@ async function fixture() {
     generated.createGeneratedOpenCodeV2HostFactory(),
   );
   writeFileSync(
+    join(root, "keiko-governed-tools-code-mode.mjs"),
+    generated.createGeneratedOpenCodeV2HostFactory("code-mode"),
+  );
+  const packetAsset = artifact.createOpenCodeServiceHostPacketDataAsset();
+  writeFileSync(join(root, "keiko-host-packet-data.mjs"), packetAsset);
+  const packetData = await import(
+    "data:text/javascript;base64," + Buffer.from(packetAsset).toString("base64")
+  );
+  writeFileSync(
     join(root, "keiko-native-context.mjs"),
     generated.createGeneratedOpenCodeV2Plugins().keiko_native_context,
   );
   const config = JSON.stringify(
-    profile.createFixedOpenCodeV2Config({
-      contextWindowTokens: 32768,
-      maxInputTokens: 28672,
-      maxOutputTokens: 4096,
-    }),
+    profile.createFixedOpenCodeV2Config(
+      {
+        contextWindowTokens: 32768,
+        maxInputTokens: 28672,
+        maxOutputTokens: 4096,
+      },
+      undefined,
+      toolProfile,
+    ),
   );
   writeFileSync(join(stateRoot, "config", "opencode", "opencode.json"), config, { mode: 0o600 });
   const host = await import(pathToFileURL(join(root, "host.mjs")));
-  const input = Object.freeze({
+  const values = {
     workspace,
     stateRoot,
     password: "p".repeat(32),
@@ -86,7 +119,11 @@ async function fixture() {
     mode: "autonomous-delivery",
     runId: "run-fixed-host-test",
     configDigest: sha(config),
-  });
+    toolProfile,
+  };
+  const input = Object.freeze(
+    Object.fromEntries(packetData.fields.map((field) => [field, values[field]])),
+  );
   return {
     root,
     stateRoot,
@@ -571,3 +608,81 @@ test("the original persistent PTY route retains Node upgrade, single-use tickets
   }
   assert.equal(observed.detached, 1);
 });
+
+for (const toolProfile of ["direct", "code-mode"]) {
+  test(`the original native advertisement matches the fixed ${toolProfile} factory and canonical profile`, async (t) => {
+    const own = await fixture(toolProfile);
+    const previous = globalThis.fetch;
+    let transports = 0;
+    globalThis.fetch = () => {
+      transports++;
+      throw new Error("no-transport-qualified");
+    };
+    try {
+      await run(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* own.host.makeFixedOpenCodeServiceHostRoutes(own.input);
+            const locations = Context.get(context, LocationServiceMap.Service);
+            const instance = yield* locations.contextEffect(
+              Location.Ref.make({ directory: own.input.workspace }),
+            );
+            yield* Context.get(instance, Plugin.Service).awaitActivation;
+            const tools = Context.get(instance, Tool.Service);
+            const snapshot = yield* tools.snapshot(JSON.parse(own.config).permissions);
+            const request = yield* nativeChat.fromRequest({
+              model: {
+                id: "hermetic",
+                provider: "keiko-runtime",
+                route: { endpoint: { baseURL: own.input.providerURL } },
+              },
+              system: [],
+              messages: [],
+              tools: snapshot.definitions,
+            });
+            const wire = request.tools.map((tool) => ({
+              name: tool.function.name,
+              parameters: tool.function.parameters,
+            }));
+            assert.equal(contract.hasExactOpenCodeVisibleToolContract(wire, toolProfile), true);
+            assert.equal(
+              contract.hasExactOpenCodeVisibleToolContract(
+                wire,
+                toolProfile === "direct" ? "code-mode" : "direct",
+              ),
+              false,
+            );
+            const handlers = (yield* tools.list()).filter((tool) => tool.name.startsWith("keiko_"));
+            assert.equal(handlers.length, 17);
+            assert.equal(
+              handlers.every((tool) => tool.options.codemode === (toolProfile === "code-mode")),
+              true,
+            );
+            if (toolProfile === "code-mode") {
+              const inventory = snapshot.codeModeCatalog.tools;
+              const managed = inventory.filter(
+                (entry) => entry.type === "tool" && entry.name.startsWith("keiko_"),
+              );
+              assert.deepEqual(
+                managed.map((entry) => entry.name).sort(),
+                handlers.map((entry) => entry.name).sort(),
+              );
+              t.diagnostic(
+                JSON.stringify({
+                  profile: toolProfile,
+                  managedCount: managed.length,
+                  nativeInventoryItems: inventory.length,
+                  additionalItems: inventory.length - managed.length,
+                }),
+              );
+            }
+          }),
+        ),
+      );
+      assert.equal(transports, 0);
+    } finally {
+      globalThis.fetch = previous;
+      own.cleanup();
+    }
+  });
+}

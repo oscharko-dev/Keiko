@@ -6,6 +6,10 @@
 // The server's incoming contract matcher and the provider bridge consume this one declaration.
 // Managed source schemas still belong to opencodeToolSchemas.ts; the catalog dialect losslessly
 // projects their canonical descriptors and does not control the native engine or its tool loop.
+import {
+  OPENCODE_TOOL_PROFILES,
+  type OpenCodeToolProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -33,7 +37,7 @@ const OPENCODE_DISCOVER_MAX_RESULTS = 100;
 const OPENCODE_READ_MAX_START_LINE = 1_000_000;
 const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
-const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(["direct", "code-mode"]);
+const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
 const OPENCODE_RUNTIME = { id: "opencode", version: "2.0.10" } as const;
@@ -692,7 +696,7 @@ function ciStatusSpec(): OpenCodeToolSpec {
  * This declaration changes neither native tool membership/permissions nor product activation.
  */
 export function opencodeRegistrationSet(
-  profile: "direct" | "code-mode" = "direct",
+  profile: OpenCodeToolProfile = "direct",
 ): CatalogRegistrationSet {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
   return {

@@ -1,10 +1,10 @@
+import { maxBytes } from "./keiko-host-packet-data.mjs";
 import { createServer } from "node:http";
 import { Cause, Context, Effect, Exit, References } from "effect";
 import { NodeHttpServer } from "@effect/platform-node";
 import { HttpRouter } from "effect/unstable/http";
 
 const { AbortController, TextDecoder } = globalThis;
-const MAX_PACKET_BYTES = 16 * 1024;
 
 /** Fixed process lifetime only; original routes, task engine and upgrade handling remain native. */
 export async function runFixedHostEntry(makeRoutes) {
@@ -68,7 +68,7 @@ function startPacketLifetime(stream) {
     controller.abort();
   };
   const onData = (chunk) => {
-    if (committed || bytes.length + chunk.length > MAX_PACKET_BYTES) return refuse();
+    if (committed || bytes.length + chunk.length > maxBytes) return refuse();
     bytes = Buffer.concat([bytes, chunk]);
     const newline = bytes.indexOf(10);
     if (newline < 0) return;

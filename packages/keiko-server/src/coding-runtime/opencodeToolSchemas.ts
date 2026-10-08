@@ -1,3 +1,8 @@
+import {
+  OPENCODE_TOOL_PROFILES,
+  type OpenCodeToolProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -630,8 +635,7 @@ const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   ]),
 );
 
-export type OpenCodeToolProfile = "direct" | "code-mode";
-const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(["direct", "code-mode"]);
+const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const CODE_MODE_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, inputSchema }) => [
     alias,

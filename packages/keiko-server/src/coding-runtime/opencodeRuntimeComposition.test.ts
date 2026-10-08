@@ -5173,12 +5173,33 @@ describe("inactive fixed-host preparation at existing captured composition", () 
     expect(reads).toBe(0);
   });
 
-  it("refuses CodeMode while fixed host assets are direct and rejects a copied receipt", async () => {
-    const codeMode = await stoppedPreparationFixture("code-mode");
+  it.each(["direct", "code-mode"] as const)(
+    "binds the captured %s profile to the same config digest without admitting readiness",
+    async (toolProfile) => {
+      const fixture = await stoppedPreparationFixture(toolProfile);
+      const result = await fixture.runtime.prepareServiceHost(
+        fixture.preparation,
+        await preparationReceipt(),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok || result.serviceHost === undefined)
+        throw new Error("Expected inactive preparation");
+      expect(result.serviceHost.binding).toMatchObject({ toolProfile });
+      const config = readFileSync(
+        join(result.serviceHost.binding.stateRoot, "config", "opencode", "opencode.json"),
+      );
+      expect(result.serviceHost.binding.configDigest).toBe(
+        createHash("sha256").update(config).digest("hex"),
+      );
+      expect(JSON.parse(result.serviceHost.packet)).toEqual(result.serviceHost.binding);
+      await expect(
+        fixture.runtime.runPort.submitTask(fixture.preparation.runId, "still inactive"),
+      ).resolves.toBe(false);
+    },
+  );
+
+  it("rejects a copied receipt without blocking later preparation from the owned receipt", async () => {
     const receipt = await preparationReceipt();
-    await expect(
-      codeMode.runtime.prepareServiceHost(codeMode.preparation, receipt),
-    ).resolves.toEqual({ ok: false, reason: "host-preparation-unqualified" });
     const direct = await stoppedPreparationFixture();
     await expect(
       direct.runtime.prepareServiceHost(direct.preparation, { ...receipt }),
@@ -5492,4 +5513,36 @@ it("settles an original read's rejected physical process before a fresh parent i
     f.registry.dispose();
     await fixture.stop();
   }
+});
+
+it("captures the host profile once and keeps it aligned with materialized config after input mutation", async () => {
+  let toolProfile: "direct" | "code-mode" = "code-mode";
+  let reads = 0;
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+      readToolProfile: () => {
+        reads += 1;
+        return toolProfile;
+      },
+    },
+  );
+  await fixture.stop();
+  toolProfile = "direct";
+  const result = await fixture.runtime.prepareServiceHost(
+    fixture.preparation,
+    await preparationReceipt(),
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok || result.serviceHost === undefined)
+    throw new Error("Expected captured host profile");
+  expect(result.serviceHost.binding.toolProfile).toBe("code-mode");
+  expect(reads).toBe(1);
+  const config = readFileSync(
+    join(result.serviceHost.binding.stateRoot, "config", "opencode", "opencode.json"),
+    "utf8",
+  );
+  expect(config.includes('{"action":"execute","resource":"*","effect":"allow"}')).toBe(true);
 });
