@@ -96,11 +96,18 @@ import {
 } from "./opencodeProtocolSurface.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
+import {
+  type OpenCodeToolProfile,
+  openCodeVisibleToolNames,
+  OPENCODE_PINNED_VERSION,
+} from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
-import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
+import {
+  openCodeCatalogAliasFor,
+  openCodeCatalogSettlementBudgetMs,
+} from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
@@ -157,6 +164,8 @@ interface VerifiedPortableInput {
 type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelled";
 
 export interface OpenCodeRuntimeCompositionInput {
+  /** Captured server-only observation profile. Absent retains the direct native history contract. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -191,7 +200,14 @@ export interface OpenCodeRuntimeCompositionInput {
               messages: readonly import("./codingRuntimeHistory.js").CodingHistoryMessage[],
             ) => boolean)
           | undefined;
-        readonly arm: () => void;
+        readonly arm: (sessionId?: string, profile?: OpenCodeToolProfile) => void;
+        readonly beginTool?:
+          | ((input: {
+              readonly actionId: string;
+              readonly tool: string;
+              readonly occurredAt: string;
+            }) => void)
+          | undefined;
         readonly clear: () => void;
         readonly ingest: (
           signal: import("./codingSafeActivityProjection.js").CodingSafeActivitySignal,
@@ -199,6 +215,8 @@ export interface OpenCodeRuntimeCompositionInput {
         readonly recordDrops: (count: number) => void;
         readonly settleTool: (input: {
           readonly actionId: string;
+          /** True only when this exact facade request entered its authorized delegate. */
+          readonly delegateStarted?: true | undefined;
           readonly state: OpenCodeToolSettlementState;
           readonly occurredAt: string;
           readonly presentation?: CodingSafeActivityToolPresentation;
@@ -337,8 +355,11 @@ type ReadyRunLookup = (runId: string) => ReadyRun | undefined;
 type QuestionRunPort = Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" | "rejectQuestion">;
 
 export function createOpenCodeRuntimeComposition(
-  input: OpenCodeRuntimeCompositionInput,
+  configured: OpenCodeRuntimeCompositionInput,
 ): OpenCodeRuntimeComposition {
+  const toolProfile = configured.toolProfile ?? "direct";
+  openCodeVisibleToolNames(toolProfile);
+  const input = { ...configured, toolProfile };
   const runs = new Map<string, PreparedRun>();
   const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
@@ -346,6 +367,7 @@ export function createOpenCodeRuntimeComposition(
       capability: input.capabilities.toolFacadeCapability,
       facade: input.toolFacade,
       settleTool: input.safeActivity?.settleTool,
+      beginTool: input.safeActivity?.beginTool,
       diagnostics: input.diagnostics,
       renderedResults: renderedResultLog(input),
     },
@@ -910,7 +932,7 @@ async function handshake(
       await adapter.close();
       return { ok: false, reason: result.phase };
     }
-    input.safeActivity?.arm();
+    input.safeActivity?.arm(result.sessionId, input.toolProfile);
     if (runs.get(request.runId) !== run) {
       await adapter.close();
       return { ok: false, reason: "preparation-missing" };
@@ -941,6 +963,7 @@ function readinessV2Ports(
   // The events the coalescing pump absorbed since the history projection last wrote its line.
   let mergedEvents = 0;
   const history = createOpenCodeV2HistoryProjection({
+    toolProfile: input.toolProfile,
     runId: run.runId,
     activityLog: input.activityLog,
     captureMessages: input.safeActivity?.captureMessages,
@@ -1589,6 +1612,7 @@ interface ToolBridgeExecutionDeps {
   readonly capability: string;
   readonly facade: CodingToolFacade;
   readonly settleTool: SafeToolSettlement | undefined;
+  readonly beginTool?: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"];
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly renderedResults?: RenderedResultLog | undefined;
 }
@@ -1896,12 +1920,15 @@ async function executeToolRequest(
     admission.release();
     return { status: 400, body: "" };
   }
-  const service = {
+  const service: ToolService = {
     request: parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES),
     startedAtMs: Date.now(),
   };
   const actionId = service.request?.actionId;
-  const work = startFacadeExecution(facade, capability, headers, body, admission);
+  const work = startFacadeExecution(facade, capability, headers, body, admission, () => {
+    beginSafeTool(deps.beginTool, service.request);
+    service.delegateStarted = true;
+  });
   releaseAdmissionWhenSettled(work, admission);
   try {
     const result = await raceAbort(work, admission.controller.signal);
@@ -1914,7 +1941,13 @@ async function executeToolRequest(
     // surfaced to the operator.
     if (reason !== undefined) return abortedToolResponse(deps, service, admission, reason);
     emitFacadeFailureDiagnostic(diagnostics, actionId, error);
-    settleSafeTool(settleTool, actionId, "failed", bridgeServicePresentation(service));
+    settleSafeTool(
+      settleTool,
+      actionId,
+      "failed",
+      bridgeServicePresentation(service),
+      service.delegateStarted,
+    );
     return { status: 502, body: "" };
   }
 }
@@ -1930,7 +1963,13 @@ function abortedToolResponse(
   reason: string,
 ): { readonly status: number; readonly body: string } {
   const actionId = service.request?.actionId;
-  settleSafeTool(deps.settleTool, actionId, "cancelled", bridgeServicePresentation(service));
+  settleSafeTool(
+    deps.settleTool,
+    actionId,
+    "cancelled",
+    bridgeServicePresentation(service),
+    service.delegateStarted,
+  );
   if (reason !== DEADLINE_ABORT) return { status: 502, body: "" };
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: actionCorrelationId(actionId),
@@ -1953,10 +1992,16 @@ function responseForToolResult(
   const actionId = service.request?.actionId;
   const presentation = bridgeServicePresentation(service, result);
   if (result.status === "busy") {
-    settleSafeTool(deps.settleTool, actionId, "failed", presentation);
+    settleSafeTool(deps.settleTool, actionId, "failed", presentation, service.delegateStarted);
     return { status: 429, body: "" };
   }
-  settleSafeTool(deps.settleTool, actionId, safeToolState(result), presentation);
+  settleSafeTool(
+    deps.settleTool,
+    actionId,
+    safeToolState(result),
+    presentation,
+    service.delegateStarted,
+  );
   const responseBody = JSON.stringify(result);
   if (Buffer.byteLength(responseBody, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
     return { status: 502, body: "" };
@@ -2012,9 +2057,16 @@ function startFacadeExecution(
   headers: Headers,
   body: string,
   admission: AdmittedToolRequest,
+  onDelegateStarted: () => void,
 ): Promise<CodingToolResult> {
   return Promise.resolve().then(() =>
-    facade.execute({ body, capability, headers, signal: admission.controller.signal }),
+    facade.execute({
+      body,
+      capability,
+      headers,
+      signal: admission.controller.signal,
+      onDelegateStarted,
+    }),
   );
 }
 
@@ -2071,22 +2123,35 @@ function releaseAdmissionWhenSettled(
   );
 }
 
+function beginSafeTool(
+  beginTool: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"],
+  request: CodingToolActionRequest | undefined,
+): void {
+  if (beginTool === undefined || request === undefined) return;
+  const tool = openCodeCatalogAliasFor(request);
+  if (tool !== undefined)
+    beginTool({ actionId: request.actionId, tool, occurredAt: new Date().toISOString() });
+}
+
 function settleSafeTool(
   settleTool: SafeToolSettlement | undefined,
   actionId: string | undefined,
   state: OpenCodeToolSettlementState,
   presentation?: CodingSafeActivityToolPresentation,
+  delegateStarted?: true,
 ): void {
   if (actionId === undefined) return;
   settleTool?.({
     actionId,
     state,
+    ...(delegateStarted === undefined ? {} : { delegateStarted }),
     occurredAt: new Date().toISOString(),
     ...(presentation === undefined ? {} : { presentation }),
   });
 }
 
 interface ToolService {
+  delegateStarted?: true;
   readonly request: CodingToolActionRequest | undefined;
   readonly startedAtMs: number;
 }

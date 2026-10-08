@@ -24,7 +24,11 @@ import {
   type LiveTextKind,
   type OpenCodeV2LiveText,
 } from "./opencodeV2LiveText.js";
-import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
+import {
+  type OpenCodeToolProfile,
+  openCodeVisibleToolNames,
+  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+} from "./opencodeToolSchemas.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);
@@ -100,6 +104,7 @@ const NATIVE_QUESTION_OPERATION = defineActivityLogOperation({
 });
 
 interface HistoryActivity {
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly captureMessages?: ((messages: readonly CodingHistoryMessage[]) => boolean) | undefined;
   readonly runId: string;
   readonly activityLog: ServerLogSink | undefined;
@@ -385,13 +390,15 @@ function toolOccurredAt(part: Readonly<Record<string, unknown>>): string {
 function toolState(
   part: Readonly<Record<string, unknown>>,
   messageId: string,
+  profile: OpenCodeToolProfile,
 ): CodingSafeActivitySignal & { kind: "tool" } {
   const state = record(part.state);
   const status = state?.status;
   if (state === undefined) throw new Error("opencode-v2-tool-state-invalid");
   const { id, name } = toolIdentity(part);
   assertToolInput(part, state);
-  if (!HISTORY_TOOLS.has(name)) throw new Error("opencode-v2-tool-invalid");
+  if (!HISTORY_TOOLS.has(name) && !(profile === "code-mode" && name === "execute"))
+    throw new Error("opencode-v2-tool-invalid");
   const mapped = displayToolState(status);
   return {
     kind: "tool",
@@ -415,6 +422,7 @@ function assistantCandidates(
   message: Readonly<Record<string, unknown>>,
   parentMessageId: string,
   live: OpenCodeV2LiveText,
+  toolProfile: OpenCodeToolProfile,
 ): readonly Candidate[] {
   const id = messageId(message);
   const occurredAt = eventTime(message);
@@ -433,7 +441,9 @@ function assistantCandidates(
   // the same-kind parts of the message.
   const ordinals: PartOrdinals = { text: 0, reasoning: 0 };
   for (const [index, value] of message.content.entries()) {
-    result.push(...assistantPartCandidates(value, id, index, occurredAt, { live, ordinals }));
+    result.push(
+      ...assistantPartCandidates(value, id, index, occurredAt, { live, ordinals, toolProfile }),
+    );
   }
   return result;
 }
@@ -487,6 +497,7 @@ interface PartOrdinals {
 }
 
 interface LivePartContext {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly live: OpenCodeV2LiveText;
   readonly ordinals: PartOrdinals;
 }
@@ -533,7 +544,7 @@ function assistantPartCandidates(
     return [reasoningCandidate(messageId, index, shown, occurredAt)];
   }
   if (part?.type !== "tool") return [];
-  const signal = toolState(part, messageId);
+  const signal = toolState(part, messageId, context.toolProfile);
   return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
 }
 
@@ -638,13 +649,14 @@ function messageCandidates(
   message: Readonly<Record<string, unknown>>,
   parentMessageId: string | undefined,
   live: OpenCodeV2LiveText,
+  toolProfile: OpenCodeToolProfile,
 ): readonly Candidate[] {
   assertMessageShape(message);
   const id = messageId(message);
   const occurredAt = eventTime(message);
   if (message.type === "assistant") {
     if (parentMessageId === undefined) throw new Error("opencode-v2-parent-message-missing");
-    return assistantCandidates(message, parentMessageId, live);
+    return assistantCandidates(message, parentMessageId, live, toolProfile);
   }
   if (message.type === "user" && typeof message.text === "string") {
     return [
@@ -675,12 +687,13 @@ function allCandidates(
   messages: readonly Readonly<Record<string, unknown>>[],
   live: OpenCodeV2LiveText,
   known: ReadonlyMap<string, KnownCandidate>,
+  toolProfile: OpenCodeToolProfile,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
   let parentMessageId: string | undefined;
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
-    result.push(...messageCandidates(message, parentMessageId, live));
+    result.push(...messageCandidates(message, parentMessageId, live, toolProfile));
     result.push(...changedNativeRetryCandidates(message, parentMessageId, known));
   }
   return result;
@@ -863,6 +876,8 @@ function conversationCapture(
 export function createOpenCodeV2HistoryProjection(
   activity?: HistoryActivity,
 ): OpenCodeV2HistoryProjection {
+  const toolProfile = activity?.toolProfile ?? "direct";
+  openCodeVisibleToolNames(toolProfile);
   let known: ReadonlyMap<string, KnownCandidate> = new Map();
   let pending: PendingProjection | undefined;
   let pendingStart = -1;
@@ -881,7 +896,7 @@ export function createOpenCodeV2HistoryProjection(
         throw new Error("opencode-v2-checkpoint-invalid");
       }
       if (pending === undefined) {
-        const candidates = allCandidates(sessionId, messages, live, known);
+        const candidates = allCandidates(sessionId, messages, live, known, toolProfile);
         pending = makePending(sessionId, position, known, candidates);
         capture(candidates);
         recordHistoryProjection(activity, pending, live);

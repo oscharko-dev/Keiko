@@ -1219,12 +1219,26 @@ export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, stri
   }));
 }
 
-function sharedV2ToolPluginSource(): string {
+/** Fixed-source external host entry; it never selects or activates a runtime. */
+export function createGeneratedOpenCodeV2HostFactory(): string {
+  return sharedV2ToolPluginSource(true);
+}
+
+function sharedV2ToolPluginSource(host = false): string {
   return [
-    "export default {",
+    ...(host
+      ? [
+          "export default (runtime) => {",
+          "  const { process, crypto, fetch, bindOwner, onParentClosed } = runtime;",
+          "  const plugin = {",
+        ]
+      : ["export default {"]),
     '  id: "keiko.governed-tools",',
     "  async setup(ctx) {",
-    ...v2InvocationIdentitySource(),
+    ...v2InvocationIdentitySource(host),
+    ...(host
+      ? ["    bindOwner(Object.freeze({ close: closeParent, assertOpen: assertInvocationOpen }));"]
+      : []),
     '    await ctx.tool.hook("execute.before", (event) => {',
     '      if (event.tool !== "execute") return;',
     "      const key = directIdentity(event);",
@@ -1233,8 +1247,7 @@ function sharedV2ToolPluginSource(): string {
     "    });",
     '    await ctx.tool.hook("execute.after", (event) => {',
     '      if (event.tool !== "execute") return;',
-    "      const parent = parents.get(directIdentity(event));",
-    "      if (parent) parent.closed = true;",
+    "      closeParent(event);",
     "    });",
     "    await ctx.tool.transform((editor) => {",
     ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) =>
@@ -1245,15 +1258,23 @@ function sharedV2ToolPluginSource(): string {
     "    return () => { disposed = true; parents.clear(); };",
     "  },",
     "};",
+    ...(host ? ["  return plugin;", "};"] : []),
   ].join("\n");
 }
 
-function v2InvocationIdentitySource(): readonly string[] {
+function v2InvocationIdentitySource(host: boolean): readonly string[] {
   return [
     `    const MAX_IDENTITIES = ${String(MAX_RECENT_IDENTITIES)};`,
     "    const parents = new Map();",
     "    let disposed = false;",
     "    const directIdentity = (context) => `${context.sessionID}:${context.id}`;",
+    "    function closeParent(context) {",
+    "      const parent = parents.get(directIdentity(context));",
+    "      if (!parent || parent.closed) return false;",
+    "      parent.closed = true;",
+    ...(host ? ["      onParentClosed?.(context);"] : []),
+    "      return true;",
+    "    }",
     "    function assertInvocationOpen(context) {",
     "      const parent = parents.get(directIdentity(context));",
     '      if (disposed || parent?.closed) throw new Error("keiko-tool-unavailable");',

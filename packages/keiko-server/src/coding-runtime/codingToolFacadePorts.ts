@@ -191,6 +191,8 @@ export interface CodingToolFacadeOptions {
 }
 
 export interface CodingToolFacadeInput {
+  /** Server-owned observation at the actual authorized delegate boundary; never decoded from IPC. */
+  readonly onDelegateStarted?: (() => void) | undefined;
   readonly body: string | Buffer;
   /** Opaque authority material; only the authoritative admission port may inspect its value. */
   readonly capability?: string | undefined;

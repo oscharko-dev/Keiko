@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "10942d63ea405477232fdbf5d5c4092f946d0e76e5ed6c3909b63f9ddf7b2aa7",
+    "catalogDigest": "e1d468b8d0f6a07cd21ee14f841fd6ce69400608e505fc2d73e4e1e59a314a15",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6076,9 +6076,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:64",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:68",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:802"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:953"
         ]
       },
       {
@@ -7059,8 +7059,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.history-projection.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:32",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:829"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:36",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:842"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -7217,8 +7217,8 @@
         "failureClasses": ["coding-safe-activity-projection"],
         "proofIds": ["coding-runtime.native-question.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:72",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:802"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:76",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeV2History.ts:815"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9554,9 +9554,9 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.sidecar-session.bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:110",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:117",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:989"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1012"
         ]
       },
       {
@@ -89004,7 +89004,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:67",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:71",
       "package": "keiko-server"
     },
     {
@@ -89105,7 +89105,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1401",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1424",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -89118,14 +89118,14 @@
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1271",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1294",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.history-projection",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:35",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:39",
       "package": "keiko-server"
     },
     {
@@ -89150,20 +89150,20 @@
     {
       "op": "coding-runtime.native-question.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:75",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2History.ts:79",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:481",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:503",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:749",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:771",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -89382,7 +89382,7 @@
     {
       "op": "coding-runtime.sidecar-session.bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:113",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:120",
       "package": "keiko-server"
     },
     {
@@ -89440,21 +89440,21 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1938",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1977",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1995",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2040",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2053",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2105",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

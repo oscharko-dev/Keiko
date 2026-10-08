@@ -653,7 +653,7 @@ describe("CodingToolFacade", () => {
 
   it("rechecks revocation immediately before dispatch", async () => {
     const ports = facade();
-    ports.authority.admit = vi.fn(() => ({
+    ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
       ok: true as const,
       mutationGuard: { check: (): false => false },
     }));
@@ -1855,6 +1855,23 @@ describe("CodingToolFacade", () => {
       return { subject: createCodingToolFacade(ports, { catalogBridge: bridge }), ports, log };
     }
 
+    it("observes the actual canonical catalog delegate after admission without exposing the callback", async () => {
+      const { subject, ports, log } = catalogBoundFacade();
+      const onDelegateStarted = vi.fn();
+      ports.delegate.execute = vi.fn(() => {
+        expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+        return Promise.resolve({ outcome: "completed" });
+      });
+      const result = await subject.execute({
+        body: requestBody({ action: "git", operation: "status" }),
+        capability,
+        onDelegateStarted,
+      });
+      expect(ports.delegate.execute).toHaveBeenCalledOnce();
+      expect(log.events.some((event) => event.op === "tool-catalog.invocation-settled")).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("onDelegateStarted");
+    });
+
     it("carries the structured failure payload through a red run instead of a bare dispatch fault", async () => {
       const { subject, ports, log } = catalogBoundFacade();
       const verificationFailure = {
@@ -2154,7 +2171,7 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
     it("reports it for the staged edit production answers, whose binding it needs", async () => {
       const outcomes: CodingToolEditOutcome[] = [];
       const ports = facade();
-      ports.authority.admit = vi.fn(() => ({
+      ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
         ok: true as const,
         mutationGuard: { check: (): true => true },
         binding: {
@@ -2251,4 +2268,106 @@ describe("CodingToolFacade edit outcome observation (F5, #3873)", () => {
       ]);
     });
   });
+});
+
+describe("server-owned admitted delegate observation", () => {
+  it("observes a plain delegate only after genuine authority and guard admission", async () => {
+    const ports = facade();
+    const onDelegateStarted = vi.fn();
+    ports.delegate.execute = vi.fn(() => {
+      expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+      return Promise.resolve({ outcome: "completed" });
+    });
+    const input = {
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+      onDelegateStarted,
+    };
+    await expect(createCodingToolFacade(ports).execute(input)).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+    onDelegateStarted.mockClear();
+    await createCodingToolFacade(facade(false)).execute(input);
+    expect(onDelegateStarted).not.toHaveBeenCalled();
+  });
+});
+
+it("never emits an admitted delegate observation for revoked guards, cancellation or a wire field", async () => {
+  const onDelegateStarted = vi.fn();
+  const ports = facade();
+  ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+    ok: true,
+    mutationGuard: { check: () => false },
+  }));
+  const input = {
+    body: requestBody({ action: "command", commandId: "test" }),
+    capability,
+    onDelegateStarted,
+  };
+  await createCodingToolFacade(ports).execute(input);
+  await createCodingToolFacade(facade()).execute({ ...input, signal: AbortSignal.abort() });
+  await createCodingToolFacade(facade()).execute({
+    ...input,
+    body: requestBody({ action: "command", commandId: "test", onDelegateStarted: true }),
+  });
+  expect(onDelegateStarted).not.toHaveBeenCalled();
+  expect(ports.delegate.execute).not.toHaveBeenCalled();
+});
+
+it("observes a claimed edit once while real in-flight duplicates and replay never execute again", async () => {
+  const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+  const ports = facade();
+  ports.authority.admit = vi.fn((): ReturnType<CodingToolAuthorityPort["admit"]> => ({
+    ok: true,
+    binding: {
+      runId: "run-1",
+      workspaceId: "workspace",
+      envelopeDigest: "a".repeat(64),
+      workspaceRootDigest: "b".repeat(64),
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    },
+    mutationGuard: { check: () => true },
+  }));
+  let resolve!: (result: unknown) => void;
+  ports.delegate.execute = vi.fn(
+    () =>
+      new Promise((accept) => {
+        resolve = accept;
+      }),
+  );
+  const onDelegateStarted = vi.fn();
+  const subject = createCodingToolFacade(ports, {
+    invocationRegistry: registry,
+    requireInvocationRegistryForEdits: true,
+  });
+  const input = { body: requestBody({ action: "edit", changeset }), capability, onDelegateStarted };
+  try {
+    const running = subject.execute(input);
+    await Promise.resolve();
+    expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+    expect((await subject.execute(input)).status).toBe("denied");
+    resolve({ outcome: "completed" });
+    expect((await running).status).toBe("completed");
+    expect((await subject.execute(input)).status).toBe("denied");
+    expect(onDelegateStarted).toHaveBeenCalledTimes(1);
+    expect(ports.delegate.execute).toHaveBeenCalledTimes(1);
+  } finally {
+    registry.dispose();
+  }
+});
+
+it("keeps an observer technical failure outside the delegate catch and never executes", async () => {
+  const ports = facade();
+  const failure = new TypeError("private-observer-failure");
+  await expect(
+    createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "command", commandId: "test" }),
+      capability,
+      onDelegateStarted: (): never => {
+        throw failure;
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect(ports.delegate.execute).not.toHaveBeenCalled();
 });

@@ -52,6 +52,8 @@ import {
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import { createCodingToolFacade } from "./codingToolFacade.js";
+import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
@@ -210,13 +212,19 @@ interface OpenCodeRuntimeCompositionModule {
       ) => Promise<OpenCodeGovernedSinkReceipt>;
     };
     readonly safeActivity?: {
-      readonly arm: () => void;
+      readonly arm: (sessionId?: string, profile?: "direct" | "code-mode") => void;
+      readonly beginTool?: (input: {
+        readonly actionId: string;
+        readonly tool: string;
+        readonly occurredAt: string;
+      }) => void;
       readonly clear: () => void;
       readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
       readonly captureMessages?: (messages: readonly CodingHistoryMessage[]) => boolean;
       readonly recordDrops: (count: number) => void;
       readonly settleTool: (input: {
         readonly actionId: string;
+        readonly delegateStarted?: true;
         readonly state: "succeeded" | "failed" | "denied" | "cancelled";
         readonly occurredAt: string;
       }) => void;
@@ -3643,4 +3651,91 @@ describe("production OpenCode pending-spawn guard wiring", () => {
     expect(spawned).not.toHaveBeenCalled();
     await bridge.stop();
   });
+});
+
+it("keeps real delegate admission private for duplicate and replay bridge responses", async () => {
+  const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+  let resolve!: (value: unknown) => void;
+  const delegate = vi.fn(
+    () =>
+      new Promise((accept) => {
+        resolve = accept;
+      }),
+  );
+  const facade = createCodingToolFacade(
+    {
+      authority: {
+        admit: (): ReturnType<
+          import("./codingToolFacadePorts.js").CodingToolAuthorityPort["admit"]
+        > => ({
+          ok: true,
+          binding: {
+            runId: "run-1",
+            workspaceId: "workspace",
+            envelopeDigest: "a".repeat(64),
+            workspaceRootDigest: "b".repeat(64),
+            expiresAt: "2030-01-01T00:00:00.000Z",
+          },
+          mutationGuard: { check: () => true },
+        }),
+      },
+      delegate: { execute: delegate },
+    },
+    { invocationRegistry: registry, requireInvocationRegistryForEdits: true },
+  );
+  const beginTool = vi.fn();
+  const settleTool = vi.fn();
+  const fixture = await startBridgeFixture(
+    facade,
+    { requestDeadlineMs: 1_000, maxInFlight: 2 },
+    {
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: () => true,
+        recordDrops: vi.fn(),
+        beginTool,
+        settleTool,
+      },
+    },
+  );
+  const request = {
+    method: "POST" as const,
+    headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+    body: JSON.stringify({
+      action: "edit",
+      actionId: "ses_tool:call_edit",
+      idempotencyKey: "same-edit",
+      changeset: {
+        patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        files: [{ file: "a.ts", expectedContentHash: "a".repeat(64) }],
+      },
+    }),
+  };
+  try {
+    const running = fixture.runtime.toolBridge.handle(request);
+    await vi.waitFor(() => {
+      expect(beginTool).toHaveBeenCalledTimes(1);
+    });
+    const duplicate = await fixture.runtime.toolBridge.handle(request);
+    expect(settleTool.mock.calls[0]?.[0]).not.toHaveProperty("delegateStarted");
+    resolve({ outcome: "completed" });
+    const completed = await running;
+    expect(settleTool.mock.calls[1]?.[0]).toMatchObject({
+      delegateStarted: true,
+      state: "succeeded",
+    });
+    const replay = await fixture.runtime.toolBridge.handle(request);
+    expect(settleTool.mock.calls[2]?.[0]).not.toHaveProperty("delegateStarted");
+    expect(beginTool).toHaveBeenCalledTimes(1);
+    expect(delegate).toHaveBeenCalledTimes(1);
+    for (const response of [duplicate, completed, replay]) {
+      expect(response.body).not.toContain("delegateStarted");
+      expect(response.body).not.toContain("onDelegateStarted");
+    }
+  } finally {
+    resolve({ outcome: "completed" });
+    await fixture.stop();
+    registry.dispose();
+  }
 });

@@ -208,6 +208,7 @@ async function executeCatalogRequest(
   const delegateState = { threw: false };
   try {
     const result = await bridge.execute(request, input, async (signal, mutationGuard) => {
+      input.onDelegateStarted?.();
       try {
         return project(
           request,
@@ -373,6 +374,7 @@ async function executePlainAction(
   request: CodingToolActionRequest,
   admission: Extract<CodingToolAdmission, { readonly ok: true }>,
 ): Promise<CodingToolResult> {
+  input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, input.signal, admission.mutationGuard);
   try {
@@ -433,6 +435,7 @@ async function executeClaimedEdit(
   const signal =
     input.signal === undefined ? claimed.signal : AbortSignal.any([input.signal, claimed.signal]);
   if (isAborted(signal)) return empty("cancelled");
+  input.onDelegateStarted?.();
   const runDelegate = (): Promise<unknown> =>
     ports.delegate.execute(request, signal, admission.mutationGuard);
   try {

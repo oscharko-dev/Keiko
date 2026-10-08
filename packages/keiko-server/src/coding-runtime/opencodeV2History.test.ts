@@ -1210,3 +1210,38 @@ describe("OpenCode V2 native retry history", () => {
     );
   });
 });
+
+it("preserves only the original native execute parent in the captured inactive profile", () => {
+  const activity = {
+    runId: "code-mode-observer",
+    activityLog: undefined,
+    toolProfile: "code-mode" as "direct" | "code-mode",
+  };
+  const projection = createOpenCodeV2HistoryProjection(activity);
+  activity.toolProfile = "direct";
+  const events = projection.project(
+    "ses_native_parent",
+    toolHistory("execute", "running"),
+    undefined,
+  );
+  const tools = events
+    .map((event) => projection.takeSignal(event))
+    .filter((signal) => signal?.kind === "tool");
+  expect(tools).toEqual([
+    {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_question",
+      tool: "execute",
+      state: "running",
+      occurredAt: "1970-01-01T00:00:00.002Z",
+    },
+  ]);
+  expect(() =>
+    createOpenCodeV2HistoryProjection().project(
+      "ses_native_parent",
+      toolHistory("execute", "running"),
+      undefined,
+    ),
+  ).toThrow("opencode-v2-tool-invalid");
+});

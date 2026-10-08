@@ -65,6 +65,30 @@ bridge and facade bodies with a controlled admission port; it was not a live aut
 test. The existing capacity reservation remained tied to the real promise. Cancellation signalling
 therefore does not yet prove effect drainage, and this prerequisite remains open.
 
+The next combined inactive increment fixes real inner-call observation and adds the fixed external
+host factory. Root independently passed 607 tests in thirteen affected suites, strict eleven-file
+source/test TypeScript, fifteen-file lint/format and a fresh forced server graph. The actual pinned
+native snapshot plus generated plugin, real facade and bridge now join the two admitted children
+to succeeded/failed terminals. Its denied request executes nothing; the original three completed
+progress rows still contain no child IDs, and no native child history is manufactured. Owning
+tests cover a denied duplicate settling before its admitted peer and replay after terminal state.
+The controlled projection observer is not a served-browser qualification.
+
+Ten fixed-transport/bootstrap controls also passed against the independently packed Node 24.18.0
+and OpenCode 2.0.10 modules. Eighteen exact original proof inputs and the production guard source
+were independently checked. Six actual original-module failures were reproduced and then passed;
+native output, progress and definition digests match between RED and GREEN. Original activation
+readiness, authenticated HTTP, fixed generated modules, SQLite and scope lifetime are exercised
+without a task or outbound request. The first root GREEN invocation lacked a RED comparison
+receipt and was refused; the subsequent complete RED/GREEN sequence is the qualified result.
+
+The V1 producer is byte-identical. Default V2 generated source grows 127 bytes to share its
+idempotent parent-close helper, and native context bytes are unchanged. These are inactive factory
+and settlement prerequisites. They do not qualify production host selection, current native Read
+or instruction authority, effect drainage, directory/media/large-file/mutation semantics or the
+complete native capability matrix. The earlier four failure-path and catalog-performance findings
+remain open; no global green claim follows from these focused runs.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

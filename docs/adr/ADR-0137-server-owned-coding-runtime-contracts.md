@@ -437,6 +437,23 @@ Unknown profiles fail closed and incoming tool fields cannot select a profile. T
 profile and Chat repository search remain unchanged. Forwarding this captured selection into the
 native runtime composition and enabling an original service host remain separate prerequisites.
 
+Native composition now captures that same profile for history and safe-activity observation.
+Only the explicit Code Mode profile recognizes the original `execute` parent. Each inner action
+joins that parent's actual session/message/call identity through the existing bounded correlation
+maps, with a private admission callback set only when that request reaches its authorized delegate.
+Denied duplicates and replays cannot overwrite the executed child's running or terminal facts.
+This projects real Keiko effect settlement; it does not invent persisted native child history.
+
+The inactive fixed external host factory uses original ServerFetch, RequestExecutor and Tool
+snapshot algorithms through their supported layer decorators. Provider and governed-tool POST
+transports capture separate immutable URL/authentication purposes; ambient model fetch is denied.
+The pinned Effect producer's bounded paired trace headers are preserved. The same generated parent
+owner closes idempotently on native success, typed failure, defect or interruption, including when
+no `execute.after` hook occurs. Original planning, output, progress, native instructions and SQLite
+ownership remain intact. Generated modules are fixed builder assets, not run-packet source paths.
+This factory still grants no production launch or native effect permission. Current authority,
+governed native IO, actual admitted-work drainage and a freshly attested host launch remain required.
+
 The first macOS filesystem foundation composes read-only accepted-workspace access, writable
 private per-run native state and read-only immutable runtime/OS support with the existing exact
 gateway and runtime/attested-Git executable policy. Both direct and supervisor-prepared launches

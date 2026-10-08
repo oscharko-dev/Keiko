@@ -2,7 +2,8 @@ import { Script } from "node:vm";
 import { webcrypto } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
-import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
+import * as runtimeAdapter from "./opencodeRuntimeAdapter.js";
+const { createGeneratedOpenCodeV2Plugins } = runtimeAdapter;
 
 interface NativeContext {
   readonly sessionID: string;
@@ -320,4 +321,84 @@ it("a parent closed while approval waits never sends the later authorized effect
   await expect(pending).rejects.toThrow("keiko-tool-unavailable");
   expect(fixture.bodies).toHaveLength(1);
   expect(fixture.bodies[0]?.action).toBe("permission-request");
+});
+
+it("binds an inactive fixed host factory to the same parent owner and lexical facade transport", async () => {
+  const create = Reflect.get(runtimeAdapter, "createGeneratedOpenCodeV2HostFactory") as
+    (() => string) | undefined;
+  expect(create, "the default plugin cannot bind a private native host capability").toBeTypeOf(
+    "function",
+  );
+  if (create === undefined) throw new Error("missing-fixed-host-factory");
+  const tools = new Map<string, GeneratedTool>();
+  const hooks = new Map<string, Hook>();
+  const closed: string[] = [];
+  let owner: { readonly close: (context: NativeContext) => boolean } | undefined;
+  const factory = new Script(
+    `${create().replace("export default", "const generated =")}\ngenerated;`,
+  ).runInNewContext({
+    AbortController,
+    AbortSignal,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    setTimeout,
+    clearTimeout,
+    fetch: (): never => {
+      throw new Error("ambient-fetch-denied");
+    },
+    process: new Proxy(
+      {},
+      {
+        get: (): never => {
+          throw new Error("ambient-process-denied");
+        },
+      },
+    ),
+  }) as (runtime: unknown) => Plugin;
+  const plugin = factory({
+    process: Object.freeze({
+      env: Object.freeze({
+        KEIKO_CODING_MODE: "autonomous-delivery",
+        KEIKO_CODING_RUN_ID: "run-host-factory",
+        KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/fixture",
+        KEIKO_TOOL_FACADE_CAPABILITY: "fixture",
+      }),
+    }),
+    crypto: webcrypto,
+    fetch: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify(RESPONSE))),
+    bindOwner: (value: typeof owner): void => {
+      owner = value;
+    },
+    onParentClosed: (context: NativeContext): void => {
+      closed.push(context.id);
+    },
+  });
+  await plugin.setup({
+    tool: {
+      hook: (name, callback): Promise<unknown> => {
+        hooks.set(name, callback);
+        return Promise.resolve();
+      },
+      transform: (callback): Promise<unknown> => {
+        callback({
+          add: (value): void => {
+            tools.set(value.name, value);
+          },
+        });
+        return Promise.resolve();
+      },
+    },
+  });
+  expect([...tools.keys()]).toEqual(opencodeRegistrationSet().entries.map((value) => value.alias));
+  const before = hooks.get("execute.before");
+  if (before === undefined || owner === undefined) throw new Error("host-owner-unbound");
+  await before({ ...CONTEXT, tool: "execute" });
+  const selected = tools.get("keiko_git_status");
+  if (selected === undefined) throw new Error("host-tool-missing");
+  await expect(selected.execute({}, CONTEXT)).resolves.toMatchObject({ output: RESPONSE });
+  expect(owner.close(CONTEXT)).toBe(true);
+  expect(owner.close(CONTEXT)).toBe(false);
+  await expect(selected.execute({}, CONTEXT)).rejects.toThrow("keiko-tool-invalid");
+  expect(closed).toEqual([CONTEXT.id]);
 });
