@@ -1149,3 +1149,31 @@ catalog performance evidence; that final-gate artifact is still pending and is n
 claim. An initial standalone diagnostics import used stale compiled output; the fresh graph and
 rerun supersede that setup result. Positive serving-readiness expiry, stale LiteLLM key/team grants
 and optional cached health remain separate acceptance work. The customer-version source audit is not a live customer-gateway test.
+
+### Original initialization over the existing tool route (ROOT qualification on 2ba69)
+
+ROOT independently matched the frozen transport's 3,430 source/input/evidence references and
+merged only its eight incremental owners with the published original-Read IO changes. The single
+append-only test conflict retains both test families. The unchanged actual bridge fails the new
+initial-scope test because it returns no admitted scope. The integrated path uses the existing
+authenticated tool route, accepted STARTING callback, one physical gate and canonical KSS3 codec.
+
+The ROOT owning run passes 266 tests across the three affected suites, eight-owner strict types,
+zero-warning lint, fourteen-file format, the fresh affected graph, 97 catalog controls and twelve
+error-observability sites. The current inventory resolves 539 proofs and all thirty scenarios.
+The ROOT actual pinned original graph compares forty ordered ancestor instructions in the same
+controlled workspace through real HTTP and current compiled producers. Its output digest equals
+the original graph; 87 actual helper children peak at eight and all close. Initial acquisition
+consumes zero model tool calls; a subsequent actual Read consumes its one parent allowance. Binary,
+zero/empty ranges, directories, negative timestamps and original technical-unavailable behavior
+retain their meaning. A separately held real helper makes first disposal refuse and preserve state;
+the same gate stays busy until actual reap, then a fresh disposal removes state. No Effect or socket
+closure is accepted as physical drain.
+
+The first local tests/proofs loaded the preceding compiled registry before the new operation was
+generated; two registered-line controls failed and private diagnostics recorded registration
+mismatch. Those intermediate logs remain separate. Generation followed by the fresh affected graph
+and repeated controls qualifies the final current registry. The synthetic supplementary host-byte
+fixture and controlled watcher stream prove this private transport only. Actual host ready lifecycle,
+Read-parent HTTP integration, trusted advertisement/history and full native Files/configuration
+functionality remain acceptance work; this change activates no production host or model tools.

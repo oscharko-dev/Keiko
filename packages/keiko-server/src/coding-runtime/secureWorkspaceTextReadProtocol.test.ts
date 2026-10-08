@@ -4,6 +4,8 @@ import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   SECURE_WORKSPACE_NATIVE_MAX_BYTES,
   encodeSecureWorkspaceNativeRequest,
+  encodeSecureWorkspaceNativeResponse,
+  encodeSecureWorkspaceNativeDirectory,
   decodeSecureWorkspaceNativeResponse,
   decodeSecureWorkspaceNativeDirectory,
   encodeSecureWorkspaceSnapshotRequest,
@@ -397,5 +399,94 @@ describe("separately pinned private native IO protocol", () => {
     "01000000010800000061",
   ])("refuses malformed directory entries %s without silent omission", (hex) => {
     expect(() => decodeSecureWorkspaceNativeDirectory(Buffer.from(hex, "hex"))).toThrow();
+  });
+});
+
+it("encodes actual native metadata and binary bytes through the canonical KSS3 producer", async () => {
+  const protocol = await import("./secureWorkspaceTextReadProtocol.js");
+  const encode = (
+    protocol as unknown as {
+      encodeSecureWorkspaceNativeResponse?: (value: {
+        status: "ok";
+        info: { type: "file"; size: number; mtimeMs: number };
+        bytes: Uint8Array;
+      }) => Uint8Array;
+    }
+  ).encodeSecureWorkspaceNativeResponse;
+  expect(encode).toBeTypeOf("function");
+  if (encode === undefined) throw new TypeError("Missing canonical native response encoder");
+  const bytes = new Uint8Array([0, 255, 137, 80, 78, 71]);
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -1000 };
+  const decoded = decodeSecureWorkspaceNativeResponse(encode({ status: "ok", bytes, info }));
+  expect(decoded.status).toBe("ok");
+  if (decoded.status !== "ok") throw new TypeError("Expected native response");
+  expect(decoded.info).toEqual(info);
+  expect(Array.from(decoded.bytes)).toEqual(Array.from(bytes));
+});
+
+describe("native same-codec response encoding", () => {
+  it("preserves exact directory order, Unicode, newlines and entry types", () => {
+    const entries = [
+      { name: "é\n.ts", type: "file" as const },
+      { name: "nested", type: "directory" as const },
+      { name: "link", type: "symlink" as const },
+    ];
+    expect(
+      decodeSecureWorkspaceNativeDirectory(encodeSecureWorkspaceNativeDirectory(entries)),
+    ).toEqual(entries);
+  });
+  it.each(["", ".", "..", "child/name", "nul\0", "\ud800"])(
+    "refuses an unrepresentable directory name %j",
+    (name) => {
+      expect(() => encodeSecureWorkspaceNativeDirectory([{ name, type: "file" }])).toThrow();
+    },
+  );
+  it("refuses duplicate names without reporting a partial listing", () => {
+    expect(() =>
+      encodeSecureWorkspaceNativeDirectory([
+        { name: "file", type: "file" },
+        { name: "file", type: "directory" },
+      ]),
+    ).toThrow();
+  });
+  it("preserves whole-file empty bytes and larger-file range metadata", () => {
+    for (const bytes of [Buffer.alloc(0), Buffer.alloc(1_048_577, 255)]) {
+      const info = { type: "file" as const, size: 100_000_000, mtimeMs: -1000 };
+      const decoded = decodeSecureWorkspaceNativeResponse(
+        encodeSecureWorkspaceNativeResponse({ status: "ok", info, bytes }),
+      );
+      expect(decoded).toEqual({ status: "ok", info, bytes });
+    }
+  });
+  it("preserves wrong-kind metadata and exact helper closed failures", () => {
+    const info = { type: "directory" as const, size: 0, mtimeMs: -1 };
+    expect(
+      decodeSecureWorkspaceNativeResponse(
+        encodeSecureWorkspaceNativeResponse({ status: "wrong-kind", info }),
+      ),
+    ).toEqual({ status: "wrong-kind", info });
+    expect(
+      decodeSecureWorkspaceNativeResponse(
+        encodeSecureWorkspaceNativeResponse({ status: "io-failure" }),
+      ),
+    ).toEqual({ status: "io-failure" });
+  });
+  it.each([NaN, Infinity, -Infinity])("refuses non-finite timestamps (%j)", (mtimeMs) => {
+    expect(() =>
+      encodeSecureWorkspaceNativeResponse({
+        status: "ok",
+        info: { type: "file", size: 0, mtimeMs },
+        bytes: Buffer.alloc(0),
+      }),
+    ).toThrow();
+  });
+  it("refuses more than the original 64MiB byte ceiling", () => {
+    expect(() =>
+      encodeSecureWorkspaceNativeResponse({
+        status: "ok",
+        info: { type: "file", size: SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1, mtimeMs: 0 },
+        bytes: Buffer.alloc(SECURE_WORKSPACE_NATIVE_MAX_BYTES + 1),
+      }),
+    ).toThrow();
   });
 });

@@ -26,7 +26,10 @@ import { CODING_TOOL_MAX_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
-import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import { errorBody, type RouteContext, type RouteResult, type HandlerOutcome } from "./routes.js";
+import { STREAMING } from "./route-outcome.js";
+import { SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES } from "./coding-runtime/secureWorkspaceTextReadProtocol.js";
+import { emitServerDiagnostic, contentFreeErrorClass } from "./diagnostics-log.js";
 
 // Closed vocabulary (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // warn line naming WHY, never a raw message. A status the bridge can return that is not in this
@@ -37,6 +40,8 @@ import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 // result, which the plugin returns to the model in place of the call, so the run goes on without it
 // (owner decision 2026-09-26, ADR-0124 D6); a cancelled or unavailable ask stays a bare 403.
 type CodingSidecarToolFacadeRejectionReason =
+  | "native-initialization-refused"
+  | "native-response-failed"
   | "origin-not-allowed"
   | "capability-invalid"
   | "body-too-large"
@@ -58,6 +63,8 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
       dataClass: "closed-enum",
       required: true,
       values: [
+        "native-initialization-refused",
+        "native-response-failed",
         "origin-not-allowed",
         "capability-invalid",
         "body-too-large",
@@ -88,6 +95,8 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
 const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   Record<CodingSidecarToolFacadeRejectionReason, ActivityLogErrorKind>
 > = {
+  "native-initialization-refused": "authority-denied",
+  "native-response-failed": "unavailable",
   "origin-not-allowed": "authority-denied",
   "capability-invalid": "permission-denied",
   "body-too-large": "invalid-request",
@@ -330,7 +339,7 @@ function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResp
 export async function handleCodingSidecarToolFacade(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
+): Promise<HandlerOutcome> {
   if (hasBrowserOrigin(ctx)) {
     logToolFacadeRejection(ctx, 403, "origin-not-allowed");
     return {
@@ -355,8 +364,96 @@ export async function handleCodingSidecarToolFacade(
       body: JSON.stringify(parsed),
       signal: disconnect.signal,
     });
+    if (result.nativeBytes !== undefined) return await deliverNativeToolBytes(ctx, result);
+    if (result.nativeResult === true) {
+      if (result.status !== 200)
+        logToolFacadeRejection(ctx, result.status, "native-initialization-refused");
+      return { status: result.status, body: JSON.parse(result.body) as unknown };
+    }
     return toolFacadeRouteResult(ctx, result);
   } finally {
     disconnect.detach();
   }
+}
+
+async function deliverNativeToolBytes(
+  ctx: RouteContext,
+  result: OpenCodeToolBridgeResponse,
+): Promise<HandlerOutcome> {
+  const bytes = result.nativeBytes;
+  if (bytes === undefined) throw new TypeError("native-response-missing");
+  try {
+    if (result.status !== 200 || bytes.byteLength > SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES)
+      throw new TypeError("native-response-invalid");
+    ctx.res.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(bytes.byteLength),
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    await writeNativeBytes(ctx, bytes);
+  } catch (error) {
+    reportNativeDeliveryFailure(ctx, error);
+    ctx.res.destroy();
+  } finally {
+    bytes.fill(0);
+  }
+  return STREAMING;
+}
+
+function writeNativeBytes(ctx: RouteContext, bytes: Uint8Array): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let offset = 0;
+    const cleanup = (): void => {
+      ctx.res.removeListener("drain", write);
+      ctx.res.removeListener("finish", finished);
+      ctx.res.removeListener("close", closed);
+      ctx.res.removeListener("error", reportNativeWriteFailure);
+    };
+    const finished = (): void => {
+      cleanup();
+      resolve();
+    };
+    const reportNativeWriteFailure = (error: unknown): void => {
+      cleanup();
+      reject(error instanceof Error ? error : new TypeError("native-response-failed"));
+    };
+    const closed = (): void => {
+      if (ctx.res.writableFinished) finished();
+      else reportNativeWriteFailure(new Error("native-response-disconnected"));
+    };
+    const write = (): void => {
+      try {
+        while (offset < bytes.byteLength) {
+          const end = Math.min(offset + 65536, bytes.byteLength);
+          const part = bytes.subarray(offset, end);
+          offset = end;
+          if (!ctx.res.write(part)) {
+            ctx.res.once("drain", write);
+            return;
+          }
+        }
+        ctx.res.end();
+      } catch (error) {
+        reportNativeWriteFailure(error);
+      }
+    };
+    ctx.res.once("finish", finished);
+    ctx.res.once("close", closed);
+    ctx.res.once("error", reportNativeWriteFailure);
+    if (ctx.res.destroyed) closed();
+    else write();
+  });
+}
+
+function reportNativeDeliveryFailure(ctx: RouteContext, error: unknown): void {
+  logToolFacadeRejection(ctx, 502, "native-response-failed");
+  emitServerDiagnostic(undefined, {
+    correlationId: correlationIdOrUnknown(ctx.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "coding-sidecar-tool-facade.native-response",
+    errorClass: contentFreeErrorClass(error),
+    message: "server-operation-failed",
+  });
 }

@@ -265,6 +265,7 @@ interface OpenCodeRuntimeCompositionModule {
     // the SAME single attested loopback origin the model gateway rides, never a second listener.
     readonly toolFacadeOrigin: string;
     readonly toolFacade: CodingToolFacade;
+    readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
     readonly governedEventSink: {
       readonly execute: (
         identityKey: string,
@@ -465,6 +466,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly workspaceRoot?: string;
   readonly gatewayUrl?: string;
   readonly signal?: AbortSignal;
@@ -879,6 +881,7 @@ async function startBridgeFixture(
     toolBridge,
     toolFacadeOrigin: TOOL_FACADE_ORIGIN,
     toolFacade: fixtureToolFacade(facade),
+    ...optionalRootAccess(control),
     governedEventSink: {
       execute: (_identityKey, event): Promise<"applied"> => {
         control?.governedEvents?.push(event);
@@ -5566,13 +5569,16 @@ it("captures the host profile once and keeps it aligned with materialized config
   expect(config.includes('{"action":"execute","resource":"*","effect":"allow"}')).toBe(true);
 });
 
-function initialBridgeAuthority(): ReturnType<typeof catalogRuntimeFixture> {
+function initialBridgeAuthority(): ReturnType<typeof catalogRuntimeFixture> & {
+  readonly authorityRegistry: EditorAgentAuthorityRegistry;
+} {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(RUNTIME_NOW));
   const base = catalogRuntimeFixture("autonomous-delivery");
   dirs.push(dirname(dirname(base.root)));
+  const authorityRegistry = new EditorAgentAuthorityRegistry();
   const authority = new CodingRuntimeAuthorityService(
-    new EditorAgentAuthorityRegistry(),
+    authorityRegistry,
     () => FIXTURE_RUN_ID,
     () => "nonce-initial-bridge",
     undefined,
@@ -5594,11 +5600,11 @@ function initialBridgeAuthority(): ReturnType<typeof catalogRuntimeFixture> {
   );
   const minted = authority.mintStart(intent, base.trusted, proof, RUNTIME_NOW);
   if (!minted.ok) throw new TypeError("Expected accepted initial bridge mint");
-  return { ...base, authority, minted };
+  return { ...base, authority, minted, authorityRegistry };
 }
 
 function initialBridgeProducer(effect?: SecureWorkspaceNativeFileIO["readBytes"]): {
-  readonly runtime: ReturnType<typeof catalogRuntimeFixture>;
+  readonly runtime: ReturnType<typeof initialBridgeAuthority>;
   readonly facade: CodingToolFacade;
   readonly read: ReturnType<typeof vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>>;
   readonly bytes: Uint8Array;
@@ -6054,3 +6060,397 @@ describe.skipIf(process.platform !== "darwin")(
     );
   },
 );
+
+function initialTransportPacket(
+  phase: string,
+  extra: Readonly<Record<string, unknown>> = {},
+): string {
+  return JSON.stringify({
+    action: "native-initialization",
+    phase,
+    runId: FIXTURE_RUN_ID,
+    ...extra,
+  });
+}
+
+async function initialTransportFixture(
+  effect?: SecureWorkspaceNativeFileIO["readBytes"],
+  requestDeadlineMs = 5000,
+): Promise<{
+  producer: ReturnType<typeof initialBridgeProducer>;
+  log: ReturnType<typeof createBufferedServerLogSink>;
+  setRoot: (root: string) => void;
+  fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+  call: (
+    phase: string,
+    extra?: Readonly<Record<string, unknown>>,
+  ) => ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>;
+}> {
+  const producer = initialBridgeProducer(effect);
+  const log = createBufferedServerLogSink();
+  let currentRoot = producer.runtime.root;
+  const fixture = await startBridgeFixture(
+    producer.facade,
+    { maxInFlight: 1, requestDeadlineMs },
+    {
+      ...producer.control,
+      activityLog: log,
+      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: currentRoot,
+        repositoryRoot: producer.runtime.root,
+        fs: nodeWorkspaceFs,
+      }),
+    },
+  );
+  await fixture.stop();
+  const prepared = await fixture.runtime.prepareServiceHost(
+    fixture.preparation,
+    await preparationReceipt(),
+  );
+  expect(prepared.ok).toBe(true);
+  return {
+    producer,
+    log,
+    setRoot: (root): void => {
+      currentRoot = root;
+    },
+    fixture,
+    call: (phase, extra) =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({
+          authorization: `Bearer ${producer.runtime.minted.toolFacadeCapability}`,
+        }),
+        body: initialTransportPacket(phase, extra),
+      }),
+  };
+}
+
+it("binds same-route initial bytes to the actual accepted callback without charging a model tool", async () => {
+  const { producer, fixture, call } = await initialTransportFixture();
+  try {
+    const begin = await call("begin");
+    expect(begin.status).toBe(200);
+    const value = JSON.parse(begin.body) as { scopeId: string };
+    expect(value.scopeId).toBeTypeOf("string");
+    const result = await call("readBytes", { scopeId: value.scopeId, relativePath: "AGENTS.md" });
+    expect(result.status).toBe(200);
+    expect((result as unknown as { nativeBytes?: Uint8Array }).nativeBytes).toBeInstanceOf(
+      Uint8Array,
+    );
+    expect(producer.read).toHaveBeenCalledOnce();
+    expect(producer.runtime.authority.state().state).toBe("starting");
+    expect(await call("end", { scopeId: value.scopeId })).toMatchObject({ status: 200 });
+  } finally {
+    await fixture.stop();
+    producer.registry.dispose();
+  }
+});
+
+function optionalRootAccess(control: StartBridgeControl | undefined): {
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+} {
+  return control?.resolveWorkspaceRootAccess === undefined
+    ? {}
+    : { resolveWorkspaceRootAccess: control.resolveWorkspaceRootAccess };
+}
+
+it("persists real transport lifecycle without content, paths or authority bytes", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const started = await f.call("begin");
+    const { scopeId } = JSON.parse(started.body) as { scopeId: string };
+    await f.call("end", { scopeId });
+    const events = f.log.events.filter(
+      (event) => event.op === "coding-runtime.initialization-transport",
+    );
+    expect(events).toHaveLength(2);
+    const line = formatActivityLogProofLine(events[0] ?? {});
+    expectActivityLogProof("coding-runtime.initialization-transport.emitted-line", line);
+    expect(events.map((event) => event.extra?.stage)).toEqual(["begin", "end"]);
+    expect(events.map((event) => event.extra?.outcome)).toEqual(["accepted", "completed"]);
+    expect(line).not.toContain(f.producer.runtime.root);
+    expect(line).not.toContain(scopeId);
+    expect(line).not.toContain(f.producer.runtime.minted.toolFacadeCapability);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("rejects copied scopes, duplicate begin, extra selectors and calls after initial end", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const started = await f.call("begin");
+    const { scopeId } = JSON.parse(started.body) as { scopeId: string };
+    expect((await f.call("begin")).status).toBe(409);
+    expect(
+      (await f.call("readBytes", { scopeId: "0".repeat(36), relativePath: "AGENTS.md" })).status,
+    ).toBe(409);
+    expect(
+      (await f.call("readBytes", { scopeId, relativePath: "AGENTS.md", purpose: "native-tool-io" }))
+        .status,
+    ).toBe(400);
+    expect(f.producer.read).not.toHaveBeenCalled();
+    expect((await f.call("end", { scopeId })).status).toBe(200);
+    expect((await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
+    expect((await f.call("begin")).status).toBe(409);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("requires actual prepared host and current accepted root before initial callback", async () => {
+  const f = initialBridgeProducer();
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    const result = await fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({ authorization: `Bearer ${f.runtime.minted.toolFacadeCapability}` }),
+      body: initialTransportPacket("begin"),
+    });
+    expect(result.status).toBe(409);
+    expect(f.read).not.toHaveBeenCalled();
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("rejects current-root drift before IO and after an outstanding real producer resolves", async () => {
+  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = await initialTransportFixture(() => held);
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const pending = f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
+    await vi.waitFor(() => {
+      expect(f.producer.read).toHaveBeenCalledOnce();
+    });
+    f.setRoot(join(f.producer.runtime.root, "changed"));
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    const result = await pending;
+    expect(result.status).toBe(409);
+    expect(f.producer.bytes.every((byte) => byte === 0)).toBe(true);
+    expect((await f.call("stat", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
+    expect(f.producer.read).toHaveBeenCalledOnce();
+  } finally {
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("removes transport authority when the actual accepted starting mint is revoked", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    f.producer.runtime.authorityRegistry.revoke(f.producer.runtime.minted.authorityRef);
+    expect((await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
+    expect(f.producer.read).not.toHaveBeenCalled();
+    expect((await f.call("end", { scopeId })).status).toBe(409);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("preserves original technical read failure as an unavailable private result", async () => {
+  const f = await initialTransportFixture(() =>
+    Promise.resolve({ ok: false, reason: "process-failed" }),
+  );
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const result = await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
+    expect(JSON.parse(result.body)).toEqual({ ok: false, reason: "process-failed" });
+    expect((await f.call("end", { scopeId })).status).toBe(200);
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("cancels promptly while holding the SAME physical gate until the actual raw IO settles", async () => {
+  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = await initialTransportFixture(() => held);
+  const controller = new AbortController();
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const pending = f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: initialTransportPacket("readBytes", { scopeId, relativePath: "AGENTS.md" }),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(f.producer.read).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+    expect(JSON.parse((await pending).body)).toMatchObject({ ok: false, reason: "cancelled" });
+    const busy = await f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: "{}",
+    });
+    expect(busy.status).toBe(429);
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await vi.waitFor(async () => {
+      expect(
+        (
+          await f.fixture.runtime.toolBridge.handle({
+            method: "POST",
+            headers: new Headers({
+              authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+            }),
+            body: "{}",
+          })
+        ).status,
+      ).not.toBe(429);
+    });
+    expect(f.producer.bytes.every((byte) => byte === 0)).toBe(true);
+  } finally {
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it.each(["accessor", "inherited", "symbol", "extra", "nested-accessor"])(
+  "captures closed initial packets without evaluating %s input",
+  async (kind) => {
+    const { copyNativeInitializationPacket } = await import("./opencodeRuntimeComposition.js");
+    const value: Record<PropertyKey, unknown> = {
+      action: "native-initialization",
+      phase: "begin",
+      runId: FIXTURE_RUN_ID,
+    };
+    const get = vi.fn(() => FIXTURE_RUN_ID);
+    if (kind === "accessor") Object.defineProperty(value, "runId", { get });
+    if (kind === "inherited") Object.setPrototypeOf(value, { inherited: true });
+    if (kind === "symbol") value[Symbol("selector")] = true;
+    if (kind === "extra") value.authority = "untrusted";
+    if (kind === "nested-accessor") {
+      value.phase = "readBytes";
+      value.scopeId = "0".repeat(36);
+      value.relativePath = "AGENTS.md";
+      value.range = Object.defineProperty({ length: 1 }, "offset", { get });
+    }
+    expect(copyNativeInitializationPacket(value)).toBeUndefined();
+    expect(get).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["expired", "ready", "running"] as const)(
+  "refuses initial transport when actual accepted authority is %s",
+  async (state) => {
+    const f = await initialTransportFixture();
+    try {
+      if (state === "expired")
+        vi.setSystemTime(new Date(Date.parse(f.producer.runtime.trusted.expiresAt) + 1));
+      else {
+        expect(f.producer.runtime.authority.transition(FIXTURE_RUN_ID, "ready", RUNTIME_NOW)).toBe(
+          true,
+        );
+        if (state === "running")
+          expect(
+            f.producer.runtime.authority.transition(FIXTURE_RUN_ID, "running", RUNTIME_NOW),
+          ).toBe(true);
+      }
+      expect((await f.call("begin")).status).toBe(409);
+      expect(f.producer.read).not.toHaveBeenCalled();
+    } finally {
+      await f.fixture.stop();
+      f.producer.registry.dispose();
+    }
+  },
+);
+
+it("refuses an initial begin when the actual accepted root no longer matches preparation", async () => {
+  const f = await initialTransportFixture();
+  try {
+    f.setRoot(join(f.producer.runtime.root, "other"));
+    expect((await f.call("begin")).status).toBe(409);
+    expect(f.producer.read).not.toHaveBeenCalled();
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("reports transport deadline while retaining actual outstanding IO and refusing a new scope", async () => {
+  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = await initialTransportFixture(() => held, 100);
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const result = await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
+    expect(JSON.parse(result.body)).toEqual({ ok: false, reason: "timeout" });
+    expect((await f.call("begin")).status).toBe(409);
+    expect(f.producer.read).toHaveBeenCalledOnce();
+    const ordinary = await f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: "{}",
+    });
+    expect(ordinary.status).toBe(429);
+  } finally {
+    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("settles initial end honestly when its actual lifecycle writer fails", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
+    const write = f.log.write.bind(f.log);
+    vi.spyOn(f.log, "write").mockImplementation((event) => {
+      if (event.op === "coding-runtime.initialization-transport" && event.extra?.stage === "end")
+        throw new Error("PRIVATE_INITIAL_END_WRITER_FAILURE");
+      write(event);
+    });
+    const pending = f.call("end", { scopeId });
+    let result: Awaited<ReturnType<typeof f.call>> | undefined;
+    void pending.then((value) => {
+      result = value;
+    });
+    await vi.waitFor(
+      () => {
+        expect(result).toBeDefined();
+      },
+      { timeout: 100 },
+    );
+    expect(JSON.parse((await pending).body)).toEqual({
+      ok: false,
+      reason: "initialization-failed",
+    });
+    expect((await f.call("begin")).status).toBe(409);
+    expect(f.log.lines().join("\n")).not.toContain("PRIVATE_INITIAL_END_WRITER_FAILURE");
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});

@@ -517,8 +517,18 @@ The one-shot scope closes when its callback settles or accepted authority is rev
 IO retains the same physical-work reservation until actual settlement, including when transport
 timeout or cancellation has already answered. Accessor, inherited and extra request fields are
 refused before IO. Technical failures retain the original unavailable instruction state.
-This prerequisite covers accepted-workspace initial acquisition only. It does not authorize global
-or above-root reads, watcher refresh, a model/HTTP selector or production host activation.
+The inactive original service can now enter that callback through the existing authenticated
+`/api/coding-sidecar/tool` route. Closed `native-initialization` begin/byte/stat/list/end packets
+require the actual prepared host while it is STARTING and the same current accepted root. No
+incoming field selects authority, executable, workspace or purpose. Its callback retains the same
+physical gate until real IO settles, including after response cancellation and a refused disposal.
+Native bytes use the existing KSS3 codec over bounded binary HTTP with backpressure, completion and
+buffer wiping; public JSON/text limits retain their contracts. The existing Activity Log records
+body-free initialization-transport begin/end outcomes. A controlled original initial graph matches
+forty ordered instructions through this actual route; synthetic host-byte fixtures do not qualify
+a production host. This prerequisite covers accepted-workspace initial acquisition only. It does
+not authorize global or above-root reads, watcher refresh, a model selector or production host
+activation.
 
 A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
 immediate directory entries to original native file consumers. Its collected output limit is

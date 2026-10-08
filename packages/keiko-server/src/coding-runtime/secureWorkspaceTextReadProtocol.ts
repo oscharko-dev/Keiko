@@ -504,3 +504,67 @@ function assertNativeResponseHeader(bytes: Buffer): void {
   )
     throw new Error("secure-workspace-read-malformed-response");
 }
+
+/** The same canonical helper response, reused by inactive authenticated native IO delivery. */
+export function encodeSecureWorkspaceNativeResponse(
+  response: SecureWorkspaceNativeResponse,
+): Buffer {
+  const hasInfo = response.status === "ok" || response.status === "wrong-kind";
+  const payload = response.status === "ok" ? response.bytes : new Uint8Array();
+  if (payload.byteLength > SECURE_WORKSPACE_NATIVE_MAX_BYTES)
+    throw new TypeError("secure-workspace-read-response-too-large");
+  const frame = Buffer.alloc(
+    RESPONSE_HEADER_BYTES + (hasInfo ? NATIVE_INFO_BYTES : 0) + payload.byteLength,
+  );
+  frame.write("KSS3", 0, "ascii");
+  frame.writeUInt16LE(3, 4);
+  frame.writeUInt16LE(response.status === "wrong-kind" ? 10 : STATUS_TO_CODE[response.status], 6);
+  frame.writeUInt32LE(frame.length - RESPONSE_HEADER_BYTES, 8);
+  if (hasInfo) writeNativeInfo(frame, response.info);
+  if (response.status === "ok") frame.set(payload, RESPONSE_HEADER_BYTES + NATIVE_INFO_BYTES);
+  decodeSecureWorkspaceNativeResponse(frame);
+  return frame;
+}
+
+function writeNativeInfo(frame: Buffer, info: SecureWorkspaceNativeFileInfo): void {
+  const code = NATIVE_TYPES.indexOf(info.type) + 1;
+  if (
+    code === 0 ||
+    !Number.isSafeInteger(info.size) ||
+    info.size < 0 ||
+    !Number.isFinite(info.mtimeMs)
+  )
+    throw new TypeError("secure-workspace-read-invalid-info");
+  frame.writeUInt16LE(code, 12);
+  frame.writeBigUInt64LE(BigInt(info.size), 16);
+  frame.writeDoubleLE(info.mtimeMs, 24);
+}
+
+export function encodeSecureWorkspaceNativeDirectory(
+  entries: readonly SecureWorkspaceNativeDirEntry[],
+): Buffer {
+  let size = 4;
+  for (const entry of entries) {
+    size += 5 + Buffer.byteLength(entry.name, "utf8");
+    if (size > SECURE_WORKSPACE_NATIVE_MAX_BYTES)
+      throw new TypeError("secure-workspace-read-response-too-large");
+  }
+  const frame = Buffer.alloc(size);
+  frame.writeUInt32LE(entries.length, 0);
+  let offset = 4;
+  for (const entry of entries) {
+    const code = NATIVE_TYPES.indexOf(entry.type) + 1;
+    if (code === 0) throw new TypeError("secure-workspace-read-invalid-info");
+    frame.writeUInt8(code, offset);
+    const length = Buffer.byteLength(entry.name, "utf8");
+    frame.writeUInt32LE(length, offset + 1);
+    frame.write(entry.name, offset + 5, length, "utf8");
+    if (frame.subarray(offset + 5, offset + 5 + length).toString("utf8") !== entry.name) {
+      frame.fill(0);
+      throw new TypeError("secure-workspace-read-invalid-name");
+    }
+    offset += 5 + length;
+  }
+  decodeSecureWorkspaceNativeDirectory(frame);
+  return frame;
+}

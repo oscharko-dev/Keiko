@@ -20,6 +20,11 @@ import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  encodeSecureWorkspaceNativeResponse,
+  encodeSecureWorkspaceNativeDirectory,
+} from "./secureWorkspaceTextReadProtocol.js";
+import { randomUUID } from "node:crypto";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 import {
@@ -284,7 +289,7 @@ type SafeToolSettlement = NonNullable<
 >["settleTool"];
 
 export interface OpenCodeToolBridge {
-  /** Inactive initial acquisition on the SAME physical-work gate; never HTTP/model callable. */
+  /** Server-held initial acquisition on the SAME physical-work gate; never a public model tool. */
   readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive server-private byte facet; model/HTTP dispatch never selects this surface. */
   readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
@@ -318,6 +323,8 @@ export interface OpenCodeToolBridge {
 export interface OpenCodeToolBridgeResponse {
   readonly status: number;
   readonly body: string;
+  readonly nativeBytes?: Uint8Array;
+  readonly nativeResult?: true;
   readonly rejection?: ToolBridgeApprovalRejection;
   /** The run and permission request a refused governed ask belongs to (PR #3617 review). */
   readonly approval?: { readonly runId: string; readonly requestId: string } | undefined;
@@ -354,6 +361,7 @@ export interface OpenCodeRunPort {
 
 interface PreparedRun {
   serviceHostPrepared?: true;
+  nativeInitialization?: NativeInitializationAttachment;
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
@@ -401,6 +409,8 @@ export function createOpenCodeRuntimeComposition(
       beginTool: input.safeActivity?.beginTool,
       diagnostics: input.diagnostics,
       renderedResults: renderedResultLog(input),
+      resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
+      activityLog: input.activityLog ?? processServerLogSink(),
     },
     input.toolBridge,
     input.toolFacadeOrigin,
@@ -1753,6 +1763,8 @@ const CLOSE_ABORT = "tool-bridge-close";
 // The execution collaborators travel the whole bridge chain (listener → handler → executor) as
 // one unit; bundling them keeps every signature within the parameter budget (typescript:S107).
 interface ToolBridgeExecutionDeps {
+  readonly activityLog: ServerLogSink;
+  readonly resolveWorkspaceRootAccess: OpenCodeRuntimeCompositionInput["resolveWorkspaceRootAccess"];
   readonly capability: string;
   readonly facade: CodingToolFacade;
   readonly settleTool: SafeToolSettlement | undefined;
@@ -2139,6 +2151,9 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
+  const native = nativeInitializationValue(input.body);
+  if (native !== undefined)
+    return handleNativeInitialization(native, input.signal, deps, gate, runs);
   const permission = parseV2PermissionRequest(input.body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
@@ -2844,4 +2859,432 @@ async function executeBridgeInitialization<T>(
     emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
     return { ok: false, reason: "initialization-failed" };
   }
+}
+
+type NativeInitializationPacket = Readonly<{
+  action: "native-initialization";
+  runId: string;
+}> &
+  (
+    | { readonly phase: "begin" }
+    | { readonly phase: "end"; readonly scopeId: string }
+    | {
+        readonly phase: "readBytes";
+        readonly scopeId: string;
+        readonly relativePath: string;
+        readonly range?: { readonly offset: number; readonly length: number };
+      }
+    | { readonly phase: "stat" | "list"; readonly scopeId: string; readonly relativePath: string }
+  );
+interface NativeInitializationAttachment {
+  readonly id: string;
+  readonly admission: AdmittedToolRequest;
+  readonly result: Promise<CodingAcceptedInitializationResult<void>>;
+  readonly end: () => void;
+  io?: CodingAcceptedInitializationReadPort;
+  open: boolean;
+}
+
+function nativeInitializationValue(body: string): unknown {
+  if (!validJson(body)) return undefined;
+  const value: unknown = JSON.parse(body);
+  return v2Record(value)?.action === "native-initialization" ? value : undefined;
+}
+
+/** Owned data only; transport never supplies authority, workspace root, purpose, or executable. */
+export function copyNativeInitializationPacket(
+  value: unknown,
+): NativeInitializationPacket | undefined {
+  const record = initializationData(value);
+  if (record?.action !== "native-initialization" || typeof record.runId !== "string")
+    return undefined;
+  if (!/^[A-Za-z0-9_-]{1,256}$/u.test(record.runId)) return undefined;
+  return copyInitializationPhase(record, record.runId);
+}
+
+function copyInitializationPhase(
+  record: Readonly<Record<string, unknown>>,
+  runId: string,
+): NativeInitializationPacket | undefined {
+  const action = "native-initialization";
+  if (record.phase === "begin")
+    return initialFields(record, ["action", "phase", "runId"])
+      ? Object.freeze({ action, phase: record.phase, runId })
+      : undefined;
+  if (typeof record.scopeId !== "string" || !/^[a-f0-9-]{36}$/u.test(record.scopeId))
+    return undefined;
+  const common = { action, runId, scopeId: record.scopeId } as const;
+  if (record.phase === "end")
+    return initialFields(record, ["action", "phase", "runId", "scopeId"])
+      ? Object.freeze({ ...common, phase: record.phase })
+      : undefined;
+  return copyInitializationIO(record, common);
+}
+
+function initializationData(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+    return undefined;
+  const fields: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) return undefined;
+    fields[key] = descriptor.value as unknown;
+  }
+  return Object.freeze(fields);
+}
+
+function initialFields(
+  record: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): boolean {
+  return (
+    Object.keys(record).length === keys.length && keys.every((key) => Object.hasOwn(record, key))
+  );
+}
+
+function copyInitializationIO(
+  record: Readonly<Record<string, unknown>>,
+  common: {
+    readonly action: "native-initialization";
+    readonly runId: string;
+    readonly scopeId: string;
+  },
+): NativeInitializationPacket | undefined {
+  if (typeof record.relativePath !== "string") return undefined;
+  const keys = ["action", "phase", "runId", "scopeId", "relativePath"];
+  const path = record.relativePath;
+  if (record.phase === "stat" || record.phase === "list")
+    return initialFields(record, keys)
+      ? Object.freeze({ ...common, phase: record.phase, relativePath: path })
+      : undefined;
+  if (record.phase !== "readBytes") return undefined;
+  const range = copyInitializationRange(record, keys);
+  if (range === false) return undefined;
+  return Object.freeze({
+    ...common,
+    phase: record.phase,
+    relativePath: path,
+    ...(range === undefined ? {} : { range }),
+  });
+}
+
+function copyInitializationRange(
+  record: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): { readonly offset: number; readonly length: number } | false | undefined {
+  if (!Object.hasOwn(record, "range")) return initialFields(record, keys) ? undefined : false;
+  const range = initializationData(record.range);
+  if (
+    range === undefined ||
+    !initialFields(record, [...keys, "range"]) ||
+    !initialFields(range, ["offset", "length"])
+  )
+    return false;
+  if (typeof range.offset !== "number" || typeof range.length !== "number") return false;
+  return Object.freeze({ offset: range.offset, length: range.length });
+}
+
+async function handleNativeInitialization(
+  value: unknown,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+  runs: ReadonlyMap<string, PreparedRun>,
+): Promise<OpenCodeToolBridgeResponse> {
+  const packet = copyNativeInitializationPacket(value);
+  if (packet === undefined) return nativeInitializationRefusal("invalid-request", 400);
+  const run = runs.get(packet.runId);
+  try {
+    if (run?.serviceHostPrepared !== true || run.ready || !initializationRootCurrent(deps, run))
+      return nativeInitializationRefusal("initialization-refused");
+    if (packet.phase === "begin") return await beginNativeInitialization(run, signal, deps, gate);
+    return await continueNativeInitialization(packet, run, signal, deps);
+  } catch (error) {
+    run?.nativeInitialization?.admission.controller.abort("initialization-failed");
+    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
+    return nativeInitializationRefusal("initialization-failed", 502);
+  }
+}
+
+function initializationRootCurrent(deps: ToolBridgeExecutionDeps, run: PreparedRun): boolean {
+  const root = deps.resolveWorkspaceRootAccess?.();
+  return root?.canonicalRoot === run.workspaceRoot;
+}
+
+function nativeInitializationRefusal(reason: string, status = 409): OpenCodeToolBridgeResponse {
+  return { status, body: JSON.stringify({ ok: false, reason }), nativeResult: true };
+}
+
+async function beginNativeInitialization(
+  run: PreparedRun,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+): Promise<OpenCodeToolBridgeResponse> {
+  const facet = deps.facade.acceptedInitialization;
+  if (facet === undefined || run.nativeInitialization !== undefined)
+    return nativeInitializationRefusal("initialization-closed");
+  if (signal?.aborted === true) return nativeInitializationRefusal("cancelled");
+  const admission = gate.admit(gate.limits.requestDeadlineMs);
+  if (admission === undefined) return nativeInitializationRefusal("busy", 429);
+  const { state, ready } = createInitializationAttachment(
+    deps,
+    facet,
+    admission,
+    signal,
+    run.runId,
+  );
+  run.nativeInitialization = state;
+  const result = state.result;
+  const entered = await Promise.race([ready.then(() => true), result.then(() => false)]);
+  if (!entered) return initializationOutcome(await result);
+  if (!state.open || !initializationRootCurrent(deps, run)) {
+    admission.controller.abort("initialization-refused");
+    return nativeInitializationRefusal("initialization-refused");
+  }
+  recordNativeInitializationLifecycle(deps, run.runId, "begin", "accepted");
+  return { status: 200, body: JSON.stringify({ ok: true, scopeId: state.id }), nativeResult: true };
+}
+
+function initializationOutcome(
+  result: CodingAcceptedInitializationResult<void>,
+): OpenCodeToolBridgeResponse {
+  return result.ok
+    ? { status: 200, body: '{"ok":true}', nativeResult: true }
+    : nativeInitializationRefusal(result.reason);
+}
+
+async function continueNativeInitialization(
+  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" }>,
+  run: PreparedRun,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+): Promise<OpenCodeToolBridgeResponse> {
+  const state = run.nativeInitialization;
+  if (state?.id !== packet.scopeId || !state.open || state.io === undefined)
+    return nativeInitializationRefusal("initialization-closed");
+  const detach = bindExternalAbort(signal, state.admission);
+  try {
+    if (packet.phase === "end") {
+      state.open = false;
+      state.end();
+      const result = await state.result;
+      return initializationRootCurrent(deps, run)
+        ? initializationOutcome(result)
+        : nativeInitializationRefusal("initialization-refused");
+    }
+    return await initialIOUnderCurrentScope(packet, run, state, state.io, deps);
+  } finally {
+    detach();
+  }
+}
+
+async function initialIOUnderCurrentScope(
+  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" | "end" }>,
+  run: PreparedRun,
+  state: NativeInitializationAttachment,
+  io: CodingAcceptedInitializationReadPort,
+  deps: ToolBridgeExecutionDeps,
+): Promise<OpenCodeToolBridgeResponse> {
+  const work = executeInitialIO(packet, io);
+  void work.then(
+    (late) => {
+      if (state.admission.controller.signal.aborted && late.ok && "bytes" in late)
+        late.bytes.fill(0);
+    },
+    (error: unknown) => {
+      if (state.admission.controller.signal.aborted)
+        emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
+    },
+  );
+  let result: InitialIOResult;
+  try {
+    result = await raceAbort(work, state.admission.controller.signal);
+  } catch (error) {
+    if (!state.admission.controller.signal.aborted) throw error;
+    return nativeInitializationRefusal(
+      abortReason(state.admission.controller.signal) === DEADLINE_ABORT ? "timeout" : "cancelled",
+    );
+  }
+  if (
+    !state.open ||
+    state.admission.controller.signal.aborted ||
+    !initializationRootCurrent(deps, run)
+  ) {
+    if (result.ok && "bytes" in result) result.bytes.fill(0);
+    state.admission.controller.abort("initialization-refused");
+    return nativeInitializationRefusal("initialization-refused");
+  }
+  return initialIOResponse(result);
+}
+
+type InitialIOResult =
+  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["readBytes"]>>
+  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["stat"]>>
+  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["list"]>>;
+function executeInitialIO(
+  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" | "end" }>,
+  io: CodingAcceptedInitializationReadPort,
+): Promise<InitialIOResult> {
+  const request = {
+    relativePath: packet.relativePath,
+    ...(packet.phase === "readBytes" && packet.range !== undefined ? { range: packet.range } : {}),
+  };
+  return io[packet.phase](request);
+}
+
+function initialIOResponse(result: InitialIOResult): OpenCodeToolBridgeResponse {
+  if (!result.ok) {
+    if (result.reason === "wrong-kind")
+      return {
+        status: 200,
+        body: "",
+        nativeBytes: encodeSecureWorkspaceNativeResponse({
+          status: "wrong-kind",
+          info: result.info,
+        }),
+      };
+    return nativeInitializationRefusal(result.reason);
+  }
+  const bytes =
+    "bytes" in result
+      ? result.bytes
+      : "entries" in result
+        ? encodeSecureWorkspaceNativeDirectory(result.entries)
+        : new Uint8Array();
+  try {
+    return {
+      status: 200,
+      body: "",
+      nativeBytes: encodeSecureWorkspaceNativeResponse({ status: "ok", info: result.info, bytes }),
+    };
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+function createInitializationAttachment(
+  deps: ToolBridgeExecutionDeps,
+  facet: CodingAcceptedInitializationFacet,
+  admission: AdmittedToolRequest,
+  signal: AbortSignal | undefined,
+  runId: string,
+): { readonly state: NativeInitializationAttachment; readonly ready: Promise<void> } {
+  const acquired = initializationDeferred<undefined>();
+  const done = initializationDeferred<undefined>();
+  const completed = initializationDeferred<CodingAcceptedInitializationResult<void>>();
+  const state: NativeInitializationAttachment = {
+    id: randomUUID(),
+    admission,
+    result: completed.promise,
+    end: () => {
+      done.resolve(undefined);
+    },
+    open: true,
+  };
+  const close = (): void => {
+    state.open = false;
+    state.end();
+  };
+  admission.controller.signal.addEventListener("abort", close, { once: true });
+  const detach = bindExternalAbort(signal, admission);
+  void executeBridgeInitialization(
+    deps,
+    facet.run.bind(facet),
+    (io) => {
+      state.io = io;
+      acquired.resolve(undefined);
+      return done.promise;
+    },
+    admission,
+  ).then((result) => {
+    close();
+    detach();
+    admission.controller.signal.removeEventListener("abort", close);
+    completed.resolve(recordInitializationCompletion(deps, runId, result));
+  });
+  return { state, ready: acquired.promise };
+}
+
+function recordInitializationCompletion(
+  deps: ToolBridgeExecutionDeps,
+  runId: string,
+  result: CodingAcceptedInitializationResult<void>,
+): CodingAcceptedInitializationResult<void> {
+  try {
+    recordNativeInitializationLifecycle(
+      deps,
+      runId,
+      "end",
+      result.ok ? "completed" : result.reason,
+    );
+    return result;
+  } catch (error) {
+    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
+    return { ok: false, reason: "initialization-failed" };
+  }
+}
+
+const NATIVE_INITIALIZATION_LIFECYCLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.initialization-transport",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeInitializationLifecycle",
+  fields: {
+    stage: { type: "string", dataClass: "closed-enum", required: true, values: ["begin", "end"] },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "accepted",
+        "completed",
+        "initialization-closed",
+        "initialization-refused",
+        "initialization-failed",
+        "cancelled",
+        "timeout",
+        "busy",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-initialization-transport"],
+  proofIds: ["coding-runtime.initialization-transport.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function recordNativeInitializationLifecycle(
+  deps: ToolBridgeExecutionDeps,
+  runId: string,
+  stage: "begin" | "end",
+  outcome:
+    | "accepted"
+    | "completed"
+    | Exclude<CodingAcceptedInitializationResult<void>, { readonly ok: true }>["reason"],
+): void {
+  deps.activityLog.write(
+    activityLogEvent(
+      NATIVE_INITIALIZATION_LIFECYCLE_OPERATION,
+      { correlationId: runId },
+      { stage, outcome },
+    ),
+  );
+}
+
+function initializationDeferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }

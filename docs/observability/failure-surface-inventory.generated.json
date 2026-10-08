@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f1a2d3b13b64314ae3bc6c29a8d11441bd18736411399e3e62a5cbc99a4f7fc6"
+    "catalogDigest": "3dc2196d94a274a77ecf2872bb0eed0b4028ad15665fd8b01e74855c642c94c5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 531,
-    "proofCount": 538,
-    "resolvedProofCount": 538,
-    "failureClassCount": 341,
+    "operationCount": 532,
+    "proofCount": 539,
+    "resolvedProofCount": 539,
+    "failureClassCount": 342,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -313,6 +313,7 @@
         "coding-runtime.history-projection",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
+        "coding-runtime.initialization-transport",
         "coding-runtime.native-question.observed",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
@@ -762,6 +763,7 @@
     "coding-runtime-dev-lane": ["tools-workflows.rejection"],
     "coding-runtime-event-drop": ["tools-workflows.loss"],
     "coding-runtime-follow-up-dispatch": ["tools-workflows.dependency-failure"],
+    "coding-runtime-initialization-transport": ["tools-workflows.dependency-failure"],
     "coding-runtime-initial-turn-dispatch": ["tools-workflows.dependency-failure"],
     "coding-runtime-initial-turn-stop": ["tools-workflows.crash"],
     "coding-runtime-issue-binding": ["tools-workflows.rejection"],
@@ -1348,6 +1350,9 @@
     ],
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
+    ],
+    "coding-runtime.initialization-transport.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.native-question.observed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"

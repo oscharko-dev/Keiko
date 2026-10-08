@@ -10,8 +10,9 @@ import {
 // request to the active run's tool bridge (`OpenCodeRuntimeComposition.toolBridge.handle`, exposed
 // here as `deps.toolFacadeBridge`), which already authenticates the bearer capability
 // (`preflightToolRequest` in opencodeRuntimeComposition.ts) and enforces its own admission gate.
-import { Readable } from "node:stream";
+import { Readable, PassThrough } from "node:stream";
 import type { IncomingMessage } from "node:http";
+import { STREAMING } from "./route-outcome.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -449,4 +450,116 @@ describe("coding-sidecar tool facade route", () => {
       }),
     ]);
   });
+});
+
+it("delivers native binary responses without passing them through public JSON rendering", async () => {
+  const bytes = Buffer.from([0, 255, 137, 80, 78, 71]);
+  const expected = Buffer.from(bytes);
+  const handle = vi.fn(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }));
+  const response = mockResponse();
+  const ctx: RouteContext = {
+    ...toolFacadeContext({ bearer: "tool-capability-material" }),
+    res: response.res,
+  };
+  const chunks: Buffer[] = [];
+  ctx.res.on("data", (chunk: Buffer) => {
+    chunks.push(Buffer.from(chunk));
+  });
+  const result = await handleCodingSidecarToolFacade(ctx, depsWith(bridge(handle)));
+  expect(result).toBe(STREAMING);
+  expect(Buffer.concat(chunks)).toEqual(expected);
+  expect(response.headers.get("content-type")).toBe("application/octet-stream");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("content-length")).toBe(String(expected.length));
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+});
+
+it("waits for actual backpressure drainage before wiping native bytes", async () => {
+  const bytes = Buffer.alloc(262144, 255);
+  const response = mockResponse({ captureBody: true });
+  nativeResponseStream(response).pause();
+  const ctx: RouteContext = { ...toolFacadeContext(), res: response.res };
+  const handle = vi.fn(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }));
+  let settled = false;
+  const pending = handleCodingSidecarToolFacade(ctx, depsWith(bridge(handle))).then((result) => {
+    settled = true;
+    return result;
+  });
+  await vi.waitFor(() => {
+    expect(response.statusCode()).toBe(200);
+  });
+  expect(settled).toBe(false);
+  expect(bytes[0]).toBe(255);
+  nativeResponseStream(response).resume();
+  expect(await pending).toBe(STREAMING);
+  expect(response.body()).toHaveLength(bytes.length);
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+});
+
+it("wipes native payload and logs only the closed failure on a disconnected response", async () => {
+  const bytes = Buffer.alloc(262144, 65);
+  const response = mockResponse({ captureBody: true });
+  nativeResponseStream(response).pause();
+  const ctx: RouteContext = { ...toolFacadeContext(), res: response.res };
+  const log = captureServerLog();
+  const pending = handleCodingSidecarToolFacade(
+    ctx,
+    depsWith(bridge(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }))),
+  );
+  await vi.waitFor(() => {
+    expect(response.statusCode()).toBe(200);
+  });
+  ctx.res.destroy();
+  expect(await pending).toBe(STREAMING);
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-response-failed" });
+  expect(log.lines().join("\n")).not.toContain("AAAA");
+});
+
+it("preserves closed native refusal JSON instead of calling it a public model result", async () => {
+  const log = captureServerLog();
+  const result = await handleCodingSidecarToolFacade(
+    toolFacadeContext(),
+    depsWith(
+      bridge(() =>
+        Promise.resolve({
+          status: 409,
+          body: '{"ok":false,"reason":"initialization-closed"}',
+          nativeResult: true,
+        }),
+      ),
+    ),
+  );
+  expect(result).toEqual({ status: 409, body: { ok: false, reason: "initialization-closed" } });
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-initialization-refused" });
+});
+
+function nativeResponseStream(response: ReturnType<typeof mockResponse>): PassThrough {
+  if (!(response.res instanceof PassThrough)) throw new TypeError("Expected actual stream fixture");
+  return response.res;
+}
+
+it("forwards actual native write errors to exactly one owning closed failure log", async () => {
+  const bytes = Buffer.from([0, 128, 255]);
+  const response = mockResponse();
+  response.res.write = (): never => {
+    throw new Error("PRIVATE_NATIVE_WRITE_FAILURE");
+  };
+  const ctx: RouteContext = { ...toolFacadeContext(), res: response.res };
+  const log = captureServerLog();
+  expect(
+    await handleCodingSidecarToolFacade(
+      ctx,
+      depsWith(bridge(() => Promise.resolve({ status: 200, body: "", nativeBytes: bytes }))),
+    ),
+  ).toBe(STREAMING);
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-response-failed" });
+  expect(log.lines().join("\n")).not.toContain("PRIVATE_NATIVE_WRITE_FAILURE");
+  expect(bytes.every((byte) => byte === 0)).toBe(true);
 });

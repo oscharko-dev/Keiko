@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f1a2d3b13b64314ae3bc6c29a8d11441bd18736411399e3e62a5cbc99a4f7fc6" as const;
+  "3dc2196d94a274a77ecf2872bb0eed0b4028ad15665fd8b01e74855c642c94c5" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 341,
-  completeClassCount: 341,
+  supportedClassCount: 342,
+  completeClassCount: 342,
   completeness: "complete",
   classes: [
     {
@@ -7624,6 +7624,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["coding-runtime.initial-turn.stop-failed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-runtime-initialization-transport",
+      requirementContract: "coding-runtime-initialization-transport",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.initialization-transport"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.initialization-transport",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.initialization-transport"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.initialization-transport",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "stage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.initialization-transport.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -40418,6 +40474,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.history-projection": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
+    "coding-runtime.initialization-transport": "tools-workflows",
     "coding-runtime.native-question.observed": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",
     "coding-runtime.operator-decision": "tools-workflows",

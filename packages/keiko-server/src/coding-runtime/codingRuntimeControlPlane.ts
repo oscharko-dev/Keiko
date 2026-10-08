@@ -194,6 +194,9 @@ export interface CodingRuntimeToolFacadeBridge {
   }): Promise<{
     readonly status: number;
     readonly body: string;
+    /** Private canonical native frames; ordinary model JSON remains unchanged. */
+    readonly nativeBytes?: Uint8Array;
+    readonly nativeResult?: true;
     readonly rejection?: ToolBridgeApprovalRejection;
   }>;
 }

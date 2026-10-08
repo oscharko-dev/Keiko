@@ -1656,6 +1656,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-runtime-initialization-transport",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.initialization-transport"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.initialization-transport"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.initialization-transport"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.initialization-transport"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-runtime-initial-turn-dispatch",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
