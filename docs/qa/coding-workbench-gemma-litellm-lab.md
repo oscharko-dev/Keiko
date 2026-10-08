@@ -1230,3 +1230,33 @@ and obsolete fixture timestamp/count corrections. A weaker initial queue transcr
 replace the corrected settled-producer regression. No cached health API or inference-triggering
 automatic health request is introduced. New-run Coding serving/picker admission is the remaining
 bounded customer fix; this increment does not age-strand an already admitted coding session.
+
+### Original Read parent over existing HTTP (ROOT qualification on 9c2f64)
+
+ROOT independently matches 92 frozen source/input/evidence references and merges only the four
+incremental owners. Three baselines match directly; the existing formatting-only test delta merges
+without conflict and preserves both prior test families. The unchanged actual bridge fails one
+new admitted-parent control because its public fallback supplies no native identity. Final ROOT
+checks pass 212 tests across the two owning suites, four-owner strict types and zero-warning lint,
+ten-file formatting, the fresh affected graph, 97 catalog controls, twelve error-observability
+sites and all 539 proofs/thirty scenarios. The first owning run loaded the prior compiled refusal
+vocabulary and failed one registered-line control; generation, fresh compilation and the final
+repeated run supersede that retained intermediate result.
+
+The ROOT actual pinned-original proof compares eleven same-workspace Read cases through the real
+authenticated route, preserving output, permission and instruction-event digests. Large native
+ranges, a 588-byte relative path, forty ancestor instructions, directories, binary/media-level
+output and an original missing-file Tool.Error retain their semantics. Eleven canonical admissions
+and settlements cover 63 actual helper children, peak six, all physically closed. One additional
+actual helper is held on stdin and its HTTP caller disconnected; after twelve milliseconds the
+child is closed and its canonical parent terminal. This is a measured private witness, not a
+latency guarantee. The response is explicitly undelivered; actual child closure precedes terminal
+settlement, and a foreign identity cannot cancel another admitted parent. Returned settlement also
+joins actual physical work and the existing idempotent slot release before fresh admission.
+
+The proof rebinds current ROOT producers and independently extracted pinned native modules. Media
+normalization and helper verification remain fixtures; original model-media acceptance is open.
+Genuine authority/Manager ready/session admission uses hermetic endpoint/supervisor readiness, not
+an actually ready fixed original service host. The production host lifecycle refusal remains in
+place; no native profile/tool advertisement or production activation is introduced. Further
+service/configuration/native Files parity remains follow-up work in the open epic.

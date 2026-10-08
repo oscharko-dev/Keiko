@@ -563,3 +563,31 @@ it("forwards actual native write errors to exactly one owning closed failure log
   expect(log.lines().join("\n")).not.toContain("PRIVATE_NATIVE_WRITE_FAILURE");
   expect(bytes.every((byte) => byte === 0)).toBe(true);
 });
+
+it("logs a refused native Read transport using the closed owning rejection without payload", async () => {
+  const log = captureServerLog();
+  const result = await handleCodingSidecarToolFacade(
+    toolFacadeContext({
+      body: JSON.stringify({
+        action: "native-read-invocation",
+        phase: "stat",
+        runId: "run-private",
+        identity: "PRIVATE_NOT_AUTHORITY",
+      }),
+    }),
+    depsWith(
+      bridge(() =>
+        Promise.resolve({
+          status: 409,
+          body: '{"ok":false,"reason":"dispatch-refused"}',
+          nativeResult: true,
+        }),
+      ),
+    ),
+  );
+  expect(result).toEqual({ status: 409, body: { ok: false, reason: "dispatch-refused" } });
+  const failures = log.events.filter((event) => event.op === "coding-sidecar.tool-facade.rejected");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.extra).toMatchObject({ reason: "native-read-refused" });
+  expect(log.lines().join("\n")).not.toContain("PRIVATE_NOT_AUTHORITY");
+});

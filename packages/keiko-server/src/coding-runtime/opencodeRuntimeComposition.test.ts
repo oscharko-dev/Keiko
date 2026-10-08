@@ -67,6 +67,7 @@ import type {
   CodingAcceptedInitializationFacet,
   CodingToolNativeTextReadFacet,
   CodingToolNativeReadBeginInput,
+  CodingToolNativeReadIdentity,
   CodingToolNativeTextSnapshotResult,
 } from "./codingToolFacadePorts.js";
 import { createProductionManagedWorktreeToolFacade } from "./productionManagedWorktreeTools.js";
@@ -76,6 +77,7 @@ import {
 } from "./secureWorkspaceTextRead.js";
 import {
   encodeSecureWorkspaceReadResponse,
+  decodeSecureWorkspaceNativeResponse,
   encodeSecureWorkspaceSnapshotResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
@@ -197,7 +199,12 @@ interface OpenCodeRuntimeComposition {
       readonly headers: Headers;
       readonly body: string;
       readonly signal?: AbortSignal;
-    }): Promise<{ readonly status: number; readonly body: string }>;
+    }): Promise<{
+      readonly status: number;
+      readonly body: string;
+      readonly nativeBytes?: Uint8Array;
+      readonly nativeResult?: true;
+    }>;
   };
   readonly runPort: {
     readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
@@ -4286,14 +4293,17 @@ function nativeBridgeArtifact(native: boolean): SecureWorkspaceTextReadArtifact 
   };
 }
 
-function nativeReadAuthority(maxToolCalls?: number): ReturnType<typeof catalogRuntimeFixture> {
+function nativeReadAuthority(
+  maxToolCalls?: number,
+  runId = "run-1",
+): ReturnType<typeof catalogRuntimeFixture> {
   const base = catalogRuntimeFixture("autonomous-delivery");
   if (maxToolCalls === undefined) return base;
   const trusted = { ...base.trusted, budget: { ...base.trusted.budget, maxToolCalls } };
   const registry = new EditorAgentAuthorityRegistry();
   const authority = new CodingRuntimeAuthorityService(
     registry,
-    () => "run-1",
+    () => runId,
     () => "nonce-1",
     undefined,
     createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(RUNTIME_NOW) }),
@@ -4314,8 +4324,8 @@ function nativeReadAuthority(maxToolCalls?: number): ReturnType<typeof catalogRu
   );
   const minted = authority.mintStart(intent, trusted, confirmation, RUNTIME_NOW);
   if (!minted.ok) throw new TypeError("Expected one-tool authority mint");
-  authority.transition("run-1", "ready", RUNTIME_NOW);
-  authority.transition("run-1", "running", RUNTIME_NOW);
+  authority.transition(runId, "ready", RUNTIME_NOW);
+  authority.transition(runId, "running", RUNTIME_NOW);
   return { ...base, trusted, registry, authority, minted };
 }
 
@@ -4324,10 +4334,11 @@ function nativeBridgeFixture(
   effect?: SecureWorkspaceTextReadProcess["run"],
   maxToolCalls?: number,
   native = false,
+  runId = "run-1",
 ): NativeBridgeFixture {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(RUNTIME_NOW));
-  const authority = nativeReadAuthority(maxToolCalls);
+  const authority = nativeReadAuthority(maxToolCalls, runId);
   dirs.push(dirname(dirname(authority.root)));
   writeFileSync(join(authority.root, "fixture.ts"), text);
   const process = vi.fn<SecureWorkspaceTextReadProcess["run"]>(
@@ -5877,6 +5888,7 @@ describe.skipIf(process.platform !== "darwin")(
     });
     function physicalFixture(
       afterFrame?: (frame: Uint8Array) => Promise<Uint8Array>,
+      runId = "run-1",
     ): NativeBridgeFixture {
       const factory = createNodeSecureWorkspaceReadProcessFactory({
         binding: {
@@ -5896,6 +5908,7 @@ describe.skipIf(process.platform !== "darwin")(
             .then((frame) => afterFrame?.(frame) ?? frame),
         1,
         true,
+        runId,
       );
     }
     it("runs bytes, stat, root list and zero range under one authority charge and admission slot", async () => {
@@ -6021,6 +6034,273 @@ describe.skipIf(process.platform !== "darwin")(
         release();
         await reading;
         await stopNativeBridge(f, fixture);
+      }
+    });
+
+    it("transports real binary, stat and directory IO through one admitted HTTP parent", async () => {
+      const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+      const admission = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+      const route = await startNativeReadTransportFixture(f);
+      try {
+        const identity = await admittedTransportIdentity(route);
+        const request = {
+          identity,
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io",
+        };
+        const bytes = await route.call("readBytes", request);
+        expect(nativeTransportFrame(bytes)).toMatchObject({
+          status: "ok",
+          bytes: Buffer.from("PRIVATE_PARENT_NATIVE_BYTES"),
+        });
+        const stat = await route.call("stat", { ...request, ordinal: 2 });
+        expect(nativeTransportFrame(stat)).toMatchObject({ status: "ok", info: { type: "file" } });
+        const list = await route.call("list", { ...request, ordinal: 3, relativePath: "" });
+        expect(nativeTransportFrame(list).info.type).toBe("directory");
+        const zero = await route.call("readBytes", {
+          ...request,
+          ordinal: 4,
+          range: { offset: 0, length: 0 },
+        });
+        expect(nativeTransportFrame(zero).bytes).toHaveLength(0);
+        expect(f.process).toHaveBeenCalledTimes(4);
+        expect(admission.mock.calls.reduce((n, [input]) => n + input.usage.toolCalls, 0)).toBe(1);
+        expect(
+          nativeTransportVerdict(
+            (await route.call("close", { identity, outcome: "completed" })).body,
+          ),
+        ).toEqual({ ok: true });
+        expect(
+          nativeTransportVerdict((await route.call("begin", originalReadTransportBegin())).body).ok,
+        ).toBe(false);
+        expect(JSON.stringify(f.activity.events)).not.toMatch(
+          /PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
+        );
+      } finally {
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it("retains physical IO through a disconnected HTTP parent and refuses a false completed close", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reached = vi.fn();
+      const f = physicalFixture(async (frame) => {
+        reached();
+        await held;
+        return frame;
+      }, FIXTURE_RUN_ID);
+      const onRelease = vi.fn();
+      const route = await startNativeReadTransportFixture(f, { onRelease });
+      const identity = await admittedTransportIdentity(route);
+      const cancel = new AbortController();
+      const reading = route.call(
+        "readBytes",
+        { identity, ordinal: 1, relativePath: "fixture.ts", purpose: "native-tool-io" },
+        cancel.signal,
+      );
+      try {
+        await vi.waitFor(() => {
+          expect(reached).toHaveBeenCalledOnce();
+        });
+        cancel.abort();
+        expect(JSON.parse((await reading).body)).toMatchObject({ ok: false });
+        expect(
+          nativeTransportVerdict(
+            (await route.call("close", { identity, outcome: "completed" })).body,
+          ),
+        ).toEqual({ ok: false });
+        expect(onRelease).not.toHaveBeenCalled();
+        expect(await route.fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+          failureCode: "runtime-reap-unproven",
+        });
+        release();
+        await vi.waitFor(() => {
+          expect(f.registry.inspect({ runId: FIXTURE_RUN_ID, ...identity }).kind).toBe("terminal");
+        });
+        expect(await route.fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+          ok: true,
+        });
+        expect(onRelease).toHaveBeenCalledOnce();
+      } finally {
+        release();
+        await reading;
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it("cannot cancel the active parent with a foreign identity and refuses terminal replay", async () => {
+      const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+      const route = await startNativeReadTransportFixture(f);
+      try {
+        const identity = await admittedTransportIdentity(route);
+        for (const foreign of [
+          { ...identity, invocationId: "0".repeat(32) },
+          { ...identity, actionId: "different" },
+          { ...identity, idempotencyKey: "different" },
+        ]) {
+          expect(
+            nativeTransportVerdict(
+              (await route.call("close", { identity: foreign, outcome: "cancelled" })).body,
+            ),
+          ).toEqual({ ok: false });
+          expect(
+            route.fixture.runtime.toolBridge.nativeTextRead?.invocations?.signalFor(identity)
+              ?.aborted,
+          ).toBe(false);
+        }
+        expect(
+          nativeTransportFrame(
+            await route.call("stat", {
+              identity,
+              ordinal: 1,
+              relativePath: "fixture.ts",
+              purpose: "native-tool-io",
+            }),
+          ).status,
+        ).toBe("ok");
+        expect(
+          nativeTransportVerdict(
+            (await route.call("close", { identity, outcome: "completed" })).body,
+          ),
+        ).toEqual({ ok: true });
+        expect(
+          nativeTransportVerdict((await route.call("close", { identity, outcome: "failed" })).body),
+        ).toEqual({ ok: false });
+        expect(
+          nativeTransportVerdict((await route.call("begin", originalReadTransportBegin())).body).ok,
+        ).toBe(false);
+        expect(f.process).toHaveBeenCalledOnce();
+      } finally {
+        await stopNativeBridge(f, route.fixture);
+      }
+    });
+
+    it.each(["changed", "technical"] as const)(
+      "withholds and wipes actual IO when root postflight is %s",
+      async (change) => {
+        const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+        const diagnostics: ServerDiagnosticRecord[] = [];
+        let captured: Uint8Array | undefined;
+        const observed = observeNativeReadBytes(f, (bytes): void => {
+          captured = bytes;
+        });
+        const route = await startNativeReadTransportFixture(observed, {
+          diagnostics: {
+            record: (event): void => {
+              diagnostics.push(event);
+            },
+          },
+        });
+        try {
+          const identity = await admittedTransportIdentity(route);
+          const accepted = route.root();
+          route.root
+            .mockImplementationOnce(() => accepted)
+            .mockImplementationOnce(() => {
+              if (change === "technical") throw new TypeError("PRIVATE_ROOT_POSTFLIGHT_FAILURE");
+              return { ...accepted, canonicalRoot: "/changed-root" };
+            });
+          const result = await route.call("readBytes", {
+            identity,
+            ordinal: 1,
+            relativePath: "fixture.ts",
+            purpose: "native-tool-io",
+          });
+          expect(result.status).toBe(change === "technical" ? 502 : 409);
+          expect(result.nativeBytes).toBeUndefined();
+          expect(captured).toBeDefined();
+          expect(captured?.every((byte) => byte === 0)).toBe(true);
+          expect(nativeTransportVerdict(result.body)).toMatchObject({ ok: false });
+          expect(f.process).toHaveBeenCalledOnce();
+          expect(
+            nativeTransportVerdict(
+              (await route.call("close", { identity, outcome: "completed" })).body,
+            ),
+          ).toEqual({ ok: false });
+          expect(diagnostics.length).toBe(change === "technical" ? 1 : 0);
+          expect(JSON.stringify({ events: f.activity.events, diagnostics })).not.toMatch(
+            /PRIVATE_ROOT_POSTFLIGHT_FAILURE|PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
+          );
+        } finally {
+          await stopNativeBridge(f, route.fixture);
+        }
+      },
+    );
+
+    it.each(["head", "expired", "withdrawn"] as const)(
+      "refuses stale %s authority over HTTP before starting a helper",
+      async (change) => {
+        const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+        const route = await startNativeReadTransportFixture(f);
+        try {
+          const identity = await admittedTransportIdentity(route);
+          if (change === "head") f.readHead.mockReturnValue("2".repeat(40));
+          else if (change === "expired")
+            vi.setSystemTime(new Date(Date.parse(f.authority.trusted.expiresAt) + 1));
+          else f.authority.registry.revoke(f.authority.minted.authorityRef);
+          expect(
+            nativeTransportVerdict(
+              (
+                await route.call("readBytes", {
+                  identity,
+                  ordinal: 1,
+                  relativePath: "fixture.ts",
+                  purpose: "native-tool-io",
+                })
+              ).body,
+            ).ok,
+          ).toBe(false);
+          expect(f.process).not.toHaveBeenCalled();
+          expect(
+            nativeTransportVerdict(
+              (await route.call("close", { identity, outcome: "failed" })).body,
+            ),
+          ).toEqual({ ok: false });
+        } finally {
+          await stopNativeBridge(f, route.fixture);
+        }
+      },
+    );
+
+    it("refuses copied identities, ordinal replay and sensitive paths without duplicate effects", async () => {
+      const f = physicalFixture(undefined, FIXTURE_RUN_ID);
+      const route = await startNativeReadTransportFixture(f);
+      try {
+        const identity = await admittedTransportIdentity(route);
+        const request = {
+          identity,
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io",
+        };
+        expect(
+          nativeTransportVerdict(
+            (
+              await route.call("stat", {
+                ...request,
+                identity: { ...identity, invocationId: "0".repeat(32) },
+              })
+            ).body,
+          ).ok,
+        ).toBe(false);
+        expect(nativeTransportFrame(await route.call("stat", request)).status).toBe("ok");
+        expect(nativeTransportVerdict((await route.call("stat", request)).body).ok).toBe(false);
+        expect(
+          nativeTransportVerdict(
+            (await route.call("readBytes", { ...request, ordinal: 2, relativePath: ".env" })).body,
+          ).ok,
+        ).toBe(false);
+        expect(f.process).toHaveBeenCalledOnce();
+        expect(
+          nativeTransportVerdict((await route.call("close", { identity, outcome: "failed" })).body),
+        ).toEqual({ ok: false });
+      } finally {
+        await stopNativeBridge(f, route.fixture);
       }
     });
 
@@ -6454,3 +6734,335 @@ it("settles initial end honestly when its actual lifecycle writer fails", async 
     f.producer.registry.dispose();
   }
 });
+
+function originalReadTransportBody(
+  phase: string,
+  extra: Readonly<Record<string, unknown>> = {},
+): string {
+  return JSON.stringify({
+    action: "native-read-invocation",
+    phase,
+    runId: FIXTURE_RUN_ID,
+    ...extra,
+  });
+}
+
+function originalReadTransportBegin(): {
+  actionId: string;
+  idempotencyKey: string;
+  relativePath: string;
+  context: CodingToolNativeReadBeginInput["context"];
+  runId?: string;
+} {
+  return {
+    actionId: "ses_tool:original-read",
+    idempotencyKey: "ses_tool:original-read",
+    relativePath: "fixture.ts",
+    context: {
+      sessionID: "ses_tool",
+      messageID: "msg_original",
+      id: "original-read",
+      agent: "build",
+    },
+  };
+}
+
+it("admits a genuine ready native read parent over the existing HTTP dispatch boundary", async () => {
+  const f = nativeBridgeFixture("PRIVATE_PARENT_ROUTE", undefined, 1, false, FIXTURE_RUN_ID);
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 5000 },
+    {
+      ...f.control,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "managed-task",
+        canonicalRoot: f.authority.root,
+        repositoryRoot: f.authority.root,
+        fs: nodeWorkspaceFs,
+      }),
+    },
+  );
+  const call = (
+    phase: string,
+    extra: Readonly<Record<string, unknown>>,
+  ): ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]> =>
+    fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.authority.minted.toolFacadeCapability}`,
+      }),
+      body: originalReadTransportBody(phase, extra),
+    });
+  try {
+    const result = await call("begin", originalReadTransportBegin());
+    expect(result.status).toBe(200);
+    const { identity } = JSON.parse(result.body) as { identity: Readonly<Record<string, string>> };
+    expect(identity).toMatchObject({ actionId: "ses_tool:original-read" });
+    expect((await call("close", { identity, outcome: "completed" })).body).toBe('{"ok":true}');
+    expect(f.authority.minted.authorityRef.runId).toBe(FIXTURE_RUN_ID);
+    expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_PARENT_ROUTE");
+  } finally {
+    await stopNativeBridge(f, fixture);
+  }
+});
+
+type NativeTransportFixture = Awaited<ReturnType<typeof startNativeReadTransportFixture>>;
+async function startNativeReadTransportFixture(
+  f: NativeBridgeFixture,
+  extra: StartBridgeControl = {},
+  deadline = 5000,
+): Promise<{
+  fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+  root: ReturnType<typeof vi.fn<() => WorkspaceRootAccess>>;
+  call: (
+    phase: string,
+    extra?: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ) => ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>;
+}> {
+  const root = vi.fn<() => WorkspaceRootAccess>(() => ({
+    kind: "managed-task",
+    canonicalRoot: f.authority.root,
+    repositoryRoot: f.authority.root,
+    fs: nodeWorkspaceFs,
+  }));
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: deadline },
+    { ...f.control, ...extra, resolveWorkspaceRootAccess: root },
+  );
+  return {
+    fixture,
+    root,
+    call: (phase, extra, signal) =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({
+          authorization: `Bearer ${f.authority.minted.toolFacadeCapability}`,
+        }),
+        body: originalReadTransportBody(phase, extra ?? {}),
+        ...(signal === undefined ? {} : { signal }),
+      }),
+  };
+}
+
+async function admittedTransportIdentity(
+  route: NativeTransportFixture,
+): Promise<CodingToolNativeReadIdentity> {
+  const result = await route.call("begin", originalReadTransportBegin());
+  expect(result.status).toBe(200);
+  const value = JSON.parse(result.body) as { ok: boolean; identity: CodingToolNativeReadIdentity };
+  expect(value.ok).toBe(true);
+  expect(value.identity.invocationId).toBeTypeOf("string");
+  return value.identity;
+}
+
+function nativeTransportFrame(
+  result: Awaited<ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>>,
+): Extract<ReturnType<typeof decodeSecureWorkspaceNativeResponse>, { status: "ok" }> {
+  expect(result.status).toBe(200);
+  if (result.nativeBytes === undefined) throw new TypeError("Missing native frame");
+  const frame = decodeSecureWorkspaceNativeResponse(result.nativeBytes);
+  if (frame.status !== "ok") throw new TypeError("Expected successful native frame");
+  return frame;
+}
+
+it.each(["session", "unknown-run", "root", "cancelled"] as const)(
+  "rejects %s Read transport admission without authority charge",
+  async (change) => {
+    const f = nativeBridgeFixture("PRIVATE_REFUSED_ADMISSION", undefined, 1, false, FIXTURE_RUN_ID);
+    const charge = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+    const route = await startNativeReadTransportFixture(f);
+    const packet = originalReadTransportBegin();
+    const cancelled = new AbortController();
+    if (change === "session") packet.context = { ...packet.context, sessionID: "other-session" };
+    if (change === "unknown-run") packet.runId = "not-the-accepted-run";
+    if (change === "root")
+      route.root.mockReturnValue({
+        kind: "managed-task",
+        canonicalRoot: "/not-accepted",
+        repositoryRoot: f.authority.root,
+        fs: nodeWorkspaceFs,
+      });
+    if (change === "cancelled") cancelled.abort();
+    try {
+      expect(
+        nativeTransportVerdict((await route.call("begin", packet, cancelled.signal)).body).ok,
+      ).toBe(false);
+      expect(charge).not.toHaveBeenCalled();
+      expect(f.process).not.toHaveBeenCalled();
+    } finally {
+      await stopNativeBridge(f, route.fixture);
+    }
+  },
+);
+
+it("keeps native Read unavailable in a genuinely prepared STARTING service host", async () => {
+  const f = await initialTransportFixture();
+  try {
+    const response = await f.fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({
+        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
+      }),
+      body: originalReadTransportBody("begin", originalReadTransportBegin()),
+    });
+    expect(JSON.parse(response.body)).toMatchObject({ ok: false, reason: "dispatch-refused" });
+    expect(f.producer.read).not.toHaveBeenCalled();
+  } finally {
+    await f.fixture.stop();
+    f.producer.registry.dispose();
+  }
+});
+
+it("does not return a parent admitted while the accepted root changed across await", async () => {
+  const f = nativeBridgeFixture("PRIVATE_POSTAWAIT_ROOT", undefined, 1, false, FIXTURE_RUN_ID);
+  const owned = f.facade.nativeTextRead;
+  const original = owned?.invocations;
+  if (owned === undefined || original === undefined)
+    throw new TypeError("Missing actual native facet");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = vi.fn();
+  const begin = original.begin;
+  const facade = {
+    ...f.facade,
+    nativeTextRead: {
+      ...owned,
+      invocations: {
+        ...original,
+        begin: async (
+          input: CodingToolNativeReadBeginInput,
+        ): Promise<Awaited<ReturnType<typeof begin>>> => {
+          const result = await begin(input);
+          reached();
+          await held;
+          return result;
+        },
+      },
+    },
+  };
+  const route = await startNativeReadTransportFixture({ ...f, facade });
+  const pending = route.call("begin", originalReadTransportBegin());
+  try {
+    await vi.waitFor(() => {
+      expect(reached).toHaveBeenCalledOnce();
+    });
+    route.root.mockReturnValue({
+      kind: "managed-task",
+      canonicalRoot: "/changed-after-admission",
+      repositoryRoot: f.authority.root,
+      fs: nodeWorkspaceFs,
+    });
+    release();
+    expect(JSON.parse((await pending).body)).toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(await route.fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+    expect(f.process).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await pending;
+    await stopNativeBridge(f, route.fixture);
+  }
+});
+
+it.each([
+  "accessor",
+  "inherited",
+  "symbol",
+  "extra",
+  "context-accessor",
+  "context-extra",
+  "range-stat",
+] as const)("captures Read transport data without trusting %s fields", async (kind) => {
+  const { copyNativeReadTransportPacket } = await import("./opencodeRuntimeComposition.js");
+  const getter = vi.fn(() => "PRIVATE_ACCESSOR");
+  const packet: Record<string | symbol, unknown> = JSON.parse(
+    originalReadTransportBody("begin", originalReadTransportBegin()),
+  ) as Record<string, unknown>;
+  if (kind === "accessor") Object.defineProperty(packet, "actionId", { get: getter });
+  if (kind === "inherited") Object.setPrototypeOf(packet, { authority: "not-owned" });
+  if (kind === "symbol") packet[Symbol("authority")] = "not-owned";
+  if (kind === "extra") packet.workspaceRoot = "/not-owned";
+  if (kind === "context-accessor")
+    Object.defineProperty(packet.context, "sessionID", { get: getter });
+  if (kind === "context-extra")
+    packet.context = { ...(packet.context as object), guard: "not-owned" };
+  if (kind === "range-stat") {
+    Object.assign(packet, {
+      phase: "stat",
+      identity: { actionId: "a", idempotencyKey: "a", invocationId: "b" },
+      ordinal: 1,
+      purpose: "native-tool-io",
+      range: { offset: 0, length: 1 },
+    });
+    delete packet.actionId;
+    delete packet.idempotencyKey;
+    delete packet.context;
+  }
+  expect(copyNativeReadTransportPacket(packet)).toBeUndefined();
+  expect(getter).not.toHaveBeenCalled();
+});
+
+function nativeTransportVerdict(body: string): { readonly ok: boolean } {
+  return JSON.parse(body) as { readonly ok: boolean };
+}
+
+it("logs technical root acquisition failure and starts no canonical Read effect", async () => {
+  const f = nativeBridgeFixture("PRIVATE_ROOT_ACQUISITION", undefined, 1, false, FIXTURE_RUN_ID);
+  const charge = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const route = await startNativeReadTransportFixture(f, {
+    diagnostics: {
+      record: (event): void => {
+        diagnostics.push(event);
+      },
+    },
+  });
+  route.root.mockImplementationOnce(() => {
+    throw new TypeError("PRIVATE_ROOT_ACQUISITION_FAILURE");
+  });
+  try {
+    const result = await route.call("begin", originalReadTransportBegin());
+    expect(result.status).toBe(502);
+    expect(nativeTransportVerdict(result.body)).toMatchObject({ ok: false });
+    expect(charge).not.toHaveBeenCalled();
+    expect(f.process).not.toHaveBeenCalled();
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_ROOT_ACQUISITION_FAILURE");
+  } finally {
+    await stopNativeBridge(f, route.fixture);
+  }
+});
+
+function observeNativeReadBytes(
+  f: NativeBridgeFixture,
+  captured: (bytes: Uint8Array) => void,
+): NativeBridgeFixture {
+  const selected = f.facade.nativeTextRead;
+  const parent = selected?.invocations;
+  const io = parent?.fileIO;
+  if (selected === undefined || parent === undefined || io === undefined)
+    throw new TypeError("Missing actual native file producer");
+  return {
+    ...f,
+    facade: {
+      ...f.facade,
+      nativeTextRead: {
+        ...selected,
+        invocations: {
+          ...parent,
+          fileIO: {
+            ...io,
+            readBytes: async (identity, input): ReturnType<typeof io.readBytes> => {
+              const result = await io.readBytes(identity, input);
+              if (result.ok) captured(result.bytes);
+              return result;
+            },
+          },
+        },
+      },
+    },
+  };
+}

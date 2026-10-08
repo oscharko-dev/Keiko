@@ -546,6 +546,17 @@ instructions are separately qualified with a controlled Location/Project, not ge
 Original Git discovery, the ready lifecycle and full native file/tool advertisement remain separate
 requirements; this private prerequisite does not activate the production service.
 
+The separately inactive original Read-parent transport also uses the existing authenticated tool
+route. Closed begin/byte/stat/list/close packets require the existing admitted run's actual ready
+state, observed exact session, current accepted root and captured native Read facet. They preserve
+the canonical parent identity, replay/ordinal controls and single authority charge. Failed or
+cancelled close validates that identity before aborting only its existing admission controller.
+Completed close does not cancel unrelated work. Returned settlement joins actual physical work and
+the same idempotent slot release, so response disconnection cannot free a still-running reader.
+Private controls use genuine authority/Manager admission with hermetic endpoint and supervisor
+readiness; they do not qualify the fixed service host as ready or activate its native advertisement.
+The existing rejection operation records the closed `native-read-refused` reason without bodies.
+
 A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
 immediate directory entries to original native file consumers. Its collected output limit is
 64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused

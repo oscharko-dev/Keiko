@@ -10810,6 +10810,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: [
+          "native-read-refused",
           "native-initialization-refused",
           "native-response-failed",
           "origin-not-allowed",

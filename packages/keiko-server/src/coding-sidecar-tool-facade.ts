@@ -40,6 +40,7 @@ import { emitServerDiagnostic, contentFreeErrorClass } from "./diagnostics-log.j
 // result, which the plugin returns to the model in place of the call, so the run goes on without it
 // (owner decision 2026-09-26, ADR-0124 D6); a cancelled or unavailable ask stays a bare 403.
 type CodingSidecarToolFacadeRejectionReason =
+  | "native-read-refused"
   | "native-initialization-refused"
   | "native-response-failed"
   | "origin-not-allowed"
@@ -63,6 +64,7 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
       dataClass: "closed-enum",
       required: true,
       values: [
+        "native-read-refused",
         "native-initialization-refused",
         "native-response-failed",
         "origin-not-allowed",
@@ -95,6 +97,7 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
 const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   Record<CodingSidecarToolFacadeRejectionReason, ActivityLogErrorKind>
 > = {
+  "native-read-refused": "authority-denied",
   "native-initialization-refused": "authority-denied",
   "native-response-failed": "unavailable",
   "origin-not-allowed": "authority-denied",
@@ -367,7 +370,13 @@ export async function handleCodingSidecarToolFacade(
     if (result.nativeBytes !== undefined) return await deliverNativeToolBytes(ctx, result);
     if (result.nativeResult === true) {
       if (result.status !== 200)
-        logToolFacadeRejection(ctx, result.status, "native-initialization-refused");
+        logToolFacadeRejection(
+          ctx,
+          result.status,
+          parsed.action === "native-read-invocation"
+            ? "native-read-refused"
+            : "native-initialization-refused",
+        );
       return { status: result.status, body: JSON.parse(result.body) as unknown };
     }
     return toolFacadeRouteResult(ctx, result);
