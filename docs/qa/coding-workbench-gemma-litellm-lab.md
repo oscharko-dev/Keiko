@@ -1504,3 +1504,42 @@ behind a returned never-helper. The existing static failure-path analyzer report
 before that correction and no finding for it afterward; all **103 owning HTTP tests** pass again.
 No failure-path exemption, legacy-register addition, authority widening or feature activation is
 introduced. Final global gates and final-head live/package qualification remain pending.
+
+### Review closeout: actual edit-revision verification and follow-up ownership
+
+ROOT independently qualifies diagnostic freeze `10ad424208b8e688c36b8dc8b981d9dcf04125ab41b9bbb90934467dd959b5d6`
+and revision freeze `40bffdf54b6569bfc7e41f42f26cfc3acd83e5afedca30a3cf812158683424b1`
+against published parent `3a1c5b12a492ce6ecf3306170e4fb63e98e07921`. The original
+task-digest fixture correction is retained; frozen replacement tests do not restore its earlier
+private state accessor.
+
+The unchanged diagnostic owners reproduce **five genuine failures**, then pass **249 tests across
+two suites**. Only applied edits establish a verification requirement; read-only diagnosis does not
+invent a mutation obligation. Already admitted effects can settle during script-trust presentation
+pauses without losing the run's effort accounting.
+
+The revision test-only baseline records **25 failed and 607 passed assertions across six suites**.
+This includes missing newly introduced observer methods and their prerequisite assertions, not 25
+independent behavioral defects. The frozen genuine regression set covers two real pre-edit verifier
+admissions, two unavailable-target controls and strict legacy-wire compatibility. The producer
+captures the actual edit revision before verifier execution or script-trust waiting, and the existing
+ledger checks that revision instead of wall-clock ordering. Skipped/unavailable checks cannot erase
+a previously required failing target or a real fresh pass. The optional nonnegative wire fact and
+body-free operation field use the existing contracts and logging owner.
+
+After exact source integration, ROOT's first fresh-graph run passes 630/632 tests; two existing
+formatter proofs refuse the stale generated operation registration. That failed run remains
+recorded. Canonical regeneration and rebuilding its leaf resolve the mismatch; the final unchanged
+six-suite selection passes **632/632**, and the two existing catalog/failure-surface suites pass
+**111/111** (97 catalog and 14 failure-surface controls). Focused strict types, zero-warning lint and formatting pass. Generation resolves
+**539/539 proofs and 30/30 scenarios with zero violations**. No registry exemption or new operation
+is introduced. Continuation/denial-race repair, final global gates and final-head live qualification
+remain separate pending work.
+
+The owner-directed follow-up is now [epic #3897](https://github.com/oscharko-dev/Keiko/issues/3897),
+attached as a native child of original epic #3871. Its ten native children #3898–#3907 cover every
+current capability row exactly once plus payload security/license, original service/settings,
+platform/process ownership, gateway health, large-repository performance and full live comparison.
+Original #3871–#3875 remain open; required checks, introduced defects and review findings stay in
+PR #3895. This checkpoint does not claim productive original-service activation or complete
+standalone parity.

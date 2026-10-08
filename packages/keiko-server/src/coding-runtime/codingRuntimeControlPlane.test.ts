@@ -340,7 +340,7 @@ describe("coding runtime control plane", () => {
   // resolver, long before this orchestrator exists, so its refused edits reached nothing that
   // counted them and the run looped on NO_ACTIVE_SESSION until an operator stopped it.
   it("fills a runtime host's edit outcome slot with the orchestrator's real observeEditOutcome", () => {
-    let attached: ((runId: string, outcome: CodingToolEditOutcome) => void) | undefined;
+    let attached: import("./codingToolFacadePorts.js").CodingRuntimeEditOutcomeObserver | undefined;
     const runtimeHost: CodingRuntimeHost = {
       createManager: () => unqualifiedManager(),
       launchResolver: { resolve: () => qualifiedLaunch() },
@@ -363,6 +363,9 @@ describe("coding runtime control plane", () => {
     const outcome: CodingToolEditOutcome = { kind: "refused", reasonCode: "NO_ACTIVE_SESSION" };
     attached?.("run-1", outcome);
     expect(observeSpy).toHaveBeenCalledExactlyOnceWith("run-1", outcome);
+    const revision = vi.spyOn(control.orchestrator, "verificationRevision").mockReturnValue(3);
+    expect(attached?.verificationRevision?.("run-1")).toBe(3);
+    expect(revision).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 });
 

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "be87262bd2c0c713d00800224762e578f38aeaad1dfcd7812ad0d12d0ff3c780" as const;
+  "9e5a8f6dfa167a2b82b2df04b6b235132ebf1f3e4b7c5974099cb44e21d98385" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -10061,6 +10061,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "verificationEditRevision",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "verificationEventId",

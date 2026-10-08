@@ -1182,6 +1182,43 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
   });
 });
 
+describe("verification edit revision evidence", () => {
+  const base = baseRuntimeEvent();
+  const event = {
+    schemaVersion: base.schemaVersion,
+    eventId: base.eventId,
+    runId: base.runId,
+    occurredAt: base.occurredAt,
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    verificationStatus: "passed",
+    passedCount: 1,
+    failedCount: 0,
+    skippedCount: 0,
+  };
+  it("admits a producer-owned nonnegative revision only on the summary", () => {
+    expect(validateCodingWorkbenchRuntimeEvent(event).ok).toBe(true);
+    expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision: 0 }).ok).toBe(
+      true,
+    );
+    expect(validateCodingWorkbenchRuntimeEvent(event).ok).toBe(true);
+  });
+  it.each([-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid revision %s",
+    (verificationEditRevision) => {
+      expect(validateCodingWorkbenchRuntimeEvent({ ...event, verificationEditRevision }).ok).toBe(
+        false,
+      );
+    },
+  );
+  it("rejects revision evidence on an unrelated runtime event", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({ ...baseRuntimeEvent(), verificationEditRevision: 0 })
+        .ok,
+    ).toBe(false);
+  });
+});
+
 describe("validateCodingWorkbenchRuntimeEvent", () => {
   it("accepts only a body-free target digest on verification summaries", () => {
     const event = {

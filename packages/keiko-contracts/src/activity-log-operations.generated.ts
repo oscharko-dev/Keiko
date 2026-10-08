@@ -9797,6 +9797,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      verificationEditRevision: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",

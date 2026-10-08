@@ -169,10 +169,13 @@ export type CodingToolEditOutcome =
     };
 
 /** The run-scoped form the run's orchestration receives an edit outcome in (F5, #3873). */
-export type CodingRuntimeEditOutcomeObserver = (
+export type CodingRuntimeEditOutcomeObserver = ((
   runId: string,
   outcome: CodingToolEditOutcome,
-) => void;
+) => void) & {
+  /** Same ledger revision, read synchronously at an admitted verifier's start. */
+  readonly verificationRevision?: ((runId: string) => number | undefined) | undefined;
+};
 
 export interface CodingToolFacadeOptions {
   readonly maxBodyBytes?: number | undefined;

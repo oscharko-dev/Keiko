@@ -717,6 +717,8 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly failureLocationCount?: number | undefined;
   readonly failureLocationsTruncated?: boolean | undefined;
   readonly verificationTargetDigest?: string | undefined;
+  /** Server-owned edit revision captured at the verifier admission; absent means unavailable. */
+  readonly verificationEditRevision?: number | undefined;
   /** Absent on older events; never infer counts or timing from tool text. */
   readonly verificationSummary?: CodingWorkbenchVerificationSummary | undefined;
   readonly artifactKind?: string | undefined;

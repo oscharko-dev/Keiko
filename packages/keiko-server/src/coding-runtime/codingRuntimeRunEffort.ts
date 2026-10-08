@@ -217,6 +217,7 @@ export function createCodingRuntimeRunEffortRegistry(
 interface OrchestratorEffortRecord {
   verificationCount: number;
   verificationRequired: boolean;
+  editRevision: number;
   readonly verificationTargets: Map<string, boolean>;
   operatorDecisionCount: number;
   operatorWaitMs: number;
@@ -257,14 +258,35 @@ export class CodingRuntimeRunEffortLedger {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     run.verificationRequired = true;
+    run.editRevision = boundedSum(run.editRevision, 1);
     for (const target of run.verificationTargets.keys()) run.verificationTargets.set(target, false);
   }
 
-  verification(runId: string, passed = false, target = "legacy"): void {
+  verificationRevision(runId: string): number | undefined {
+    const revision = this.runs.get(runId)?.editRevision;
+    return revision === Number.MAX_SAFE_INTEGER ? undefined : revision;
+  }
+
+  verification(
+    runId: string,
+    passed: boolean | null = false,
+    target = "legacy",
+    editRevision?: number,
+  ): void {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     run.verificationCount += 1;
-    run.verificationRequired = true;
+    if (passed === null) return;
+    if (
+      run.verificationRequired &&
+      (editRevision === undefined ||
+        editRevision !== run.editRevision ||
+        editRevision === Number.MAX_SAFE_INTEGER)
+    ) {
+      // A late old summary must not erase an already observed fresh pass for this same target.
+      if (!run.verificationTargets.has(target)) run.verificationTargets.set(target, false);
+      return;
+    }
     run.verificationTargets.set(target, passed);
   }
 
@@ -323,6 +345,7 @@ function newOrchestratorRecord(): OrchestratorEffortRecord {
   return {
     verificationCount: 0,
     verificationRequired: false,
+    editRevision: 0,
     verificationTargets: new Map(),
     operatorDecisionCount: 0,
     operatorWaitMs: 0,

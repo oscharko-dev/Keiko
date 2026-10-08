@@ -96,6 +96,7 @@ import type {
   SecureWorkspaceTextReadPort,
 } from "./secureWorkspaceTextRead.js";
 import { humanDecisionToolResult } from "./codingToolFacade.js";
+import { CodingRuntimeRunEffortLedger } from "./codingRuntimeRunEffort.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -825,6 +826,49 @@ describe("production managed worktree tools", () => {
       expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview: false }));
       expect(apply).toHaveBeenCalledOnce();
       expect(browserAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["same-clock", "clock-moved"] as const)(
+    "captures original verification admission before a later edit (%s)",
+    async (clock) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const ledger = new CodingRuntimeRunEffortLedger();
+      ledger.begin("run-verification-3");
+      ledger.edit("run-verification-3");
+      const revision = (): number | undefined => ledger.verificationRevision("run-verification-3");
+      const admittedRevision = revision();
+      const events: CodingWorkbenchRuntimeEvent[] = [];
+      const facade = verificationFacade({
+        records: [],
+        events,
+        verificationRevision: revision,
+        runToReport: (): Promise<VerificationReport> => {
+          ledger.edit("run-verification-3");
+          if (clock === "clock-moved") vi.spyOn(Date, "now").mockReturnValue(1);
+          return Promise.resolve(verificationReport("passed"));
+        },
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "revision-proof",
+          idempotencyKey: "revision-proof",
+          verifierId: "test",
+        }),
+      });
+      const event = events.find((entry) => entry.kind === "verification-summarized");
+      expect(event?.verificationEditRevision).toBeDefined();
+      expect(event?.verificationEditRevision).toBe(admittedRevision);
+      ledger.verification(
+        "run-verification-3",
+        true,
+        event?.verificationTargetDigest,
+        event?.verificationEditRevision,
+      );
+      expect(ledger.needsVerification("run-verification-3")).toBe(true);
+      vi.restoreAllMocks();
     },
   );
 
@@ -3956,6 +4000,7 @@ function verificationRunnerOptions(options: {
 }
 
 function verificationFacade(options: {
+  readonly verificationRevision?: (() => number | undefined) | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
   readonly verifiedCommitService?: VerifiedCommitService;
@@ -3975,6 +4020,7 @@ function verificationFacade(options: {
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
+    verificationRevision: options.verificationRevision,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     ...(options.approvalProofVerifier === undefined
       ? {}

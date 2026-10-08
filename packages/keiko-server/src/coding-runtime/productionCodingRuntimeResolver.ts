@@ -1439,10 +1439,18 @@ function mutationPortOptions({
 // The run's own observers on its tool facade: the runtime event sink, and the counter of the run's
 // governed tool calls for its effort roll-up (#3873).
 function runObservers(
-  options: Pick<ManagedToolFacadeInput, "onRuntimeEvent" | "onToolSettled">,
-): Pick<ProductionManagedWorktreeToolInput, "onRuntimeEvent" | "onToolSettled"> {
+  options: Pick<
+    ManagedToolFacadeInput,
+    "onRuntimeEvent" | "onToolSettled" | "editOutcomes" | "minted"
+  >,
+): Pick<
+  ProductionManagedWorktreeToolInput,
+  "onRuntimeEvent" | "onToolSettled" | "verificationRevision"
+> {
   return {
     onRuntimeEvent: options.onRuntimeEvent,
+    verificationRevision: (): number | undefined =>
+      options.editOutcomes.current?.verificationRevision?.(options.minted.authorityRef.runId),
     ...(options.onToolSettled === undefined ? {} : { onToolSettled: options.onToolSettled }),
   };
 }

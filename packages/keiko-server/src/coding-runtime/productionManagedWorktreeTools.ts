@@ -621,6 +621,8 @@ export interface ProductionManagedWorktreeToolInput {
    * it, so the run's orchestration can bound consecutive refusals. Absent, nothing is reported.
    */
   readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
+  /** Server-owned edit revision captured before a verifier executes or waits for script trust. */
+  readonly verificationRevision?: (() => number | undefined) | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -1699,6 +1701,7 @@ function buildVerificationRunner(
       // catalog's ceilings both run from admission, so the wait below must be measured from here
       // and not from the moment the first attempt failed (owner review, PR #3452).
       const enteredAtMs = Date.now();
+      const editRevision = input.verificationRevision?.();
       let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
       if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
         if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
@@ -1712,10 +1715,16 @@ function buildVerificationRunner(
         return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
       }
       verificationSequence += 1;
-      publishVerification(input, verificationSequence, attempt.report, {
-        ...request,
-        verifierId: kind,
-      });
+      publishVerification(
+        input,
+        verificationSequence,
+        attempt.report,
+        {
+          ...request,
+          verifierId: kind,
+        },
+        editRevision,
+      );
       return verificationOutcome(input, attempt, guard, signal);
     },
   };
@@ -2406,6 +2415,7 @@ function publishVerification(
     import("./codingToolIpc.js").CodingToolActionRequest,
     { readonly action: "verification" }
   > & { readonly verifierId: VerificationKind },
+  editRevision: number | undefined,
 ): void {
   const failure = modelVerificationFailure(report);
   const event: CodingWorkbenchRuntimeEvent = {
@@ -2415,6 +2425,7 @@ function publishVerification(
     occurredAt: new Date().toISOString(),
     kind: "verification-summarized",
     verificationKind: "verification-command",
+    ...(editRevision === undefined ? {} : { verificationEditRevision: editRevision }),
     verificationStatus: verificationStatus(report.overallStatus),
     verificationSummary: {
       verifierId: request.verifierId,

@@ -7174,6 +7174,7 @@ describe("verification truth at task settlement", () => {
       skipped: 0,
     },
     targetDigest?: string,
+    editRevision = f.orchestrator.verificationRevision("run-1"),
   ): Promise<void> {
     await f.orchestrator.ingest({
       schemaVersion: "1",
@@ -7186,12 +7187,121 @@ describe("verification truth at task settlement", () => {
       passedCount: counts.passed,
       failedCount: counts.failed,
       skippedCount: counts.skipped,
+      verificationEditRevision: editRevision,
       ...(targetDigest === undefined ? {} : { verificationTargetDigest: targetDigest }),
     });
   }
 
+  it.each(["failed", "partial"] as const)(
+    "completes a read-only %s diagnosis without initiating a repair",
+    async (status) => {
+      const { f, finish } = await runningTask();
+      await verification(f, status);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+      });
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("records an edit that applied during a script-trust decision wait", async () => {
+    const { f, finish } = await runningTask();
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest(operatorDecisionEvent());
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("paused");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await f.orchestrator.ingest(operatorDecisionEvent("limit-reached"));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("counts a genuine passing summary during a script-trust decision wait", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest(operatorDecisionEvent());
+    await verification(f, "passed");
+    await f.orchestrator.ingest(operatorDecisionEvent("accepted"));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(log.records.some((event) => event.op === "coding-runtime.verification-summarized")).toBe(
+      true,
+    );
+  });
+
+  it("keeps a real post-edit pass when another verifier is unavailable", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const revision = f.orchestrator.verificationRevision("run-1");
+    await verification(f, "passed", undefined, "a".repeat(64));
+    await verification(f, "partial", { passed: 0, failed: 0, skipped: 1 }, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    const summary = requireLoggedEvent(
+      log.records.find((entry) => entry.op === "coding-runtime.verification-summarized"),
+      "Expected revision-bound verification evidence",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification-summarized.emitted-line",
+        formatActivityLogProofLine(summary),
+      ),
+    ).toMatchObject({ verificationEditRevision: revision });
+  });
+
+  it("accepts actual passing checks alongside skipped checks without weakening a failed target", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "partial", { passed: 1, failed: 0, skipped: 1 }, "a".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a passing completion from a verifier admitted before the final edit", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const admittedRevision = f.orchestrator.verificationRevision("run-1");
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "passed", undefined, "a".repeat(64), admittedRevision);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+  });
+
+  it("never clears a failed target merely because its next attempt was skipped", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed", undefined, "a".repeat(64));
+    await verification(f, "partial", { passed: 0, failed: 0, skipped: 1 }, "a".repeat(64));
+    await verification(f, "passed", undefined, "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+  });
+
   it("does not let a different passing target clear a failed test", async () => {
     const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "failed", undefined, "a".repeat(64));
     await verification(f, "passed", undefined, "b".repeat(64));
     finish();
@@ -7306,6 +7416,7 @@ describe("verification truth at task settlement", () => {
       finishRepair = resolve;
     });
     f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "failed");
     finish();
     await vi.waitFor(() => {
@@ -7331,6 +7442,7 @@ describe("verification truth at task settlement", () => {
       ok: true,
       completion: Promise.resolve("succeeded"),
     });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "failed");
     finish();
     await vi.waitFor(() => {

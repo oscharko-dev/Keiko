@@ -71,6 +71,7 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
 // at the one production composition site so a test can play the facade's part.
 const editOutcomeCapture = vi.hoisted(() => ({
   observers: [] as ((outcome: { readonly kind: "refused"; readonly reasonCode: string }) => void)[],
+  revisions: [] as (() => number | undefined)[],
 }));
 
 // PR #3876 review: the registry of rendered diffs the resolver hands each run's managed tool facade,
@@ -86,6 +87,8 @@ vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
     ): ReturnType<typeof original.createProductionManagedWorktreeToolFacade> => {
       const observe = args[0].observeEditOutcome;
       if (observe !== undefined) editOutcomeCapture.observers.push(observe);
+      if (args[0].verificationRevision !== undefined)
+        editOutcomeCapture.revisions.push(args[0].verificationRevision);
       materializedPatchesCapture.registries.push(args[0].materializedPatches);
       return original.createProductionManagedWorktreeToolFacade(...args);
     },
@@ -494,9 +497,11 @@ describe("production coding runtime resolver", () => {
     );
     if (host === undefined) throw new Error("expected qualified host");
     const first = vi.fn();
-    const latest = vi.fn();
+    const readRevision = vi.fn(() => 5);
+    const latest = Object.assign(vi.fn(), { verificationRevision: readRevision });
     host.attachEditOutcomeObserver?.(first);
     editOutcomeCapture.observers.length = 0;
+    editOutcomeCapture.revisions.length = 0;
     const request = launchRequest(fixture.workspace);
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
     host.launchResolver.resolve(request);
@@ -508,6 +513,8 @@ describe("production coding runtime resolver", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
+    expect(editOutcomeCapture.revisions[0]?.()).toBe(5);
+    expect(readRevision).toHaveBeenCalledExactlyOnceWith(request.runId);
   });
 
   // PR #3876 review: a run's edit port registers the diff it renders in the one registry the editor

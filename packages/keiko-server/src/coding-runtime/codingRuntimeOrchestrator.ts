@@ -618,6 +618,7 @@ const CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION = defineActivityLogOperat
       required: false,
       maxLength: 64,
     },
+    verificationEditRevision: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -1453,13 +1454,11 @@ function isCompleteVerificationSummary(
   ].every((value) => value !== undefined);
 }
 
-function verificationSummaryPassed(event: CodingWorkbenchRuntimeEvent): boolean {
-  return (
-    event.verificationStatus === "passed" &&
-    (event.passedCount ?? 0) > 0 &&
-    event.failedCount === 0 &&
-    event.skippedCount === 0
-  );
+function verificationSummaryPassed(event: CodingWorkbenchRuntimeEvent): boolean | null {
+  if ((event.failedCount ?? 0) > 0) return false;
+  if ((event.passedCount ?? 0) > 0 && event.verificationStatus !== "failed") return true;
+  // No executed check is unavailable, not a new failing target and never evidence of a pass.
+  return null;
 }
 
 // Whether the event was a complete verification summary, the one the run's roll-up counts (#3873).
@@ -1482,6 +1481,9 @@ function recordRuntimeVerificationSummary(
         verificationEventId: event.eventId,
         verificationKind: event.verificationKind,
         verificationStatus: event.verificationStatus,
+        ...(event.verificationEditRevision === undefined
+          ? {}
+          : { verificationEditRevision: event.verificationEditRevision }),
         passedCount: event.passedCount,
         failedCount: event.failedCount,
         skippedCount: event.skippedCount,
@@ -1713,6 +1715,12 @@ type TaskSettlementFailureCode = CodingRuntimeTerminalFailureCode | EditRefusalF
 const REFUSAL_COUNTED_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "running",
   "awaiting-approval",
+]);
+
+// A script-trust wait pauses presentation while already admitted tool effects can still settle.
+const EFFORT_COUNTED_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  ...REFUSAL_COUNTED_STATES,
+  "paused",
 ]);
 
 function isTerminalRuntimeState(
@@ -2531,6 +2539,7 @@ export class CodingRuntimeOrchestrator {
       recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
       return this.stopAfterIssueFailure(current, "runtime-failed");
     }
+    this.observeVerificationSummary(current, event);
     const paused = await this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
   }
@@ -2623,6 +2632,20 @@ export class CodingRuntimeOrchestrator {
     if (outcome === "accepted" || outcome === "denied") this.effort.decision(runId);
   }
 
+  private observeVerificationSummary(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): void {
+    if (!EFFORT_COUNTED_STATES.has(current.state)) return;
+    if (!recordRuntimeVerificationSummary(this.deps.activityLog, event)) return;
+    this.effort.verification(
+      current.runId,
+      verificationSummaryPassed(event),
+      event.verificationTargetDigest ?? event.verificationKind,
+      event.verificationEditRevision,
+    );
+  }
+
   private async ingestActiveEvent(
     current: CodingRuntimeSnapshot,
     event: CodingWorkbenchRuntimeEvent,
@@ -2633,13 +2656,6 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
-    if (recordRuntimeVerificationSummary(this.deps.activityLog, event)) {
-      this.effort.verification(
-        current.runId,
-        verificationSummaryPassed(event),
-        event.verificationTargetDigest ?? event.verificationKind,
-      );
-    }
     return this.publishOrRecover(current, event.kind, auxiliaryEventFacts(event));
   }
 
@@ -2894,10 +2910,19 @@ export class CodingRuntimeOrchestrator {
    * that names the refusal class, through the same settlement a failed turn takes, instead of
    * letting the model resend an edit that cannot apply until an operator stops the run.
    */
+  verificationRevision(runId: string): number | undefined {
+    const current = this.current();
+    return current?.runId === runId && EFFORT_COUNTED_STATES.has(current.state)
+      ? this.effort.verificationRevision(runId)
+      : undefined;
+  }
+
   observeEditOutcome(runId: string, outcome: CodingToolEditOutcome): void {
     const current = this.current();
-    if (current?.runId !== runId || !REFUSAL_COUNTED_STATES.has(current.state)) return;
-    if (outcome.kind === "applied") this.effort.edit(runId);
+    if (current?.runId !== runId) return;
+    if (outcome.kind === "applied" && EFFORT_COUNTED_STATES.has(current.state))
+      this.effort.edit(runId);
+    if (!REFUSAL_COUNTED_STATES.has(current.state)) return;
     const escalation = this.editRefusals.observe(runId, outcome);
     if (escalation === undefined) return;
     recordRefusalEscalated(this.deps.activityLog, runId, escalation);

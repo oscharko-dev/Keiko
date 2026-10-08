@@ -681,6 +681,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "failureLocationCount",
     "failureLocationsTruncated",
     "verificationTargetDigest",
+    "verificationEditRevision",
     "verificationSummary",
   ),
   "artifact-produced": runtimeEventAllowedKeys(
@@ -981,6 +982,7 @@ function validateRuntimeEventCounts(value: Record<string, unknown>, errors: stri
     "passedCount",
     "failedCount",
     "skippedCount",
+    "verificationEditRevision",
     "artifactBytes",
     "childResultCount",
   ].forEach((key) => {

@@ -373,9 +373,16 @@ function attachEditOutcomeObserver(
   runtimeHost: CodingRuntimeHost | undefined,
   orchestrator: CodingRuntimeOrchestrator,
 ): void {
-  runtimeHost?.attachEditOutcomeObserver?.((runId, outcome): void => {
-    orchestrator.observeEditOutcome(runId, outcome);
-  });
+  const observe: CodingRuntimeEditOutcomeObserver = Object.assign(
+    (runId: string, outcome: Parameters<CodingRuntimeEditOutcomeObserver>[1]): void => {
+      orchestrator.observeEditOutcome(runId, outcome);
+    },
+    {
+      verificationRevision: (runId: string): number | undefined =>
+        orchestrator.verificationRevision(runId),
+    },
+  );
+  runtimeHost?.attachEditOutcomeObserver?.(observe);
 }
 
 function unavailableTaskDispatcher(): CodingRuntimeTaskDispatcher {

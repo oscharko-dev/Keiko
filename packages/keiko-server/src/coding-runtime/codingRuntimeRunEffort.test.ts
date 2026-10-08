@@ -214,6 +214,37 @@ describe("CodingRuntimeRunEffortLedger", () => {
     });
   });
 
+  it.each([true, false])(
+    "keeps a read-only verification result (%s) diagnostic until an edit applies",
+    (passed) => {
+      const ledger = new CodingRuntimeRunEffortLedger();
+      ledger.begin("run-a");
+      ledger.verification("run-a", passed, "diagnostic-target");
+      expect(ledger.needsVerification("run-a")).toBe(false);
+      expect(ledger.rollUp(run, undefined)).toMatchObject({ verificationCount: 1 });
+      ledger.edit("run-a");
+      expect(ledger.needsVerification("run-a")).toBe(true);
+      ledger.verification("run-a", true, "diagnostic-target", ledger.verificationRevision("run-a"));
+      expect(ledger.needsVerification("run-a")).toBe(false);
+    },
+  );
+
+  it("requires actual revision provenance after an edit and ignores a late older pass", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    const earlier = ledger.verificationRevision("run-a");
+    ledger.edit("run-a");
+    ledger.verification("run-a", true, "target-a", earlier);
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    ledger.verification("run-a", true, "target-a");
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    ledger.verification("run-a", true, "target-a", ledger.verificationRevision("run-a"));
+    expect(ledger.needsVerification("run-a")).toBe(false);
+    ledger.verification("run-a", false, "target-a", earlier);
+    expect(ledger.needsVerification("run-a")).toBe(false);
+  });
+
   it("fails closed to zero host counts and reports only the wall time of an unobserved run", () => {
     const ledger = new CodingRuntimeRunEffortLedger();
     ledger.begin("run-a");
