@@ -89,8 +89,10 @@ wrapped command, recording the attestation on `CommandResult`. No second spawnin
 that request neither boundary are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
 
-For an actual Darwin Seatbelt execution-root `npm` or `npx` run, that same boundary sets the
-server-owned `npm_config_script_shell=/bin/sh`. npm extends `PATH` with caller and ancestor bin
+The retained Darwin execution-root environment mapping uses the server-owned
+`npm_config_script_shell=/bin/sh` for `npm`/`npx`. It is not currently selected by assured macOS
+admission, which requires the container lifetime owner (D9); direct native containment fixtures
+qualify the shell/path seam independently. npm extends `PATH` with caller and ancestor bin
 directories; an inaccessible foreign bin directory can make its bare `sh` lookup fail even
 though the system shell is already admitted. Binding that existing executable preserves the
 original `PATH`, workspace bin resolution, the outer `shell: false` spawn and all filesystem and
@@ -183,9 +185,13 @@ Both assured pre-filter execution and in-place repository verification request
 `filesystem:"execution-root"`. In-place runs still operate against the selected real workspace,
 including ordinary package scripts and targeted tests, but repository code may write only inside
 that root and sandbox temporary storage. The governed command runner uses the same existing policy.
-Strict bubblewrap, the filesystem-scoped macOS Seatbelt profile, or Docker/Podman must enforce the
-requested filesystem boundary. Network-only `unshare` and Seatbelt profiles do not qualify. The
-macOS execution-root profile denies reads and writes outside the canonical accepted root, except
+Strict bubblewrap on Linux or Docker/Podman must enforce the requested execution-root boundary.
+On macOS, assured execution-root runs select Docker/Podman with its existing private PID namespace
+and container lifetime; without one, admission fails closed before spawn. Filesystem-scoped Seatbelt
+cannot own a detached `setsid` descendant after the command exits, so it no longer qualifies for
+this selection. Network-only native Seatbelt and gateway routes retain their existing qualified
+contracts. The direct macOS containment profile denies reads and writes outside the canonical
+accepted root, except
 readonly OS/runtime paths, narrowly selected toolchain libraries, and ancestor directory metadata.
 It grants neither the entire `/opt` or `/usr` trees nor Homebrew `var` and `etc`. Homebrew-linked Node
 uses library-file reads and toolchain metadata; it does not receive a general Homebrew data grant.
@@ -193,27 +199,35 @@ Only the dyld boot directories themselves and the selected OS runtime subtree ar
 Preboot children stay denied. Writes and the ephemeral HOME/TMPDIR stay within the accepted root,
 including writes from descendants. Symlink escapes and service-mediated filesystem escapes stay denied.
 Signals and process inspection are restricted to the same sandbox and the process itself.
-This boundary does not establish that detached descendants have stopped after a clean command close;
-that execution-lifetime qualification is separate from the filesystem/network attestation.
+Those native profile controls prove individual file, network, signal and process-information
+restrictions only; they do not attest command lifetime. The actual isolated regression returned
+`exitCode:0` while a detached owned child could still write after settlement. Signaling the original
+process group cannot contain a child that has left it. Native macOS assured execution may qualify
+again only with the existing attested descendant owner wired through the command lifecycle, with
+actual zero-live settlement proof; that integration remains follow-up work in #3899/#3901.
 
-`network:"none"` denies all network activity, including the host loopback. An explicitly selected
-`network:"inherit"` preserves the same filesystem/process boundary and truthfully reports
+`network:"none"` denies host and external network access. The direct Seatbelt profile also denies
+its own loopback, whereas the container has a private loopback namespace. An explicitly selected
+`network:"inherit"` preserves the selected execution-root boundary and truthfully reports
 `networkEnforced:false`; it never upgrades a `none` or gateway policy. Coding Workbench command and
 verification producers still select `none` behind the accepted Authority Envelope. A test requiring
 its own isolated loopback namespace needs a qualifying container/backend; Seatbelt does not silently
-grant host loopback or detect that requirement from the test body. Containers are selected when the
-native filesystem backend is unavailable, not as a retry after a native test fails. The command
+grant host loopback or detect that requirement from the test body. On macOS, containers are selected
+at admission for execution-root work, never as a retry after a native test fails. Container
+`network:none` separates host loopback from container-local loopback; actual platform evidence must
+qualify that distinction, and no host network/PID namespace is granted. The command
 attestation reports filesystem and network enforcement separately. No compatible backend means
 execution is refused before spawn.
 
 Pure planners require the caller's already canonical workspace-contained cwd, and the spawner must
 actually enter that directory. `runCommand` owns both operations; the platform proof supplies both
-instead of passing a `/var` alias and inheriting the test runner's cwd. For a default Darwin Seatbelt
-execution-root child, the existing environment owner binds `OPENSSL_CONF=/dev/null` so Node does not
+instead of passing a `/var` alias and inheriting the test runner's cwd. The retained direct Darwin
+profile fixture binds `OPENSSL_CONF=/dev/null` so Node does not
 import ambient Homebrew OpenSSL configuration outside its root. Explicit policy-admitted OpenSSL
 environment configuration, Node crypto flags, and admitted `NODE_OPTIONS` remain intact. Workspace
-configurations work; configurations outside the admitted root remain refused by the filesystem
-boundary. This does not claim FIPS certification or support for external provider modules.
+configurations work in that profile proof; configurations outside the admitted root remain refused
+by its filesystem boundary. These fixture facts do not certify Seatbelt command lifetime, a native
+assured execution route, FIPS certification or support for external provider modules.
 
 
 The Docker fallback resolves only the selected local engine endpoint before spawning: a canonical

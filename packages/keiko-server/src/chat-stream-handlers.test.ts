@@ -77,7 +77,7 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
-import { currentContextProfileForModel } from "./deps.js";
+import { currentContextProfileForModel, currentConversationReady } from "./deps.js";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -414,9 +414,10 @@ function readyRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig 
   holder.recordVerifiedCapability(
     CHAT_MODEL,
     { conversationReady: true },
-    "2026-08-16T00:00:00.000Z",
+    new Date().toISOString(),
     holder.generation(),
   );
+  expect(currentConversationReady({ gatewayConfig: holder }, CHAT_MODEL)).toBe(true);
   return holder;
 }
 
@@ -425,9 +426,10 @@ function replaceWithReadyRuntimeConfig(holder: RuntimeGatewayConfig): void {
   holder.recordVerifiedCapability(
     CHAT_MODEL,
     { conversationReady: true },
-    "2026-08-16T00:01:00.000Z",
+    new Date().toISOString(),
     holder.generation(),
   );
+  expect(currentConversationReady({ gatewayConfig: holder }, CHAT_MODEL)).toBe(true);
 }
 
 function customModelConfig(modelId: string): GatewayConfig {

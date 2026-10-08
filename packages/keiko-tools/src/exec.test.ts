@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
-import { isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWindowsTerminationCapacity,
@@ -50,6 +50,8 @@ import {
   type SandboxPolicy,
 } from "./types.js";
 import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
+import { buildWrappedCommand } from "@oscharko-dev/keiko-sandbox";
+import { buildChildEnv } from "./sandbox.js";
 
 let root: string;
 let info: WorkspaceInfo;
@@ -104,7 +106,69 @@ function controller(): AbortController {
   return new AbortController();
 }
 
-describe.runIf(process.platform === "darwin")("native execution-root verification", () => {
+interface NativeProfileFixtureResult {
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly profile: string;
+}
+
+function nativeFixtureExecutable(command: string, env: NodeJS.ProcessEnv): string {
+  if (command === "node") return realpathSync(process.execPath);
+  const path = (env.PATH ?? "").split(delimiter).map((directory) => join(directory, command));
+  const executable = path.find((candidate) => existsSync(candidate));
+  if (executable === undefined) throw new Error("Native profile fixture executable unavailable");
+  return realpathSync(executable);
+}
+
+// This exercises the production profile directly; it is not an assured runCommand admission.
+async function runNativeContainmentFixture(
+  input: Parameters<typeof runCommand>[0],
+  deps: RunCommandDeps,
+): Promise<NativeProfileFixtureResult> {
+  const cwd = realpathSync(root);
+  const home = realpathSync(mkdtempSync(join(cwd, ".keiko-home-")));
+  const wrapped = buildWrappedCommand("seatbelt", {
+    command: nativeFixtureExecutable(input.command, deps.processEnv),
+    args: input.args,
+    cwd,
+    network: deps.policy.network,
+    filesystem: "execution-root",
+  });
+  if (wrapped === undefined) throw new Error("Native containment profile unavailable");
+  const env = {
+    OPENSSL_CONF: "/dev/null",
+    npm_config_script_shell: "/bin/sh",
+    ...buildChildEnv(deps.processEnv, deps.policy),
+    HOME: home,
+    TMPDIR: home,
+  };
+  const child = deps.spawn(wrapped.command, wrapped.args, {
+    cwd,
+    env,
+    shell: false,
+    detached: true,
+  });
+  const out: Buffer[] = [],
+    err: Buffer[] = [];
+  child.stdout?.on("data", (chunk: Buffer) => out.push(chunk));
+  child.stderr?.on("data", (chunk: Buffer) => err.push(chunk));
+  const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  try {
+    await once(child, "close");
+    return {
+      exitCode: child.exitCode,
+      stdout: Buffer.concat(out).toString("utf8"),
+      stderr: Buffer.concat(err).toString("utf8"),
+      profile: wrapped.args[1] ?? "",
+    };
+  } finally {
+    clearTimeout(timer);
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe.runIf(process.platform === "darwin")("native profile containment only", () => {
   function confinedDeps(): RunCommandDeps {
     return {
       ...realDeps({ PATH: process.env.PATH ?? "" }),
@@ -118,6 +182,82 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       },
     };
   }
+
+  it.each(["none", "inherit"] as const)(
+    "does not admit an assured run with only Seatbelt and network:%s",
+    async (network) => {
+      const spawn = vi.fn(nodeSpawnFn);
+      await expect(
+        runCommand(
+          {
+            command: "node",
+            args: ["-e", "process.stdout.write('UNADMITTED')"],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          {
+            ...confinedDeps(),
+            policy: { ...confinedDeps().policy, network },
+            spawn,
+          },
+        ),
+      ).rejects.toThrow(CommandDeniedError);
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("admits the available local container through the existing command owner", async () => {
+    const endpointRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-command-engine-")));
+    const endpoint = join(endpointRoot, "engine.sock");
+    const listener = createServer();
+    await new Promise<void>((resolve) => listener.listen(endpoint, resolve));
+    try {
+      const spawn = recordingSpawn();
+      const pending = runCommand(
+        {
+          command: "node",
+          args: ["-e", "process.exit(0)"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          spawn: spawn.fn,
+          resolveExecutable: (command) => `/abs/${command}`,
+          processEnv: { PATH: process.env.PATH ?? "", DOCKER_HOST: `unix://${endpoint}` },
+          sandboxAvailability: {
+            seatbelt: true,
+            bubblewrap: false,
+            unshare: false,
+            docker: true,
+            podman: false,
+          },
+        },
+      );
+      spawn.child.emit("close", 0, null);
+      const result = await pending;
+      expect(result.attestation).toEqual({
+        backend: "container-docker",
+        filesystemEnforced: true,
+        networkEnforced: true,
+        platform: "darwin",
+      });
+      expect(spawn.calls()[0]?.command).toBe("/abs/docker");
+      expect(spawn.calls()[0]?.args).toContain("--rm");
+      expect(spawn.calls()[0]?.args).toContain("--network=none");
+      expect(spawn.calls()[0]?.args).not.toContain("--pid=host");
+      expect(spawn.calls()[0]?.args).not.toContain("--network=host");
+    } finally {
+      await new Promise<void>((resolve) =>
+        listener.close(() => {
+          resolve();
+        }),
+      );
+      rmSync(endpointRoot, { recursive: true, force: true });
+    }
+  });
 
   async function withOwnedVictim(run: (pid: number) => Promise<void>): Promise<void> {
     const victim = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
@@ -147,7 +287,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
         signalDenied: false,
         selfAllowed: true,
       });
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           cwd: undefined,
           timeoutMs: undefined,
@@ -193,7 +333,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
         const control = spawnSync(executable, [String(pid)], { encoding: "utf8" });
         expect(control.status).toBe(0);
         expect(JSON.parse(control.stdout) as unknown).toEqual({ denied: false, self: true });
-        const result = await runCommand(
+        const result = await runNativeContainmentFixture(
           {
             cwd: undefined,
             timeoutMs: undefined,
@@ -222,7 +362,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       child.once("spawn",()=>{process.kill(child.pid,0);child.kill("SIGTERM")});
       child.once("exit",(_,signal)=>process.stdout.write(signal==="SIGTERM"?"OWNED-REAPED":"UNPROVEN"));
     `;
-    const result = await runCommand(
+    const result = await runNativeContainmentFixture(
       {
         cwd: undefined,
         timeoutMs: undefined,
@@ -243,7 +383,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       writeFileSync(config, "");
       const code =
         'process.stdout.write(require("node:crypto").getFips()===0?"CONFIGURED":"UNPROVEN")';
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           cwd: undefined,
           timeoutMs: undefined,
@@ -278,7 +418,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       expect(control.status).toBe(0);
       expect(control.stdout).toBe("CONFIGURED");
       const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           cwd: undefined,
           timeoutMs: undefined,
@@ -328,7 +468,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
         const control = spawnSync(process.execPath, ["-e", code, canary], { encoding: "utf8" });
         expect(control.status).toBe(0);
         expect(control.stdout).toBe("READABLE");
-        const result = await runCommand(
+        const result = await runNativeContainmentFixture(
           {
             cwd: undefined,
             timeoutMs: undefined,
@@ -362,7 +502,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     const control = spawnSync(process.execPath, args, { encoding: "utf8" });
     expect(control.status).toBe(0);
     expect(JSON.parse(control.stdout) as unknown).toEqual({ top: true, denied: false });
-    const result = await runCommand(
+    const result = await runNativeContainmentFixture(
       { cwd: undefined, timeoutMs: undefined, command: "node", args, signal: controller().signal },
       confinedDeps(),
     );
@@ -387,7 +527,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
         temp, home:process.env.HOME}));
     `;
     try {
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           command: "node",
           args: ["-e", code, denied],
@@ -407,11 +547,8 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
         childDenied: true,
       });
       expectConfinedTemporaryDirectory(facts);
-      expect(result.attestation).toMatchObject({
-        backend: "seatbelt",
-        filesystemEnforced: true,
-        networkEnforced: true,
-      });
+      expect(result.profile).toContain("(deny signal process-info*)");
+      expect(result.profile).toContain("(deny file-read* file-write* network*");
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -442,7 +579,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     try {
       const code =
         'const s=require("node:net").connect(Number(process.argv[1]),"127.0.0.1");s.once("connect",()=>{s.end();process.exitCode=7});s.once("error",e=>{process.stdout.write(e.code);s.destroy()})';
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           command: "node",
           args: ["-e", code, String(address.port)],
@@ -475,7 +612,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
         s.once("connect",()=>{s.end();process.stdout.write("CONNECTED")});
         s.once("error",()=>{process.stdout.write("UNPROVEN");s.destroy()});
       `;
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           cwd: undefined,
           timeoutMs: undefined,
@@ -487,11 +624,8 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("CONNECTED");
-      expect(result.attestation).toMatchObject({
-        backend: "seatbelt",
-        filesystemEnforced: true,
-        networkEnforced: false,
-      });
+      expect(result.profile).toContain("(deny file-read* file-write*");
+      expect(result.profile).not.toContain("network*");
     } finally {
       await new Promise<void>((resolve) => {
         listener.close(() => {
@@ -538,7 +672,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     const path = `${callerBin}:${process.env.PATH ?? ""}`;
     const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
     try {
-      const result = await runCommand(
+      const result = await runNativeContainmentFixture(
         {
           command: "npm",
           args: ["run", "typecheck"],
@@ -560,11 +694,8 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       expect(result.stdout).toContain("owned-task-passed");
       expect(result.stderr).toBe("");
       expect(calls[0]?.[2]).toMatchObject({ shell: false, env: { PATH: path } });
-      expect(result.attestation).toMatchObject({
-        backend: "seatbelt",
-        filesystemEnforced: true,
-        networkEnforced: true,
-      });
+      expect(result.profile).toContain("(deny signal process-info*)");
+      expect(result.profile).toContain("(deny file-read* file-write* network*");
     } finally {
       rmSync(caller, { recursive: true, force: true });
     }
@@ -676,6 +807,11 @@ describe("runCommand — the confined npm script shell", () => {
           },
         },
       );
+      if (row.platform === "darwin" && row.backend === "seatbelt" && row.scoped) {
+        await expect(pending).rejects.toThrow(CommandDeniedError);
+        expect(spawn.calls()).toHaveLength(0);
+        return;
+      }
       spawn.child.emit("close", 0, null);
       const result = await pending;
       expect(result.attestation?.backend).toBe(row.backend === "none" ? undefined : row.backend);
@@ -703,7 +839,7 @@ describe("runCommand — the confined npm script shell", () => {
         policy: {
           ...DEFAULT_SANDBOX_POLICY,
           network: "none",
-          filesystem: "execution-root",
+          filesystem: "inherit",
           envAllowlist: [...DEFAULT_ENV_ALLOWLIST, ...Object.keys(env)],
         },
         sandboxAvailability: {

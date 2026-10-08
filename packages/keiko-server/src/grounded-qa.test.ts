@@ -69,7 +69,7 @@ import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
+import { currentConversationReady, type RuntimeGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
@@ -392,10 +392,11 @@ function runtimeGatewayConfig(config: GatewayConfig, ready: boolean): RuntimeGat
     holder.recordVerifiedCapability(
       CHAT_MODEL,
       { conversationReady: true },
-      "2026-08-16T00:00:00.000Z",
+      new Date().toISOString(),
       generation,
     );
   }
+  expect(currentConversationReady({ gatewayConfig: holder }, CHAT_MODEL)).toBe(ready);
   return holder;
 }
 

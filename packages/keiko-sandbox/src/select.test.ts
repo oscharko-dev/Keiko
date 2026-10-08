@@ -66,7 +66,7 @@ describe("selectEnforcingBackend", () => {
       "none",
     );
     expect(selectEnforcingBackend("darwin", { ...NONE, seatbelt: true }, "execution-root")).toBe(
-      "seatbelt",
+      "none",
     );
     expect(selectEnforcingBackend("linux", { ...NONE, bubblewrap: true }, "execution-root")).toBe(
       "bubblewrap",
@@ -76,9 +76,18 @@ describe("selectEnforcingBackend", () => {
     );
   });
 
-  it("prefers native filesystem confinement on macOS over container platform translation", () => {
+  it("requires the container lifetime owner for macOS execution-root runs", () => {
     expect(
       selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, docker: true }, "execution-root"),
+    ).toBe("container-docker");
+    expect(
+      selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, podman: true }, "execution-root"),
+    ).toBe("container-podman");
+  });
+
+  it("retains native macOS confinement for ordinary network-only runs", () => {
+    expect(
+      selectEnforcingBackend("darwin", { ...NONE, seatbelt: true, docker: true }, "inherit"),
     ).toBe("seatbelt");
   });
 });

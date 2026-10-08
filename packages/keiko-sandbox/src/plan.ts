@@ -17,8 +17,8 @@ import type {
 const FAIL_CLOSED_REASON =
   'execution isolation was requested (network: "none" or filesystem: "execution-root") but no compatible sandbox backend ' +
   "is available on this host. Network-only runs need bubblewrap or unshare on Linux, sandbox-exec " +
-  "on macOS, or docker/podman; execution-root runs need strict bubblewrap, filesystem-scoped " +
-  "Seatbelt on macOS, or docker/podman. " +
+  "on macOS, or docker/podman; execution-root runs need strict bubblewrap on Linux or " +
+  "docker/podman. macOS Seatbelt alone cannot contain detached descendants after command exit. " +
   "Untrusted code is not executed.";
 
 // Shared with keiko-server's native runtime backend (nativeRuntimeProcessBackend.ts) so a Windows

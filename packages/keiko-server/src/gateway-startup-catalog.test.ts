@@ -1695,3 +1695,89 @@ it("lets an explicit reload recover at the existing connection backoff after a b
   expect(discovery).toHaveBeenCalledTimes(4);
   expect(catalogCompletions(events).at(-1)?.extra?.outcome).toBe("unchanged");
 });
+
+function catalogEvidenceConfig(
+  ids: readonly string[],
+  contextWindow: number,
+  assumed: boolean,
+): ReturnType<typeof parseGatewayConfig> {
+  const initial = startupConfig(contextWindow);
+  const provider = requiredStartupProvider(initial);
+  return parseGatewayConfig({
+    ...rawConfigFromCurrent(initial, undefined),
+    providers: ids.map((modelId) => ({ ...provider, modelId })),
+    capabilities: ids.map((id) => ({
+      ...createDefaultChatCapability(id),
+      contextWindow,
+      maxOutputTokens: 2000,
+      ...(assumed ? { contextWindowAssumed: true } : {}),
+    })),
+  });
+}
+
+function stubDeclaredCatalog(ids: readonly string[], contextWindow: number): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: unknown) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/model/info"))
+        return Promise.resolve(
+          Response.json({
+            data: ids.map((model_name) => ({
+              model_name,
+              model_info: { mode: "chat", context_window: contextWindow },
+            })),
+          }),
+        );
+      if (path.endsWith("/models"))
+        return Promise.resolve(Response.json({ data: ids.map((id) => ({ id })) }));
+      return Promise.resolve(
+        Response.json({
+          choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+        }),
+      );
+    }),
+  );
+}
+
+it.each([
+  {
+    title: "all three configured models on one accepted connection",
+    ids: ["chat-a", "chat-b", "chat-c"],
+    beforeWindow: 64_000,
+    reportedWindow: 32_000,
+    assumed: false,
+  },
+  {
+    title: "a provenance-only assumption change at the same numeric window",
+    ids: ["chat-model"],
+    beforeWindow: 4_096,
+    reportedWindow: 4_096,
+    assumed: true,
+  },
+])("counts $title in the actual registered catalog completion", async (row) => {
+  stubDeclaredCatalog(row.ids, row.reportedWindow);
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(undefined, events);
+  deps.gatewayConfig?.set(catalogEvidenceConfig(row.ids, row.beforeWindow, row.assumed), true);
+  await vi.waitFor(() => {
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
+  });
+  const completion = catalogCompletions(events)[0];
+  if (completion === undefined) throw new TypeError("Expected actual catalog completion.");
+  const encoded = formatActivityLogProofLine(completion);
+  expectActivityLogProof("gateway.catalog.automatic.completed.line", encoded);
+  expect(JSON.parse(encoded) as unknown).toMatchObject({
+    outcome: "applied",
+    configuredModelCount: row.ids.length,
+    updatedModelCount: row.ids.length,
+  });
+  for (const id of row.ids) {
+    const model = startupModels(deps).find((capability) => capability.id === id);
+    expect(model).toMatchObject({ contextWindow: row.reportedWindow });
+    expect(model?.contextWindowReported).not.toBe(true);
+    expect(model?.contextWindowAssumed).toBeUndefined();
+  }
+  expect(encoded).not.toContain("throwaway-key");
+  expect(encoded).not.toContain("provider.example.invalid");
+});

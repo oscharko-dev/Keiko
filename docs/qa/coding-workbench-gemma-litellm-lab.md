@@ -1730,3 +1730,43 @@ repair passes all six with identical generated HTML digests, preserving current-
 terminal-advice distinctions. This controlled original-entry proof is not the full packaged
 npm/Yarn, gateway or live customer qualification. Final source-bound evidence, coverage, Sonar,
 live/platform/package checks, dependency approval and remaining reviews are still pending.
+
+### Incremental review closeout: bounded command lifetime and readiness fixtures
+
+The authoritative review queue assigns each discussion to exactly one owner. ROOT independently
+checks the actual fix, current source lineage and focused proof before adding a solution reference
+and resolving the conversation. The first 33 discussions from the 89-item closeout snapshot are
+resolved; new review findings join the same queue. Required reviewer approval remains pending.
+
+On Darwin, an actual detached-child regression returned success while an owned `setsid` child
+remained able to write after command settlement. Seatbelt filesystem/process restrictions alone
+do not bind that lifetime. Assured execution-root admission therefore uses the existing Docker or
+Podman PID namespace; with only Seatbelt it refuses before spawn. Native network-only and gateway
+routes retain their existing contracts. ROOT reproduces three actual public-command admission
+failures before the repair, then passes 202 tests in four owning suites, scoped strict types,
+zero-warning lint and formatting. Direct native profile tests retain their individual containment
+assertions and explicitly make no command-lifetime attestation.
+
+ROOT additionally runs the actual compiled `runCommand` against the local Docker engine and its
+existing Node image. An ownership-only `--cidfile` argument identifies the disposable container.
+The detached positive control writes before settlement; the same detached-session child cannot
+write after settlement and removal of its PID namespace. The separate network-none control serves
+its private loopback while refusing the owned host listener, with zero host accepts. This is
+Darwin developer/container evidence, not Windows, hosted-CI or native-supervisor qualification.
+
+Three test fixtures previously supplied successful observations dated in August or September,
+which the finite readiness contract correctly expires. Their actual holder/admission producers
+now receive fresh fixture observations; original memory, cancellation, receiver, rollback and
+window assertions remain intact. The agent retains 14 baseline failures; ROOT independently
+passes the same 276 owning tests, scoped strict types, lint and formatting. The adjacent
+chat-handlers caller remains separately assigned for the same correction.
+
+Two additional actual startup/holder/registered-formatter controls prove catalog counts for three
+configured models on one connection and an assumed-to-declared transition at an unchanged numeric
+window. Both pass with the already repaired producer; they add proof and are not reported as new
+behavior regressions. Declared catalog metadata clears the assumption without inventing a live
+provider-reported provenance flag. ROOT's two controls and scoped strict/lint/format checks pass.
+
+Final local gates, coverage, Sonar, regenerated package/UI evidence, exact-head CI, live sandbox
+qualification and the remaining review discussions are pending. These focused increments do not
+claim complete standalone OpenCode parity or release approval.
