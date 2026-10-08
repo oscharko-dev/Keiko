@@ -1307,6 +1307,7 @@ function buildCommandRunner(
         requestId: request.actionId,
         signal,
         timeoutMs: guard.resolveParentAuthority?.()?.commandPolicy.maxCommandTimeoutMs,
+        beforeSpawn: (): boolean => guard.check() && live(input),
       });
       if (result.failureReason !== "none") {
         return { status: "failed", reasonCode: "command-execution-failed" };

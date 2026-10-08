@@ -125,6 +125,8 @@ import {
 } from "../editor/verificationRunner.js";
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore } from "../store/index.js";
+import { createCommandRunnerManager, type CommandRunnerManager } from "../command-runner.js";
+import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
@@ -1385,6 +1387,105 @@ describe("production managed worktree tools", () => {
     if (posted === undefined) throw new Error("expected the edit to reach the editor route");
     expect(registry.lookup(posted).registered).toBe(true);
     expect(registry.stats().entries).toBe(1);
+  });
+
+  function realCommandFixture(): {
+    readonly root: string;
+    readonly manager: CommandRunnerManager;
+    readonly spawn: ReturnType<typeof vi.fn<SpawnFn>>;
+    readonly diagnostics: readonly ServerDiagnosticRecord[];
+    readonly dispose: () => void;
+  } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-command-live-")));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "command-live");
+    const spawn = vi.fn<SpawnFn>(() => {
+      throw new Error("CONTROLLED_UNEXPECTED_COMMAND_SPAWN");
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const manager = createCommandRunnerManager({
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      store,
+      evidenceStore: createInMemoryEvidenceStore(),
+      isWorkspaceTrustedForPackageScripts: () => true,
+      runDeps: {
+        spawn,
+        resolveExecutable: (command): string => command,
+        sandboxAvailability: {
+          bubblewrap: true,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        },
+        platform: "linux",
+      },
+    });
+    return {
+      root,
+      diagnostics,
+      manager,
+      spawn,
+      dispose: (): void => {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it("refuses a real production command after authority revocation in run-started", async () => {
+    const f = realCommandFixture();
+    let authorized = true;
+    f.manager.subscribe((event) => {
+      if (event.kind === "run-started") authorized = false;
+    });
+    const resolveAuthority = (): ReturnType<
+      ProductionManagedWorktreeToolInput["authority"]["revalidateCapabilityForMutation"]
+    > =>
+      authorized
+        ? { ok: true, envelope: authorizedEnvelope() }
+        : { ok: false, reason: "workspace-drift" };
+    const facade = createProductionManagedWorktreeToolFacade({
+      ...baseEditAdmissionInput(),
+      authority: {
+        revalidateCapabilityForMutation: resolveAuthority,
+        resolveCapabilityForDelegation: resolveAuthority,
+      },
+      workspaceRoot: f.root,
+      resolveWorkspaceRootAccess: () => ({
+        kind: "ordinary",
+        canonicalRoot: f.root,
+        fs: nodeWorkspaceFs,
+      }),
+      commandRunner: f.manager,
+      editorAgentClient: { action: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+    });
+    try {
+      expect(
+        await facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "command",
+            actionId: "command-revoked",
+            idempotencyKey: "command-revoked",
+            commandId: "npm-script:test",
+          }),
+        }),
+      ).toMatchObject({ status: "failed" });
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(f.manager.inFlightCount()).toBe(0);
+      expect(f.diagnostics.at(-1)).toMatchObject({
+        operation: "command.before-spawn",
+        code: "command-spawn-authority-revoked",
+        diagnosticOutcome: "request-refused",
+      });
+      expect(JSON.stringify(f.diagnostics)).not.toContain(f.root);
+      expect(JSON.stringify(f.diagnostics)).not.toContain("CONTROLLED_UNEXPECTED_COMMAND_SPAWN");
+    } finally {
+      f.dispose();
+    }
   });
 
   it("completes a governed command through production wiring", async () => {

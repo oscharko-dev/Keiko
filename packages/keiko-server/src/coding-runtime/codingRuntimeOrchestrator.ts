@@ -2645,6 +2645,8 @@ export class CodingRuntimeOrchestrator {
   ): void {
     if (!EFFORT_COUNTED_STATES.has(current.state)) return;
     if (!recordRuntimeVerificationSummary(this.deps.activityLog, event)) return;
+    if (event.verificationKind === "targeted-test" && event.verificationTargetDigest === undefined)
+      return;
     this.effort.verification(
       current.runId,
       verificationSummaryPassed(event),

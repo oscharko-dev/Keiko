@@ -173,11 +173,7 @@ import {
 } from "./CodingWorkbenchRunStatus";
 import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
-import {
-  offeredSavedCodingModel,
-  rememberCodingModel,
-  savedCodingModel,
-} from "./codingModelPreference";
+import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
@@ -879,14 +875,14 @@ export function CodingWorkbenchWindow({
   // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
   const catalogSettled = useGatewayModelCatalogSettled();
   useEffect(() => requestGatewayModelCatalogRefresh(), []);
-  useCodingModelSelection(
+  const modelSelection = useCodingModelSelection(
     state,
     actions,
     codingModels,
     catalogInconclusive(chatCatalog, catalogSettled),
     pendingCodingModelIds(chatCatalog),
   );
-  useWorkbenchCatalogEvidence(state, chatCatalog);
+  useWorkbenchCatalogEvidence(state, chatCatalog, modelSelection.human);
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
@@ -961,6 +957,7 @@ export function CodingWorkbenchWindow({
       research={research}
       skills={skills}
       codingModels={codingModels}
+      onSelectedModelChange={modelSelection.onChange}
       authority={authority}
       onOpenGit={onOpenGit}
       onSelectRepository={onSelectRepository}
@@ -1042,7 +1039,8 @@ function useCodingModelSelection(
   models: readonly ModelCapability[],
   catalogEmpty: boolean,
   pendingModelIds: readonly string[] | undefined,
-): void {
+): { readonly human: boolean; readonly onChange: (modelId: string | null) => void } {
+  const [humanSelectedId, setHumanSelectedId] = useState<string | null>(null);
   const selectionPending =
     state.selectedModelId !== null &&
     pendingModelIds?.includes(state.selectedModelId) === true &&
@@ -1057,7 +1055,10 @@ function useCodingModelSelection(
       offeredSavedCodingModel(models)?.id ??
       models.find((model) => model.conversationReady === true)?.id ??
       null;
-    if (next !== state.selectedModelId) actions.setSelectedModel(next);
+    if (next !== state.selectedModelId) {
+      setHumanSelectedId(null);
+      actions.setSelectedModel(next);
+    }
   }, [
     actions,
     catalogUnavailable,
@@ -1066,6 +1067,23 @@ function useCodingModelSelection(
     state.runtimePreference,
     state.selectedModelId,
   ]);
+  useCodingReasoningEffortSelection(state, actions, selected, catalogUnavailable);
+  return {
+    human: state.selectedModelId !== null && humanSelectedId === state.selectedModelId,
+    onChange: (modelId): void => {
+      setHumanSelectedId(modelId);
+      actions.setSelectedModel(modelId);
+      rememberCodingModel(modelId);
+    },
+  };
+}
+
+function useCodingReasoningEffortSelection(
+  state: CodingWorkbenchRuntimeState,
+  actions: CodingWorkbenchRuntimeActions,
+  selected: ModelCapability | undefined,
+  catalogUnavailable: boolean,
+): void {
   useEffect(() => {
     if (catalogUnavailable) return;
     const efforts = selected?.reasoningEfforts ?? [];
@@ -1113,10 +1131,10 @@ interface WorkbenchCatalogEvidenceSnapshot {
 function workbenchCatalogEvidenceSnapshot(
   selectedId: string | null,
   read: NonNullable<ChatSessionCatalog["modelCatalogRead"]>,
+  human: boolean,
 ): WorkbenchCatalogEvidenceSnapshot {
   const selected = read.capabilities.find((model) => model.id === selectedId);
   const fresh = isFreshSelectedCodingModel(selected);
-  const human = selectedId !== null && savedCodingModel() === selectedId;
   const selectionDigest = selectedId === null ? undefined : sha256Hex(selectedId);
   const held = selected !== undefined && isCodingWorkbenchModel(selected) && !fresh;
   const catalogDigest = sha256Hex(JSON.stringify(read.capabilities));
@@ -1170,15 +1188,16 @@ function reportWorkbenchCatalogDecision(
 function useWorkbenchCatalogEvidence(
   state: CodingWorkbenchRuntimeState,
   catalog: ChatSessionCatalog | null,
+  human: boolean,
 ): void {
   const previous = useRef<WorkbenchCatalogEvidenceState | undefined>(undefined);
   useEffect(() => {
     const read = catalog?.modelCatalogRead;
     if (state.runtimePreference !== "managed-gateway" || read === undefined) return;
-    const snapshot = workbenchCatalogEvidenceSnapshot(state.selectedModelId, read);
+    const snapshot = workbenchCatalogEvidenceSnapshot(state.selectedModelId, read, human);
     reportWorkbenchCatalogDecision(previous.current, snapshot, read.correlationId);
     previous.current = snapshot.next;
-  }, [catalog?.modelCatalogRead, state.runtimePreference, state.selectedModelId]);
+  }, [catalog?.modelCatalogRead, human, state.runtimePreference, state.selectedModelId]);
 }
 
 interface WorkbenchContentProps {
@@ -1200,6 +1219,7 @@ interface WorkbenchContentProps {
   readonly research: UseCodingWorkbenchResearchResult;
   readonly skills: UseCodingWorkbenchSkillsResult;
   readonly codingModels: readonly ModelCapability[];
+  readonly onSelectedModelChange: (modelId: string | null) => void;
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   readonly onSelectRepository: (root: string) => void;
@@ -1457,6 +1477,7 @@ function WorkbenchColumns({
   research,
   skills,
   codingModels,
+  onSelectedModelChange,
   authority,
   onOpenGit,
   onSelectRepository,
@@ -1611,10 +1632,7 @@ function WorkbenchColumns({
       models={codingModels}
       selectedModelId={state.selectedModelId}
       reasoningEffort={state.reasoningEffort}
-      onSelectedModelChange={(modelId): void => {
-        actions.setSelectedModel(modelId);
-        rememberCodingModel(modelId);
-      }}
+      onSelectedModelChange={onSelectedModelChange}
       onReasoningEffortChange={actions.setReasoningEffort}
     />
   );

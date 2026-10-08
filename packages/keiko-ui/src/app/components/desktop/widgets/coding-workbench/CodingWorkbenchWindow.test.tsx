@@ -4614,7 +4614,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
           modelCatalog: expect.objectContaining({
             surface: "coding-workbench",
             outcome: "held",
-            selectionProvenance: "human",
+            selectionProvenance: "elected",
             selectionDigest: sha256Hex(MODEL_B.id),
             configuredModelCount: 2,
             usableModelCount: 1,
@@ -4642,6 +4642,128 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(MODEL_B.id);
     window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
     resetClientDiagnosticWriter();
+  });
+
+  describe("model selection event provenance", () => {
+    afterEach(() => {
+      window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+      resetClientDiagnosticWriter();
+      vi.restoreAllMocks();
+    });
+
+    function observeCatalog(models: readonly ModelCapability[], correlationId: string): void {
+      chatCatalogMock.models = [...models];
+      chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: models,
+        source: "background",
+        correlationId,
+      };
+    }
+
+    function expectHeldOrigin(writer: ReturnType<typeof vi.fn>, human: boolean): void {
+      expect(writer).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          parentCorrelationId: "origin-held-123",
+          stageReport: expect.objectContaining({
+            phase: "settled",
+            modelCatalog: expect.objectContaining({
+              outcome: "held",
+              selectionProvenance: human ? "human" : "elected",
+              selectionDigest: sha256Hex(MODEL_B.id),
+            }),
+          }),
+        }),
+      );
+    }
+
+    it("records an automatically restored preference as elected", () => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, MODEL_B.id);
+      observeCatalog([MODEL_A, MODEL_B], "origin-initial-123");
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      observeCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }], "origin-held-123");
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expectHeldOrigin(writer, false);
+    });
+
+    it("clears human origin when a later catalog automatically re-elects the same saved model", async () => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      observeCatalog([MODEL_A, MODEL_B], "origin-initial-123");
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_A.id }),
+        actions: liveActions,
+      });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Coding model: model-a" }));
+      await user.click(screen.getByRole("option", { name: MODEL_B.id }));
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      observeCatalog([MODEL_A], "origin-fallback-123");
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(liveActions.setSelectedModel).toHaveBeenLastCalledWith(MODEL_A.id);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_A.id }),
+        actions: liveActions,
+      });
+      observeCatalog([MODEL_B], "origin-reelected-123");
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(liveActions.setSelectedModel).toHaveBeenLastCalledWith(MODEL_B.id);
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      observeCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }], "origin-held-123");
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expectHeldOrigin(writer, false);
+    });
+
+    it.each([false, true])(
+      "records the actual human pick when preference persistence fails: %s",
+      async (storageFails) => {
+        const writer = vi.fn();
+        setClientDiagnosticWriter(writer);
+        observeCatalog([MODEL_A, MODEL_B], "origin-initial-123");
+        const liveActions = actions();
+        runtimeHookMock.mockReturnValue({
+          state: liveState({ selectedModelId: MODEL_A.id }),
+          actions: liveActions,
+        });
+        const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+        if (storageFails)
+          vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+            throw new DOMException("storage unavailable", "SecurityError");
+          });
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("combobox", { name: "Coding model: model-a" }));
+        await user.click(screen.getByRole("option", { name: MODEL_B.id }));
+        expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+        expect(window.localStorage.getItem(CODING_MODEL_STORAGE_KEY)).toBe(
+          storageFails ? null : MODEL_B.id,
+        );
+        runtimeHookMock.mockReturnValue({
+          state: liveState({ selectedModelId: MODEL_B.id }),
+          actions: liveActions,
+        });
+        observeCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }], "origin-held-123");
+        view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+        expectHeldOrigin(writer, true);
+      },
+    );
   });
 
   // #3873 live review: after a run with "gemma-4-31b-it" the composer fell back to the first offered

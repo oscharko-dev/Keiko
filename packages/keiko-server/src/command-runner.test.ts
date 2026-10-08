@@ -636,9 +636,10 @@ describe("CommandRunnerManager — execution", () => {
     const spawn = vi.fn(makeSpawn());
     let authorized = true;
     let started = false;
+    let postStartTrustChecks = 0;
     const manager = makeManager(spawn, {
       isWorkspaceTrustedForPackageScripts: (): boolean => {
-        if (started) authorized = false;
+        if (started && ++postStartTrustChecks === 2) authorized = false;
         return true;
       },
     });
@@ -650,6 +651,7 @@ describe("CommandRunnerManager — execution", () => {
       taskId: "npm-script:test",
       beforeSpawn: () => authorized,
     });
+    expect(postStartTrustChecks).toBe(2);
     expect(result.failureReason).toBe("denied");
     expect(spawn).not.toHaveBeenCalled();
   });
@@ -663,7 +665,7 @@ describe("CommandRunnerManager — execution", () => {
       taskId: "npm-script:test",
       beforeSpawn: (): boolean => {
         callerChecks += 1;
-        if (callerChecks === 2) {
+        if (callerChecks === 3) {
           writeFileSync(
             join(workspaceRoot, "package.json"),
             PACKAGE_JSON.replace("vitest run", "node attacker.js"),
@@ -673,7 +675,7 @@ describe("CommandRunnerManager — execution", () => {
         return true;
       },
     });
-    expect(callerChecks).toBe(2);
+    expect(callerChecks).toBe(3);
     expect(result.failureReason).toBe("denied");
     expect(spawn).not.toHaveBeenCalled();
   });
@@ -934,7 +936,7 @@ describe("CommandRunnerManager — execution", () => {
       beforeSpawn,
     });
     expect(result.failureReason).toBe("none");
-    expect(beforeSpawn).toHaveBeenCalledTimes(2);
+    expect(beforeSpawn).toHaveBeenCalledTimes(3);
     expect(spawn).toHaveBeenCalledOnce();
   });
 

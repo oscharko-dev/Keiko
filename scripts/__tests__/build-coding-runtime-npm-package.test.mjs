@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL, URL } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import ts from "typescript";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -742,3 +742,42 @@ function serviceFixtureDeps() {
     }),
   };
 }
+
+function shellQuotedPath(path) {
+  return "'" + path.replaceAll("'", "'\"'\"'") + "'";
+}
+
+describe("trusted archive tool in actual npm candidate verification", () => {
+  it.skipIf(process.platform === "win32")(
+    "ignores a workspace tar canary during real npm pack and default content verification",
+    async () => {
+      const fixture = await releaseFixture();
+      const workspace = mkdtempSync(join(process.cwd(), ".keiko-tar-canary-"));
+      const marker = join(workspace, "invocations");
+      const tar = resolveHostExecutable("tar");
+      writeFileSync(
+        join(workspace, "tar"),
+        `#!/bin/sh\nprintf 'called\n' >> ${shellQuotedPath(marker)}\nexec ${shellQuotedPath(tar)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const previousPath = process.env.PATH;
+      process.env.PATH = workspace + delimiter + (previousPath ?? "");
+      try {
+        expect(resolveHostExecutable("tar")).toBe(tar);
+        const deps = {
+          loadApproval: fixture.deps.loadApproval,
+          verifySourceCommit: fixture.deps.verifySourceCommit,
+        };
+        const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
+        const verified = await verifyCodingRuntimeNpmCandidate(releaseInput(fixture), deps);
+        expect(prepared.receipt.files).toHaveLength(6);
+        expect(verified.receipt).toStrictEqual(prepared.receipt);
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+});

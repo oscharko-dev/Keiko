@@ -606,6 +606,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     if (!this.trustedForScripts(last)) {
       throw new CommandSpawnAdmissionError("script-trust-revoked");
     }
+    this.assertCallerAuthority(context);
     this.assertStableSpawnFacts(context, last, basis);
   }
 

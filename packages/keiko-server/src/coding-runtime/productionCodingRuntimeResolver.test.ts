@@ -1267,6 +1267,55 @@ describe("operatorDecisionRequester", () => {
 });
 
 describe("production pending-spawn lease binding", () => {
+  it.each(["workspace-drift", "technical-resolver-fault"] as const)(
+    "distinguishes expected refusal from %s after real pending-spawn admission",
+    (kind) => {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const failure = new Error("PRIVATE_RESOLVER_TECHNICAL_CAUSE");
+      let fault = false;
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+          resolveWorkspaceRootAccess: (root) => {
+            if (fault) throw failure;
+            return {
+              kind: "managed-task",
+              canonicalRoot: root,
+              repositoryRoot: root,
+              fs: nodeWorkspaceFs,
+            };
+          },
+        }),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      const resolved = host.launchResolver.resolve(request);
+      const backend = createRun.mock.calls[0]?.[0];
+      if (backend?.canSpawnRuntime === undefined)
+        throw new Error("expected actual pending spawn guard");
+      const launch = {
+        ...resolved,
+        runId: request.runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: request.requestedMode,
+      };
+      expect(backend.canSpawnRuntime(launch)).toBe(true);
+      if (kind === "workspace-drift") {
+        fixture.setHead("2".repeat(40));
+        expect(backend.canSpawnRuntime(launch)).toBe(false);
+      } else {
+        fault = true;
+        expect(() => backend.canSpawnRuntime?.(launch)).toThrow(failure);
+      }
+    },
+  );
+
   it.each(["revoked", "expired", "root-drift", "run", "tree", "envelope", "workspace"] as const)(
     "rechecks %s using the minted starting authority",
     async (kind) => {

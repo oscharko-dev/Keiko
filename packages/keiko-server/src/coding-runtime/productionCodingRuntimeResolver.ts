@@ -1,3 +1,4 @@
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
@@ -1642,21 +1643,29 @@ function pendingSpawnGuard({
   CreateBackendRunInput,
   "input" | "context" | "minted" | "authority" | "controller" | "resolveWorkspaceRootAccess"
 >): NonNullable<CodingRuntimeManagerDeps["canSpawnRuntime"]> {
-  return (launch): boolean =>
-    launch.runId === minted.authorityRef.runId &&
-    launch.treeBindingId === minted.treeBindingId &&
-    launch.authorityEnvelopeDigest === minted.authorityRef.envelopeDigest &&
-    launch.workspaceRoot === context.workspaceRoot &&
-    !controller.signal.aborted &&
-    resolveWorkspaceRootAccess()?.canonicalRoot === context.workspaceRoot &&
-    authority.revalidateCapabilityForPendingSpawn({
-      capability: minted.toolFacadeCapability,
-      adapterKind: adapterKind(context),
-      liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
-      workspaceRoot: context.workspaceRoot,
-      deploymentCeiling: context.deploymentCeiling,
-      nowIso: runtimeNow(input).toISOString(),
-    }).ok;
+  return (launch): boolean => {
+    try {
+      return (
+        launch.runId === minted.authorityRef.runId &&
+        launch.treeBindingId === minted.treeBindingId &&
+        launch.authorityEnvelopeDigest === minted.authorityRef.envelopeDigest &&
+        launch.workspaceRoot === context.workspaceRoot &&
+        !controller.signal.aborted &&
+        resolveWorkspaceRootAccess()?.canonicalRoot === context.workspaceRoot &&
+        authority.revalidateCapabilityForPendingSpawn({
+          capability: minted.toolFacadeCapability,
+          adapterKind: adapterKind(context),
+          liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+          workspaceRoot: context.workspaceRoot,
+          deploymentCeiling: context.deploymentCeiling,
+          nowIso: runtimeNow(input).toISOString(),
+        }).ok
+      );
+    } catch (error) {
+      if (error instanceof CodingRuntimeLaunchRejectedError) return false;
+      throw error;
+    }
+  };
 }
 
 function runtimeMutationLive(

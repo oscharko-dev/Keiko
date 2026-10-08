@@ -53,6 +53,7 @@ import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mj
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { NPM_PACK_STDIO_MAX_BUFFER } from "./package-surface-pack.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -101,6 +102,7 @@ const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "NOTICE",
 ]);
 const TAR_LINK_POLICY_SKIP_SAFE = "skip-safe";
+const TAR_COMMAND_TIMEOUT_MS = 120_000;
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -842,13 +844,28 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function run(cmd, args, options = {}) {
+function run(cmd, args, options = {}, onFailure = fail) {
   const result = spawnSync(cmd, args, { cwd: repoRoot, encoding: "utf8", ...options });
   if (result.error !== undefined)
-    fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
+    onFailure(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`, result.error);
   if (result.status !== 0)
-    fail(`${cmd} ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
+    onFailure(`${cmd} ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
   return result;
+}
+
+function runArchiveTar(args, policy, options = {}) {
+  const onFailure = policy.onFailure ?? fail;
+  let executable;
+  try {
+    executable = resolveHostExecutable("tar");
+  } catch (error) {
+    return onFailure("trusted archive executable is unavailable", error);
+  }
+  return run(executable, args, { ...options, timeout: TAR_COMMAND_TIMEOUT_MS }, onFailure);
+}
+
+function throwPackedExtractionFailure(message, cause) {
+  throw new Error(`packed runtime extraction failed: ${message}`, { cause });
 }
 
 // npm is `npm.cmd` on Windows, which spawnSync can only launch through a shell (a bare "npm"
@@ -938,12 +955,13 @@ function extractNodeRuntime(archivePath, target, nodeVersion, runtimeRoot) {
   }
 }
 
-/** Fixed npm package root; links and special entries are refused by the existing archive owner. */
+/** Fixed npm package root; library refusals throw so both helper and caller cleanup can run. */
 export function extractPackedRuntimePackage(archivePath, destinationRoot) {
   const scratch = mkdtempSync(join(tmpdir(), "keiko-packed-runtime-"));
   try {
     extractArchiveRoot(archivePath, "tar.gz", "package", scratch, destinationRoot, {
       tarLinkPolicy: "reject",
+      onFailure: throwPackedExtractionFailure,
     });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -961,18 +979,18 @@ function extractArchiveRoot(
   rmSync(extractRoot, { recursive: true, force: true });
   mkdirSync(extractRoot, { recursive: true });
   const entries = safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy);
-  extractArchive(archivePath, archiveKind, extractRoot, entries);
-  copySafeTreeContents(join(extractRoot, expectedRoot), destinationRoot);
+  extractArchive(archivePath, archiveKind, extractRoot, entries, policy);
+  copySafeTreeContents(join(extractRoot, expectedRoot), destinationRoot, policy.onFailure ?? fail);
 }
 
-function extractArchive(archivePath, archiveKind, extractRoot, entries) {
+function extractArchive(archivePath, archiveKind, extractRoot, entries, policy) {
   if (archiveKind === "zip") {
     createPortableZipAdapter().extract(archivePath, extractRoot);
     return;
   }
   const includeFile = join(extractRoot, "portable-runtime-tar-include.txt");
   writeFileSync(includeFile, `${entries.join("\n")}\n`);
-  run("tar", ["-xzf", archivePath, "-C", extractRoot, "-T", includeFile]);
+  runArchiveTar(["-xzf", archivePath, "-C", extractRoot, "-T", includeFile], policy);
   rmSync(includeFile, { force: true });
 }
 
@@ -980,18 +998,20 @@ function safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy) {
   if (archiveKind === "zip") {
     return safeZipExtractionEntries(archivePath, expectedRoot, createPortableZipAdapter());
   }
-  const entries = archiveEntries(archivePath);
+  const onFailure = policy.onFailure ?? fail;
+  const entries = archiveEntries(archivePath, policy);
   if (!entries.some((entry) => archiveEntryInsideRoot(entry, expectedRoot))) {
-    fail(`archive must contain ${expectedRoot}`);
+    onFailure(`archive must contain ${expectedRoot}`);
   }
   for (const entry of entries) {
-    if (!archiveEntryInsideRoot(entry, expectedRoot)) fail(`archive entry escapes ${expectedRoot}`);
+    if (!archiveEntryInsideRoot(entry, expectedRoot))
+      onFailure(`archive entry escapes ${expectedRoot}`);
   }
-  return tarExtractionEntries(archivePath, entries, expectedRoot, policy.tarLinkPolicy);
+  return tarExtractionEntries(archivePath, entries, expectedRoot, policy);
 }
 
-function archiveEntries(archivePath) {
-  return run("tar", ["-tzf", archivePath], { maxBuffer: NPM_PACK_STDIO_MAX_BUFFER })
+function archiveEntries(archivePath, policy) {
+  return runArchiveTar(["-tzf", archivePath], policy, { maxBuffer: NPM_PACK_STDIO_MAX_BUFFER })
     .stdout.split(/\r?\n/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -1040,11 +1060,14 @@ function normalizeArchiveEntry(entry) {
   return normalized;
 }
 
-function tarExtractionEntries(archivePath, entries, expectedRoot, linkPolicy) {
-  const lines = run("tar", ["-tvzf", archivePath], { maxBuffer: NPM_PACK_STDIO_MAX_BUFFER })
+function tarExtractionEntries(archivePath, entries, expectedRoot, policy) {
+  const onFailure = policy.onFailure ?? fail;
+  const lines = runArchiveTar(["-tvzf", archivePath], policy, {
+    maxBuffer: NPM_PACK_STDIO_MAX_BUFFER,
+  })
     .stdout.split(/\r?\n/u)
     .filter(Boolean);
-  if (lines.length !== entries.length) fail("tar archive listing is inconsistent");
+  if (lines.length !== entries.length) onFailure("tar archive listing is inconsistent");
   const extractable = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -1054,26 +1077,26 @@ function tarExtractionEntries(archivePath, entries, expectedRoot, linkPolicy) {
       extractable.push(entry);
     } else if (type === "d") {
       continue;
-    } else if (type === "l" && linkPolicy === TAR_LINK_POLICY_SKIP_SAFE) {
-      assertTarSymlinkTargetSafe(entry, line, expectedRoot);
+    } else if (type === "l" && policy.tarLinkPolicy === TAR_LINK_POLICY_SKIP_SAFE) {
+      assertTarSymlinkTargetSafe(entry, line, expectedRoot, onFailure);
     } else {
-      fail("archive contains unsupported link or special-file entries");
+      onFailure("archive contains unsupported link or special-file entries");
     }
   }
   return extractable;
 }
 
-function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
+function assertTarSymlinkTargetSafe(entry, line, expectedRoot, onFailure) {
   const marker = " -> ";
   const markerIndex = line.lastIndexOf(marker);
-  if (markerIndex === -1) fail("tar symlink entry is missing target");
+  if (markerIndex === -1) onFailure("tar symlink entry is missing target");
   const target = line.slice(markerIndex + marker.length);
   if (target.startsWith("/") || /^[A-Za-z]:/u.test(target)) {
-    fail("archive symlink target escapes expected root");
+    onFailure("archive symlink target escapes expected root");
   }
   const normalizedTarget = normalizeArchiveEntry(posix.join(posix.dirname(entry), target));
   if (!archiveEntryInsideRoot(normalizedTarget, expectedRoot)) {
-    fail("archive symlink target escapes expected root");
+    onFailure("archive symlink target escapes expected root");
   }
 }
 
@@ -1141,36 +1164,36 @@ function assertInfoZipEntryTypesSafe(archivePath, commandRunner) {
   }
 }
 
-function copySafeTreeContents(sourceRoot, destinationRoot) {
-  if (!existsSync(sourceRoot)) fail(`archive root not found at ${basename(sourceRoot)}`);
+function copySafeTreeContents(sourceRoot, destinationRoot, onFailure = fail) {
+  if (!existsSync(sourceRoot)) onFailure(`archive root not found at ${basename(sourceRoot)}`);
   mkdirSync(destinationRoot, { recursive: true });
   for (const entry of readdirSync(sourceRoot)) {
-    copySafeEntry(join(sourceRoot, entry), join(destinationRoot, entry));
+    copySafeEntry(join(sourceRoot, entry), join(destinationRoot, entry), onFailure);
   }
 }
 
-function copySafeEntry(sourcePath, destinationPath) {
+function copySafeEntry(sourcePath, destinationPath, onFailure) {
   const entry = lstatSync(sourcePath);
   if (entry.isDirectory()) {
-    copySafeDirectory(sourcePath, destinationPath);
+    copySafeDirectory(sourcePath, destinationPath, onFailure);
     return;
   }
   if (entry.isFile()) {
-    copySafeFile(sourcePath, destinationPath, entry.nlink);
+    copySafeFile(sourcePath, destinationPath, entry.nlink, onFailure);
     return;
   }
-  fail("archive contains unsupported special-file entries");
+  onFailure("archive contains unsupported special-file entries");
 }
 
-function copySafeDirectory(sourcePath, destinationPath) {
+function copySafeDirectory(sourcePath, destinationPath, onFailure) {
   mkdirSync(destinationPath, { recursive: true });
   for (const entry of readdirSync(sourcePath)) {
-    copySafeEntry(join(sourcePath, entry), join(destinationPath, entry));
+    copySafeEntry(join(sourcePath, entry), join(destinationPath, entry), onFailure);
   }
 }
 
-function copySafeFile(sourcePath, destinationPath, linkCount) {
-  if (linkCount > 1) fail("archive contains hardlinked file entries");
+function copySafeFile(sourcePath, destinationPath, linkCount, onFailure) {
+  if (linkCount > 1) onFailure("archive contains hardlinked file entries");
   mkdirSync(dirname(destinationPath), { recursive: true });
   copyFileSync(sourcePath, destinationPath);
 }

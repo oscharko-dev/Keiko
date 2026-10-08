@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
+import { codingVerificationTargetDigest } from "./productionManagedWorktreeTools.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local test fixture callbacks are contextually typed. */
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7006,6 +7007,7 @@ describe("run effort roll-up (#3873)", () => {
       occurredAt: "2026-10-06T10:00:08.000Z",
       kind: "verification-summarized" as const,
       verificationKind: "targeted-test" as const,
+      verificationTargetDigest: codingVerificationTargetDigest("targeted-test"),
       verificationStatus: "passed" as const,
       passedCount: 4,
       failedCount: 0,
@@ -7174,7 +7176,7 @@ describe("verification truth at task settlement", () => {
       failed: status === "failed" ? 1 : 0,
       skipped: 0,
     },
-    targetDigest?: string,
+    targetDigest: string | null = codingVerificationTargetDigest("targeted-test"),
     editRevision = f.orchestrator.verificationRevision("run-1"),
   ): Promise<void> {
     await f.orchestrator.ingest({
@@ -7189,7 +7191,7 @@ describe("verification truth at task settlement", () => {
       failedCount: counts.failed,
       skippedCount: counts.skipped,
       verificationEditRevision: editRevision,
-      ...(targetDigest === undefined ? {} : { verificationTargetDigest: targetDigest }),
+      ...(targetDigest === null ? {} : { verificationTargetDigest: targetDigest }),
     });
   }
 
@@ -7376,6 +7378,23 @@ describe("verification truth at task settlement", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
   });
+
+  it.each(["both", "pass-only"] as const)(
+    "does not let digest-less targeted summaries erase a distinct failed verification (%s)",
+    async (unidentified) => {
+      const { f, finish } = await runningTask();
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      await verification(f, "failed", undefined, unidentified === "both" ? null : "a".repeat(64));
+      await verification(f, "passed", undefined, null);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+        });
+      });
+    },
+  );
 
   it("does not let a different passing target clear a failed test", async () => {
     const { f, finish } = await runningTask();

@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  linkSync,
+  readdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -15,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { URL } from "node:url";
 import { dirname, join } from "node:path";
+import { resolveHostExecutable } from "../lib/host-executable.mjs";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -4351,14 +4354,124 @@ describe("fixed runtime npm archive extraction", () => {
         expect(
           spawnSync("tar", ["-czf", archive, "-C", source, "package"], { encoding: "utf8" }).status,
         ).toBe(0);
+        expect(() => extractPackedRuntimePackage(archive, join(root, "output"))).toThrow(
+          "unsupported link or special-file entries",
+        );
+        expect(existsSync(join(root, "output"))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+function packedCleanupArchive(root, kind) {
+  const archive = join(root, "package.tgz");
+  if (kind === "missing") return archive;
+  if (kind === "malformed") {
+    writeFileSync(archive, "not a gzip archive");
+    return archive;
+  }
+  const source = join(root, "source");
+  const name = kind === "wrong-root" ? "other" : "package";
+  mkdirSync(join(source, name), { recursive: true });
+  const program = join(source, name, "program");
+  writeFileSync(program, "fixed program");
+  if (kind === "symbolic-link") symlinkSync("program", join(source, name, "link"));
+  if (kind === "hard-link") linkSync(program, join(source, name, "link"));
+  const packed = spawnSync(resolveHostExecutable("tar"), ["-czf", archive, "-C", source, name], {
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  expect(packed.status).toBe(0);
+  return archive;
+}
+
+function packedCleanupChild(root, archive) {
+  const temp = join(root, "child-temp");
+  mkdirSync(temp);
+  const moduleURL = new URL("../stage-portable-runtime.mjs", import.meta.url).href;
+  const script = `
+    import {extractPackedRuntimePackage} from ${JSON.stringify(moduleURL)};
+    import {mkdtempSync,readdirSync,rmSync} from "node:fs";
+    import {tmpdir} from "node:os";
+    import {join} from "node:path";
+    const destination=mkdtempSync(join(tmpdir(),"keiko-runtime-packed-inspection-"));
+    let caught=false,finallyRan=false;
+    try { extractPackedRuntimePackage(${JSON.stringify(archive)},destination); }
+    catch(error) { caught=error instanceof Error; }
+    finally { rmSync(destination,{recursive:true,force:true}); finallyRan=true; }
+    const leftovers=readdirSync(tmpdir()).filter(name=>name.startsWith("keiko-packed-runtime-")||name.startsWith("keiko-runtime-packed-inspection-"));
+    process.stdout.write(JSON.stringify({caught,finallyRan,leftovers:leftovers.length}));
+  `;
+  return spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    env: { ...process.env, TMPDIR: temp, TMP: temp, TEMP: temp },
+    timeout: 10_000,
+  });
+}
+
+describe("packed runtime library caller cleanup", () => {
+  it
+    .skipIf(process.platform === "win32")
+    .each(["ordinary", "symbolic-link", "hard-link", "wrong-root", "malformed", "missing"])(
+    "keeps %s catchable and runs caller/helper cleanup",
+    (kind) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-pack-cleanup-control-"));
+      try {
+        const archive = packedCleanupArchive(root, kind);
+        const result = packedCleanupChild(root, archive);
+        expect(readdirSync(join(root, "child-temp"))).toEqual([]);
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          caught: kind !== "ordinary",
+          finallyRan: true,
+          leftovers: 0,
+        });
+        expect(readdirSync(join(root, "child-temp"))).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("packed runtime archive command binding", () => {
+  it.skipIf(process.platform === "win32")(
+    "binds all three actual tar commands to the trusted executable and prior deadline",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-packed-tar-boundary-"));
+      try {
+        const archive = packedCleanupArchive(root, "ordinary");
+        const output = join(root, "output");
         const moduleURL = new URL("../stage-portable-runtime.mjs", import.meta.url).href;
-        const script = `import {extractPackedRuntimePackage} from ${JSON.stringify(moduleURL)}; extractPackedRuntimePackage(${JSON.stringify(archive)},${JSON.stringify(join(root, "output"))});`;
+        const trustedTar = resolveHostExecutable("tar");
+        const script = `
+          import childProcess from "node:child_process";
+          import {syncBuiltinESMExports} from "node:module";
+          const actualSpawn=childProcess.spawnSync;
+          const facts=[];
+          childProcess.spawnSync=(command,args,options)=>{
+            facts.push({trusted:command===${JSON.stringify(trustedTar)},command:args[0],timeout:options.timeout??null});
+            return actualSpawn(command,args,options);
+          };
+          syncBuiltinESMExports();
+          const {extractPackedRuntimePackage}=await import(${JSON.stringify(moduleURL)});
+          extractPackedRuntimePackage(${JSON.stringify(archive)},${JSON.stringify(output)});
+          process.stdout.write(JSON.stringify(facts));
+        `;
         const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
           encoding: "utf8",
+          timeout: 10_000,
         });
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("unsupported link or special-file entries");
-        expect(existsSync(join(root, "output"))).toBe(false);
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(
+          ["-tzf", "-tvzf", "-xzf"].map((command) => ({
+            trusted: true,
+            command,
+            timeout: 120_000,
+          })),
+        );
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
