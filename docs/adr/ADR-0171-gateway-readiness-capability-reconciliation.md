@@ -51,7 +51,8 @@ credential-setup chat checks populate the same generation-bound ledger and are r
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization. A fresh successful observation adds no per-question readiness request. A success
 expires at the exact five-minute boundary; malformed or future successful timestamps are unknown.
-The existing background queue renews success after four minutes and uses the same generation/model
+The existing background queue renews success after two minutes, leaving the two-minute provider
+timeout floor plus one minute of margin before expiry, and uses the same generation/model
 in-flight map, two slots and recovery timers. Reload starts unknown or expired checks immediately
 in the background, independently of held catalog discovery; selected requests join that same work.
 An expired success can share one selected-request renewal. Failed initialization remains

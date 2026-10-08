@@ -1467,3 +1467,40 @@ identity labels use the existing English/German translations. This does not expa
 Coding scope. The initial wrong-directory UI test invocation is retained as a setup error, not
 product evidence. Final global gates, fresh Linux UI evidence and final-head live qualification
 remain pending.
+
+### Frozen-scope review closeout: catalog transport and readiness lifecycle
+
+ROOT reproduced **seven unchanged-producer assertion failures** in the three catalog/body/renewal
+suites, then passed **157 tests** with the frozen repair. The original HTTP body reader distinguishes
+producer-typed malformed/oversized JSON from original transport failures; an actual transport
+rejection remains retryable. Existing explicit or legacy deployments may obtain hidden management
+metadata only for enrichment when their connection has no discovered-origin inventory rows.
+Automatic inventory reconciliation still uses the caller-facing `/models` listing.
+
+Background renewal now starts after two minutes within the unchanged five-minute serving lifetime.
+The actual 119-second request control remains ready before expiry; both the provider's two-minute
+floor and one minute of margin fit within that lifetime. Existing ADR-0171 documents the same rule.
+No reload waits for this work and no new poller or queue is added.
+
+ROOT separately reproduced **three Workbench queue/readiness failures and 17 stale HTTP-twin
+fixture failures**, then passed their **40 owning tests**. The existing serial queue promotes an
+already queued elected model without duplicating its Promise or active work. A successful but stale
+observation stays pending and eligible for recovery; conclusive tool refusal cannot leave Coding
+pending because another context probe was inconclusive. The twin derives its `/models` IDs from its
+actual management fixture producer, without a second handwritten inventory.
+
+The actual joined-startup disposal and startup retry-timer regressions both fail on the unchanged
+applicable owners. With the repair, cancellation is initiated before joining startup work, reaches
+actual request-owned I/O, and disposal still waits for original physical settlement. Recovery is
+triggered by the existing production startup timer rather than a manual initializer call. The first
+ROOT regex run omitted the new abort test and is retained as an incomplete selection, not RED proof;
+`root-closeout-disposal-qualified-red.log` records both genuine failures.
+
+ROOT's final combined slice passes **198 tests across five suites**, strict types over nine owners,
+a fresh affected server/model graph, zero-warning lint, formatting and **97 canonical drift
+controls**. Generation resolves **539/539 proofs and 30/30 scenarios without violations**. The JSON
+classifier now explicitly rethrows each actual fault in its catch instead of hiding propagation
+behind a returned never-helper. The existing static failure-path analyzer reports the new catch
+before that correction and no finding for it afterward; all **103 owning HTTP tests** pass again.
+No failure-path exemption, legacy-register addition, authority widening or feature activation is
+introduced. Final global gates and final-head live/package qualification remain pending.

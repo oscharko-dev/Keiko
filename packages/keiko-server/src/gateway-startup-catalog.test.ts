@@ -2,7 +2,11 @@ import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createDefaultChatCapability,
+  parseGatewayConfig,
+  toolCallingConfigurationFingerprint,
+} from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleModels } from "./read-handlers.js";
 import {
@@ -13,7 +17,8 @@ import {
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   isLiteLlmCodingReadinessPending,
-  initializeLiteLlmCodingReadiness,
+  WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
+  ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import {
@@ -61,12 +66,13 @@ function startupConfig(contextWindow = 64_000): ReturnType<typeof parseGatewayCo
 function startupDeps(
   discovery: Parameters<typeof buildUiHandlerDeps>[0]["gatewayModelDiscovery"],
   events?: ServerLogEvent[],
+  env: Record<string, string> = {},
 ): UiHandlerDeps {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-startup-catalog-"));
   directories.push(dir);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
-    env: {},
+    env,
     uiDbPath: join(dir, "ui.db"),
     evidenceDir: join(dir, "evidence"),
     gatewayModelDiscovery: discovery,
@@ -125,6 +131,73 @@ function stubReadyChat(): void {
     ),
   );
 }
+
+it.each(["explicit", undefined] as const)(
+  "enriches an existing %s hidden deployment without requiring public catalog visibility",
+  async (origin) => {
+    const fetch = vi.fn((input: Parameters<typeof globalThis.fetch>[0]) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (path.endsWith("/model/info"))
+        return Promise.resolve(
+          Response.json({
+            data: [
+              { model_name: "chat-model", model_info: { mode: "chat", max_model_len: 32_768 } },
+            ],
+          }),
+        );
+      if (path.endsWith("/models")) return Promise.resolve(new Response("", { status: 403 }));
+      return Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+    const events: ServerLogEvent[] = [];
+    const deps = startupDeps(undefined, events);
+    const config = managedStartupConfig(origin);
+    deps.gatewayConfig?.set(config, true);
+    await vi.waitFor(() => {
+      expect(startupModels(deps)[0]?.contextWindow).toBe(32_768);
+    });
+    expect(startupProviderIds(deps)).toEqual(["chat-model"]);
+    expect(
+      fetch.mock.calls.some(([input]) =>
+        new URL(input instanceof Request ? input.url : String(input)).pathname.endsWith("/models"),
+      ),
+    ).toBe(false);
+    expect(
+      events.find((event) => event.op === "gateway.catalog.automatic.completed"),
+    ).toMatchObject({ extra: { outcome: "applied" } });
+  },
+);
+
+it("retries a real discovery response-body transport rejection instead of pinning malformed JSON", async () => {
+  vi.stubGlobal("fetch", (input: Parameters<typeof globalThis.fetch>[0]) => {
+    const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+    if (path.endsWith("/model/info") || path.endsWith("/models")) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller): void {
+          controller.error(new TypeError("terminated synthetic private diagnostic"));
+        },
+      });
+      return Promise.resolve(new Response(body));
+    }
+    return Promise.resolve(
+      Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+    );
+  });
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(undefined, events);
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.waitFor(() => {
+    expect(
+      events.find((event) => event.op === "gateway.catalog.automatic.completed"),
+    ).toMatchObject({ extra: { outcome: "failed", retryable: true } });
+  });
+  expect(
+    events.find((event) => event.op === "gateway.catalog.automatic.completed")?.errorKind,
+  ).toBe("unavailable");
+  expect(JSON.stringify(events)).not.toContain("terminated synthetic private diagnostic");
+});
 
 it("refreshes on reload without waiting and shares concurrent reload catalog discovery", async () => {
   stubReadyChat();
@@ -333,6 +406,7 @@ it("keeps a window refinement made while startup discovery is in flight", async 
 });
 
 it("reproves an unready LiteLLM model when its successful proof became stale", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const blocked = deferredValue<boolean>();
   let toolCalls = 0;
   vi.stubGlobal(
@@ -379,7 +453,8 @@ it("reproves an unready LiteLLM model when its successful proof became stale", a
   );
   blocked.resolve(true);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await initializeLiteLlmCodingReadiness(deps, "corr-stale-proof-recovery");
+  expect(isLiteLlmCodingReadinessPending(deps)).toBe(true);
+  await vi.advanceTimersByTimeAsync(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1);
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
   expect(toolCalls).toBe(2);
 });
@@ -964,7 +1039,7 @@ it("reuses the actual metadata and models transport after a producer-derived bou
   vi.stubGlobal("fetch", fetch);
   const events: ServerLogEvent[] = [];
   const deps = startupDeps(undefined, events);
-  const initial = startupConfig();
+  const initial = managedStartupConfig("discovered");
   deps.gatewayConfig?.set(initial, true);
   await vi.waitFor(() => {
     expect(events.some((event) => event.op === "gateway.catalog.automatic.completed")).toBe(true);
@@ -1147,4 +1222,86 @@ it("preserves the actual durable source reference after transient alias reconcil
   expect(configuredAliasKey(restored)).toBe("durable-source-credential");
   expect(vault.get(reference)).toBe("durable-source-credential");
   expect(vault.get(providerSecretRef("new-chat"))).toBeUndefined();
+});
+
+function requestOwnedCodingConfig(): ReturnType<typeof parseGatewayConfig> {
+  const config = startupConfig();
+  const provider = requiredStartupProvider(config);
+  return parseGatewayConfig({
+    ...rawConfigFromCurrent(config, undefined),
+    capabilities: config.capabilities?.map((model) => ({
+      ...model,
+      toolCalling: true,
+      toolCallingVerification: {
+        status: "verified",
+        probe: "gateway-tool-calling-v1",
+        checkedAt: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
+        configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+      },
+    })),
+  });
+}
+
+it("aborts a request-owned Workbench probe joined by startup and waits for its physical settlement", async () => {
+  const env = { KEIKO_CODING_SIDECAR_DISABLED: "1" };
+  let aborted = false;
+  let release: (() => void) | undefined;
+  vi.stubGlobal("fetch", (_input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    if (typeof init?.body !== "string" || !init.body.includes("report_readiness"))
+      return Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      );
+    return new Promise<Response>((resolve, reject) => {
+      init.signal?.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+        },
+        { once: true },
+      );
+      release = (): void => {
+        if (aborted) reject(new DOMException("Synthetic physical request cancelled", "AbortError"));
+        else
+          resolve(
+            Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+          );
+      };
+    });
+  });
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), events, env);
+  deps.gatewayConfig?.set(requestOwnedCodingConfig(), true);
+  const request = ensureCodingWorkbenchContextWindows(
+    deps,
+    "chat-model",
+    "corr-request-owned-workbench",
+  );
+  await vi.waitFor(() => {
+    expect(release).toBeTypeOf("function");
+  });
+  env.KEIKO_CODING_SIDECAR_DISABLED = "0";
+  deps.refreshGatewayCatalog?.("corr-reload-joins-request-owned");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  let disposed = false;
+  const disposal = Promise.resolve(deps.dispose?.()).then(() => {
+    disposed = true;
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(aborted).toBe(true);
+    });
+    expect(disposed).toBe(false);
+  } finally {
+    release?.();
+    await request;
+    await disposal;
+  }
+  expect(disposed).toBe(true);
+  expect(
+    events.some(
+      (event) =>
+        event.correlationId === "corr-request-owned-workbench" &&
+        event.op === "gateway.readiness.automatic.completed",
+    ),
+  ).toBe(true);
 });

@@ -79,6 +79,7 @@ import {
   classifyOutboundHost,
   gatewayFetch,
   readJsonCapped,
+  GatewayResponseBodyValidationError,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   EnvSource,
@@ -2055,12 +2056,17 @@ async function fetchDiscoveryJson(
   }
   try {
     return await readJsonCapped(response);
-  } catch {
+  } catch (cause) {
     signal.throwIfAborted();
-    throw discoveryTerminal(
-      "model discovery response was not readable JSON",
-      "DISCOVERY_INVALID_RESPONSE",
-    );
+    if (cause instanceof GatewayResponseBodyValidationError) {
+      throw discoveryTerminal(
+        "model discovery response was not readable JSON",
+        "DISCOVERY_INVALID_RESPONSE",
+      );
+    }
+    if (cause instanceof TypeError)
+      throw new Error("Model metadata transport was unavailable.", { cause });
+    throw cause;
   }
 }
 
@@ -2339,7 +2345,7 @@ export async function refreshLiteLlmGatewayCatalog(
     const result = await discoverConfiguredGatewayCatalog(
       deps,
       provider,
-      config.egress,
+      config,
       signal,
       trace,
       correlationId,
@@ -2446,7 +2452,7 @@ function applyStartupCatalog(
 function discoverConfiguredGatewayCatalog(
   deps: UiHandlerDeps,
   provider: ModelProviderConfig,
-  egress: GatewayEgressConfig | undefined,
+  config: GatewayConfig,
   signal: AbortSignal,
   trace: SetupDiscoveryTrace,
   correlationId: string,
@@ -2456,11 +2462,11 @@ function discoverConfiguredGatewayCatalog(
       provider.baseUrl,
       provider.apiKey,
       provider.apiKeyHeaderName,
-      egress,
+      config.egress,
       correlationId,
       trace,
       signal,
-      false,
+      !usesAutomaticCatalog(config, provider),
       true,
     );
   return awaitSetupOperation(
@@ -2468,10 +2474,17 @@ function discoverConfiguredGatewayCatalog(
       provider.baseUrl,
       provider.apiKey,
       provider.apiKeyHeaderName,
-      egress,
+      config.egress,
       correlationId,
     ),
     signal,
+  );
+}
+
+function usesAutomaticCatalog(config: GatewayConfig, connection: ModelProviderConfig): boolean {
+  return config.providers.some(
+    (provider) =>
+      provider.catalogOrigin === "discovered" && catalogConnectionMatches(provider, connection),
   );
 }
 
@@ -2550,10 +2563,7 @@ function reconcileCatalogInventory(
   const capabilities = listConfiguredCapabilities(active).filter((model) =>
     providers.some((provider) => provider.modelId === model.id),
   );
-  const automatic = configured.providers.some(
-    (provider) =>
-      provider.catalogOrigin === "discovered" && catalogConnectionMatches(provider, connection),
-  );
+  const automatic = usesAutomaticCatalog(configured, connection);
   for (const id of automatic ? discovery.modelIds : []) {
     if (providers.some((provider) => provider.modelId === id)) continue;
     const stored = configured.providers.find((provider) => provider.modelId === id);

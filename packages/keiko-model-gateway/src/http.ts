@@ -1765,12 +1765,37 @@ export async function gatewayFetch(
   }
 }
 
+export class GatewayResponseBodyValidationError extends TypeError {
+  public constructor(public readonly validation: "json-invalid" | "size-exceeded") {
+    super(
+      validation === "size-exceeded"
+        ? "response body exceeded the size limit"
+        : "response body was not valid JSON",
+    );
+    this.name = "GatewayResponseBodyValidationError";
+  }
+}
+
+function rethrowJsonBodyFailure(error: unknown): never {
+  if (error instanceof SyntaxError) throw new GatewayResponseBodyValidationError("json-invalid");
+  throw error;
+}
+
+function parseResponseJson(body: string): unknown {
+  try {
+    return JSON.parse(body) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new GatewayResponseBodyValidationError("json-invalid");
+    throw error;
+  }
+}
+
 export async function readJsonCapped(
   response: Response,
   maxBytes: number = MAX_RESPONSE_BYTES,
 ): Promise<unknown> {
   if (response.body === null) {
-    return response.json();
+    return response.json().catch(rethrowJsonBodyFailure);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -1787,12 +1812,12 @@ export async function readJsonCapped(
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
-      throw new Error("response body exceeded the size limit");
+      throw new GatewayResponseBodyValidationError("size-exceeded");
     }
     parts.push(decoder.decode(value, { stream: true }));
   }
   parts.push(decoder.decode());
-  return JSON.parse(parts.join("")) as unknown;
+  return parseResponseJson(parts.join(""));
 }
 
 // Reads a binary response body into a single `ArrayBuffer`-backed `Uint8Array`, capping the

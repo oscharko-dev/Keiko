@@ -2061,9 +2061,14 @@ const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 // cooldown, so one slow answer at peak load locked the Workbench out with no operator remedy but
 // a restart. An inconclusive run is retried on the next Workbench read after this much quiet.
 export const WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS = 60_000;
-type WorkbenchProbeOutcome = "proven" | "refuted" | "inconclusive";
+type WorkbenchProbeOutcome = "proven" | "refuted" | "inconclusive" | "stale";
 interface WorkbenchProbeEntry {
   readonly promise: Promise<void>;
+  readonly perform: () => Promise<void>;
+  readonly holder: UiHandlerDeps["gatewayConfig"];
+  readonly cancelQueued: () => void;
+  prioritized: boolean;
+  running: boolean;
   at: number;
   cooldownMs: number;
   settled: boolean;
@@ -2075,10 +2080,12 @@ const workbenchProbes = new Map<string, WorkbenchProbeEntry>();
 // six models at once would store the first to finish and silently drop the other five. A queue
 // lets every run start on the generation the one before it left behind.
 let workbenchProbeQueue: Promise<void> = Promise.resolve();
+let workbenchProbeQueueRunning = false;
 
 export function resetCodingWorkbenchContextWindowProbesForTests(): void {
   workbenchProbes.clear();
   workbenchProbeQueue = Promise.resolve();
+  workbenchProbeQueueRunning = false;
 }
 
 /** Resolves once every automatic Workbench probe queued so far has finished. Test seam. */
@@ -2177,8 +2184,13 @@ function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
  * profile while this holds keeps reading until the gateway has actually answered.
  */
 export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: string): boolean {
+  const model = listConfiguredCapabilities(config).find((candidate) => candidate.id === modelId);
+  if (model === undefined || model.toolCallingVerification?.status === "unsupported") return false;
   const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
-  return entry !== undefined && (!entry.settled || entry.outcome === "inconclusive");
+  return (
+    entry !== undefined &&
+    (!entry.settled || entry.outcome === "inconclusive" || entry.outcome === "stale")
+  );
 }
 
 /** Whether any model the Workbench could still elect has its verification open. */
@@ -2195,6 +2207,15 @@ function workbenchProbeOutcome(
   if ("status" in report) return "inconclusive";
   const results = target.probes.map((name) => report.probes.find((probe) => probe.name === name));
   if (results.every((probe) => probe?.status === "passed")) return "proven";
+  if (
+    results.some(
+      (probe) =>
+        probe?.name === "tool_calling" &&
+        (probe.status === "failed" || probe.status === "unsupported") &&
+        !probeInconclusive(probe),
+    )
+  )
+    return "refuted";
   // The gating chat probe runs first and a target probe is skipped when it fails: a gateway that
   // never answered the chat probe has not refuted anything either.
   if (report.probes.some(probeInconclusive)) return "inconclusive";
@@ -2204,7 +2225,6 @@ function workbenchProbeOutcome(
 async function runWorkbenchProbe(
   deps: UiHandlerDeps,
   target: WorkbenchProbeTarget,
-  key: string,
   correlationId: string,
 ): Promise<WorkbenchProbeOutcome> {
   const generation = deps.gatewayConfig?.generation();
@@ -2228,7 +2248,7 @@ async function runWorkbenchProbe(
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
     if (outcome === "proven" && stillNeeded && deps.gatewayConfig?.generation() !== generation)
-      workbenchProbes.delete(key);
+      return "stale";
     return outcome;
   } catch (error) {
     emitServerDiagnostic(
@@ -2251,30 +2271,89 @@ function enqueueWorkbenchProbe(
   config: GatewayConfig,
   target: WorkbenchProbeTarget,
   correlationId: string,
+  prioritized = false,
 ): Promise<void> {
   const key = workbenchProbeKey(config, target.modelId);
   const known = workbenchProbes.get(key);
-  if (known !== undefined && Date.now() - known.at < known.cooldownMs) {
+  if (known !== undefined && (!known.settled || Date.now() - known.at < known.cooldownMs)) {
+    known.prioritized ||= prioritized;
     return known.promise;
   }
+  const entry = createWorkbenchProbeEntry(deps, target, correlationId, prioritized);
+  workbenchProbes.set(key, entry);
+  startWorkbenchProbeQueue();
+  return entry.promise;
+}
+
+function createWorkbenchProbeEntry(
+  deps: UiHandlerDeps,
+  target: WorkbenchProbeTarget,
+  correlationId: string,
+  prioritized: boolean,
+): WorkbenchProbeEntry {
+  let finish: () => void = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
   const entry: WorkbenchProbeEntry = {
-    promise: workbenchProbeQueue.then(async () => {
-      const outcome = await runWorkbenchProbe(deps, target, key, correlationId);
+    promise,
+    holder: deps.gatewayConfig,
+    cancelQueued: (): void => {
+      if (entry.running || entry.settled) return;
+      entry.settled = true;
+      finish();
+    },
+    perform: async (): Promise<void> => {
+      const controlled =
+        deps.gatewayConfig === undefined
+          ? deps
+          : cancellableConversationProbeDeps(
+              deps,
+              conversationQueue(deps.gatewayConfig).controller.signal,
+            );
+      const outcome = await runWorkbenchProbe(controlled, target, correlationId);
       entry.settled = true;
       entry.outcome = outcome;
       entry.at = Date.now();
       entry.cooldownMs =
-        outcome === "inconclusive"
-          ? WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS
-          : WORKBENCH_REPROBE_COOLDOWN_MS;
-    }),
+        outcome === "stale"
+          ? 0
+          : outcome === "inconclusive"
+            ? WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS
+            : WORKBENCH_REPROBE_COOLDOWN_MS;
+      finish();
+    },
+    prioritized,
+    running: false,
     at: Date.now(),
     cooldownMs: WORKBENCH_REPROBE_COOLDOWN_MS,
     settled: false,
   };
-  workbenchProbeQueue = entry.promise;
-  workbenchProbes.set(key, entry);
-  return entry.promise;
+  return entry;
+}
+
+function nextWorkbenchProbe(): WorkbenchProbeEntry | undefined {
+  const pending = [...workbenchProbes.values()].filter((entry) => !entry.settled && !entry.running);
+  return pending.find((entry) => entry.prioritized) ?? pending[0];
+}
+
+function startWorkbenchProbeQueue(): void {
+  if (workbenchProbeQueueRunning) return;
+  workbenchProbeQueueRunning = true;
+  workbenchProbeQueue = drainWorkbenchProbeQueue().finally(() => {
+    workbenchProbeQueueRunning = false;
+    if (nextWorkbenchProbe() !== undefined) startWorkbenchProbeQueue();
+  });
+}
+
+async function drainWorkbenchProbeQueue(): Promise<void> {
+  await Promise.resolve();
+  let entry = nextWorkbenchProbe();
+  while (entry !== undefined) {
+    entry.running = true;
+    await entry.perform();
+    entry = nextWorkbenchProbe();
+  }
 }
 
 export async function ensureCodingWorkbenchContextWindows(
@@ -2293,7 +2372,10 @@ export async function ensureCodingWorkbenchContextWindows(
     ...targets.filter((target) => target.modelId !== electedModelId),
   ];
   const queued = new Map(
-    ordered.map((target) => [target.modelId, enqueueWorkbenchProbe(deps, config, target, id)]),
+    ordered.map((target) => [
+      target.modelId,
+      enqueueWorkbenchProbe(deps, config, target, id, target.modelId === electedModelId),
+    ]),
   );
   // A named model waits for ITS proof only — never for another model's. Without a name (the
   // Workbench could elect none yet) the first queued model is the one it would elect next.
@@ -2448,11 +2530,16 @@ export async function stopConfiguredConversationReadiness(deps: UiHandlerDeps): 
   const queue = conversationQueue(holder);
   queue.disposed = true;
   queue.controller.abort();
+  const workbench = [...workbenchProbes.values()].filter((entry) => entry.holder === holder);
+  for (const entry of workbench) entry.cancelQueued();
   for (const timer of queue.retries.values()) clearTimeout(timer);
   queue.retries.clear();
   drainConversationQueue(queue);
   // Each probe reports its own failure; this barrier keeps those reports ahead of shutdown sealing.
-  await Promise.allSettled([...readinessProbesFor(holder).values()].map((probe) => probe.promise));
+  await Promise.allSettled([
+    ...[...readinessProbesFor(holder).values()].map((probe) => probe.promise),
+    ...workbench.map((entry) => entry.promise),
+  ]);
 }
 
 export function withReadinessParentCorrelation(
@@ -2505,7 +2592,7 @@ function monitorConversationInitialization(
 
 const MAX_CONVERSATION_RECOVERY_DELAY_MS = 5 * 60_000;
 function conversationReadinessRenewAfterMs(): number {
-  return CONVERSATION_READINESS_MAX_AGE_MS - 60_000;
+  return CONVERSATION_READINESS_MAX_AGE_MS - WORKBENCH_PROBE_TIMEOUT_FLOOR_MS - 60_000;
 }
 
 function conversationRecoveryDelay(
@@ -2683,8 +2770,8 @@ async function reprobeExpiredNotReadyModel(
 // readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
 // request either — each probe can burn the full provider timeout against a dead gateway. So a
 // current-generation non-ready observation answers the guard only within this window; after it,
-// configuration-owned background recovery — and, when that has stopped on a conclusive failure, the
-// first conversation request that needs the model — re-probes and either heals or refreshes the pin.
+// configuration-owned background recovery, or the first conversation request that needs the model,
+// re-probes and either heals or refreshes the pin. Answered failures retain slow background recovery.
 export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
 
 // Age of the current-generation EXPLICIT failed chat observation of a model, `NaN` when its

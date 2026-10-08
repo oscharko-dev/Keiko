@@ -4780,8 +4780,9 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
+      const conversationShutdown = stopConfiguredConversationReadiness(deps);
       await startup.stop();
-      await stopConfiguredConversationReadiness(deps);
+      await conversationShutdown;
       await stopAssumedContextWindowDiscovery(deps);
       await deps.dispose?.();
     },
