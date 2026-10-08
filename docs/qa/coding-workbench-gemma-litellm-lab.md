@@ -1208,3 +1208,25 @@ fixtures. Original Git metadata/process discovery, global/above-root instruction
 full Files and tools, actual host ready lifecycle and platform qualification remain open. The exact
 spdx-exceptions 2.5.0 CC-BY-3.0 license refusal is retained; public runtime pins and selectors remain
 unchanged. Further parity work belongs to the open epic after the bounded customer-fix PR closes.
+
+### Finite serving readiness and background renewal (ROOT qualification on e46b11)
+
+ROOT independently matches ten source baselines and 38 frozen source/evidence references. Four
+actual unchanged-holder controls fail for expiry, malformed/future timestamps and separately dated
+chat freshness. Minimal integration passes 659 tests across six owning suites, ten-owner strict
+types and zero-warning lint, fifteen-file formatting and the fresh affected package graph. All 97
+catalog controls, twelve error-observability sites and 539 proofs/thirty scenarios resolve. The existing probe
+owner records actual serving readiness for five minutes and renews success after four minutes,
+through its existing two-slot queue and generation/model in-flight map. Reload returns the current
+projection immediately, even while catalog discovery or renewal is held; selected requests join
+that same work. Removed models and superseded credentials cannot receive late readiness results.
+
+Chat-only renewal preserves feature `checkedAt` and records the real `conversationCheckedAt`.
+Completed catalog reuse compares actual connection identity, so a producer-derived timeout-bounds
+refinement does not repeat discovery; credential header/protocol rotation does. The original causal
+correlation is preserved. Retained intermediate evidence includes the genuine eager circular-import
+`NaN` timer regression and its runtime-calculation repair, the unchanged causal baseline failure,
+and obsolete fixture timestamp/count corrections. A weaker initial queue transcript does not
+replace the corrected settled-producer regression. No cached health API or inference-triggering
+automatic health request is introduced. New-run Coding serving/picker admission is the remaining
+bounded customer fix; this increment does not age-strand an already admitted coding session.

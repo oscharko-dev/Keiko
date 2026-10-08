@@ -2463,7 +2463,7 @@ function discoverConfiguredGatewayCatalog(
   );
 }
 
-function catalogConnectionMatches(
+export function catalogConnectionMatches(
   candidate: ModelProviderConfig,
   connection: ModelProviderConfig,
 ): boolean {
@@ -8500,6 +8500,8 @@ function applyVerifiedCapabilityUpdate(
       entry.modelId,
       entry.fields,
       entry.observation?.checkedAt ?? new Date().toISOString(),
+      undefined,
+      entry.observation?.conversationCheckedAt,
     );
   }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };

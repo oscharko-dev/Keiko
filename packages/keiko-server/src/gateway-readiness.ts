@@ -36,8 +36,17 @@ import {
   selectCodingWorkbenchReadinessCandidate,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
-import { currentConversationReady, currentGatewayConfig } from "./deps.js";
+import type {
+  UiHandlerDeps,
+  VerifiedModelCapabilityFields,
+  VerifiedModelCapabilityObservation,
+} from "./deps.js";
+import {
+  CONVERSATION_READINESS_MAX_AGE_MS,
+  conversationReadinessAgeMs,
+  currentConversationReady,
+  currentGatewayConfig,
+} from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import type { RerankSelection } from "./grounded-rerank-facade.js";
@@ -1831,16 +1840,35 @@ function recordReadinessObservation(
   // chat-only refresh and re-stamp stale previous fields with a fresh checkedAt — verified
   // evidence contradicted by the very run recording it.
   const chatOnlyRun = !executedCategoricalFeatureProbe(report.probes);
-  const fields =
-    chatOnlyRun && previous !== undefined && previous.generation === observedGeneration
-      ? { ...previous.fields, ...observation }
-      : observation;
+  const retained = retainedFeatureObservation(previous, chatOnlyRun, observedGeneration);
+  const fields = retained === undefined ? observation : { ...retained.fields, ...observation };
+  if (retained !== undefined) {
+    deps.gatewayConfig?.recordVerifiedCapability(
+      report.modelId,
+      fields,
+      retained.checkedAt,
+      observedGeneration,
+      report.checkedAt,
+    );
+    return;
+  }
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
     fields,
     report.checkedAt,
     observedGeneration,
   );
+}
+
+function retainedFeatureObservation(
+  previous: VerifiedModelCapabilityObservation | undefined,
+  chatOnly: boolean,
+  generation: number | undefined,
+): VerifiedModelCapabilityObservation | undefined {
+  if (!chatOnly || previous === undefined || previous.generation !== generation) return undefined;
+  return Object.keys(previous.fields).some((key) => key !== "conversationReady")
+    ? previous
+    : undefined;
 }
 
 function recordFailedReadinessObservation(
@@ -1868,6 +1896,7 @@ function preserveUnexecutedCapabilityObservation(
     { ...previous.fields, conversationReady: false },
     previous.checkedAt,
     observedGeneration,
+    report.checkedAt,
   );
   return true;
 }
@@ -1892,9 +1921,10 @@ function preserveVerifiedToolCallingObservation(
   // with its original timestamp so an unrelated outage cannot erase uncontradicted evidence.
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
-    { toolCalling: true },
+    { toolCalling: true, conversationReady: categoricalProbeValue(report.probes, "chat") === true },
     previous.checkedAt,
     observedGeneration,
+    report.checkedAt,
   );
   return true;
 }
@@ -2364,7 +2394,11 @@ function enqueueConversationProbe(
   return new Promise<void>((resolve, reject) => {
     queue.pending.push(async (): Promise<void> => {
       try {
-        if (!queue.disposed && holder.generation() === generation)
+        if (
+          !queue.disposed &&
+          holder.generation() === generation &&
+          holder.current()?.providers.some((provider) => provider.modelId === modelId) === true
+        )
           await runOnDemandReadinessProbe(
             cancellableConversationProbeDeps(deps, queue.controller.signal),
             holder,
@@ -2470,6 +2504,30 @@ function monitorConversationInitialization(
 }
 
 const MAX_CONVERSATION_RECOVERY_DELAY_MS = 5 * 60_000;
+function conversationReadinessRenewAfterMs(): number {
+  return CONVERSATION_READINESS_MAX_AGE_MS - 60_000;
+}
+
+function conversationRecoveryDelay(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  attempt: number,
+): number {
+  const observation = holder.verifiedCapability(modelId);
+  if (currentConversationReady(deps, modelId) && observation !== undefined)
+    return (
+      Math.max(0, conversationReadinessRenewAfterMs() - conversationReadinessAgeMs(observation)) + 1
+    );
+  return (
+    (conversationQueue(holder).retryable.get(modelId) === false
+      ? MAX_CONVERSATION_RECOVERY_DELAY_MS
+      : Math.min(
+          NOT_READY_REPROBE_COOLDOWN_MS * 2 ** Math.min(attempt - 1, 4),
+          MAX_CONVERSATION_RECOVERY_DELAY_MS,
+        )) + 1
+  );
+}
 
 function scheduleConversationRecovery(
   deps: UiHandlerDeps,
@@ -2484,10 +2542,11 @@ function scheduleConversationRecovery(
   if (
     queue.disposed ||
     holder.generation() !== generation ||
-    currentConversationReady(deps, modelId)
+    holder.current()?.providers.some((provider) => provider.modelId === modelId) !== true
   )
     return;
   clearTimeout(queue.retries.get(modelId));
+  const nextAttempt = currentConversationReady(deps, modelId) ? 1 : attempt + 1;
   const retry = setTimeout(
     () => {
       queue.retries.delete(modelId);
@@ -2496,21 +2555,51 @@ function scheduleConversationRecovery(
         modelId,
         generation,
         parentCorrelationId,
-        attempt + 1,
+        nextAttempt,
       );
     },
-    (queue.retryable.get(modelId) === false
-      ? MAX_CONVERSATION_RECOVERY_DELAY_MS
-      : Math.min(
-          NOT_READY_REPROBE_COOLDOWN_MS * 2 ** (attempt - 1),
-          MAX_CONVERSATION_RECOVERY_DELAY_MS,
-        )) + 1,
+    conversationRecoveryDelay(deps, holder, modelId, attempt),
   );
   retry.unref();
   queue.retries.set(modelId, retry);
 }
 
-/** Configuration-owned, rate-bounded background probes heal outages without per-question checks. */
+function resetConversationGeneration(
+  queue: ConversationInitializationQueue,
+  generation: number,
+): void {
+  if (queue.initializedGeneration === generation) return;
+  for (const timer of queue.retries.values()) clearTimeout(timer);
+  queue.retries.clear();
+  queue.retryable.clear();
+  queue.probeSettledAt.clear();
+  queue.initializedGeneration = generation;
+}
+
+function initializeConversationModel(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string | undefined,
+): void {
+  if (readinessProbesFor(holder).has(`${String(holder.generation())}:${modelId}`)) return;
+  const observation = holder.verifiedCapability(modelId);
+  const ready = currentConversationReady(deps, modelId);
+  const queue = conversationQueue(holder);
+  if (
+    ready &&
+    observation !== undefined &&
+    conversationReadinessAgeMs(observation) < conversationReadinessRenewAfterMs()
+  ) {
+    if (!queue.retries.has(modelId))
+      scheduleConversationRecovery(deps, modelId, holder.generation(), correlationId, 1);
+    return;
+  }
+  if (observation?.fields.conversationReady === false && queue.retries.has(modelId)) return;
+  monitorConversationInitialization(deps, modelId, holder.generation(), correlationId, 1);
+}
+
+/** Configuration-owned, rate-bounded background probes renew health and recover outages. */
 export function initializeConfiguredConversationReadiness(
   deps: UiHandlerDeps,
   correlationId?: string,
@@ -2518,31 +2607,20 @@ export function initializeConfiguredConversationReadiness(
   const holder = deps.gatewayConfig;
   if (holder === undefined) return;
   const queue = conversationQueue(holder);
-  const generation = holder.generation();
-  if (queue.disposed || queue.initializedGeneration === generation) return;
-  for (const timer of queue.retries.values()) clearTimeout(timer);
-  queue.retries.clear();
-  queue.retryable.clear();
-  queue.probeSettledAt.clear();
-  queue.initializedGeneration = generation;
+  if (queue.disposed) return;
+  resetConversationGeneration(queue, holder.generation());
   const config = currentGatewayConfig(deps);
   if (config === undefined) return;
   for (const model of listConfiguredCapabilities(config)) {
-    if (model.kind === "chat")
-      monitorConversationInitialization(deps, model.id, generation, correlationId, 1);
+    if (model.kind === "chat") initializeConversationModel(deps, holder, model.id, correlationId);
   }
 }
 
 /**
- * What a conversation request does about a model that is not ready. A ready model, and a model whose
- * readiness was never observed, are never probed here: interactive Chat adds no readiness request.
- * A probe already running is joined. Only a model whose LAST probe failed at least
- * `NOT_READY_REPROBE_COOLDOWN_MS` ago earns one fresh probe from the first request that needs it —
- * a conclusive failure stops the background retries, so without this a transient gateway answer at
- * startup would leave the model not-ready until a restart or a Settings change (1.1.13 regression;
- * 1.1.11 re-probed on the next send). The probe goes through the same in-flight map, the same
- * two-slot queue and the same cooldown as every other probe, so concurrent requests share it and a
- * failed one refreshes the cooldown: never a probe storm.
+ * Fresh chat success adds no interactive readiness request. A running probe is joined; an expired
+ * success or a failed observation outside its cooldown can share one fresh check through the
+ * existing two-slot queue. Background renewal and recovery use the same in-flight owner, so
+ * simultaneous requests cannot create a probe storm.
  */
 export async function awaitInitializedConversationReadiness(
   deps: UiHandlerDeps,
@@ -2573,7 +2651,12 @@ async function reprobeExpiredNotReadyModel(
   correlationId: string | undefined,
 ): Promise<void> {
   if (modelId.length === 0 || conversationQueue(holder).disposed) return;
-  if (!notReadyCooldownElapsed(holder, modelId)) return;
+  const observation = holder.verifiedCapability(modelId);
+  const expiredSuccess =
+    observation?.generation === holder.generation() &&
+    observation.fields.conversationReady === true &&
+    !currentConversationReady(deps, modelId);
+  if (!expiredSuccess && !notReadyCooldownElapsed(holder, modelId)) return;
   const requestCorrelationId = correlationId ?? newCorrelationId();
   // The probe's own lines carry the request's correlation id; a probe failure is reported once by
   // the queue and once here, against the request that was waiting for it.
@@ -2616,7 +2699,7 @@ function notReadyObservationAgeMs(
   const observation = holder.verifiedCapability(modelId);
   if (observation?.generation !== holder.generation()) return undefined;
   if (observation.fields.conversationReady !== false) return undefined;
-  return Date.now() - Date.parse(observation.checkedAt);
+  return conversationReadinessAgeMs(observation);
 }
 
 function withinNotReadyCooldown(
@@ -2646,6 +2729,23 @@ function notReadyCooldownElapsed(
   return usableAges.length > 0 && Math.min(...usableAges) >= NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
+function conversationProbeDue(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  backgroundAttempt: number | undefined,
+): boolean {
+  if (holder.current()?.providers.some((provider) => provider.modelId === modelId) !== true)
+    return false;
+  if (!currentConversationReady(deps, modelId)) return true;
+  if (backgroundAttempt === undefined) return false;
+  const observation = holder.verifiedCapability(modelId);
+  return (
+    observation !== undefined &&
+    conversationReadinessAgeMs(observation) >= conversationReadinessRenewAfterMs()
+  );
+}
+
 // `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
 // so that request's timeline shows the check it waited for.
 export async function ensureOnDemandConversationReadiness(
@@ -2656,7 +2756,7 @@ export async function ensureOnDemandConversationReadiness(
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
-  if (currentConversationReady(deps, modelId)) return;
+  if (!conversationProbeDue(deps, holder, modelId, backgroundAttempt)) return;
   if (withinNotReadyCooldown(holder, modelId)) return;
   // The in-flight key carries the generation: a config replaced mid-probe must not hand the
   // NEW generation's caller the OLD generation's discarded report.

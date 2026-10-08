@@ -3,7 +3,11 @@ import { codingSidecarDisabledByPolicy } from "./coding-sidecar-gateway.js";
 import { newCorrelationId } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
-import { liteLlmDiscoveryConnections, refreshLiteLlmGatewayCatalog } from "./gateway-setup.js";
+import {
+  catalogConnectionMatches,
+  liteLlmDiscoveryConnections,
+  refreshLiteLlmGatewayCatalog,
+} from "./gateway-setup.js";
 import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
@@ -43,6 +47,14 @@ class GatewayStartupChecks {
 
   public constructor(private readonly deps: UiHandlerDeps) {}
 
+  private initializeConversationReadiness(
+    deps: UiHandlerDeps,
+    correlationId: string,
+    parentCorrelationId: string | undefined,
+  ): void {
+    initializeConfiguredConversationReadiness(deps, parentCorrelationId ?? correlationId);
+  }
+
   public start(parentCorrelationId?: string): void {
     const correlationId = newCorrelationId();
     const observedDeps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
@@ -50,7 +62,7 @@ class GatewayStartupChecks {
     if (this.controller.signal.aborted || holder?.current() === undefined) return;
     if (this.startedGeneration === holder.generation()) return;
     this.startedGeneration = holder.generation();
-    initializeConfiguredConversationReadiness(observedDeps, correlationId);
+    this.initializeConversationReadiness(observedDeps, correlationId, parentCorrelationId);
     this.track(this.run(observedDeps, correlationId, parentCorrelationId), correlationId);
   }
 
@@ -66,6 +78,7 @@ class GatewayStartupChecks {
     }
     const correlationId = newCorrelationId();
     const deps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
+    this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
     const task = this.catalog(deps, correlationId)
       .finally(() => {
         this.refreshingGenerations.delete(generation);
@@ -128,7 +141,7 @@ class GatewayStartupChecks {
     retryCatalog: boolean,
   ): Promise<void> {
     if (this.controller.signal.aborted) return;
-    initializeConfiguredConversationReadiness(deps, correlationId);
+    this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
     const source =
       deps.codingSidecarGatewayModelSourceResolver?.() ??
       deps.codingSidecarGatewayModelSource ??
@@ -226,7 +239,7 @@ function pruneCatalogConnections(
     const current = connections.find(
       (provider) => toolCallingConfigurationFingerprint(provider) === key,
     );
-    if (current === undefined || JSON.stringify(current) !== JSON.stringify(state.provider))
+    if (current === undefined || !catalogConnectionMatches(current, state.provider))
       discovered.delete(key);
   }
 }

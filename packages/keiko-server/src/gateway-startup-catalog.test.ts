@@ -5,7 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDefaultChatCapability, parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleModels } from "./read-handlers.js";
-import { refreshLiteLlmGatewayCatalog, parseModelDiscovery } from "./gateway-setup.js";
+import {
+  refreshLiteLlmGatewayCatalog,
+  parseModelDiscovery,
+  rawConfigFromCurrent,
+} from "./gateway-setup.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   isLiteLlmCodingReadinessPending,
@@ -758,4 +762,85 @@ it("refuses inventory mutation when the source-retaining catalog facet is unavai
   );
   expect(refine).not.toHaveBeenCalled();
   expect(holder.current()?.providers).toEqual(config.providers);
+});
+
+it("retains catalog results across a producer-derived nonconnection bounds update", async () => {
+  stubReadyChat();
+  const discovery = vi.fn().mockResolvedValue(discoveredCatalog());
+  const deps = startupDeps(discovery);
+  const initial = startupConfig();
+  deps.gatewayConfig?.set(initial, true);
+  await vi.waitFor(() => {
+    expect(discovery).toHaveBeenCalledOnce();
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const produced = parseGatewayConfig(rawConfigFromCurrent(initial, undefined, 2000));
+  expect(produced.providers[0]?.timeoutMs).toBe(2000);
+  deps.gatewayConfig?.set(produced, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(discovery).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { apiKeyHeaderName: "api-key" },
+  { endpointStyle: "azure-openai-deployment" as const, apiVersion: "2026-07-01" },
+])(
+  "invalidates completed catalog for an actual credential header or protocol rotation: %j",
+  async (change) => {
+    stubReadyChat();
+    const discovery = vi.fn().mockResolvedValue(discoveredCatalog());
+    const deps = startupDeps(discovery);
+    const initial = startupConfig();
+    deps.gatewayConfig?.set(initial, true);
+    await vi.waitFor(() => {
+      expect(discovery).toHaveBeenCalledOnce();
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const produced = parseGatewayConfig({
+      ...initial,
+      providers: initial.providers.map((provider) => ({ ...provider, ...change })),
+    });
+    deps.gatewayConfig?.set(produced, true);
+    await vi.waitFor(() => {
+      expect(discovery).toHaveBeenCalledTimes(2);
+    });
+  },
+);
+
+it("reuses the actual metadata and models transport after a producer-derived bounds refinement", async () => {
+  const fetch = vi.fn((input: Parameters<typeof globalThis.fetch>[0]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.pathname.endsWith("/model/info"))
+      return Promise.resolve(
+        Response.json({
+          data: [
+            { model_name: "chat-model", model_info: { mode: "chat", max_model_len: 128_000 } },
+          ],
+        }),
+      );
+    if (url.pathname.endsWith("/models"))
+      return Promise.resolve(Response.json({ data: [{ id: "chat-model" }] }));
+    return Promise.resolve(
+      Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+    );
+  });
+  vi.stubGlobal("fetch", fetch);
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(undefined, events);
+  const initial = startupConfig();
+  deps.gatewayConfig?.set(initial, true);
+  await vi.waitFor(() => {
+    expect(events.some((event) => event.op === "gateway.catalog.automatic.completed")).toBe(true);
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const countModels = (): number =>
+    fetch.mock.calls.filter(([input]) =>
+      (input instanceof Request ? input.url : String(input)).endsWith("/models"),
+    ).length;
+  expect(countModels()).toBe(1);
+  const current = deps.gatewayConfig?.current();
+  if (current === undefined) throw new TypeError("Expected gateway configuration.");
+  deps.gatewayConfig?.set(parseGatewayConfig(rawConfigFromCurrent(current, undefined, 2000)), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(countModels()).toBe(1);
 });

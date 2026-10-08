@@ -704,6 +704,7 @@ describe("handleGatewaySetup", () => {
     );
 
     expect("status" in report).toBe(false);
+    if ("status" in report) throw new TypeError("Expected actual readiness report.");
     expect(
       requiredCapability(requiredGatewayConfig(deps), provider.modelId).toolCallingVerification,
     ).toEqual(proof);
@@ -711,6 +712,7 @@ describe("handleGatewaySetup", () => {
       modelId: provider.modelId,
       generation: gatewayConfig.generation(),
       checkedAt: proof.checkedAt,
+      conversationCheckedAt: report.checkedAt,
       fields: { toolCalling: true, conversationReady: false },
     });
     deps.store.close();

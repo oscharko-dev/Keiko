@@ -25,9 +25,12 @@ downgrade every consumer and violate the human-control invariant.
 verification state. Passed categorical probes record `true`; only the categorical `unsupported`
 result records `false`. Failed and skipped probes record no field value. A run with categorical
 evidence replaces the model's complete usable observation set for that generation, so an omitted
-field cannot survive a narrower categorical result as stale evidence. A chat-only or wholly
-inconclusive run produces no categorical evidence and leaves the last same-generation observation
-unchanged; a failed readiness run clears it. Observations contain no response body, endpoint,
+field cannot survive a narrower categorical result as stale evidence. A chat-only run can update
+actual serving readiness while retaining uncontradicted feature evidence with its original
+`checkedAt`; its separate `conversationCheckedAt` dates the actual chat result. A chat failure
+records unavailable serving without refreshing retained feature proof. Executed contradictory
+feature probes replace or clear their evidence through the existing reconciliation owner.
+Observations contain no response body, endpoint,
 credential, or customer content.
 
 A successful long-context probe proves only that the model accepted at least the tested token count.
@@ -46,8 +49,12 @@ requests in the current process, but not a configuration replacement or process 
 either event basic-chat verification starts during configuration initialization. Successful
 credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
 create, send, streaming send, regeneration, or grounded question may join an already running
-initialization, and never initiates a provider readiness test for a model that is ready or whose
-readiness was never observed. Failed initialization remains
+initialization. A fresh successful observation adds no per-question readiness request. A success
+expires at the exact five-minute boundary; malformed or future successful timestamps are unknown.
+The existing background queue renews success after four minutes and uses the same generation/model
+in-flight map, two slots and recovery timers. Reload starts unknown or expired checks immediately
+in the background, independently of held catalog discovery; selected requests join that same work.
+An expired success can share one selected-request renewal. Failed initialization remains
 visible. Inconclusive transport or provider failures recover through configuration-owned background
 probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
 provider recovers or the configuration changes. A conclusive rejection (for example a 4xx the gateway
@@ -101,7 +108,9 @@ check. The initial workspace model request carries `refresh=1`; the BFF immediat
 current projection and does not await gateway discovery or model probes. Concurrent reloads share
 in-flight discovery, retry deadlines remain effective, and ordinary background projection reads
 never trigger another gateway discovery. Completion uses the existing correlated, body-free
-catalog operation. Automatic onboarding treats the key-scoped `/models` listed IDs as the model
+catalog operation. Completed discovery is reused across nonconnection bounds refinements through
+the existing connection comparator; endpoint, credentials, effective protocol, credential header
+and API-version changes invalidate it. Automatic onboarding treats the key-scoped `/models` listed IDs as the model
 inventory and uses management metadata only to enrich exact matching IDs; a successful management
 response cannot invent a selectable deployment or replace a forbidden or empty model list.
 This listing does not prove a live deployment: LiteLLM may retain names from key/team grants after
@@ -184,8 +193,9 @@ judging every model as of the epoch and offering none (F76).
   retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
 - Basic-chat readiness runs at initialization after restart or configuration replacement and reuses
-  successful credential checks; interactive Chat never adds a readiness request for a ready or
-  never-observed model, and re-probes a failed one at most once per not-ready cooldown.
+  successful credential checks. Fresh success adds no interactive readiness request; background
+  renewal prevents indefinitely cached health, and expired selected requests share the same work.
+  Failed observations are re-probed at most once per not-ready cooldown.
 - A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out
   mid-run; a new run still needs a fresh proof.
 

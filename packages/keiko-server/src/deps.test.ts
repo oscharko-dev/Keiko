@@ -63,6 +63,8 @@ import {
   buildRedactor,
   buildUiHandlerDeps,
   currentContextProfileForModel,
+  currentConversationReady,
+  currentConversationReadinessObservation,
   createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
@@ -3667,5 +3669,83 @@ describe("runtime gateway accepted source and active inventory", () => {
     expect(holder.verifiedCapability("retained-chat")).toBeUndefined();
     expect(holder.configured?.()?.providers[0]?.apiKey).toBe("rotated-synthetic-credential");
     await deps.dispose?.();
+  });
+  async function withFreshnessDeps(check: (deps: UiHandlerDeps) => void): Promise<void> {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          Response.json({
+            choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+          }),
+        ),
+      ),
+    );
+    const deps = inventoryDeps();
+    try {
+      deps.gatewayConfig?.set(inventoryConfig(), true);
+      check(deps);
+    } finally {
+      await deps.dispose?.();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it("expires a genuine chat success at five minutes without replacing its generation", async () => {
+    await withFreshnessDeps((deps): void => {
+      const holder = deps.gatewayConfig;
+      holder?.recordVerifiedCapability(
+        "retained-chat",
+        { conversationReady: true },
+        new Date().toISOString(),
+      );
+      const generation = holder?.generation();
+      vi.setSystemTime(new Date("2026-10-08T12:04:59.999Z"));
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
+      vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
+      expect(holder?.generation()).toBe(generation);
+      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+      expect(currentConversationReadinessObservation(deps, "retained-chat")).toBeUndefined();
+    });
+  });
+
+  it.each(["invalid-chat-time", "2026-10-08T12:05:00.000Z"])(
+    "does not trust a successful chat timestamp that cannot describe the present: %s",
+    async (checkedAt) => {
+      await withFreshnessDeps((deps): void => {
+        deps.gatewayConfig?.recordVerifiedCapability(
+          "retained-chat",
+          { conversationReady: true },
+          checkedAt,
+        );
+        expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+        expect(currentConversationReadinessObservation(deps, "retained-chat")).toBeUndefined();
+      });
+    },
+  );
+
+  it("dates chat freshness separately from preserved feature evidence", async () => {
+    await withFreshnessDeps((deps): void => {
+      const holder = deps.gatewayConfig;
+      const chatTime = new Date().toISOString();
+      holder?.recordVerifiedCapability(
+        "retained-chat",
+        { streaming: true, conversationReady: true },
+        "2026-10-07T12:00:00.000Z",
+        holder.generation(),
+        chatTime,
+      );
+      expect(holder?.verifiedCapability("retained-chat")).toMatchObject({
+        checkedAt: "2026-10-07T12:00:00.000Z",
+        conversationCheckedAt: chatTime,
+        fields: { streaming: true, conversationReady: true },
+      });
+      expect(currentConversationReady(deps, "retained-chat")).toBe(true);
+      vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
+      expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+    });
   });
 });

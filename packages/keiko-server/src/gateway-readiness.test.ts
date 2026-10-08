@@ -1628,8 +1628,9 @@ describe("gateway readiness route", () => {
     expect(recordVerifiedCapability).toHaveBeenCalledWith(
       "test-chat-model",
       { streaming: true, conversationReady: true },
-      expect.any(String),
+      "2026-08-15T00:00:00.000Z",
       4,
+      expect.any(String),
     );
     deps.store.close();
   });
@@ -1835,3 +1836,56 @@ describe("verified-capability evidence patterns (S8786 regression)", () => {
     expect(embeddingMatch).toBeNull();
   });
 });
+
+function priorFeatureReadinessDeps(fetchImpl: typeof fetch): {
+  readonly deps: UiHandlerDeps;
+  readonly record: ReturnType<typeof vi.fn>;
+} {
+  const config = gatewayConfig();
+  const record = vi.fn();
+  return {
+    record,
+    deps: {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        clearVerifiedCapability: () => false,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 0,
+          checkedAt: "2026-10-07T12:00:00.000Z",
+          fields: { streaming: true },
+        }),
+        recordVerifiedCapability: record,
+      },
+    },
+  };
+}
+
+it.each([true, false])(
+  "dates the actual chat result separately without renewing previous features: %s",
+  async (passes) => {
+    const { deps, record } = priorFeatureReadinessDeps(
+      vi.fn(() => Promise.resolve(jsonResponse(chatPayload(passes ? "OK" : "")))),
+    );
+    try {
+      const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+      if ("status" in report) throw new TypeError("Expected actual readiness report.");
+      expect(record).toHaveBeenCalledWith(
+        "test-chat-model",
+        { streaming: true, conversationReady: passes },
+        "2026-10-07T12:00:00.000Z",
+        0,
+        report.checkedAt,
+      );
+    } finally {
+      deps.store.close();
+    }
+  },
+);

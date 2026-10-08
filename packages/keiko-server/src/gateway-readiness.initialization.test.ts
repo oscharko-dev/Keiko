@@ -8,8 +8,11 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
   awaitInitializedConversationReadiness,
+  initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
+import { handleModels } from "./read-handlers.js";
+import type { RouteContext } from "./routes.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
@@ -160,11 +163,15 @@ it("bounds recovery traffic during a long outage and heals within five minutes",
   expect(deps.gatewayConfig?.verifiedCapability("chat-model")?.fields.conversationReady).toBe(true);
   const callsAfterRecovery = fetch.mock.calls.length;
   await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
-  expect(fetch).toHaveBeenCalledTimes(callsAfterRecovery);
+  expect(fetch.mock.calls.length).toBeGreaterThan(callsAfterRecovery);
+  expect(fetch.mock.calls.length - callsAfterRecovery).toBeLessThanOrEqual(31);
   const started = sink.events.filter((event) => event.op === "gateway.readiness.automatic.started");
-  expect(started.map((event) => event.extra?.backgroundAttempt)).toEqual(
-    Array.from({ length: started.length }, (_, index) => index + 1),
-  );
+  expect(
+    started.slice(0, callsBeforeRecovery + 1).map((event) => event.extra?.backgroundAttempt),
+  ).toEqual(Array.from({ length: callsBeforeRecovery + 1 }, (_, index) => index + 1));
+  expect(
+    started.slice(callsBeforeRecovery + 1).every((event) => event.extra?.backgroundAttempt === 1),
+  ).toBe(true);
   expect(new Set(started.map((event) => event.correlationId)).size).toBe(started.length);
   expect(started.every((event) => event.parentCorrelationId === "corr-prolonged-outage")).toBe(
     true,
@@ -256,7 +263,7 @@ it("re-probes a conclusively failed model on the first conversation request afte
   expect(completed.at(-1)?.correlationId).toBe("corr-chat-send");
   expect(completed.at(-1)?.extra?.overallStatus).toBe("ready");
 
-  // A ready model is never rechecked per request.
+  // Fresh readiness avoids one probe per interactive request; background renewal remains bounded.
   for (let request = 0; request < 5; request += 1) {
     await awaitInitializedConversationReadiness(
       deps,
@@ -264,7 +271,8 @@ it("re-probes a conclusively failed model on the first conversation request afte
       `corr-chat-ready-${String(request)}`,
     );
   }
-  await vi.advanceTimersByTimeAsync(60 * 60_000);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(4 * 60_000 - 1000);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
@@ -340,4 +348,227 @@ it("answers a request whose re-probe cannot reach the gateway instead of throwin
   ).resolves.toBeUndefined();
 
   expect(chatModelReady(deps)).toBe(false);
+});
+
+it("renews a healthy model proactively through the existing background queue", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const fetch = vi.fn(() =>
+    Promise.resolve(
+      Response.json({
+        choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+      }),
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-healthy-renewal");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(chatModelReady(deps)).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(timers.mock.calls.some(([, delay]) => Number.isNaN(delay))).toBe(false);
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  await vi.advanceTimersByTimeAsync(4 * 60_000 + 1);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  await vi.advanceTimersByTimeAsync(4 * 60_000 + 1);
+  expect(fetch).toHaveBeenCalledTimes(3);
+});
+
+it("refreshes expired readiness on the same generation and shares the selected model join", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+  const fetch = vi.fn(() =>
+    Promise.resolve(
+      Response.json({
+        choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+      }),
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-same-generation-renewal");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  await awaitInitializedConversationReadiness(deps, "chat-model");
+  const generation = deps.gatewayConfig?.generation();
+  vi.setSystemTime(new Date("2026-10-08T12:06:00.000Z"));
+  initializeConfiguredConversationReadiness(deps, "corr-reload-one");
+  initializeConfiguredConversationReadiness(deps, "corr-reload-two");
+  await Promise.all([
+    awaitInitializedConversationReadiness(deps, "chat-model", "corr-selected-one"),
+    awaitInitializedConversationReadiness(deps, "chat-model", "corr-selected-two"),
+  ]);
+  expect(deps.gatewayConfig?.generation()).toBe(generation);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("returns local models immediately and joins one held renewal across repeated reloads", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+  let hold = false;
+  let release: ((value: Response) => void) | undefined;
+  const fetch = vi.fn(() =>
+    hold
+      ? new Promise<Response>((resolve) => {
+          release = resolve;
+        })
+      : Promise.resolve(chatProbeAnswer()),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-reload-initial");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  hold = true;
+  vi.setSystemTime(new Date("2026-10-08T12:06:00.000Z"));
+  const context = { url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext;
+  const response = handleModels(context, deps);
+  expect(response).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
+  expect(response.body).not.toMatchObject({ models: [{ conversationReady: true }] });
+  handleModels(context, deps);
+  const selected = awaitInitializedConversationReadiness(
+    deps,
+    "chat-model",
+    "corr-selected-renewal",
+  );
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  release?.(chatProbeAnswer());
+  await selected;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(chatModelReady(deps)).toBe(true);
+});
+
+it("keeps the existing two-slot ceiling while background and selected requests share queued work", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  let active = 0;
+  let maximum = 0;
+  const releases: (() => void)[] = [];
+  const fetch = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        active++;
+        maximum = Math.max(maximum, active);
+        releases.push(() => {
+          active--;
+          resolve(chatProbeAnswer());
+        });
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const config = parseGatewayConfig({
+    providers: ["first-chat", "second-chat", "third-chat", "fourth-chat"].map((modelId) => ({
+      modelId,
+      baseUrl: "https://provider.example.invalid/v1",
+      apiKey: "throwaway-key",
+      timeoutMs: 1000,
+      maxRetries: 0,
+      retryBaseDelayMs: 1,
+    })),
+  });
+  deps.gatewayConfig?.set(config, true, "corr-two-slot-source");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  initializeConfiguredConversationReadiness(deps, "corr-two-slot-reload");
+  const selected = awaitInitializedConversationReadiness(
+    deps,
+    "third-chat",
+    "corr-queued-selection",
+  );
+  releases.splice(0).forEach((release) => {
+    release();
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(maximum).toBe(2);
+  releases.splice(0).forEach((release) => {
+    release();
+  });
+  await selected;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(maximum).toBe(2);
+});
+
+it("rejects a late removed-model chat success through the same current generation owner", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  let release: ((value: Response) => void) | undefined;
+  const fetch = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-removed-chat-source");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (config === undefined || holder?.replaceCatalog === undefined)
+    throw new TypeError("Expected catalog owner.");
+  holder.replaceCatalog({ ...config, providers: [], capabilities: [] }, holder.generation());
+  release?.(chatProbeAnswer());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(holder.verifiedCapability("chat-model")).toBeUndefined();
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+it("retains the rotated connection result when an older chat failure finally arrives", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  let release: ((value: Response) => void) | undefined;
+  const fetch = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    )
+    .mockImplementation(() => Promise.resolve(chatProbeAnswer()));
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-old-chat-connection");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (config === undefined || holder === undefined) throw new TypeError("Expected gateway owner.");
+  holder.set(
+    {
+      ...config,
+      providers: config.providers.map((provider) => ({
+        ...provider,
+        apiKey: "rotated-synthetic-key",
+      })),
+    },
+    true,
+  );
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const observation = holder.verifiedCapability("chat-model");
+  expect(observation?.fields.conversationReady).toBe(true);
+  release?.(Response.json({ choices: [] }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(holder.verifiedCapability("chat-model")).toEqual(observation);
+  expect(fetch).toHaveBeenCalledTimes(2);
 });

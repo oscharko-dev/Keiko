@@ -578,6 +578,7 @@ export interface RuntimeGatewayConfig {
     fields: VerifiedModelCapabilityFields,
     checkedAt: string,
     observedGeneration?: number,
+    conversationCheckedAt?: string,
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
@@ -603,6 +604,8 @@ export interface VerifiedModelCapabilityObservation {
   readonly modelId: string;
   readonly generation: number;
   readonly checkedAt: string;
+  /** Actual chat observation time, separate from retained feature evidence. */
+  readonly conversationCheckedAt?: string | undefined;
   readonly fields: VerifiedModelCapabilityFields;
 }
 
@@ -1685,7 +1688,7 @@ function gatewayCapabilityRecorder(
   generation: () => number,
   admitted: (modelId: string) => boolean,
 ): RuntimeGatewayConfig["recordVerifiedCapability"] {
-  return (modelId, fields, checkedAt, observedGeneration): void => {
+  return (modelId, fields, checkedAt, observedGeneration, conversationCheckedAt): void => {
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
     if (observedGeneration !== undefined && observedGeneration !== currentGeneration) return;
@@ -1693,6 +1696,9 @@ function gatewayCapabilityRecorder(
       modelId,
       generation: currentGeneration,
       checkedAt,
+      ...(fields.conversationReady === undefined
+        ? {}
+        : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
     });
   };
@@ -1723,23 +1729,27 @@ export function currentGatewayVerification(
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
 }
 
-/** Returns true only for a basic-chat observation bound to the holder's current generation. */
+/** A live success must be renewed; configuration alone cannot keep it ready indefinitely. */
+export const CONVERSATION_READINESS_MAX_AGE_MS = 5 * 60_000;
+
+export function conversationReadinessAgeMs(
+  observation: VerifiedModelCapabilityObservation,
+): number {
+  return Date.now() - Date.parse(observation.conversationCheckedAt ?? observation.checkedAt);
+}
+
+/** Returns true only for a fresh basic-chat success bound to the current generation. */
 export function currentConversationReady(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
   modelId: string,
 ): boolean {
-  const holder = deps.gatewayConfig;
-  if (holder === undefined) return false;
-  const observation = holder.verifiedCapability(modelId);
-  return (
-    observation?.generation === holder.generation() && observation.fields.conversationReady === true
-  );
+  return currentConversationReadinessObservation(deps, modelId) === true;
 }
 
 /**
  * Tri-state view for the models wire: `true`/`false` only when the CURRENT generation holds an
- * actual basic-chat observation, `undefined` when this process never probed the model since the
- * configuration was (re)loaded. The observation store is process-local by design, so collapsing
+ * actual basic-chat observation, `undefined` when this process never probed the model or its
+ * successful observation expired. Configuration reloads also invalidate observations. The observation store is process-local by design, so collapsing
  * "unknown" into "not ready" told the UI after every restart that no model was usable until a
  * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
  * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
@@ -1753,7 +1763,9 @@ export function currentConversationReadinessObservation(
   if (holder === undefined) return undefined;
   const observation = holder.verifiedCapability(modelId);
   if (observation?.generation !== holder.generation()) return undefined;
-  return observation.fields.conversationReady;
+  if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
+  const ageMs = conversationReadinessAgeMs(observation);
+  return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
 }
 
 function configuredChatContextProfile(
