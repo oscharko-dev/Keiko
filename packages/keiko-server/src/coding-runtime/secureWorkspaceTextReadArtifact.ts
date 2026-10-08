@@ -17,6 +17,8 @@ export interface SecureWorkspaceTextReadArtifact {
   readonly signed: boolean;
   /** Server-pinned helper capability; absent for the current portable/dev helper. */
   readonly byteCap?: number;
+  /** Server-pinned, digest-bound optional capability; absent on every current shipped helper. */
+  readonly snapshotProtocol?: "KSR2/KSS2";
 }
 
 export interface SecureWorkspaceTextReadArtifactVerifier {
@@ -61,10 +63,31 @@ export function isValidSecureWorkspaceTextReadArtifact(
     artifact.target === target &&
     artifact.installRelativePath === expectedPath &&
     artifact.protocol === "KSR1/KSS1" &&
+    validSnapshotCapability(artifact) &&
     artifact.signed &&
-    isSecureWorkspaceReadByteCap(artifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) &&
+    isSecureWorkspaceReadByteCap(secureWorkspaceReadArtifactByteCap(artifact)) &&
     /^[a-f0-9]{64}$/.test(artifact.sha256) &&
     /^[a-f0-9]{40}$/.test(artifact.sourceCommit) &&
     /^[a-f0-9]{64}$/.test(artifact.sourceTreeSha256)
+  );
+}
+
+export function secureWorkspaceReadArtifactByteCap(
+  artifact: SecureWorkspaceTextReadArtifact,
+): number {
+  return artifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES;
+}
+
+function validSnapshotCapability(artifact: SecureWorkspaceTextReadArtifact): boolean {
+  return snapshotProtocolApproved(
+    artifact.snapshotProtocol,
+    secureWorkspaceReadArtifactByteCap(artifact),
+  );
+}
+
+function snapshotProtocolApproved(protocol: unknown, byteCap: number): boolean {
+  return (
+    protocol === undefined ||
+    (protocol === "KSR2/KSS2" && byteCap === SECURE_WORKSPACE_TEXT_READ_MAX_BYTES)
   );
 }

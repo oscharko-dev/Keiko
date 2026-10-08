@@ -434,6 +434,15 @@ native permission hook must separately deny model access to sensitive workspace 
 state and realpath escapes before any production native Read/Search/Edit/Shell admission. This
 foundation is not full native capability parity and grants no workspace write authority.
 
+The optional server-private regular-text snapshot facet reuses the existing governed read's
+preflight, secure helper and postflight. Its additive `KSR2/KSS2` response derives size and
+modification time from the same verified stable file descriptor as the text; a refused read emits
+neither text nor metadata. Both protocol capability and effective byte cap are bound to the
+approved helper identity. Existing `KSR1/KSS1` helpers retain their exact contract and report the
+new snapshot capability unavailable. Existing workspace-read evidence records only closed native
+IO/instruction purposes and refusal reasons. This bounded text prerequisite does not activate a
+native host or qualify original Read paging, directories, media or large-file semantics.
+
 Codex subscription traffic remains a distinct runtime/model source. Its egress uses Keiko's shared
 enterprise proxy and custom-CA path, and any official authentication navigation target is validated
 server-side against the closed official-origin policy before the browser may open it. Credentials

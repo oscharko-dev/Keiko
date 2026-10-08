@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <float.h>
+
+_Static_assert(sizeof(double) == 8 && DBL_MANT_DIG == 53 && DBL_MAX_EXP == 1024, "KSS2 requires IEEE-754 binary64");
 
 #define KSR_VERSION 1u
 #define KSR_MAX_ROOT 32768u
@@ -25,12 +29,15 @@ enum ksr_status {
   KSR_CHANGED_DURING_READ = 8, KSR_IO_FAILURE = 9
 };
 
-struct request { char *root; char *path; uint32_t cap; };
+struct request { char *root; char *path; uint32_t cap; uint16_t version; };
+struct snapshot_info { uint64_t size; double mtime_ms; };
 
 static uint16_t le16(const unsigned char *p) { return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
 static uint32_t le32(const unsigned char *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 static void put16(unsigned char *p, uint16_t n) { p[0] = (unsigned char)n; p[1] = (unsigned char)(n >> 8); }
 static void put32(unsigned char *p, uint32_t n) { p[0] = (unsigned char)n; p[1] = (unsigned char)(n >> 8); p[2] = (unsigned char)(n >> 16); p[3] = (unsigned char)(n >> 24); }
+
+static void put64(unsigned char *p, uint64_t n) { for (unsigned int i = 0; i < 8; ++i) p[i] = (unsigned char)(n >> (8u * i)); }
 
 static int valid_utf8(const unsigned char *s, size_t n) {
   size_t i = 0;
@@ -102,11 +109,18 @@ static int valid_root(const char *root) {
 #endif
 }
 
-static void reply(enum ksr_status status, const unsigned char *content, uint32_t length) {
+static void reply(enum ksr_status status, const unsigned char *content, uint32_t length, uint16_t version, const struct snapshot_info *info) {
   unsigned char header[12] = { 'K', 'S', 'S', '1', 0, 0, 0, 0, 0, 0, 0, 0 };
   if (status != KSR_OK) { content = NULL; length = 0; }
-  put16(header + 4, KSR_VERSION); put16(header + 6, (uint16_t)status); put32(header + 8, length);
+  unsigned char metadata[16] = {0}; uint64_t mtime_bits = 0;
+  const int rich = version == 2u;
+  if (rich) header[3] = '2';
+  if (rich && status == KSR_OK) {
+    put64(metadata, info->size); memcpy(&mtime_bits, &info->mtime_ms, sizeof(mtime_bits)); put64(metadata + 8, mtime_bits);
+  }
+  put16(header + 4, rich ? 2u : KSR_VERSION); put16(header + 6, (uint16_t)status); put32(header + 8, length + ((rich && status == KSR_OK) ? 16u : 0u));
   (void)fwrite(header, 1, sizeof(header), stdout);
+  if (rich && status == KSR_OK) (void)fwrite(metadata, 1, sizeof(metadata), stdout);
   if (content != NULL && length != 0) (void)fwrite(content, 1, length, stdout);
   (void)fflush(stdout);
 }
@@ -114,7 +128,11 @@ static void reply(enum ksr_status status, const unsigned char *content, uint32_t
 static enum ksr_status parse_request(struct request *out) {
   unsigned char header[20]; uint32_t root_len, path_len; size_t total;
   memset(out, 0, sizeof(*out));
-  if (fread(header, 1, sizeof(header), stdin) != sizeof(header) || memcmp(header, "KSR1", 4) != 0 || le16(header + 4) != KSR_VERSION || le16(header + 6) != 0) return KSR_MALFORMED_REQUEST;
+  out->version = KSR_VERSION;
+  if (fread(header, 1, sizeof(header), stdin) != sizeof(header)) return KSR_MALFORMED_REQUEST;
+  if (memcmp(header, "KSR2", 4) == 0 && le16(header + 4) == 2u) out->version = 2u;
+  else if (memcmp(header, "KSR1", 4) != 0 || le16(header + 4) != KSR_VERSION) return KSR_MALFORMED_REQUEST;
+  if (le16(header + 6) != 0) return KSR_MALFORMED_REQUEST;
   root_len = le32(header + 8); path_len = le32(header + 12); out->cap = le32(header + 16);
   if (root_len == 0 || root_len > KSR_MAX_ROOT || path_len == 0 || path_len > KSR_MAX_PATH || out->cap != KSR_CAP) return KSR_MALFORMED_REQUEST;
   total = (size_t)root_len + (size_t)path_len;
@@ -158,7 +176,7 @@ static void pause_after_final_open(void) {
 }
 #endif
 
-static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length) {
+static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) {
   int fds[KSR_MAX_COMPONENTS + 1], fd = -1, count = 0; char *copy = NULL, *part, *next; struct stat root_st, dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; ssize_t chunk; size_t got = 0, capacity = 0; int changed = 0;
   *content = NULL; *length = 0;
   fd = open(request->root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
@@ -199,6 +217,9 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
   if (changed) { memset(buffer, 0, capacity); free(buffer); close(fd); while (count) close(fds[--count]); return KSR_CHANGED_DURING_READ; }
   close(fd); while (count) close(fds[--count]);
   if (!valid_utf8(buffer, got)) { memset(buffer, 0, capacity); free(buffer); return KSR_CONTENT_NOT_TEXT; }
+  info->size = (uint64_t)after.st_size;
+  info->mtime_ms = (double)KSR_MTIME(&after).tv_sec * 1000.0 + (double)KSR_MTIME(&after).tv_nsec / 1000000.0;
+  if (!isfinite(info->mtime_ms)) { memset(buffer, 0, capacity); free(buffer); return KSR_IO_FAILURE; }
   *content = buffer; *length = (uint32_t)got; return KSR_OK;
 }
 #elif defined(_WIN32)
@@ -286,7 +307,7 @@ static void close_handles(HANDLE *handles, int count) {
   for (int i = 0; i < count; ++i) CloseHandle(handles[i]);
 }
 
-static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length) {
+static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) {
   wchar_t *root = NULL, *path = NULL, *cursor, *slash; HANDLE handles[KSR_MAX_COMPONENTS + 1], file = INVALID_HANDLE_VALUE; int count = 0; DWORD chunk = 0, read = 0, capacity = 0; struct file_identity dirs[KSR_MAX_COMPONENTS + 1], before, after; unsigned char *buffer = NULL; nt_create_file_fn nt_create; HMODULE ntdll;
   *content = NULL; *length = 0;
   root = calloc(KSR_MAX_ROOT + 1, sizeof(*root)); path = calloc(KSR_MAX_PATH + 1, sizeof(*path));
@@ -330,10 +351,13 @@ static enum ksr_status secure_read(const struct request *request, unsigned char 
   for (int i = 0; i < count; ++i) { struct file_identity now; if (!identity(handles[i], &now) || now.id.VolumeSerialNumber != dirs[0].id.VolumeSerialNumber || !same_identity(&dirs[i], &now)) { memset(buffer, 0, capacity); free(buffer); free(path); CloseHandle(file); close_handles(handles, count); return KSR_CHANGED_DURING_READ; } }
   free(path); CloseHandle(file); close_handles(handles, count);
   if (!valid_utf8(buffer, read)) { memset(buffer, 0, capacity); free(buffer); return KSR_CONTENT_NOT_TEXT; }
+  info->size = (uint64_t)after.standard.EndOfFile.QuadPart;
+  info->mtime_ms = (double)(after.basic.LastWriteTime.QuadPart / 10000) - 11644473600000.0 + (double)(after.basic.LastWriteTime.QuadPart % 10000) / 10000.0;
+  if (!isfinite(info->mtime_ms)) { memset(buffer, 0, capacity); free(buffer); return KSR_IO_FAILURE; }
   *content = buffer; *length = read; return KSR_OK;
 }
 #else
-static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length) { (void)request; (void)content; (void)length; return KSR_UNSUPPORTED_PLATFORM; }
+static enum ksr_status secure_read(const struct request *request, unsigned char **content, uint32_t *length, struct snapshot_info *info) { (void)request; (void)content; (void)length; (void)info; return KSR_UNSUPPORTED_PLATFORM; }
 #endif
 
 int main(void) {
@@ -343,9 +367,9 @@ int main(void) {
   if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !SetDllDirectoryW(L"")) return 1;
   if (!binary_standard_io()) return 1;
 #endif
-  struct request request; unsigned char *content = NULL; uint32_t length = 0; enum ksr_status status = parse_request(&request);
-  if (status == KSR_OK) status = secure_read(&request, &content, &length);
-  reply(status, content, length);
+  struct request request; struct snapshot_info info = {0}; unsigned char *content = NULL; uint32_t length = 0; enum ksr_status status = parse_request(&request);
+  if (status == KSR_OK) status = secure_read(&request, &content, &length, &info);
+  reply(status, content, length, request.version, &info);
   if (content != NULL) { memset(content, 0, (size_t)length + 1); free(content); }
   clear_request(&request);
   return 0;

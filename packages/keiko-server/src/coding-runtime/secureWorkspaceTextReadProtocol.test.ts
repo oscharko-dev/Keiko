@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  encodeSecureWorkspaceSnapshotRequest,
+  encodeSecureWorkspaceSnapshotResponse,
+  decodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceReadRequest,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
@@ -219,5 +222,85 @@ describe("secure workspace text-read request decoding and response encoding", ()
         bytes: Buffer.alloc(MAX_TEXT_BYTES + 1),
       }),
     ).toThrow("secure-workspace-read-response-too-large");
+  });
+});
+
+describe("closed same-descriptor snapshot protocol", () => {
+  function success(): Buffer {
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes: Buffer.from("safe\n"),
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+  }
+
+  it("retains producer-owned request bounds and exact snapshot metadata", () => {
+    const frame = encodeSecureWorkspaceSnapshotRequest({
+      root: "/workspace",
+      relativePath: "deep/a.ts",
+      byteCap: MAX_TEXT_BYTES,
+    });
+    expect(frame.subarray(0, 4).toString("ascii")).toBe("KSR2");
+    expect(frame.readUInt16LE(4)).toBe(2);
+    const decoded = decodeSecureWorkspaceSnapshotResponse(success());
+    expect(decoded).toEqual({
+      status: "ok",
+      bytes: Buffer.from("safe\n"),
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+    if (decoded.status !== "ok") throw new Error("expected snapshot");
+    expect(Object.isFrozen(decoded.info)).toBe(true);
+  });
+
+  it.each([
+    "size",
+    "nan",
+    "infinity",
+    "trailing",
+    "truncated",
+    "foreign-v1",
+    "unknown-status",
+  ] as const)("rejects %s without accepting partial snapshot facts", (kind) => {
+    let frame = success();
+    if (kind === "size") frame.writeBigUInt64LE(6n, 12);
+    else if (kind === "nan") frame.writeDoubleLE(Number.NaN, 20);
+    else if (kind === "infinity") frame.writeDoubleLE(Number.POSITIVE_INFINITY, 20);
+    else if (kind === "trailing") frame = Buffer.concat([frame, Buffer.of(0)]);
+    else if (kind === "truncated") frame = frame.subarray(0, 27);
+    else if (kind === "foreign-v1")
+      frame = encodeSecureWorkspaceReadResponse({ status: "ok", bytes: Buffer.from("safe\n") });
+    else frame.writeUInt16LE(100, 6);
+    expect(() => decodeSecureWorkspaceSnapshotResponse(frame)).toThrow(
+      "secure-workspace-read-malformed-response",
+    );
+  });
+
+  it("keeps refusal frames free of text and metadata", () => {
+    const frame = encodeSecureWorkspaceSnapshotResponse({ status: "access-denied" });
+    expect(frame).toHaveLength(12);
+    expect(decodeSecureWorkspaceSnapshotResponse(frame)).toEqual({ status: "access-denied" });
+    const malicious = Buffer.concat([frame, Buffer.alloc(16)]);
+    malicious.writeUInt32LE(16, 8);
+    expect(() => decodeSecureWorkspaceSnapshotResponse(malicious)).toThrow();
+  });
+
+  it("enforces the rich facet's unchanged 1 MiB content boundary", () => {
+    expect(() =>
+      encodeSecureWorkspaceSnapshotRequest({
+        root: "/workspace",
+        relativePath: "a.ts",
+        byteCap: 65_536,
+      }),
+    ).toThrow();
+    const bytes = Buffer.alloc(MAX_TEXT_BYTES, 0x61);
+    expect(
+      decodeSecureWorkspaceSnapshotResponse(
+        encodeSecureWorkspaceSnapshotResponse({
+          status: "ok",
+          bytes,
+          info: { type: "file", size: bytes.byteLength, mtimeMs: -1 },
+        }),
+      ),
+    ).toEqual({ status: "ok", bytes, info: { type: "file", size: MAX_TEXT_BYTES, mtimeMs: -1 } });
   });
 });

@@ -447,6 +447,21 @@ remained byte-identical and canonical log generation remained unchanged. Complet
 Scope-disposal controls pass; native cancellation does not guarantee an after hook. Code Mode
 flags and native tool permissions remain unchanged pending full activation qualification.
 
+The inactive original-Read prerequisite adds an optional same-descriptor regular UTF-8 text
+snapshot to the existing secure-read and governed pre/post owners. Genuine native, protocol and
+governed RED controls preceded the change. The additive rich protocol returns actual stable-file
+size and modification time; malformed metadata, in-place mutation, symlink changes, cancellation
+and current-authority refusal return no text or metadata. Effective byte cap and protocol
+capability are part of the bound process artifact identity. Independent native rich/race and full
+existing protocol controls pass, including 1,000 sequential and 100 concurrent ordinary reads
+without parent resource growth. Actual approved npm 1.1.3, existing privately built 1.1.4 and
+candidate-helper controls retain all three ordinary reads; both old helpers refuse the rich
+protocol and only the new source-built helper returns metadata. Independent forced graph and
+source/test types, scoped lint/format, 294 server/unchanged-search controls and canonical generated
+log contracts pass. No artifact approval, shipped pin,
+selector or original native tool is activated. Original-host current-authority routing, paging,
+media, directories and large reads remain separate qualification obligations.
+
 The retained failed-baseline recovery was acknowledged once on clean source `41769633a8f8`
 only after the original captured processes were absent and the new host had no current or
 previously observed surviving child. Both selection guards returned 409 before acknowledgement

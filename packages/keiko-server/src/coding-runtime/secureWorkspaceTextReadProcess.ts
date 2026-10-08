@@ -1,5 +1,8 @@
 import { isAbsolute, win32 } from "node:path";
-import { SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES } from "./secureWorkspaceTextReadProtocol.js";
+import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES,
+  SECURE_WORKSPACE_TEXT_SNAPSHOT_MAX_RESPONSE_BYTES,
+} from "./secureWorkspaceTextReadProtocol.js";
 
 export interface SecureWorkspaceReadPlatform {
   readonly os: string;
@@ -50,6 +53,7 @@ export interface SecureWorkspaceReadProcessPortDeps {
   /** Fixed safe server-owned directory, never the workspace root. */
   readonly cwd: string;
   readonly spawn: SecureWorkspaceReadProcessSpawn;
+  readonly snapshotProtocol?: "KSR2/KSS2";
 }
 
 /** Constructs the private one-shot launch seam with no shell, PATH, argv, or inherited environment. */
@@ -88,6 +92,12 @@ function runOneShot(
   deps: SecureWorkspaceReadProcessPortDeps,
   request: { readonly stdin: Uint8Array; readonly signal: AbortSignal },
 ): Promise<Uint8Array> {
+  const richRequest = Buffer.from(request.stdin.subarray(0, 4)).toString("ascii") === "KSR2";
+  if (richRequest && deps.snapshotProtocol !== "KSR2/KSS2")
+    return Promise.reject(new SecureWorkspaceReadProcessError("protocol-invalid"));
+  const responseLimit = richRequest
+    ? SECURE_WORKSPACE_TEXT_SNAPSHOT_MAX_RESPONSE_BYTES
+    : SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES;
   // eslint-disable-next-line max-lines-per-function
   return new Promise((resolve, reject) => {
     let child: SecureWorkspaceReadChild;
@@ -136,7 +146,7 @@ function runOneShot(
         return;
       }
       stdoutBytes += chunk.byteLength;
-      if (stdoutBytes > SECURE_WORKSPACE_TEXT_READ_MAX_RESPONSE_BYTES) {
+      if (stdoutBytes > responseLimit) {
         chunk.fill(0);
         child.kill();
         void finish(

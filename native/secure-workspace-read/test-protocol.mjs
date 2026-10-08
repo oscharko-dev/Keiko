@@ -9,6 +9,7 @@ import {
   rename,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +27,11 @@ import {
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
-import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "../../packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadProtocol.ts";
+import {
+  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  encodeSecureWorkspaceSnapshotRequest,
+  decodeSecureWorkspaceSnapshotResponse,
+} from "../../packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadProtocol.ts";
 
 const source = fileURLToPath(new URL("./secure_workspace_read.c", import.meta.url));
 const SAFE_TEXT = "safe text\n";
@@ -2434,6 +2439,81 @@ async function assertLoadEvidence(binary, fixture) {
   );
 }
 
+function richRequest(root, path) {
+  return encodeSecureWorkspaceSnapshotRequest({
+    root,
+    relativePath: path,
+    byteCap: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  });
+}
+
+async function assertRichSnapshot(binary, pausedBinary, fixture) {
+  const path = "nested/good.txt";
+  await utimes(join(fixture, path), 1_600_000_000, 1_600_000_000);
+  const result = await run(binary, richRequest(fixture, path));
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr.byteLength, 0);
+  assert.equal(
+    result.stdout.subarray(0, 4).toString("ascii"),
+    "KSS2",
+    "rich request must return metadata from the secure descriptor",
+  );
+  assert.equal(result.stdout.readUInt16LE(4), 2);
+  assert.equal(result.stdout.readUInt16LE(6), 0);
+  assert.equal(Number(result.stdout.readBigUInt64LE(12)), Buffer.byteLength(SAFE_TEXT));
+  assert.equal(result.stdout.readDoubleLE(20), 1_600_000_000_000);
+  assert.equal(result.stdout.subarray(28).toString("utf8"), SAFE_TEXT);
+  assert.equal(result.stdout.byteLength, 28 + Buffer.byteLength(SAFE_TEXT));
+  assertSafeResult(await run(binary, request(fixture, path)));
+  if (pausedBinary !== undefined) {
+    const raced = await runPaused(pausedBinary, richRequest(fixture, path), () =>
+      writeFile(join(fixture, path), "changed private text\n"),
+    );
+    if (raced.mutationDenied) assertRichSafeResult(raced);
+    else {
+      assert.equal(raced.stdout.readUInt16LE(6), 8);
+      assert.equal(
+        raced.stdout.byteLength,
+        12,
+        "unstable snapshot must disclose neither text nor metadata",
+      );
+    }
+    await assertRichPrivateStateFlip(pausedBinary, fixture, path);
+  }
+}
+
+function assertRichSafeResult(result) {
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr.byteLength, 0);
+  const decoded = decodeSecureWorkspaceSnapshotResponse(result.stdout);
+  assert.equal(decoded.status, "ok");
+  assert.equal(Buffer.from(decoded.bytes).toString("utf8"), SAFE_TEXT);
+}
+
+async function assertRichPrivateStateFlip(pausedBinary, fixture, path) {
+  await writeFile(join(fixture, path), SAFE_TEXT);
+  const original = join(fixture, "nested");
+  const moved = join(fixture, "nested-original");
+  const privateRoot = join(fixture, ".keiko", "private");
+  await mkdir(privateRoot, { recursive: true });
+  await writeFile(join(privateRoot, "good.txt"), "protected state sentinel\n");
+  const flipped = await runPaused(pausedBinary, richRequest(fixture, path), async () => {
+    await rename(original, moved);
+    await symlink(privateRoot, original, isWindows ? "junction" : "dir");
+  });
+  if (flipped.mutationDenied) assertRichSafeResult(flipped);
+  else {
+    assert.equal(flipped.stdout.readUInt16LE(6), 8);
+    assert.equal(
+      flipped.stdout.byteLength,
+      12,
+      "symlink flip into private state must disclose neither text nor metadata",
+    );
+    await rm(original, { force: true });
+    await rename(moved, original);
+  }
+}
+
 function existingBinaryArgument(argv) {
   if (argv.length === 0) return undefined;
   if (argv.length !== 2 || argv[0] !== "--binary" || argv[1].length === 0)
@@ -2441,7 +2521,10 @@ function existingBinaryArgument(argv) {
   return resolve(argv[1]);
 }
 
-const externalBinary = existingBinaryArgument(process.argv.slice(2));
+const richOnly = process.argv.includes("--rich-only");
+const externalBinary = existingBinaryArgument(
+  process.argv.slice(2).filter((arg) => arg !== "--rich-only"),
+);
 // The platform restriction belongs to compile mode, not to the harness as a whole. Building the
 // helper needs MSVC on Windows or `xcrun clang -D_DARWIN_C_SOURCE` on macOS, and neither exists
 // on Linux. Everything the --binary path exercises is Windows/POSIX: the source contract is a
@@ -2470,18 +2553,23 @@ try {
     ? "secure-workspace-read-paused.exe"
     : "secure-workspace-read-paused";
   const pausedBinary = binaryRoot === undefined ? undefined : join(binaryRoot, pausedBinaryName);
-  await assertWindowsSourceContract();
+  if (!richOnly) await assertWindowsSourceContract();
   if (externalBinary === undefined) {
     await compile(binary);
     await compile(pausedBinary, true);
   }
   await setupFixture(fixture, outside);
-  await assertProtocolCases(binary, fixture, outside);
-  // Signed --binary runs protocol, live fixture consistency, and load checks against the exact
-  // supplied bytes. Deterministically paused races require the compile-mode test companion.
-  if (pausedBinary !== undefined) await assertAdversarialRaces(pausedBinary, fixture);
-  if (externalBinary !== undefined) await assertExternalBinaryConsistency(binary, fixture, outside);
-  await assertLoadEvidence(binary, fixture);
+  if (richOnly) {
+    await assertRichSnapshot(binary, pausedBinary, fixture);
+  } else {
+    await assertProtocolCases(binary, fixture, outside);
+    // Signed --binary runs protocol, live fixture consistency, and load checks against the exact
+    // supplied bytes. Deterministically paused races require the compile-mode test companion.
+    if (pausedBinary !== undefined) await assertAdversarialRaces(pausedBinary, fixture);
+    if (externalBinary !== undefined)
+      await assertExternalBinaryConsistency(binary, fixture, outside);
+    await assertLoadEvidence(binary, fixture);
+  }
   if (externalBinaryBytes !== undefined)
     assert.deepEqual(
       await readFile(binary),

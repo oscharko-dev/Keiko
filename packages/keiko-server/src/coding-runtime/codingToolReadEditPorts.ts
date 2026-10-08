@@ -80,6 +80,8 @@ import { processServerLogSink } from "../process-log-sink.js";
 import {
   secureWorkspaceTextDigest,
   type SecureWorkspaceTextReadPort,
+  type SecureWorkspaceTextSnapshotResult,
+  isSecureWorkspaceTextRelativePath,
 } from "./secureWorkspaceTextRead.js";
 import {
   WORKSPACE_PATH_ABSENCE_VERDICTS,
@@ -125,7 +127,7 @@ type EditOutcome =
       readonly reasonCode?: string | undefined;
       readonly message?: string | undefined;
       readonly prepareCause?: EditPrepareCause | undefined;
-      readonly readReason?: WorkspaceReadFailureReason | undefined;
+      readonly readReason?: GovernedWorkspaceReadFailure | undefined;
       readonly affectedRelativePath?: string | undefined;
     };
 
@@ -145,9 +147,24 @@ const EDITOR_SESSION_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 3_000, 5_000] as
 
 export interface CodingToolReadEditPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
+  /** Server-private IO only; consumes the original authority owner's admitted guard. No host is enabled. */
+  readonly nativeTextRead: {
+    readTextSnapshot(
+      request: {
+        readonly relativePath: string;
+        readonly purpose: "native-tool-io" | "native-instructions";
+      },
+      signal: AbortSignal | undefined,
+      mutationGuard: CodingToolMutationGuard,
+    ): Promise<GovernedTextSnapshotResult>;
+  };
   readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
   readonly editorChangeset: GovernedCodingToolPort<"edit">;
 }
+
+export type GovernedTextSnapshotResult =
+  | Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }>
+  | { readonly ok: false; readonly reason: GovernedWorkspaceReadFailure | "snapshot-unavailable" };
 
 export interface CodingToolReadEditPortDeps {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
@@ -208,6 +225,10 @@ export function createCodingToolReadEditPorts(
   deps: CodingToolReadEditPortDeps,
 ): CodingToolReadEditPorts {
   return {
+    nativeTextRead: {
+      readTextSnapshot: (request, signal, mutationGuard) =>
+        executeSnapshotRead(deps, request, signal, mutationGuard),
+    },
     repositoryRead: {
       execute: (request, signal, mutationGuard) =>
         executeRead(deps, request, signal, mutationGuard),
@@ -580,7 +601,7 @@ type GovernedRead =
     }
   | {
       readonly ok: false;
-      readonly reason: WorkspaceReadFailureReason;
+      readonly reason: GovernedWorkspaceReadFailure;
       readonly binding: RuntimeProducerBinding | undefined;
       readonly error?: unknown;
       // The closed verdict of the secure read's walk, set only when the helper answered
@@ -588,21 +609,95 @@ type GovernedRead =
       readonly absence?: WorkspacePathAbsence;
     };
 
+type GovernedSnapshotRead =
+  | (Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }> & {
+      readonly binding: RuntimeProducerBinding | undefined;
+    })
+  | (Omit<Extract<GovernedRead, { readonly ok: false }>, "reason"> & {
+      readonly reason: GovernedWorkspaceReadFailure | "snapshot-unavailable";
+    });
+type AnyGovernedRead = GovernedRead | GovernedSnapshotRead;
+
+async function executeSnapshotRead(
+  deps: CodingToolReadEditPortDeps,
+  request: {
+    readonly relativePath: string;
+    readonly purpose: "native-tool-io" | "native-instructions";
+  },
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+): Promise<GovernedTextSnapshotResult> {
+  const read = await governedWorkspaceRead(
+    deps,
+    request.relativePath,
+    signal,
+    mutationGuard,
+    request.purpose,
+    true,
+  );
+  if (!read.ok) return { ok: false, reason: read.reason };
+  recordSnapshotRead(deps, read.binding, request.relativePath, request.purpose);
+  return Object.freeze({
+    ok: true,
+    text: read.text,
+    info: Object.freeze({ type: "file", size: read.info.size, mtimeMs: read.info.mtimeMs }),
+  });
+}
+
+function recordSnapshotRead(
+  deps: CodingToolReadEditPortDeps,
+  binding: RuntimeProducerBinding | undefined,
+  relativePath: string,
+  purpose: ReadPurpose,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_READ_OPERATION,
+      { correlationId: correlationIdOrUnknown(binding?.runId) },
+      { state: "completed", purpose, targetPathSha256: targetPathDigest(relativePath) },
+    ),
+  );
+}
+
 // The one governed read: preflight (abort, denied path, live workspace, producer binding, guard),
 // the secure read, postflight, and the response bound. The model's own read and a replacement
 // materialization both read through it (#3873 review), so both fail closed the same way, and every
 // failure, a thrown one included, leaves its `coding-runtime.workspace-read` line here with the
 // closed reason and the purpose the read served.
+function governedWorkspaceRead(
+  deps: CodingToolReadEditPortDeps,
+  relativePath: string,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+  purpose: ReadPurpose,
+  snapshot?: false,
+): Promise<GovernedRead>;
+function governedWorkspaceRead(
+  deps: CodingToolReadEditPortDeps,
+  relativePath: string,
+  signal: AbortSignal | undefined,
+  mutationGuard: CodingToolMutationGuard,
+  purpose: ReadPurpose,
+  snapshot: true,
+): Promise<GovernedSnapshotRead>;
 async function governedWorkspaceRead(
   deps: CodingToolReadEditPortDeps,
   relativePath: string,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
   purpose: ReadPurpose,
-): Promise<GovernedRead> {
+  snapshot = false,
+): Promise<AnyGovernedRead> {
   const binding = safeMutationBinding(mutationGuard);
   try {
-    const read = await attemptGovernedRead(deps, relativePath, signal, mutationGuard, binding);
+    const read = await attemptGovernedRead(
+      deps,
+      relativePath,
+      signal,
+      mutationGuard,
+      binding,
+      snapshot,
+    );
     if (!read.ok) recordReadFailure(deps, read, relativePath, purpose);
     return read;
   } catch (error) {
@@ -618,26 +713,71 @@ async function attemptGovernedRead(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
   initialBinding: RuntimeProducerBinding | undefined,
-): Promise<GovernedRead> {
+  snapshot: boolean,
+): Promise<AnyGovernedRead> {
   const preflight = readPreflight(deps, relativePath, signal, mutationGuard);
   if (!preflight.ok) return { ok: false, reason: "preflight-refused", binding: initialBinding };
   const binding = preflight.binding;
-  const result = await deps.secureWorkspaceTextRead.readText({ relativePath, signal });
-  if (!result.ok) {
-    return {
-      ok: false,
-      reason: result.reason,
-      binding,
-      ...(result.absence === undefined ? {} : { absence: result.absence }),
-    };
-  }
+  const result = await readGovernedValue(deps, relativePath, signal, snapshot);
+  if (!result.ok) return boundReadFailure(result, binding);
   if (!readPostflight(deps, result, binding, signal, mutationGuard)) {
     return { ok: false, reason: "postflight-refused", binding };
   }
   if (Buffer.byteLength(result.text, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_BYTES) {
     return { ok: false, reason: "response-too-large", binding };
   }
+  if (snapshot) {
+    if (!("info" in result) || !validSnapshotRead(result.text, result.info))
+      return { ok: false, reason: "protocol-invalid", binding };
+    return { ok: true, text: result.text, info: result.info, binding };
+  }
   return { ok: true, text: result.text, binding };
+}
+
+async function readGovernedValue(
+  deps: CodingToolReadEditPortDeps,
+  relativePath: string,
+  signal: AbortSignal | undefined,
+  snapshot: boolean,
+): Promise<
+  SecureWorkspaceTextSnapshotResult | Awaited<ReturnType<SecureWorkspaceTextReadPort["readText"]>>
+> {
+  if (!snapshot) return deps.secureWorkspaceTextRead.readText({ relativePath, signal });
+  const readSnapshot = deps.secureWorkspaceTextRead.readTextSnapshot?.bind(
+    deps.secureWorkspaceTextRead,
+  );
+  return readSnapshot === undefined
+    ? { ok: false, reason: "snapshot-unavailable" }
+    : readSnapshot({ relativePath, signal });
+}
+
+function boundReadFailure(
+  result: Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: false }>,
+  binding: RuntimeProducerBinding | undefined,
+): Extract<GovernedSnapshotRead, { readonly ok: false }> {
+  return {
+    ok: false,
+    reason: result.reason,
+    binding,
+    ...("absence" in result ? { absence: result.absence } : {}),
+  };
+}
+
+function validSnapshotRead(
+  text: string,
+  info: unknown,
+): info is Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }>["info"] {
+  if (info === null || typeof info !== "object" || Reflect.ownKeys(info).length !== 3) return false;
+  return (
+    ownSnapshotValue(info, "type") === "file" &&
+    ownSnapshotValue(info, "size") === Buffer.byteLength(text, "utf8") &&
+    Number.isFinite(ownSnapshotValue(info, "mtimeMs"))
+  );
+}
+
+function ownSnapshotValue(info: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(info, key);
+  return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
 }
 
 // A path that does not exist is a legitimate precondition of the file a materialization creates or
@@ -645,7 +785,7 @@ async function attemptGovernedRead(
 // failed read.
 function recordReadFailure(
   deps: CodingToolReadEditPortDeps,
-  read: Extract<GovernedRead, { readonly ok: false }>,
+  read: Extract<AnyGovernedRead, { readonly ok: false }>,
   relativePath: string,
   purpose: ReadPurpose,
 ): void {
@@ -716,10 +856,15 @@ function targetPathDigest(relativePath: string): string {
   return createHash("sha256").update(relativePath, "utf8").digest("hex");
 }
 
-type WorkspaceReadFailureReason = GovernedWorkspaceReadFailure;
+type WorkspaceReadFailureReason = GovernedWorkspaceReadFailure | "snapshot-unavailable";
 
 // #3873 review: which consumer a read served. Absent on lines written before the field existed.
-const READ_PURPOSES = ["tool-result", "edit-materialization"] as const;
+const READ_PURPOSES = [
+  "tool-result",
+  "edit-materialization",
+  "native-tool-io",
+  "native-instructions",
+] as const;
 type ReadPurpose = (typeof READ_PURPOSES)[number];
 
 const CODING_RUNTIME_WORKSPACE_READ_PURPOSE_FIELD = {
@@ -733,7 +878,7 @@ const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
   type: "string",
   dataClass: "closed-enum",
   required: false,
-  values: [...EDIT_READ_REASONS],
+  values: [...EDIT_READ_REASONS, "snapshot-unavailable"],
 } as const;
 
 // #3873 review (PR #3876): the closed verdict of the server's no-follow walk, set only when the native
@@ -996,6 +1141,7 @@ const WORKSPACE_READ_ERROR_KINDS: Partial<
   "postflight-refused": "authority-denied",
   "not-found": "unavailable",
   "workspace-unavailable": "unavailable",
+  "snapshot-unavailable": "unavailable",
   "too-large": "validation-failed",
   "response-too-large": "validation-failed",
   exception: "internal",
@@ -1097,7 +1243,7 @@ function readRefusal(reason: WorkspaceReadFailureReason): {
 
 function logFailedRead(
   deps: CodingToolReadEditPortDeps,
-  read: Extract<GovernedRead, { readonly ok: false }>,
+  read: Extract<AnyGovernedRead, { readonly ok: false }>,
   relativePath: string,
   purpose: ReadPurpose,
 ): void {
@@ -1195,14 +1341,19 @@ function readPreflight(
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
 ): ReadEditPreflightOutcome {
-  if (isAborted(signal) || isDenied(relativePath) || !hasLiveWorkspaceAccess(deps)) {
+  if (
+    isAborted(signal) ||
+    !isSecureWorkspaceTextRelativePath(relativePath) ||
+    isDenied(relativePath) ||
+    !hasLiveWorkspaceAccess(deps)
+  ) {
     return { ok: false };
   }
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return { ok: false };
   if (binding === undefined && deps.enforceProducerBinding === true) return { ok: false };
   if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return { ok: false };
-  return isDenied(relativePath) ? { ok: false } : { ok: true, binding };
+  return { ok: true, binding };
 }
 
 function discoveryPreflight(
@@ -1562,7 +1713,7 @@ async function completedEdit(
 interface EditRefusalDetail extends Partial<EditFormEvidence> {
   readonly message?: string;
   readonly prepareCause?: EditPrepareCause;
-  readonly readReason?: WorkspaceReadFailureReason;
+  readonly readReason?: GovernedWorkspaceReadFailure;
   readonly replacementRefusal?: ReplacementRefusalEvidence;
   readonly affectedRelativePath?: string;
 }

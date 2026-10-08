@@ -8,17 +8,20 @@ import {
   type WorkspacePathLstat,
 } from "./secureWorkspaceTextReadAbsence.js";
 import {
-  SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES,
   SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES,
   decodeSecureWorkspaceReadResponse,
   decodeSecureWorkspaceText,
   encodeSecureWorkspaceReadRequest,
+  encodeSecureWorkspaceSnapshotRequest,
+  decodeSecureWorkspaceSnapshotResponse,
+  type SecureWorkspaceTextSnapshotInfo,
   type SecureWorkspaceReadClosedStatus,
   type SecureWorkspaceReadHelperResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 import {
   resolveSecureWorkspaceReadArtifact,
+  secureWorkspaceReadArtifactByteCap,
   secureWorkspaceReadTargetFor,
   type SecureWorkspaceTextReadArtifact,
   type SecureWorkspaceTextReadArtifactVerifier,
@@ -61,6 +64,16 @@ export type SecureWorkspaceTextReadResult =
       readonly absence?: WorkspacePathAbsence;
     };
 
+export type SecureWorkspaceTextSnapshotResult =
+  | { readonly ok: true; readonly text: string; readonly info: SecureWorkspaceTextSnapshotInfo }
+  | Extract<SecureWorkspaceTextReadResult, { readonly ok: false }>
+  | { readonly ok: false; readonly reason: "snapshot-unavailable" };
+
+export interface SecureWorkspaceTextReadRequest {
+  readonly relativePath: string;
+  readonly signal?: AbortSignal | undefined;
+}
+
 export interface SecureWorkspaceTextReadPort {
   /**
    * The text of one workspace-relative file, or the closed reason it could not be read.
@@ -72,10 +85,11 @@ export interface SecureWorkspaceTextReadPort {
    * live root proved the path absent after the helper refused it (F27, #3876). It is the precondition
    * of a file creation and of a rename target, and it never reaches past a link.
    */
-  readText(request: {
-    readonly relativePath: string;
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<SecureWorkspaceTextReadResult>;
+  readText(request: SecureWorkspaceTextReadRequest): Promise<SecureWorkspaceTextReadResult>;
+  /** Optional same-descriptor text facet. Capability is separately pinned on the helper identity. */
+  readTextSnapshot?(
+    request: SecureWorkspaceTextReadRequest,
+  ): Promise<SecureWorkspaceTextSnapshotResult>;
 }
 
 /**
@@ -100,12 +114,24 @@ export function exactWorkspaceRead(
   isRunWorkspace: () => boolean,
   refusal: SecureWorkspaceTextReadFailure,
 ): SecureWorkspaceTextReadPort {
+  const readSnapshot = port.readTextSnapshot?.bind(port);
   return {
     readText: async (request): Promise<SecureWorkspaceTextReadResult> => {
       if (!isRunWorkspace()) return { ok: false, reason: refusal };
       const result = await port.readText(request);
       return isRunWorkspace() ? result : { ok: false, reason: refusal };
     },
+    ...(readSnapshot === undefined
+      ? {}
+      : {
+          readTextSnapshot: async (
+            request: SecureWorkspaceTextReadRequest,
+          ): Promise<SecureWorkspaceTextSnapshotResult> => {
+            if (!isRunWorkspace()) return { ok: false, reason: refusal };
+            const result = await readSnapshot(request);
+            return isRunWorkspace() ? result : { ok: false, reason: refusal };
+          },
+        }),
   };
 }
 
@@ -131,15 +157,36 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
 
   public constructor(private readonly deps: SecureWorkspaceTextReadDeps) {}
 
-  public async readText(request: {
-    readonly relativePath: string;
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<SecureWorkspaceTextReadResult> {
+  public readText(request: SecureWorkspaceTextReadRequest): Promise<SecureWorkspaceTextReadResult> {
+    return this.read(request, false);
+  }
+
+  public readTextSnapshot(
+    request: SecureWorkspaceTextReadRequest,
+  ): Promise<SecureWorkspaceTextSnapshotResult> {
+    return this.read(request, true);
+  }
+
+  private read(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: false,
+  ): Promise<SecureWorkspaceTextReadResult>;
+  private read(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: true,
+  ): Promise<SecureWorkspaceTextSnapshotResult>;
+  private async read(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: boolean,
+  ): Promise<SecureWorkspaceTextReadResult | SecureWorkspaceTextSnapshotResult> {
     // The always-on deny list (ADR-0005 D3) is the wrapper's own, not only its callers': the helper
     // has no policy and reads a `.env` it can open, and the read-only child passes the model's path
     // straight through. A denied path answers `denied` before anything touches the filesystem, so
     // it is the same answer whether or not the path exists and cannot be used to probe for it.
-    if (!isNormalizedRelativePath(request.relativePath) || isDenied(request.relativePath)) {
+    if (
+      !isSecureWorkspaceTextRelativePath(request.relativePath) ||
+      isDenied(request.relativePath)
+    ) {
       return { ok: false, reason: "denied" };
     }
     if (request.signal?.aborted === true) return { ok: false, reason: "cancelled" };
@@ -149,29 +196,28 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     if (this.live >= SECURE_WORKSPACE_TEXT_READ_MAX_LIVE) return { ok: false, reason: "busy" };
     this.live += 1;
     try {
-      return await this.readTextGuarded(request);
+      return await this.readTextGuarded(request, snapshot);
     } finally {
       this.live -= 1;
     }
   }
 
-  private async readTextGuarded(request: {
-    readonly relativePath: string;
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<SecureWorkspaceTextReadResult> {
-    const platform = this.deps.platform ?? { os: process.platform, arch: process.arch };
-    const workspaceRoot = await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot);
-    if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
-    const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
-      this.deps.artifact,
-      platform,
-      this.deps.artifactVerifier,
-    );
-    if (verifiedArtifact === undefined) return { ok: false, reason: "artifact-unverified" };
-    const frame = encodeSecureWorkspaceReadRequest({
+  private async readTextGuarded(
+    request: SecureWorkspaceTextReadRequest,
+    snapshot: boolean,
+  ): Promise<SecureWorkspaceTextReadResult | SecureWorkspaceTextSnapshotResult> {
+    const material = await resolveVerifiedReadMaterial(this.deps);
+    if (!material.ok) return material;
+    const { workspaceRoot, verifiedArtifact } = material;
+    if (snapshot && verifiedArtifact.snapshotProtocol !== "KSR2/KSS2")
+      return { ok: false, reason: "snapshot-unavailable" };
+    const encode = snapshot
+      ? encodeSecureWorkspaceSnapshotRequest
+      : encodeSecureWorkspaceReadRequest;
+    const frame = encode({
       root: workspaceRoot,
       relativePath: request.relativePath,
-      byteCap: verifiedArtifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      byteCap: secureWorkspaceReadArtifactByteCap(verifiedArtifact),
     });
     try {
       const signal = readSignal(request.signal);
@@ -183,10 +229,13 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       } catch (error) {
         return processRunFailure(error, signal, request.signal);
       }
-      const answer = decodeHelperResponse(
-        response,
-        verifiedArtifact.byteCap ?? SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
-      );
+      if (snapshot && signal.aborted) {
+        response.fill(0);
+        return processRunFailure(undefined, signal, request.signal);
+      }
+      const answer = snapshot
+        ? decodeSnapshotHelperResponse(response)
+        : decodeHelperResponse(response, secureWorkspaceReadArtifactByteCap(verifiedArtifact));
       if (answer.kind === "settled") return answer.result;
       return await refinedAccessDenial(
         workspaceRoot,
@@ -327,7 +376,7 @@ function helperFailure(status: MappedHelperStatus): SecureWorkspaceTextReadFailu
   }
 }
 
-function isNormalizedRelativePath(value: string): boolean {
+export function isSecureWorkspaceTextRelativePath(value: string): boolean {
   if (
     value.length === 0 ||
     Buffer.byteLength(value, "utf8") > SECURE_WORKSPACE_TEXT_READ_MAX_PATH_BYTES ||
@@ -353,4 +402,47 @@ function isUsableWorkspaceRoot(value: unknown): value is string {
     !value.includes("\0") &&
     Buffer.byteLength(value, "utf8") <= SECURE_WORKSPACE_TEXT_READ_MAX_ROOT_BYTES
   );
+}
+
+function decodeSnapshotHelperResponse(
+  response: Uint8Array,
+):
+  | { readonly kind: "settled"; readonly result: SecureWorkspaceTextSnapshotResult }
+  | { readonly kind: "access-denied" } {
+  try {
+    const decoded = decodeSecureWorkspaceSnapshotResponse(response);
+    if (decoded.status === "access-denied") return { kind: "access-denied" };
+    if (decoded.status !== "ok")
+      return { kind: "settled", result: { ok: false, reason: helperFailure(decoded.status) } };
+    const text = decodeSecureWorkspaceText(decoded.bytes);
+    return {
+      kind: "settled",
+      result: text.ok ? { ok: true, text: text.text, info: decoded.info } : text,
+    };
+  } catch {
+    return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
+  } finally {
+    response.fill(0);
+  }
+}
+
+async function resolveVerifiedReadMaterial(deps: SecureWorkspaceTextReadDeps): Promise<
+  | {
+      readonly ok: true;
+      readonly workspaceRoot: string;
+      readonly verifiedArtifact: SecureWorkspaceTextReadArtifact;
+    }
+  | { readonly ok: false; readonly reason: "workspace-unavailable" | "artifact-unverified" }
+> {
+  const platform = deps.platform ?? { os: process.platform, arch: process.arch };
+  const workspaceRoot = await resolveLiveWorkspaceRoot(deps.resolveWorkspaceRoot);
+  if (workspaceRoot === undefined) return { ok: false, reason: "workspace-unavailable" };
+  const verifiedArtifact = await resolveSecureWorkspaceReadArtifact(
+    deps.artifact,
+    platform,
+    deps.artifactVerifier,
+  );
+  return verifiedArtifact === undefined
+    ? { ok: false, reason: "artifact-unverified" }
+    : { ok: true, workspaceRoot, verifiedArtifact };
 }

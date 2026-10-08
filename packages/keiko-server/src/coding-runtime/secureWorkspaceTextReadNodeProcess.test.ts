@@ -145,3 +145,25 @@ describe("Node secure workspace-read process adapter", () => {
     );
   });
 });
+
+describe("secure helper snapshot identity", () => {
+  it("refuses a richer protocol substituted after binding a legacy helper", () => {
+    const factory = createNodeSecureWorkspaceReadProcessFactory({
+      binding,
+      safeCwd: "/verified/runtime",
+      spawn: vi.fn(),
+    });
+    expect(() => factory.create({ ...artifact, snapshotProtocol: "KSR2/KSS2" })).toThrow(
+      "secure-workspace-read-artifact-mismatch",
+    );
+  });
+
+  it("refuses a larger read cap substituted after binding a legacy helper", () => {
+    const factory = createNodeSecureWorkspaceReadProcessFactory({
+      binding: { ...binding, artifact: { ...artifact, byteCap: 65_536 } },
+      safeCwd: "/verified/runtime",
+      spawn: vi.fn(),
+    });
+    expect(() => factory.create(artifact)).toThrow("secure-workspace-read-artifact-mismatch");
+  });
+});

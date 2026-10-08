@@ -6216,6 +6216,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "postflight-refused",
           "preflight-refused",
           "response-too-large",
+          "snapshot-unavailable",
         ],
       },
       replacementRefusal: {
@@ -9938,7 +9939,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["tool-result", "edit-materialization"],
+        values: ["tool-result", "edit-materialization", "native-tool-io", "native-instructions"],
       },
       reason: {
         type: "string",
@@ -9962,6 +9963,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "postflight-refused",
           "preflight-refused",
           "response-too-large",
+          "snapshot-unavailable",
         ],
       },
       absence: {

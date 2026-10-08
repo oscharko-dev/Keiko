@@ -282,10 +282,14 @@ describe("production Coding Workbench scoped streaming discovery", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    fs.iterateDirectory = async function* (path): AsyncIterable<WorkspaceDirEntry> {
-      yield* iterate?.call(fs, path) ?? [];
-      await blocked;
-    };
+    Reflect.set(
+      fs,
+      "iterateDirectory",
+      async function* (path: string): AsyncIterable<WorkspaceDirEntry> {
+        yield* iterate?.call(fs, path) ?? [];
+        await blocked;
+      },
+    );
     const result = await ports.repositoryDiscover.execute(request, undefined, {
       check: () => true,
       executionBudget: { nowMs: Date.now, deadlineAtMs: Date.now() + 250 },
@@ -2827,4 +2831,181 @@ describe("CodingTool materialized patch provenance (#3873)", () => {
     expect(registry.lookup(supplied.patch).registered).toBe(false);
     expect(registry.stats().entries).toBe(0);
   });
+});
+
+interface NativeTextSnapshotFixture {
+  readonly ports: ReturnType<typeof createCodingToolReadEditPorts>;
+  readonly guard: {
+    readonly binding: ReturnType<typeof liveDiscoveryBinding>;
+    readonly check: () => boolean;
+  };
+  readonly events: ServerLogEvent[];
+  readonly readTextSnapshot: ReturnType<
+    typeof vi.fn<
+      () => Promise<import("./secureWorkspaceTextRead.js").SecureWorkspaceTextSnapshotResult>
+    >
+  >;
+  readonly revoke: () => void;
+  readonly replace: () => void;
+}
+
+describe("governed native text snapshot current authority", () => {
+  function fixture(): NativeTextSnapshotFixture {
+    const binding = liveDiscoveryBinding();
+    let current = { ...binding };
+    let allowed = true;
+    const events: ServerLogEvent[] = [];
+    const readTextSnapshot = vi.fn(() =>
+      Promise.resolve({
+        ok: true as const,
+        text: "safe source\n",
+        info: Object.freeze({ type: "file" as const, size: 12, mtimeMs: 1_600_000_000_000 }),
+      }),
+    );
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn(), readTextSnapshot },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => current,
+      enforceProducerBinding: true,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const guard = {
+      binding,
+      check: (): boolean => allowed,
+    };
+    return {
+      ports,
+      guard,
+      events,
+      readTextSnapshot,
+      revoke: (): void => {
+        allowed = false;
+      },
+      replace: (): void => {
+        current = { ...binding, workspaceRootDigest: "d".repeat(64) };
+      },
+    };
+  }
+
+  it("returns immutable same-descriptor facts only for current bound IO", async () => {
+    const f = fixture();
+    expect(f.ports.nativeTextRead).toBeDefined();
+    await expect(
+      f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-tool-io" },
+        undefined,
+        f.guard,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      text: "safe source\n",
+      info: { type: "file", size: 12, mtimeMs: 1_600_000_000_000 },
+    });
+    expect(f.events.at(-1)?.extra).toMatchObject({ state: "completed", purpose: "native-tool-io" });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "completed", purpose: "native-tool-io" });
+    expect(JSON.stringify(persisted)).not.toContain("safe source");
+    expect(JSON.stringify(persisted)).not.toContain("src/a.ts");
+  });
+
+  it.each(["revoke", "replace", "cancel"] as const)(
+    "discards both text and metadata after %s during native IO",
+    async (change) => {
+      const f = fixture();
+      const abort = new AbortController();
+      f.readTextSnapshot.mockImplementationOnce(() => {
+        if (change === "cancel") abort.abort();
+        else f[change]();
+        return Promise.resolve({
+          ok: true,
+          text: "safe source\n",
+          info: { type: "file", size: 12, mtimeMs: 1_600_000_000_000 },
+        });
+      });
+      const result = await f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-instructions" },
+        abort.signal,
+        f.guard,
+      );
+      expect(result).toEqual({ ok: false, reason: "postflight-refused" });
+      expect(f.events.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        purpose: "native-instructions",
+        reason: "postflight-refused",
+      });
+    },
+  );
+
+  it("owns immutable metadata and rejects accessor facts without evaluating them", async () => {
+    const f = fixture();
+    const info = { type: "file" as const, size: 12, mtimeMs: 1_600_000_000_000 };
+    f.readTextSnapshot.mockResolvedValueOnce({ ok: true, text: "safe source\n", info });
+    const result = await f.ports.nativeTextRead.readTextSnapshot(
+      { relativePath: "src/a.ts", purpose: "native-tool-io" },
+      undefined,
+      f.guard,
+    );
+    info.size = 999;
+    expect(result).toMatchObject({ ok: true, info: { size: 12 } });
+    if (!result.ok) throw new Error("expected snapshot");
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.info)).toBe(true);
+    const getter = vi.fn(() => 1_600_000_000_000);
+    Reflect.defineProperty(info, "mtimeMs", { get: getter });
+    info.size = 12;
+    f.readTextSnapshot.mockResolvedValueOnce({ ok: true, text: "safe source\n", info });
+    await expect(
+      f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-tool-io" },
+        undefined,
+        f.guard,
+      ),
+    ).resolves.toEqual({ ok: false, reason: "protocol-invalid" });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("records absence of a rich capability without calling the ordinary read fallback", async () => {
+    const f = fixture();
+    f.readTextSnapshot.mockResolvedValueOnce({ ok: false, reason: "snapshot-unavailable" });
+    await expect(
+      f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-instructions" },
+        undefined,
+        f.guard,
+      ),
+    ).resolves.toEqual({ ok: false, reason: "snapshot-unavailable" });
+    expect(f.events.at(-1)?.extra).toMatchObject({
+      state: "failed",
+      purpose: "native-instructions",
+      reason: "snapshot-unavailable",
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(f.events.at(-1) ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "failed",
+      purpose: "native-instructions",
+      reason: "snapshot-unavailable",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("src/a.ts");
+  });
+
+  it.each([".env", ".keiko/private/state.db", "../outside.txt"])(
+    "refuses protected %s before the helper is called",
+    async (relativePath) => {
+      const f = fixture();
+      const result = await f.ports.nativeTextRead.readTextSnapshot(
+        { relativePath, purpose: "native-tool-io" },
+        undefined,
+        f.guard,
+      );
+      expect(result).toEqual({ ok: false, reason: "preflight-refused" });
+      expect(f.readTextSnapshot).not.toHaveBeenCalled();
+    },
+  );
 });

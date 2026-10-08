@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createSecureWorkspaceTextReadPort,
+  exactWorkspaceRead,
   type SecureWorkspaceTextReadResult,
 } from "./secureWorkspaceTextRead.js";
 import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
@@ -13,6 +14,7 @@ import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadA
 import type { SecureWorkspaceTextReadProcessFactory } from "./secureWorkspaceTextReadProcess.js";
 import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+  encodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceReadRequest,
   encodeSecureWorkspaceReadResponse,
   type SecureWorkspaceReadClosedStatus,
@@ -664,5 +666,110 @@ describe("SecureWorkspaceTextReadPort absence decision (F27)", () => {
       });
       expect(create).toHaveBeenCalledOnce();
     });
+  });
+});
+
+it("offers a rich snapshot facet without treating a verified legacy helper as rich-capable", async () => {
+  const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("private text"))));
+  const { port, create } = createPort(run);
+  expect("readTextSnapshot" in port).toBe(true);
+  await expect(port.readTextSnapshot?.({ relativePath: "src/a.ts" })).resolves.toEqual({
+    ok: false,
+    reason: "snapshot-unavailable",
+  });
+  expect(create).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
+describe("pinned rich secure text read", () => {
+  function richPort(
+    run: (request: {
+      readonly stdin: Uint8Array;
+      readonly signal: AbortSignal;
+    }) => Promise<Uint8Array>,
+  ): ReturnType<typeof createSecureWorkspaceTextReadPort> {
+    return createSecureWorkspaceTextReadPort({
+      resolveWorkspaceRoot: () => "/current/workspace",
+      artifact: { ...artifact, snapshotProtocol: "KSR2/KSS2" },
+      artifactVerifier: { verify: () => true },
+      processFactory: { create: () => ({ run }) },
+      platform: { os: "darwin", arch: "arm64" },
+    });
+  }
+  function snapshot(): Buffer {
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes: Buffer.from("safe\n"),
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+  }
+
+  it("returns only verified same-descriptor facts and wipes transient response bytes", async () => {
+    const frame = snapshot();
+    const port = richPort(({ stdin }) => {
+      expect(Buffer.from(stdin.subarray(0, 4)).toString("ascii")).toBe("KSR2");
+      return Promise.resolve(frame);
+    });
+    const result = await port.readTextSnapshot?.({ relativePath: "src/a.ts" });
+    expect(result).toEqual({
+      ok: true,
+      text: "safe\n",
+      info: { type: "file", size: 5, mtimeMs: 1_600_000_000_000 },
+    });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+    if (!result?.ok) throw new Error("expected snapshot");
+    expect(Object.isFrozen(result.info)).toBe(true);
+  });
+
+  it("discards the snapshot when the caller cancels before helper settlement", async () => {
+    const controller = new AbortController();
+    const frame = snapshot();
+    const port = richPort(() => {
+      controller.abort();
+      return Promise.resolve(frame);
+    });
+    await expect(
+      port.readTextSnapshot?.({ relativePath: "src/a.ts", signal: controller.signal }),
+    ).resolves.toEqual({ ok: false, reason: "cancelled" });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+  });
+
+  it("preserves the current-workspace wrapper around the richer facet", async () => {
+    let current = true;
+    const port = exactWorkspaceRead(
+      richPort(() => {
+        current = false;
+        return Promise.resolve(snapshot());
+      }),
+      () => current,
+      "workspace-unavailable",
+    );
+    await expect(port.readTextSnapshot?.({ relativePath: "AGENTS.md" })).resolves.toEqual({
+      ok: false,
+      reason: "workspace-unavailable",
+    });
+  });
+
+  it.each([".env", ".keiko/private/state.db", "../outside.txt"])(
+    "does not invoke the helper for protected %s",
+    async (relativePath) => {
+      const run = vi.fn(() => Promise.resolve(snapshot()));
+      const port = richPort(run);
+      await expect(port.readTextSnapshot?.({ relativePath })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+      });
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a foreign ordinary success frame without disclosing content", async () => {
+    const frame = response(0, Buffer.from("private text"));
+    const port = richPort(() => Promise.resolve(frame));
+    await expect(port.readTextSnapshot?.({ relativePath: "src/a.ts" })).resolves.toEqual({
+      ok: false,
+      reason: "protocol-invalid",
+    });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
   });
 });
