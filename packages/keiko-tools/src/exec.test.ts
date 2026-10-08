@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
-import { delimiter, isAbsolute, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWindowsTerminationCapacity,
@@ -669,7 +669,9 @@ describe.runIf(process.platform === "darwin")("native profile containment only",
       join(root, "package.json"),
       JSON.stringify({ scripts: { typecheck: 'node -e "process.exit(0)" && owned-task' } }),
     );
-    const path = `${callerBin}:${process.env.PATH ?? ""}`;
+    // The profile admits the actual runtime, while an inherited PATH may name an external symlink.
+    const runtimeBin = dirname(nativeFixtureExecutable("node", {}));
+    const path = `${callerBin}:${runtimeBin}:${process.env.PATH ?? ""}`;
     const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
     try {
       const result = await runNativeContainmentFixture(

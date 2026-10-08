@@ -188,6 +188,8 @@ function runHostNpm(root, args) {
     encoding: "utf8",
     timeout: 300_000,
     maxBuffer: NPM_PACK_STDIO_MAX_BUFFER,
+    // SECURITY-SHELL-OK: trusted npm.cmd needs a shell on Windows; both callers use fixed ci/sbom
+    // argv. npmCommand resolves and quotes the host executable; root is cwd, not a shell argument.
     shell: shouldShellNpmCommand(),
   });
 }
