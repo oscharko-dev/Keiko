@@ -43,6 +43,52 @@ import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 describe("production OpenCode backend composition", () => {
+  it("captures the trusted registry profile once without changing the default runtime", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-profile-capture-"));
+    try {
+      let selected: "direct" | "code-mode" = "code-mode";
+      const profile = vi.fn(() => selected);
+      const gatewayReadiness = {
+        ...createOpenCodeGatewayReadinessRegistry("code-mode"),
+        get toolProfile(): "direct" | "code-mode" {
+          return profile();
+        },
+      };
+      const backend = createProductionOpenCodeBackend({
+        ...backendInput(root, scriptedFunctionalPortable(root)),
+        gatewayReadiness,
+      });
+      selected = "direct";
+      expect(Reflect.get(backend, "toolProfile")).toBe("code-mode");
+      expect(Reflect.get(backend, "toolProfile")).toBe("code-mode");
+      expect(profile).toHaveBeenCalledOnce();
+      expect(Object.isFrozen(backend)).toBe(true);
+      const direct = createProductionOpenCodeBackend(
+        backendInput(root, scriptedFunctionalPortable(root)),
+      );
+      expect(Reflect.get(direct, "toolProfile")).toBe("direct");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps legacy missing profiles direct and refuses unknown constructor profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-closed-profile-"));
+    try {
+      const input = backendInput(root, scriptedFunctionalPortable(root));
+      const { toolProfile: _profile, ...legacy } = createOpenCodeGatewayReadinessRegistry();
+      const backend = createProductionOpenCodeBackend({ ...input, gatewayReadiness: legacy });
+      expect(Reflect.get(backend, "toolProfile")).toBe("direct");
+      const invalid = { ...createOpenCodeGatewayReadinessRegistry() };
+      Reflect.set(invalid, "toolProfile", "unqualified-profile");
+      expect(() =>
+        createProductionOpenCodeBackend({ ...input, gatewayReadiness: invalid }),
+      ).toThrow(TypeError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("binds native filesystem roots from trusted macOS production inputs", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
     const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");

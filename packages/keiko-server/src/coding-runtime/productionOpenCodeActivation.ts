@@ -143,7 +143,7 @@ export interface ProductionOpenCodeActivationInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
   >;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;

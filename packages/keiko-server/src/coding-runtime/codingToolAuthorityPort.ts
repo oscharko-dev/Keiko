@@ -1,3 +1,4 @@
+import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
 
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
@@ -122,6 +123,7 @@ interface CodingToolAuthorityPortOptions {
 }
 
 interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
@@ -591,6 +593,7 @@ function catalogFacadeBridgeFor(
     options.invocationRegistry ??
     createCodingToolInvocationRegistry({ now: lazyContextClock(context) });
   return createCanonicalCatalogFacadeBridge({
+    toolProfile: options.toolProfile,
     authority: authorityPort,
     previewAuthority: createCodingToolAuthorityPreview(authority, context, {
       approvalProofVerifier: options.approvalProofVerifier,

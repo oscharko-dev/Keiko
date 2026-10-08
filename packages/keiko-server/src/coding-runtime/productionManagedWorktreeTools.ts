@@ -1,3 +1,4 @@
+import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
@@ -525,6 +526,8 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 }
 
 export interface ProductionManagedWorktreeToolInput {
+  /** Server-captured catalog projection; legacy compositions retain direct tools. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly ciObservationService?: CiObservationService;
   readonly draftDeliveryService?: DraftDeliveryService;
@@ -759,6 +762,7 @@ export function createProductionManagedWorktreeToolFacade(
     managedWorktreeAuthorityContext(input),
     governedPorts(input, readEdit),
     {
+      toolProfile: input.toolProfile,
       invocationRegistry: input.invocationRegistry,
       ...(input.ciRepairBudget === undefined ? {} : { ciRepairBudget: input.ciRepairBudget }),
       reserveEditDelegation: true,

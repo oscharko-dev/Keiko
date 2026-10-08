@@ -114,6 +114,8 @@ export interface CanonicalCatalogContext {
 }
 
 export interface CanonicalCatalogFacadeBridgeInput {
+  /** Trusted constructor selection; never inferred from tool input. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly authority: CodingToolAuthorityPort;
   readonly previewAuthority: CodingToolAuthorityPreview;
   readonly invocationRegistry: CodingToolInvocationRegistry;
@@ -647,15 +649,20 @@ function preparedBindings(
   );
 }
 
+function catalogAdvertisementForProfile(
+  profile: OpenCodeToolProfile,
+): ReturnType<typeof openCodeGatewayCatalogProjection> {
+  return profile === "direct"
+    ? OPENCODE_CATALOG_ADVERTISEMENT
+    : openCodeGatewayCatalogProjection(profile);
+}
+
 /** The same concrete OpenCode handler composition used for dispatch, projected for advertisement. */
 export function createCanonicalOpenCodeHandlerCoverage(
   unavailable: ReadonlySet<OpenCodeOptionalToolName>,
   profile: OpenCodeToolProfile = "direct",
 ): OpenCodeGatewayHandlerCoverage {
-  const advertisement =
-    profile === "direct"
-      ? OPENCODE_CATALOG_ADVERTISEMENT
-      : openCodeGatewayCatalogProjection(profile);
+  const advertisement = catalogAdvertisementForProfile(profile);
   const descriptors = OPENCODE_CATALOG_DESCRIPTORS;
   const fallback = representative("keiko.workspace.discover", {
     actionId: "coverage",
@@ -687,6 +694,7 @@ export function createCanonicalOpenCodeHandlerCoverage(
 }
 
 interface PreparedDispatchBinder {
+  readonly advertisement: ReturnType<typeof openCodeGatewayCatalogProjection>;
   readonly preparation: ReturnType<typeof prepareCatalogToolBinder>;
   readonly preparationFor: (
     unavailable: ReadonlySet<OpenCodeOptionalToolName>,
@@ -700,13 +708,15 @@ function unavailableKey(unavailable: ReadonlySet<OpenCodeOptionalToolName>): str
 function prepareDispatchBinder(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
 ): PreparedDispatchBinder {
+  const profile = bridgeInput.toolProfile ?? "direct";
+  const advertisement = catalogAdvertisementForProfile(profile);
   const fallback = representative("keiko.workspace.discover", {
     actionId: "catalog-composition",
     idempotencyKey: "catalog-composition",
   });
   const preparation = prepareCatalogToolBinder(
     {
-      projection: OPENCODE_CATALOG_ADVERTISEMENT.projection,
+      projection: advertisement.projection,
       handlerBindings: preparedBindings(
         fallback,
         bridgeInput.unavailableOptionalTools ??
@@ -723,7 +733,7 @@ function prepareDispatchBinder(
       },
       logPort: bridgeInput.logPort,
     },
-    OPENCODE_CATALOG_ADVERTISEMENT.catalog,
+    advertisement.catalog,
   );
   const preparationsByAvailability = new Map<string, typeof preparation>([["", preparation]]);
   const preparationFor = (
@@ -742,7 +752,7 @@ function prepareDispatchBinder(
     return variant;
   };
   preparationFor(bridgeInput.unavailableOptionalTools?.() ?? new Set());
-  return { preparation, preparationFor };
+  return { advertisement, preparation, preparationFor };
 }
 
 function createDispatchBinder(
@@ -762,7 +772,7 @@ function createDispatchBinder(
   return createCatalogToolBinderFromPreparation(
     prepared.preparationFor(unavailable),
     {
-      catalog: OPENCODE_CATALOG_ADVERTISEMENT.catalog,
+      catalog: prepared.advertisement.catalog,
       context: () => {
         const live = bridgeInput.context();
         const trusted = live === undefined ? undefined : trustedContext(live, facadeInput);
@@ -789,7 +799,7 @@ async function executeCanonical(
   if (action === undefined || current === undefined) return { status: "denied", evidence: [] };
   if (trustedContext(current, facadeInput) === undefined) return { status: "denied", evidence: [] };
   if (Date.parse(current.authorityExpiresAt) <= current.now) {
-    emitExpiredBinding(OPENCODE_CATALOG_ADVERTISEMENT, current, bridgeInput.logPort);
+    emitExpiredBinding(preparation.advertisement, current, bridgeInput.logPort);
     return expiredResult(request);
   }
   const descriptor = OPENCODE_DESCRIPTOR_BY_ID.get(action.toolId);
@@ -811,7 +821,7 @@ async function executeCanonical(
     {
       kind: "bound",
       toolRef: descriptor.toolRef,
-      projectionDigest: OPENCODE_CATALOG_ADVERTISEMENT.projection.projectionDigest,
+      projectionDigest: preparation.advertisement.projection.projectionDigest,
       offerId: offer.offerId,
       arguments: action.arguments,
     },
@@ -850,4 +860,12 @@ export function createCanonicalCatalogFacadeBridge(
     execute: (request, facadeInput, run): Promise<CodingToolResult> =>
       executeCanonical(bridgeInput, preparation, request, facadeInput, run),
   };
+}
+
+/** The existing request owner selects the canonical alias, never a caller-supplied display label. */
+export function openCodeCatalogAliasFor(request: CodingToolActionRequest): string | undefined {
+  const canonicalId = catalogActionFor(request)?.toolId;
+  return OPENCODE_CATALOG_ADVERTISEMENT.projection.tools.find(
+    (tool) => tool.toolRef.canonicalId === canonicalId,
+  )?.alias;
 }

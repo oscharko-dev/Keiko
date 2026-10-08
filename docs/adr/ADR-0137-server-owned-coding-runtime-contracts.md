@@ -429,6 +429,14 @@ and mixed direct/Code Mode offers, hidden direct calls, schema drift and expired
 The ordinary direct profile remains the default with its existing eighteen visible tools. This
 advertisement prerequisite neither registers native execute nor activates its effects or transport.
 
+The backend captures the selected profile once from the server-owned readiness registry and exposes
+an immutable resolver selection. The resolver captures that selection once again when composing its
+run tools; later changes to caller-owned input objects do not change the canonical facade binder.
+The same selected projection supplies prepared binding, expiry evidence and dispatch digests.
+Unknown profiles fail closed and incoming tool fields cannot select a profile. The existing direct
+profile and Chat repository search remain unchanged. Forwarding this captured selection into the
+native runtime composition and enabling an original service host remain separate prerequisites.
+
 The first macOS filesystem foundation composes read-only accepted-workspace access, writable
 private per-run native state and read-only immutable runtime/OS support with the existing exact
 gateway and runtime/attested-Git executable policy. Both direct and supervisor-prepared launches

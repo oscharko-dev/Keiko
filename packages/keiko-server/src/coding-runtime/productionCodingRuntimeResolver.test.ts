@@ -1,4 +1,11 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local resolver fixtures are contextually typed. */
+import * as processLog from "../process-log-sink.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
+import {
+  openCodeGatewayCatalogProjection,
+  type OpenCodeToolProfile,
+} from "./opencodeToolSchemas.js";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { tmpdir } from "node:os";
@@ -89,10 +96,89 @@ const roots: string[] = [];
 afterEach(() => {
   ciRepairBudgetOverride.current = undefined;
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("production coding runtime resolver", () => {
+  it.each(["direct", "code-mode"] as const)(
+    "binds actual facade lifecycle to the captured %s projection",
+    async (selected) => {
+      const log = createBufferedServerLogSink();
+      const originalSink = processLog.processServerLogSink();
+      vi.spyOn(processLog, "processServerLogSink").mockReturnValue({
+        ...originalSink,
+        write: log.write,
+      });
+      const fixture = workspaceFixture();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(fixture.nowMs());
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      let profile: OpenCodeToolProfile = selected;
+      const readProfile = vi.fn(() => profile);
+      const backend = {
+        createRun,
+        get toolProfile(): OpenCodeToolProfile {
+          return readProfile();
+        },
+      };
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer, undefined, { backend }),
+      );
+      if (host === undefined) throw new Error("expected qualified composition");
+      profile = selected === "direct" ? "code-mode" : "direct";
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      host.launchResolver.resolve(request);
+      const composed = createRun.mock.calls[0]?.[0];
+      if (composed === undefined) throw new Error("expected minted composition");
+      await expect(
+        composed.toolFacade.execute({
+          capability: composed.minted.toolFacadeCapability,
+          body: JSON.stringify({
+            action: "discover",
+            actionId: "profile-read",
+            idempotencyKey: "profile-read",
+            query: "source",
+            maxResults: 1,
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "denied" });
+      const expected = openCodeGatewayCatalogProjection(selected).projection;
+      const bindings = log.events.filter((event) => event.op.startsWith("tool-catalog.bind-"));
+      expect(bindings.length).toBeGreaterThan(0);
+      for (const event of bindings) {
+        const line: unknown = JSON.parse(formatActivityLogProofLine(event));
+        expect(line).toMatchObject({
+          profileId: expected.profile.id,
+          profileVersion: expected.profile.version,
+          projectionDigest: expected.projectionDigest,
+        });
+      }
+      expect(readProfile).toHaveBeenCalledOnce();
+      await expect(
+        composed.toolFacade.execute({
+          capability: composed.minted.toolFacadeCapability,
+          body: JSON.stringify({
+            action: "discover",
+            actionId: "profile-input",
+            idempotencyKey: "profile-input",
+            query: "source",
+            maxResults: 1,
+            toolProfile: profile,
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "invalid" });
+      expect(JSON.stringify(bindings)).not.toContain("source");
+      expect(JSON.stringify(bindings)).not.toContain(composed.minted.toolFacadeCapability);
+    },
+  );
+
   it("shares provider context usage between the backend and public host projection", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

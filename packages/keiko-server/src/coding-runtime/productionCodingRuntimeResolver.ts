@@ -1,3 +1,4 @@
+import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
   requestDraftDeliveryApproval,
@@ -192,6 +193,8 @@ export interface QualifiedProductionRuntimeRun {
 }
 
 export interface ProductionRuntimeBackendResolver {
+  /** Captured by the server backend; never selected by task or tool input. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly createRun: (input: ProductionRuntimeBackendInput) => QualifiedProductionRuntimeRun;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
 }
@@ -259,6 +262,7 @@ interface ResearchComposition {
 // What every run of this server shares: the run-bound research grants and the one server-approved
 // skill catalog (#3417). One value, so a run's composition keeps its parameter count in hand.
 interface RunComposition {
+  readonly toolProfile: OpenCodeToolProfile;
   // Filled once by `deps.ts` after the deps graph exists; `undefined` until then, and on a server
   // that composes no semantic index -- which is what makes a lexical-only search the default.
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
@@ -327,11 +331,14 @@ export function resolveProductionRuntimeStartConfirmationClaim(
 // server-approved skill catalog (#3417) is what every run composes its tools from, and what the
 // operator's channel reads back. The effort registry (#3873) times model calls on the server clock.
 function sharedRunComposition(input: ProductionCodingRuntimeResolverInput): RunComposition {
+  const toolProfile = input.backend.toolProfile ?? "direct";
+  openCodeVisibleToolNames(toolProfile);
   const research: ResearchComposition = {
     grants: createResearchGrantRegistry(),
     pending: createPendingResearchApprovals(),
   };
   return {
+    toolProfile,
     research,
     skillCatalog: createServerApprovedSkillCatalog(),
     semanticSearch: { current: undefined },
@@ -659,12 +666,7 @@ function launchResolver(
           context,
           minted,
           authority,
-          research: shared.research,
-          skillCatalog: shared.skillCatalog,
-          semanticSearch: shared.semanticSearch,
-          editOutcomes: shared.editOutcomes,
-          contextUsage: shared.contextUsage,
-          runEffort: shared.runEffort,
+          ...shared,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
         });
@@ -878,6 +880,7 @@ function prepareRunToolContext(
 }
 
 interface RunToolSurfaceInput {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly input: ProductionCodingRuntimeResolverInput;
   readonly request: ProductionRuntimeBackendInput["request"];
   readonly context: CodingRuntimeTrustedContext;
@@ -941,6 +944,7 @@ function composeRunToolPorts(
     childModelPortFactory: input.childModelPortFactory,
   });
   const toolFacade = createManagedToolFacade({
+    toolProfile: args.toolProfile,
     input,
     request,
     context,
@@ -1290,6 +1294,7 @@ function recordBackendDisposalFailure(
 
 /** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
 interface ManagedToolFacadeInput {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly ciRepairBudget?: CiRepairExecutionBudget | undefined;
   readonly ciObservationService?: CiObservationService | undefined;
   readonly draftDeliveryService?: DraftDeliveryService | undefined;
@@ -1371,6 +1376,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     childModel,
   } = options;
   return createProductionManagedWorktreeToolFacade({
+    toolProfile: options.toolProfile,
     authority,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     authorityRef: minted.authorityRef,

@@ -39,6 +39,32 @@ handler coverage. Original execute schema/description, default rejection, mixed-
 hidden direct refusal, expiry and coverage identities are checked. Production activation and the
 remaining native lifecycle/effect observation bindings are still pending.
 
+The next inactive profile-binding increment carries the immutable server selection through the
+backend, resolver and existing managed tool facade into the canonical binder. Genuine regression
+controls first failed on the missing backend capture and the Code Mode facade's incorrect direct
+projection digest. The default direct control passed. Independent integration checks passed all
+313 tests in six owning suites, a fresh forced server graph, strict source/test TypeScript and
+ten-file lint/format checks. A pre-existing lazy-context test was separately reproduced against
+unchanged production sources and repaired with the real discovery producer in an owned temporary
+workspace. No invented discovery payload or production authority validation was substituted.
+Four existing Chat/search/backend control suites passed another 88 tests; two optional native
+artifact cases were not enabled. Their production consumers were unchanged.
+Native composition forwarding, host activation and full native capabilities remain pending.
+
+The Activity Log aggregate was also attempted during this increment. Registry checks and all
+143 scenario tests passed, but the aggregate is red: four previously introduced closed decoder
+or metadata-validation catches lack failure-path disposition, and catalog performance evidence
+does not describe the current producer. The new profile slice did not add those catches. This is
+an open verification result, not a green aggregate claim; final quality qualification must repair
+the actual evidence and failure handling without bypassing either gate.
+
+A separate unchanged-source bridge observation exposed a teardown gap: its close promise resolved
+after aborting the delegate signal but before the real admitted delegate promise had settled.
+The controlled delegate then completed one effect after that resolved close. This used the actual
+bridge and facade bodies with a controlled admission port; it was not a live authority or filesystem
+test. The existing capacity reservation remained tied to the real promise. Cancellation signalling
+therefore does not yet prove effect drainage, and this prerequisite remains open.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

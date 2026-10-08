@@ -1,3 +1,4 @@
+import { openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { randomBytes } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -119,7 +120,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "verifyObserved" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -150,6 +151,8 @@ export interface ProductionOpenCodeBackendInput {
 export function createProductionOpenCodeBackend(
   input: ProductionOpenCodeBackendInput,
 ): ProductionRuntimeBackendResolver {
+  const toolProfile = input.gatewayReadiness.toolProfile ?? "direct";
+  openCodeVisibleToolNames(toolProfile);
   const safeActivityProjection =
     input.safeActivityProjection ??
     createCodingSafeActivityProjection({
@@ -160,11 +163,12 @@ export function createProductionOpenCodeBackend(
           ? undefined
           : codingSafeActivityTtlMs(input.runtimeMaxDurationMs),
     });
-  return {
+  return Object.freeze({
+    toolProfile,
     safeActivityProjection,
-    createRun: (run): QualifiedProductionRuntimeRun =>
+    createRun: (run: ProductionRuntimeBackendInput): QualifiedProductionRuntimeRun =>
       createOpenCodeRun(input, run, safeActivityProjection),
-  };
+  });
 }
 
 function createOpenCodeRun(

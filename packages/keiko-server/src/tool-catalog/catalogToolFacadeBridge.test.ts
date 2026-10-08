@@ -35,6 +35,7 @@ import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchP
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
+  openCodeCatalogAliasFor,
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
@@ -778,4 +779,19 @@ describe("inactive Code Mode handler coverage", () => {
     expect(grouped.readinessByToolId.size).toBe(17);
     expect(grouped.handlerSetDigest).not.toBe(direct.handlerSetDigest);
   });
+});
+
+it("derives mapped aliases from the existing canonical request producer", () => {
+  expect(openCodeCatalogAliasFor(discoverRequest)).toBe("keiko_workspace_discover");
+  expect(
+    openCodeCatalogAliasFor({
+      ...identity,
+      action: "git",
+      operation: "stage",
+      phase: "execute",
+      proposalId: "proposal",
+    }),
+  ).toBe("keiko_git_execute");
+  expect(new Set(COVERED.map(openCodeCatalogAliasFor)).size).toBe(COVERED.length);
+  for (const request of UNCOVERED) expect(openCodeCatalogAliasFor(request)).toBeUndefined();
 });

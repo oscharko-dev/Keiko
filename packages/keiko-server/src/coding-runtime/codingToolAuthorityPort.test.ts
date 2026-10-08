@@ -1,3 +1,7 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { describe, expect, it, vi } from "vitest";
@@ -143,6 +147,31 @@ function runtimeContext(): {
     envelopeDigest: DIGEST,
     authorityExpiresAt: "2026-07-12T12:00:00.000Z",
   };
+}
+
+function discoveryPort(
+  workspaceRoot: string,
+): ReturnType<typeof createCodingToolReadEditPorts>["repositoryDiscover"] {
+  return createCodingToolReadEditPorts({
+    secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+    editorAgentClient: { action: () => Promise.reject(new Error("unused-editor-route")) },
+    resolveEditorActionContext: () => {
+      throw new Error("unused-edit-context");
+    },
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      repositoryRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+    }),
+    resolveRepositoryReadContext: () => ({
+      runId: runtimeContext().runId,
+      envelopeDigest: runtimeContext().envelopeDigest,
+      workspaceId: liveFacts.binding.workspaceId,
+      workspaceRootDigest: liveFacts.binding.workspaceRootDigest,
+      expiresAt: runtimeContext().authorityExpiresAt,
+    }),
+  }).repositoryDiscover;
 }
 
 function approvableRequest(
@@ -1426,36 +1455,42 @@ describe("CodingToolAuthorityPort", () => {
     };
 
     it("does not read an unavailable context at construction when a registry is supplied", async () => {
-      let available = false;
-      const contextProvider = vi.fn(() => {
-        if (!available) throw new Error("context-not-ready-private");
-        return runtimeContext();
-      });
-      const repositoryDiscover = vi.fn(() =>
-        Promise.resolve({ status: "completed" as const, evidence: [] }),
-      );
-      const runtime = createRuntimeCodingToolFacade(
-        authority,
-        contextProvider,
-        { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
-        { invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }) },
-      );
-      expect(contextProvider).not.toHaveBeenCalled();
+      const workspace = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lazy-discovery-")));
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(runtimeContext().nowIso));
+      try {
+        let available = false;
+        const contextProvider = vi.fn(() => {
+          if (!available) throw new Error("context-not-ready-private");
+          return { ...runtimeContext(), workspaceRoot: workspace };
+        });
+        const repositoryDiscover = vi.fn(discoveryPort(workspace).execute);
+        const runtime = createRuntimeCodingToolFacade(
+          authority,
+          contextProvider,
+          { ...governedPorts(), repositoryDiscover: { execute: repositoryDiscover } },
+          { invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }) },
+        );
+        expect(contextProvider).not.toHaveBeenCalled();
 
-      available = true;
-      await expect(
-        runtime.execute({
-          body: JSON.stringify({
-            action: "discover",
-            actionId: "lazy-context",
-            idempotencyKey: "lazy-context",
-            query: "needle",
-            maxResults: 1,
+        available = true;
+        await expect(
+          runtime.execute({
+            body: JSON.stringify({
+              action: "discover",
+              actionId: "lazy-context",
+              idempotencyKey: "lazy-context",
+              query: "needle",
+              maxResults: 1,
+            }),
+            capability: "runtime-capability-secret",
           }),
-          capability: "runtime-capability-secret",
-        }),
-      ).resolves.toMatchObject({ status: "completed" });
-      expect(repositoryDiscover).toHaveBeenCalledOnce();
+        ).resolves.toMatchObject({ status: "completed" });
+        expect(repositoryDiscover).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+        rmSync(workspace, { recursive: true, force: true });
+      }
     });
 
     it("emits real tool-catalog.* binding + settlement lines with a correlation id and no bodies for a real discover dispatch", async () => {
