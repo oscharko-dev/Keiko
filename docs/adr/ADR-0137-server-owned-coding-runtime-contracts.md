@@ -420,6 +420,15 @@ server authority and budget checks remain mandatory for every request. Code Mode
 requires the exact native execute advertisement, permission, network and lifecycle contracts;
 mapped tools retain `codemode: false` until those contracts are qualified.
 
+The inactive explicit Code Mode catalog retains the same seventeen governed inner descriptors and
+actual handler coverage, while the original native model advertisement exposes only `question`
+and `execute`. Its exact OpenCode 2.0.10 execute schema and description come from the original
+snapshot/provider producer. The server captures this distinct profile at registry construction;
+an incoming model request cannot select it. Projection and handler identities remain profile-bound,
+and mixed direct/Code Mode offers, hidden direct calls, schema drift and expired offers are refused.
+The ordinary direct profile remains the default with its existing eighteen visible tools. This
+advertisement prerequisite neither registers native execute nor activates its effects or transport.
+
 The first macOS filesystem foundation composes read-only accepted-workspace access, writable
 private per-run native state and read-only immutable runtime/OS support with the existing exact
 gateway and runtime/attested-Git executable policy. Both direct and supervisor-prepared launches

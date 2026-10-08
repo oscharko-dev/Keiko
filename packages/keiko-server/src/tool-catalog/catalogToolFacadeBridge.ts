@@ -27,6 +27,7 @@ import {
   openCodeGatewayCatalogProjection,
   isOpenCodeVerificationId,
   type OpenCodeGatewayHandlerCoverage,
+  type OpenCodeToolProfile,
 } from "../coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -649,8 +650,12 @@ function preparedBindings(
 /** The same concrete OpenCode handler composition used for dispatch, projected for advertisement. */
 export function createCanonicalOpenCodeHandlerCoverage(
   unavailable: ReadonlySet<OpenCodeOptionalToolName>,
+  profile: OpenCodeToolProfile = "direct",
 ): OpenCodeGatewayHandlerCoverage {
-  const advertisement = OPENCODE_CATALOG_ADVERTISEMENT;
+  const advertisement =
+    profile === "direct"
+      ? OPENCODE_CATALOG_ADVERTISEMENT
+      : openCodeGatewayCatalogProjection(profile);
   const descriptors = OPENCODE_CATALOG_DESCRIPTORS;
   const fallback = representative("keiko.workspace.discover", {
     actionId: "coverage",

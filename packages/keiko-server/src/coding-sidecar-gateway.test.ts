@@ -8900,3 +8900,190 @@ describe("coding sidecar gateway retry facts (#3873 review)", () => {
     expect(JSON.stringify(records)).not.toContain("exploded");
   });
 });
+
+function nativeCodeModeRequestTools(): ModelVisibleRequestTool[] {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "./coding-runtime/opencodeToolSchemas.opencode-2.0.10-codemode.fixture.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as {
+    readonly tools: readonly {
+      readonly name: string;
+      readonly parameters: Readonly<Record<string, unknown>>;
+    }[];
+  };
+  return modelVisibleTools(fixture.tools);
+}
+
+describe("inactive Code Mode readiness selection", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("admits the exact producer advertisement under a trusted explicit profile", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+    const observed = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+        tools: nativeCodeModeRequestTools(),
+      }),
+      runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } }), undefined, readiness),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    expect(await observed).toBe(true);
+    expect(readiness.isVerified("run-1")).toBe(true);
+    expect(readiness.toolProfile).toBe("code-mode");
+    expect(Reflect.set(readiness, "toolProfile", "direct")).toBe(false);
+  });
+
+  it("never selects Code Mode from incoming tools or a request profile field", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        profile: "code-mode",
+        messages: [{ role: "user", content: "private task" }],
+        tools: nativeCodeModeRequestTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(result).toMatchObject({ status: 403 });
+    expect(chat).not.toHaveBeenCalled();
+    expect(readiness.toolProfile).toBe("direct");
+    expect(readiness.isVerified("run-1")).toBe(false);
+  });
+
+  it("advertises two outer tools and retains the seventeen canonical inner bindings", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+    const chat = vi.fn((_request: GatewayRequest) =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "private task" }],
+        tools: nativeCodeModeRequestTools(),
+      }),
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+    );
+    expect(result).toMatchObject({ status: 200 });
+    const request = chat.mock.calls[0]?.[0];
+    expect(request).not.toHaveProperty("tools");
+    expect(request?.toolCatalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
+      "execute",
+      "question",
+    ]);
+    expect(request?.toolCatalog?.projection.tools).toHaveLength(17);
+    expect(request?.toolCatalog?.offered.toolRefs).toHaveLength(17);
+    expect(request?.toolCatalog?.projection.profile).toEqual({
+      id: "opencode-code-mode",
+      version: 1,
+    });
+  });
+
+  it.each(["direct", "mixed", "drift"])(
+    "refuses %s shape under the selected native profile with body-free evidence",
+    async (kind) => {
+      const sink = captureServerLog("info");
+      const tools = kind === "direct" ? modelVisibleTools() : nativeCodeModeRequestTools();
+      if (kind === "mixed") tools.push(...modelVisibleTools().slice(0, 1));
+      if (kind === "drift") {
+        const execute = tools.find((tool) => tool.function.name === "execute");
+        if (execute === undefined) throw new TypeError("Missing producer execute");
+        const parameters = execute.function.parameters;
+        if (typeof parameters !== "object" || parameters === null)
+          throw new TypeError("Missing producer schema");
+        tools.splice(tools.indexOf(execute), 1, {
+          ...execute,
+          function: {
+            ...execute.function,
+            parameters: { ...parameters, description: "private-customer-schema" },
+          },
+        });
+      }
+      const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+      const pending = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+      const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+          tools,
+        }),
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-1" } }),
+          () => chat,
+          readiness,
+        ),
+      );
+      expect(result).toMatchObject({ status: 403 });
+      expect(await pending).toBe(false);
+      expect(chat).not.toHaveBeenCalled();
+      expect(readiness.isVerified("run-1")).toBe(false);
+      const event = sink.events.find((entry) => entry.op === "coding-sidecar.gateway.rejected");
+      expect(event?.extra).toMatchObject({ expectedToolCount: 2, reason: "tool-contract-drift" });
+      const persisted = expectActivityLogProof(
+        "coding-sidecar.gateway.rejected.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(persisted).toMatchObject({ expectedToolCount: 2, reason: "tool-contract-drift" });
+      expect(JSON.stringify(sink.events)).not.toContain("private-customer-schema");
+    },
+  );
+
+  it("rejects an unknown server-selected profile", () => {
+    expect(() => {
+      Reflect.apply(createOpenCodeGatewayReadinessRegistry, undefined, ["unknown"]);
+    }).toThrow(TypeError);
+  });
+});
+
+describe("inactive Code Mode run-bound compaction", () => {
+  it("retains the authenticated handshake and clear boundaries", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
+    const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      () => chat,
+      readiness,
+    );
+    const compact = (): Promise<RouteResult | typeof STREAMING> =>
+      handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({ model: "coding", messages: [{ role: "user", content: "compact" }] }),
+        deps,
+      );
+    expect(await compact()).toMatchObject({ status: 403 });
+    const pending = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    expect(
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+          tools: nativeCodeModeRequestTools(),
+        }),
+        deps,
+      ),
+    ).toMatchObject({ status: 200 });
+    expect(await pending).toBe(true);
+    expect(await compact()).toMatchObject({ status: 200 });
+    readiness.clear("run-1");
+    expect(await compact()).toMatchObject({ status: 403 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(readiness.toolProfile).toBe("code-mode");
+  });
+});

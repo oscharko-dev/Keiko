@@ -5,6 +5,8 @@ import type {
   CatalogProfile,
   CatalogProfileDeclaration,
   CatalogProfileToolRef,
+  CatalogVersionRef,
+  CatalogRuntimeRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
@@ -43,7 +45,10 @@ function extensions(value: CatalogJsonValue | undefined): readonly CatalogNative
   const entries = catalogArray(value).map((entry): CatalogNativeExtension => {
     const object = catalogObject(entry);
     exactCatalogKeys(object, ["alias", "contractVersion"]);
-    requireCatalog(object.alias === "question" && object.contractVersion === 1, "invalid-identity");
+    requireCatalog(
+      (object.alias === "question" || object.alias === "execute") && object.contractVersion === 1,
+      "invalid-identity",
+    );
     return { alias: object.alias, contractVersion: 1 };
   });
   requireCatalog(
@@ -51,6 +56,24 @@ function extensions(value: CatalogJsonValue | undefined): readonly CatalogNative
     "duplicate-identity",
   );
   return entries.sort((left, right) => compareStrings(left.alias, right.alias));
+}
+
+function qualifyCodeModeExtensions(
+  profile: CatalogVersionRef,
+  runtime: CatalogRuntimeRef,
+  extensions: readonly CatalogNativeExtension[],
+): void {
+  const hasExecute = extensions.some((extension) => extension.alias === "execute");
+  if (profile.id !== "opencode-code-mode" && !hasExecute) return;
+  requireCatalog(
+    hasExecute &&
+      profile.id === "opencode-code-mode" &&
+      profile.version === 1 &&
+      runtime.id === "opencode" &&
+      runtime.version === "2.0.10" &&
+      extensions.some((extension) => extension.alias === "question"),
+    "unrepresentable-projection",
+  );
 }
 
 export function createCatalogProfileDeclaration(value: unknown): CatalogProfileDeclaration {
@@ -66,6 +89,8 @@ export function createCatalogProfileDeclaration(value: unknown): CatalogProfileD
   const toolRefs = profileTools(object.toolRefs);
   const nativeExtensions = extensions(object.nativeExtensions);
   const adapterRuntime = runtimeRefFrom(object.adapterRuntime);
+  const profile = versionRefFrom(object.profile);
+  qualifyCodeModeExtensions(profile, adapterRuntime, nativeExtensions);
   requireCatalog(
     nativeExtensions.length === 0 || adapterRuntime.id === "opencode",
     "unrepresentable-projection",
@@ -80,7 +105,7 @@ export function createCatalogProfileDeclaration(value: unknown): CatalogProfileD
   requireCatalog(new Set(identities).size === compatibility.length, "duplicate-identity");
   compatibility.sort((left, right) => compareStrings(canonicalise(left), canonicalise(right)));
   return deepFreeze({
-    profile: versionRefFrom(object.profile),
+    profile,
     toolRefs,
     nativeExtensions,
     adapterDialect: versionRefFrom(object.adapterDialect),

@@ -742,3 +742,82 @@ describe("OpenCode 2.0.10 real advertisement fidelity", () => {
     expect(hasExactOpenCodeVisibleToolContract(sourceShaped)).toBe(false);
   });
 });
+
+function codeModeFixture(): readonly RealAdvertisedTool[] {
+  const value = JSON.parse(
+    readFileSync(
+      new URL("./opencodeToolSchemas.opencode-2.0.10-codemode.fixture.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { readonly tools: readonly RealAdvertisedTool[] };
+  return value.tools;
+}
+
+describe("inactive native Code Mode qualification", () => {
+  it("accepts the original pinned snapshot only under the explicit Code Mode profile", () => {
+    expect(hasExactOpenCodeVisibleToolContract(codeModeFixture(), "code-mode")).toBe(true);
+    expect(hasExactOpenCodeVisibleToolContract(codeModeFixture())).toBe(false);
+  });
+});
+
+describe("explicit native Code Mode schema boundary", () => {
+  it("rejects mixed direct/inner, empty, duplicate and altered outer schemas", () => {
+    const tools = codeModeFixture();
+    const execute = tools.find((tool) => tool.name === "execute");
+    const question = tools.find((tool) => tool.name === "question");
+    if (execute === undefined || question === undefined)
+      throw new TypeError("Missing native producer tools");
+    const invalid = [
+      [],
+      [execute],
+      [question, question],
+      [...tools, ...projectedTools().slice(0, 1)],
+      [question, { ...execute, parameters: { ...execute.parameters, additionalProperties: true } }],
+      [question, { ...execute, parameters: { type: "object", properties: {}, required: [] } }],
+      [question, { ...execute, parameters: { ...execute.parameters, maxProperties: 1 } }],
+    ];
+    for (const value of invalid)
+      expect(hasExactOpenCodeVisibleToolContract(value, "code-mode")).toBe(false);
+    expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture(), "code-mode")).toBe(
+      false,
+    );
+  });
+
+  it("retains actual inner handler coverage, offer lifetime and the entire canonical projection", () => {
+    const projection = openCodeGatewayCatalogProjection("code-mode").projection;
+    const coverage: OpenCodeGatewayHandlerCoverage = {
+      readinessByToolId: new Map(
+        projection.tools.map((tool) => [
+          tool.toolRef.canonicalId,
+          tool.toolRef.canonicalId === "keiko.repo.search" ? "unavailable" : "ready",
+        ]),
+      ),
+      handlerSetDigest: "caller-owned-handler-digest" as CatalogDigest,
+    };
+    const offer = createOpenCodeGatewayToolCatalogAdvertisement(1000, coverage, 9000, "code-mode");
+    expect(offer.projection.tools).toHaveLength(17);
+    expect(offer.offered.toolRefs).toHaveLength(16);
+    expect(offer.offered.toolRefs.some((ref) => ref.canonicalId === "keiko.repo.search")).toBe(
+      false,
+    );
+    expect(offer.offered.binding).toMatchObject({
+      readiness: "unavailable",
+      handlerSetDigest: coverage.handlerSetDigest,
+    });
+    expect(offer.offered.expiresAt).toBe(new Date(10000).toISOString());
+    expect(offer.projection).toBe(projection);
+    const before = { ...projectionCompilations };
+    createOpenCodeGatewayToolCatalogAdvertisement(1000, coverage, 9000, "code-mode");
+    expect(projectionCompilations).toEqual(before);
+    expect(openCodeGatewayCatalogProjection().projection.tools).toEqual(projection.tools);
+    expect(openCodeGatewayCatalogProjection().projection.nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+    ]);
+  });
+
+  it("refuses an unknown explicit profile at the immutable projection owner", () => {
+    expect(() => {
+      Reflect.apply(openCodeGatewayCatalogProjection, undefined, ["unknown"]);
+    }).toThrow(TypeError);
+  });
+});

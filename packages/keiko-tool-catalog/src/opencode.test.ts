@@ -11,6 +11,7 @@ import {
 import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
+import { createCatalogProfileDeclaration } from "./profile.js";
 import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
@@ -355,19 +356,113 @@ describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.nativeExtensions).toEqual(
-      OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, contractVersion }) => ({
-        alias,
-        contractVersion,
-      })),
+      OPENCODE_NATIVE_EXTENSION_DEFINITIONS.filter((entry) => entry.alias === "question").map(
+        ({ alias, contractVersion }) => ({
+          alias,
+          contractVersion,
+        }),
+      ),
     );
   });
 
-  it("declares only question with a non-empty description and an object schema", () => {
-    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias)).toEqual(["question"]);
+  it("keeps only question active by default and declares the inactive execute definition", () => {
+    expect(opencodeRegistrationSet().nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+    ]);
+    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias)).toEqual([
+      "question",
+      "execute",
+    ]);
     for (const entry of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
       expect(entry.contractVersion).toBe(1);
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.inputSchema.type).toBe("object");
     }
+  });
+});
+
+describe("inactive Code Mode catalog", () => {
+  it("keeps all governed descriptors in a separate explicit question/execute profile", () => {
+    const direct = opencodeRegistrationSet();
+    const grouped = opencodeRegistrationSet("code-mode");
+    expect(grouped.entries).toEqual(direct.entries);
+    expect(grouped.entries).toHaveLength(17);
+    expect(grouped.profile).toEqual({ id: "opencode-code-mode", version: 1 });
+    expect(grouped.nativeExtensions).toEqual([
+      { alias: "question", contractVersion: 1 },
+      { alias: "execute", contractVersion: 1 },
+    ]);
+  });
+});
+
+function codeModeProfileDeclaration(): Record<string, unknown> {
+  const set = opencodeRegistrationSet("code-mode");
+  const profile = createKeikoToolCatalog([set]).profiles[0];
+  if (profile === undefined) throw new TypeError("Missing producer profile");
+  return Object.fromEntries(Object.entries(profile).filter(([key]) => key !== "catalogRevision"));
+}
+
+describe("closed inactive native extension profile", () => {
+  it("compiles the exact governed descriptors and native extensions without granting effects", () => {
+    const set = opencodeRegistrationSet("code-mode");
+    const catalog = createKeikoToolCatalog([set]);
+    const projection = compileToolProjection(catalog, set.profile);
+    expect(projection.nativeExtensions).toEqual([
+      { alias: "execute", contractVersion: 1 },
+      { alias: "question", contractVersion: 1 },
+    ]);
+    expect(projection.tools.map((tool) => tool.descriptorDigest)).toEqual(
+      compileToolProjection(
+        createKeikoToolCatalog([opencodeRegistrationSet()]),
+        OPENCODE_PROFILE,
+      ).tools.map((tool) => tool.descriptorDigest),
+    );
+    expect(Object.isFrozen(projection.nativeExtensions)).toBe(true);
+  });
+  it.each([
+    { profile: { id: "opencode", version: 1 } },
+    { profile: { id: "opencode-code-mode", version: 2 } },
+    { adapterRuntime: { id: "opencode", version: "2.0.11" } },
+    { adapterRuntime: { id: "keiko", version: "1.1.1" } },
+    { nativeExtensions: [{ alias: "execute", contractVersion: 1 }] },
+    {
+      nativeExtensions: [
+        { alias: "question", contractVersion: 1 },
+        { alias: "execute", contractVersion: 2 },
+      ],
+    },
+    {
+      nativeExtensions: [
+        { alias: "question", contractVersion: 1 },
+        { alias: "shell", contractVersion: 1 },
+      ],
+    },
+    {
+      nativeExtensions: [
+        { alias: "question", contractVersion: 1 },
+        { alias: "execute", contractVersion: 1 },
+        { alias: "execute", contractVersion: 1 },
+      ],
+    },
+  ])("refuses an unqualified or ambiguous native declaration %j", (change) => {
+    expect(() =>
+      createCatalogProfileDeclaration({ ...codeModeProfileDeclaration(), ...change }),
+    ).toThrow();
+  });
+  it("refuses a caller-supplied unknown profile instead of selecting Code Mode", () => {
+    expect(() => {
+      Reflect.apply(opencodeRegistrationSet, undefined, ["unknown"]);
+    }).toThrow(TypeError);
+  });
+});
+
+describe("complete explicit Code Mode native declaration", () => {
+  it("refuses a qualified profile that lost execute", () => {
+    expect(() =>
+      createCatalogProfileDeclaration({
+        ...codeModeProfileDeclaration(),
+        nativeExtensions: [{ alias: "question", contractVersion: 1 }],
+      }),
+    ).toThrow("unrepresentable-projection");
   });
 });

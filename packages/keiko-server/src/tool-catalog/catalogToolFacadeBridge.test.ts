@@ -769,3 +769,13 @@ describe("canonical catalog facade bridge", () => {
     expect(bindings[1]?.extra?.handlerSetDigest).toBe(readyDigest);
   });
 });
+
+describe("inactive Code Mode handler coverage", () => {
+  it("binds the actual same seventeen handlers to the selected projection identity", () => {
+    const direct = createCanonicalOpenCodeHandlerCoverage(new Set());
+    const grouped = createCanonicalOpenCodeHandlerCoverage(new Set(), "code-mode");
+    expect(grouped.readinessByToolId).toEqual(direct.readinessByToolId);
+    expect(grouped.readinessByToolId.size).toBe(17);
+    expect(grouped.handlerSetDigest).not.toBe(direct.handlerSetDigest);
+  });
+});

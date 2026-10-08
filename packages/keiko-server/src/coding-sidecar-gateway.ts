@@ -72,7 +72,8 @@ import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   opencodeGatewayOfferLifetimeMs,
   hasExactOpenCodeVisibleToolContract,
-  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  openCodeVisibleToolNames,
+  type OpenCodeToolProfile,
   type OpenCodeGatewayHandlerCoverage,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
@@ -934,6 +935,8 @@ function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
 }
 
 export interface OpenCodeGatewayReadinessRegistry {
+  /** Server-owned qualification choice; never selected from a request. */
+  readonly toolProfile?: OpenCodeToolProfile;
   readonly claim: (runId: string) => boolean;
   readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
@@ -972,7 +975,10 @@ function pendingChallengeWait(
   });
 }
 
-export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
+export function createOpenCodeGatewayReadinessRegistry(
+  toolProfile: OpenCodeToolProfile = "direct",
+): OpenCodeGatewayReadinessRegistry {
+  openCodeVisibleToolNames(toolProfile);
   const observed = new Set<string>();
   const armed = new Set<string>();
   const adoptionGapDiagnosed = new Set<string>();
@@ -981,7 +987,8 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
     observed.add(runId);
     waiters.get(runId)?.(true);
   };
-  return {
+  return Object.freeze<OpenCodeGatewayReadinessRegistry>({
+    toolProfile,
     claim: (runId): boolean => {
       if (!armed.delete(runId)) return false;
       verifyObserved(runId);
@@ -1011,7 +1018,7 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
       adoptionGapDiagnosed.delete(runId);
       waiters.get(runId)?.(false);
     },
-  };
+  });
 }
 
 export interface CodingSidecarGatewayChatCompletionRequest {
@@ -1425,6 +1432,7 @@ function isMatchingModelAlias(
  */
 /** The per-request facts the tool-catalog advertisement is minted from. */
 interface GatewayToolCatalogOffer {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly coverage: OpenCodeGatewayHandlerCoverage | undefined;
   readonly offerLifetimeMs: number;
 }
@@ -1433,11 +1441,12 @@ function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
   offer: GatewayToolCatalogOffer,
 ): GatewayCallRequest["toolCatalog"] {
-  return isExactManagedToolSet(tools)
+  return isExactManagedToolSet(tools, offer.toolProfile)
     ? createOpenCodeGatewayToolCatalogAdvertisement(
         Date.now(),
         offer.coverage,
         offer.offerLifetimeMs,
+        offer.toolProfile,
       )
     : undefined;
 }
@@ -1490,7 +1499,10 @@ function resolveToolCatalogHandlerCoverage(
         !unavailable.has(name as OpenCodeOptionalToolName),
     )
     .sort(compareStrings);
-  const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
+  const coverage = createCanonicalOpenCodeHandlerCoverage(
+    unavailable,
+    gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+  );
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION,
@@ -2565,8 +2577,11 @@ function bearerCapability(ctx: RouteContext): string | undefined {
   return capability.length > 0 ? capability : undefined;
 }
 
-function isExactManagedToolSet(tools: readonly ToolDefinition[] | undefined): boolean {
-  return hasExactOpenCodeVisibleToolContract(tools);
+function isExactManagedToolSet(
+  tools: readonly ToolDefinition[] | undefined,
+  profile: OpenCodeToolProfile = "direct",
+): boolean {
+  return hasExactOpenCodeVisibleToolContract(tools, profile);
 }
 
 function isAdmittedManagedToolSet(
@@ -2575,7 +2590,8 @@ function isAdmittedManagedToolSet(
   runId: string,
 ): boolean {
   return (
-    isExactManagedToolSet(tools) || (tools === undefined && registry?.isVerified(runId) === true)
+    isExactManagedToolSet(tools, registry?.toolProfile ?? "direct") ||
+    (tools === undefined && registry?.isVerified(runId) === true)
   );
 }
 
@@ -2614,8 +2630,9 @@ function toolNameSetDigest(names: readonly string[]): string {
 
 function toolContractMismatch(
   tools: readonly ToolDefinition[] | undefined,
+  profile: OpenCodeToolProfile,
 ): GatewayRejectionEvidence {
-  const expected = new Set<string>(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+  const expected = new Set<string>(openCodeVisibleToolNames(profile));
   const received = new Set(tools?.map((tool) => tool.name) ?? []);
   const unexpected = [...received].filter((name) => !expected.has(name));
   const missing = [...expected].filter((name) => !received.has(name));
@@ -2647,7 +2664,13 @@ function refuseGatewayToolContract(
     code,
   });
   const answer = forbiddenGatewayRequest();
-  logGatewayRejection(ctx, runId, answer.status, reason, toolContractMismatch(tools));
+  logGatewayRejection(
+    ctx,
+    runId,
+    answer.status,
+    reason,
+    toolContractMismatch(tools, gatewayReadinessRegistry(deps)?.toolProfile ?? "direct"),
+  );
   refuseReadinessChallenge(deps, runId, parsed);
   reportGatewayTurnRejection(ctx, deps, runId, answer);
   return answer;
@@ -3011,6 +3034,7 @@ function gatewayRequestCancellation(
 }
 
 interface GatewayChatDelivery {
+  readonly toolProfile: OpenCodeToolProfile;
   readonly modelAlias: string;
   readonly maxOutputTokens: number;
   readonly upstreamStreamingSupported: boolean;
@@ -3053,7 +3077,11 @@ function requestForGatewayDelivery(
       delivery.maxOutputTokens,
       ctx.correlationId,
       delivery.reasoningEffort,
-      { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
+      {
+        coverage: delivery.toolCatalogCoverage,
+        offerLifetimeMs: delivery.offerLifetimeMs,
+        toolProfile: delivery.toolProfile,
+      },
     ),
     retryObserver,
   };
@@ -4283,7 +4311,11 @@ function rejectUnmanagedGatewayToolContract(
   authentication: AuthenticatedGatewayRequest,
 ): RouteResult | undefined {
   const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
-  if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
+  if (
+    !declaresTools ||
+    isExactManagedToolSet(parsed.tools, gatewayReadinessRegistry(deps)?.toolProfile ?? "direct")
+  )
+    return undefined;
   return refuseGatewayToolContract(ctx, deps, authentication.runId, parsed);
 }
 
@@ -4308,23 +4340,20 @@ function authenticatedGatewayAdmission(
   modelAlias: string,
 ): RuntimeGatewayAdmission {
   const registry = gatewayReadinessRegistry(deps);
+  const exact = isExactManagedToolSet(parsed.tools, registry?.toolProfile ?? "direct");
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
     return {
       kind: "handled",
       result: refuseGatewayToolContract(ctx, deps, authentication.runId, parsed),
     };
   }
-  if (
-    isExactManagedToolSet(parsed.tools) &&
-    isRuntimeReadinessProbe(parsed) &&
-    registry?.claim(authentication.runId) === true
-  ) {
+  if (exact && isRuntimeReadinessProbe(parsed) && registry?.claim(authentication.runId) === true) {
     return {
       kind: "handled",
       result: fixedReadinessResponse(ctx, deps, modelAlias, parsed.stream === true),
     };
   }
-  if (isExactManagedToolSet(parsed.tools)) registry?.verifyObserved(authentication.runId);
+  if (exact) registry?.verifyObserved(authentication.runId);
   noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
   return { kind: "proceed" };
 }
@@ -4575,6 +4604,7 @@ function executeBudgetedGatewayChat(
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {
     ...profile,
     promptTokenReservation,
+    toolProfile: gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
     toolCatalogCoverage: resolveToolCatalogHandlerCoverage(
       deps,
       authentication.runId,

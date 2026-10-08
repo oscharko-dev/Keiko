@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   createToolCatalog,
+  createKeikoToolCatalog,
   createToolDescriptor,
   compileToolProjection,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
@@ -600,9 +602,13 @@ describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
     // Derived from the producer, never a restated count: every catalog entry of the OpenCode
     // registration set plus its declared native extensions is model-visible.
     expect(bridge.tools).toHaveLength(
-      opencodeRegistrationSet().entries.length + OPENCODE_NATIVE_EXTENSION_DEFINITIONS.length,
+      opencodeRegistrationSet().entries.length +
+        (opencodeRegistrationSet().nativeExtensions?.length ?? 0),
     );
-    for (const definition of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
+    expect(bridge.tools.some((tool) => tool.name === "execute")).toBe(false);
+    for (const definition of OPENCODE_NATIVE_EXTENSION_DEFINITIONS.filter(
+      (entry) => entry.alias === "question",
+    )) {
       expect(bridge.tools).toContainEqual({
         name: definition.alias,
         description: definition.description,
@@ -866,5 +872,143 @@ describe("provider invocation batch bounds", () => {
     expect(() => bridge.bindCalls(calls)).toThrow(
       expect.objectContaining({ reason: "invalid-arguments" }),
     );
+  });
+});
+
+function codeModeAdvertisement(): GatewayToolCatalogAdvertisement {
+  const set = opencodeRegistrationSet("code-mode");
+  const catalog = createKeikoToolCatalog([set]);
+  const projection = compileToolProjection(catalog, set.profile);
+  const legacy = openCodeGatewayCatalogAdvertisement(NOW);
+  const offered = {
+    ...legacy.offered,
+    binding: {
+      ...legacy.offered.binding,
+      catalogRevision: catalog.catalogRevision,
+      profile: projection.profile,
+      projectionDigest: projection.projectionDigest,
+      handlerSetDigest: projection.projectionDigest,
+    },
+    toolRefs: projection.tools.map((tool) => tool.toolRef),
+  };
+  return { kind: "bound", catalog, projection, offered };
+}
+
+describe("inactive native Code Mode provider advertisement", () => {
+  it("offers only original outer extensions while retaining all governed inner bindings", () => {
+    const advertisement = codeModeAdvertisement();
+    const bridge = createGatewayToolCatalogBridge(
+      { modelId: "fixture", messages: [], toolCatalog: advertisement },
+      () => NOW,
+    );
+    expect(bridge.tools.map((tool) => tool.name).sort()).toEqual(["execute", "question"]);
+    expect(advertisement.projection.tools).toHaveLength(17);
+    const native = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../keiko-server/src/coding-runtime/opencodeToolSchemas.opencode-2.0.10-codemode.fixture.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as {
+      readonly tools: readonly {
+        readonly name: string;
+        readonly parameters: unknown;
+        readonly description: string;
+      }[];
+    };
+    for (const tool of native.tools) {
+      const projected = bridge.tools.find((entry) => entry.name === tool.name);
+      expect(projected?.parameters).toEqual(tool.parameters);
+      if (tool.name === "execute") expect(projected?.description).toBe(tool.description);
+    }
+  });
+
+  it("uses alias/version lookup when sorted extensions put execute first", () => {
+    const advertisement = codeModeAdvertisement();
+    expect(advertisement.projection.nativeExtensions[0]?.alias).toBe("execute");
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: advertisement },
+      () => NOW,
+    );
+    expect(bridge.tools.map((tool) => tool.name)).toEqual(["execute", "question"]);
+    expect(bridge.tools.find((tool) => tool.name === "execute")?.parameters).not.toEqual(
+      bridge.tools.find((tool) => tool.name === "question")?.parameters,
+    );
+  });
+
+  it("keeps execute unbound and logs no JavaScript body", () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: codeModeAdvertisement() },
+      () => NOW,
+      {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    );
+    const call = {
+      id: "call-native",
+      name: "execute",
+      arguments: { code: "return 'private-body';" },
+    };
+    expect(bridge.bind(call)).toEqual(call);
+    expect(bridge.bind(call)).not.toHaveProperty("invocation");
+    expect(JSON.stringify(events)).not.toContain("private-body");
+    const event = events.find((entry) => entry.op === "gateway.tool-catalog.native-passthrough");
+    expectActivityLogProof(
+      "gateway.tool-catalog.native-passthrough.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  });
+
+  it("refuses a provider direct call to a hidden governed capability", () => {
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: codeModeAdvertisement() },
+      () => NOW,
+    );
+    expect(() =>
+      bridge.bind({
+        id: "call-direct",
+        name: "keiko_workspace_discover",
+        arguments: { query: "*", maxResults: 1 },
+      }),
+    ).toThrow(expect.objectContaining({ reason: "unoffered-tool" }));
+  });
+
+  it("enforces original offer expiry and argument budgets on execute passthrough", () => {
+    let time = NOW;
+    const bridge = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: codeModeAdvertisement() },
+      () => time,
+    );
+    expect(() =>
+      bridge.bind({
+        id: "call-big",
+        name: "execute",
+        arguments: { code: "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1) },
+      }),
+    ).toThrow();
+    time += 30_000;
+    expect(() =>
+      bridge.bind({ id: "call-expired", name: "execute", arguments: { code: "return 1;" } }),
+    ).toThrow();
+  });
+});
+
+describe("inactive Code Mode profile substitution", () => {
+  it("rejects a direct offer or projection substituted into Code Mode", () => {
+    const grouped = codeModeAdvertisement();
+    const direct = openCodeGatewayCatalogAdvertisement(NOW);
+    for (const value of [
+      { ...grouped, offered: direct.offered },
+      { ...grouped, projection: direct.projection },
+    ]) {
+      expect(() =>
+        createGatewayToolCatalogBridge({ ...request(), toolCatalog: value }, () => NOW),
+      ).toThrow(GatewayToolCatalogError);
+    }
   });
 });

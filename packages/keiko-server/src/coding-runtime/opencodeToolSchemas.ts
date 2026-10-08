@@ -30,13 +30,15 @@ export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
  * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` (one source,
  * imported back here); see that package's opencode.ts header comment for why.
  */
-function nativeExtensionSchema(): Readonly<Record<string, unknown>> {
-  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS[0];
+function nativeExtensionSchema(alias: "question" | "execute"): Readonly<Record<string, unknown>> {
+  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find(
+    (entry) => `${entry.alias}@${String(entry.contractVersion)}` === `${alias}@1`,
+  );
   if (definition === undefined) throw new TypeError("Missing native extension definition");
   return definition.inputSchema;
 }
 
-const QUESTION_SCHEMA = nativeExtensionSchema();
+const QUESTION_SCHEMA = nativeExtensionSchema("question");
 
 const WORKSPACE_READ_SCHEMA = {
   type: "object",
@@ -628,17 +630,35 @@ const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   ]),
 );
 
+export type OpenCodeToolProfile = "direct" | "code-mode";
+const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(["direct", "code-mode"]);
+const CODE_MODE_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map(({ alias, inputSchema }) => [
+    alias,
+    schemaDigest(inputSchema),
+  ]),
+);
+
+export function openCodeVisibleToolNames(
+  profile: OpenCodeToolProfile = "direct",
+): readonly string[] {
+  if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
+  if (profile === "direct") return OPENCODE_MODEL_VISIBLE_TOOL_NAMES;
+  return [...CODE_MODE_GATEWAY_SCHEMA_DIGESTS.keys()];
+}
+
 export function hasExactOpenCodeVisibleToolContract(
   tools: readonly OpenCodeToolInput[] | undefined,
+  profile: OpenCodeToolProfile = "direct",
 ): boolean {
-  if (tools?.length !== OPENCODE_MODEL_VISIBLE_TOOLS.length) return false;
+  if (!OPEN_CODE_TOOL_PROFILES.has(profile)) return false;
+  const expected =
+    profile === "direct" ? EXPECTED_GATEWAY_SCHEMA_DIGESTS : CODE_MODE_GATEWAY_SCHEMA_DIGESTS;
+  if (tools?.length !== expected.size) return false;
   const names = new Set(tools.map(({ name }) => name));
   return (
-    names.size === OPENCODE_MODEL_VISIBLE_TOOLS.length &&
-    tools.every(
-      ({ name, parameters }) =>
-        EXPECTED_GATEWAY_SCHEMA_DIGESTS.get(name) === schemaDigest(parameters),
-    )
+    names.size === expected.size &&
+    tools.every(({ name, parameters }) => expected.get(name) === schemaDigest(parameters))
   );
 }
 
@@ -683,6 +703,23 @@ const OPENCODE_GATEWAY_PROJECTION = compileToolProjection(
   OPENCODE_GATEWAY_CATALOG,
   OPENCODE_GATEWAY_PROFILE,
 );
+
+// The inactive variant is compiled only when explicitly requested, once per process.
+let codeModeCatalogProjection:
+  Pick<GatewayToolCatalogAdvertisement, "catalog" | "projection"> | undefined;
+function qualifiedCodeModeProjection(): Pick<
+  GatewayToolCatalogAdvertisement,
+  "catalog" | "projection"
+> {
+  if (codeModeCatalogProjection !== undefined) return codeModeCatalogProjection;
+  const set = opencodeRegistrationSet("code-mode");
+  const catalog = createKeikoToolCatalog([set]);
+  codeModeCatalogProjection = Object.freeze({
+    catalog,
+    projection: compileToolProjection(catalog, set.profile),
+  });
+  return codeModeCatalogProjection;
+}
 
 /**
  * A tool the advertisement offers can never be a working binding when its declared
@@ -794,14 +831,12 @@ function realCoverageOffer(
  * the descriptors (the canonical facade bridge's descriptor lookup) reads this instead of minting
  * a request offer it will never bind.
  */
-export function openCodeGatewayCatalogProjection(): Pick<
-  GatewayToolCatalogAdvertisement,
-  "catalog" | "projection"
-> {
-  return {
-    catalog: OPENCODE_GATEWAY_CATALOG,
-    projection: OPENCODE_GATEWAY_PROJECTION,
-  };
+export function openCodeGatewayCatalogProjection(
+  profile: OpenCodeToolProfile = "direct",
+): Pick<GatewayToolCatalogAdvertisement, "catalog" | "projection"> {
+  if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
+  if (profile === "code-mode") return qualifiedCodeModeProjection();
+  return { catalog: OPENCODE_GATEWAY_CATALOG, projection: OPENCODE_GATEWAY_PROJECTION };
 }
 
 export function createOpenCodeGatewayToolCatalogAdvertisement(
@@ -810,18 +845,19 @@ export function createOpenCodeGatewayToolCatalogAdvertisement(
   // Always derived from the request deadline by `opencodeGatewayOfferLifetimeMs`; explicit so no
   // caller can fall back to a fixed lifetime shorter than the request it advertises for.
   offerLifetimeMs: number,
+  profile: OpenCodeToolProfile = "direct",
 ): GatewayToolCatalogAdvertisement {
   if (!Number.isFinite(offerLifetimeMs) || offerLifetimeMs <= 0) {
     throw new RangeError("the gateway offer lifetime must be a positive number of milliseconds");
   }
-  const { projection } = openCodeGatewayCatalogProjection();
+  const { catalog, projection } = openCodeGatewayCatalogProjection(profile);
   const offer =
     handlerCoverage === undefined
       ? structuralOnlyOffer(projection)
       : realCoverageOffer(projection, handlerCoverage);
   return {
     kind: "bound",
-    catalog: OPENCODE_GATEWAY_CATALOG,
+    catalog,
     projection,
     offered: {
       binding: {

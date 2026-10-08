@@ -278,27 +278,24 @@ function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement 
   );
   return object as unknown as GatewayToolCatalogAdvertisement;
 }
-/**
- * The native `question` extension is not a Keiko tool descriptor (ADR-0175 D2) and
- * carry no schema on the compiled projection -- their pinned wire schema is the single source
- * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS`. A projection may
- * only ever declare the closed `"question"` alias set (contracts-enforced), so a
- * missing definition here is an impossible-by-contract drift, not a request-shaped error.
- */
-function nativeExtensionDefinition(): (typeof OPENCODE_NATIVE_EXTENSION_DEFINITIONS)[number] {
-  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS[0];
-  if (definition === undefined) throw new TypeError("Missing native extension definition");
-  return definition;
-}
+/** Native extensions retain their exact pinned schemas and never become managed handlers. */
 function nativeExtensionTools(normalizer: ToolInvocationNormalizer): readonly ToolDefinition[] {
-  return normalizer.binding.projection.nativeExtensions.map(() => {
-    const definition = nativeExtensionDefinition();
+  return normalizer.binding.projection.nativeExtensions.map((extension) => {
+    const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find(
+      (entry) =>
+        `${entry.alias}@${String(entry.contractVersion)}` ===
+        `${extension.alias}@${String(extension.contractVersion)}`,
+    );
+    if (definition === undefined) throw new TypeError("Missing native extension definition");
     return Object.freeze({
       name: definition.alias,
       description: definition.description,
       parameters: definition.inputSchema,
     });
   });
+}
+function isCodeModeProjection(normalizer: ToolInvocationNormalizer): boolean {
+  return isNativeExtensionAlias(normalizer, "execute");
 }
 function definitions(normalizer: ToolInvocationNormalizer, now: number): readonly ToolDefinition[] {
   const tools = normalizer.tools(now);
@@ -307,7 +304,7 @@ function definitions(normalizer: ToolInvocationNormalizer, now: number): readonl
     "unsupported-capability",
   );
   return Object.freeze([
-    ...tools.map((tool) =>
+    ...(isCodeModeProjection(normalizer) ? [] : tools).map((tool) =>
       Object.freeze({
         name: tool.alias,
         description: tool.description,
@@ -455,6 +452,7 @@ function bindCall(
     captured = call;
     requireBridge(normalizer !== undefined, "unoffered-tool");
     if (isNativeExtensionAlias(normalizer, call.name)) {
+      normalizer.tools(now());
       log.write(
         activityLogEvent(
           TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION,
@@ -467,6 +465,7 @@ function bindCall(
       );
       return call;
     }
+    requireBridge(!isCodeModeProjection(normalizer), "unoffered-tool");
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
     log.write(
       activityLogEvent(TOOL_CATALOG_CALL_BOUND_OPERATION, toolCatalogEnvelope(log, "info"), {

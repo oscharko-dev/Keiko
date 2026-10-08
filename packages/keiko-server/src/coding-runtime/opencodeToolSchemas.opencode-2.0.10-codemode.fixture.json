@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "runtime": "opencode",
+    "version": "2.0.10",
+    "sourceCommit": "1fa0bb5d593124a2119a28043003f2f1907895e0",
+    "capture": "original Tool.Service.snapshot and OpenAIChat.fromRequest; in-memory Code Mode variant"
+  },
+  "tools": [
+    {
+      "name": "question",
+      "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- A \"Type your own answer\" option is added automatically; don't include a separate option for free form answers\n- Set `multiple: true` to allow selecting more than one option\n- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "type": "string",
+                  "description": "Complete question"
+                },
+                "header": {
+                  "type": "string",
+                  "description": "Very short label (max 30 chars)"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "description": "Display text (1-5 words, concise)"
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "Explanation of choice"
+                      }
+                    },
+                    "required": ["label", "description"],
+                    "additionalProperties": false
+                  },
+                  "description": "Available choices"
+                },
+                "multiple": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["question", "header", "options"],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Questions to ask"
+          }
+        },
+        "required": ["questions"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "execute",
+      "description": "Run JavaScript in a confined Code Mode runtime to script tool calls and HTTP requests and compose their results.\n`fetch` is available for HTTP requests. Imports, direct filesystem access, and timers are unavailable; all other external access goes through `tools`.\nWithin `{ code }`, the only callable tools are those explicitly listed in the Code Mode catalog instructions or returned by the `search` function. Inside `{ code }`, ignore tools shown outside the Code Mode catalog. They are not available in the Code Mode runtime.\nCall tools through `tools` using only exact paths and signatures from the catalog. Do not infer or normalize tool names; preserve bracket notation such as `tools.<namespace>[\"tool-name\"](input)`.\nPrefer an explicit `return`; if omitted, the final top-level expression becomes the result.\nAwait every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.all`.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": ["code"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "innerToolNames": [
+    "keiko_changeset_edit",
+    "keiko_child_agent",
+    "keiko_ci_status",
+    "keiko_git_commit",
+    "keiko_git_diff",
+    "keiko_git_execute",
+    "keiko_git_push",
+    "keiko_git_stage",
+    "keiko_git_status",
+    "keiko_pull_request",
+    "keiko_repository_search",
+    "keiko_research_fetch",
+    "keiko_skill",
+    "keiko_skill_discover",
+    "keiko_verification",
+    "keiko_workspace_discover",
+    "keiko_workspace_read"
+  ]
+}

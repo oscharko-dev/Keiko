@@ -31,6 +31,20 @@ and advertised definitions are byte-identical between the two phases. This is an
 proof, not a production host or full native capability qualification. Existing producer cancellation
 and current authority checks are still required for an already admitted effect.
 
+The separate inactive Code Mode advertisement passed 615 focused catalog, provider, gateway and
+facade tests plus an independent original OpenCode snapshot/provider qualification. The default
+eighteen-tool advertisement is unchanged. Only an explicit server-owned qualified profile projects
+the two native outer extensions while retaining seventeen governed inner capabilities and actual
+handler coverage. Original execute schema/description, default rejection, mixed-profile refusal,
+hidden direct refusal, expiry and coverage identities are checked. Production activation and the
+remaining native lifecycle/effect observation bindings are still pending.
+
+The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
+current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
+accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had
+already been recorded. The receipt remains not qualified, with zero signals, restarts,
+acknowledgements or task resubmissions. It cannot establish the missing before-spawn qualification.
+
 ## Deployment shape
 
 | Layer         | Lab                                                                                                                          | Customer                                          |
