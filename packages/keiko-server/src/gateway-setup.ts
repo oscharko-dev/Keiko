@@ -588,6 +588,8 @@ function isAzureFoundryBaseUrl(baseUrl: string): boolean {
 }
 
 interface ProviderRawOptions {
+  readonly explicitDeploymentNames?: readonly string[] | undefined;
+  readonly catalogOrigin?: ModelProviderConfig["catalogOrigin"];
   /** True on preserve-mode rebuilds — stored-capability carry-overs are preserve semantics. */
   readonly preserveExisting?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
@@ -847,6 +849,22 @@ function genericEndpointProtocolRaw(
   };
 }
 
+function providerCatalogOrigin(
+  modelId: string,
+  options: ProviderRawOptions,
+): Pick<ModelProviderConfig, "catalogOrigin"> {
+  const existing = (options.stored ?? options.current)?.providers.find(
+    (provider) => provider.modelId === modelId,
+  );
+  const origin =
+    options.explicitDeploymentNames?.includes(modelId) === true
+      ? "explicit"
+      : existing === undefined
+        ? options.catalogOrigin
+        : existing.catalogOrigin;
+  return origin === undefined ? {} : { catalogOrigin: origin };
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
@@ -866,6 +884,7 @@ function providerRaw(
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...genericEndpointProtocolRaw(options),
+    ...providerCatalogOrigin(modelId, options),
     ...modelTokenCounterMetadata(options, modelId),
     capability: {
       ...defaultCapability,
@@ -1287,6 +1306,12 @@ function stripDerivedVoicePersonas(capability: ModelCapability): ModelCapability
 // the preserve-existing save path round-trips a parsed config back to raw for persistence, and the
 // Issue #1557 voice-persona round-trip (voiceProfiles preserved, derived supportedVoicePersonas
 // stripped and re-derived on reload — ADR-0094 D2) is pinned directly against this function.
+function storedCatalogOrigin(
+  provider: ModelProviderConfig,
+): Pick<ModelProviderConfig, "catalogOrigin"> {
+  return provider.catalogOrigin === undefined ? {} : { catalogOrigin: provider.catalogOrigin };
+}
+
 function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
@@ -1297,6 +1322,7 @@ function rawProviderFromCurrent(
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...storedCatalogOrigin(provider),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
     ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
     ...(provider.outputTokenParameter === undefined
@@ -1717,25 +1743,19 @@ export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
     : classified.id;
 }
 
-// Issue #144: exported as part of the discovery-normalization seam. Throws on schema-level
-// malformation (no data array) and on the "every entry filtered" terminal case so the caller
-// (production path) returns an honest error rather than a silently-empty model list.
+// Setup remains strict on empty discovery. Runtime refresh admits a complete empty listing,
+// but rejects malformed entries so a partial response cannot remove active models.
 export function parseModelDiscovery(
   payload: unknown,
   correlationId?: string,
+  options?: { readonly allowEmpty: boolean },
 ): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
   // An alias may route to any deployment. Its usable geometry is their intersection; list order
   // must never grant the largest deployment's capabilities to its smaller peers.
-  const byId = new Map<string, ClassifiedDiscoveryModel>();
-  for (const item of payload.data) {
-    const classified = classifyDiscoveryItem(item);
-    if (classified === undefined) continue;
-    collectDiscoveryDeployment(byId, classified);
-  }
-  const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
+  const entries = discoveryEntries(payload.data, options?.allowEmpty === true);
   // LiteLLM declares audio roles in /model/info. Preserve the existing chat/embedding discovery
   // contract while routing these declarations to Voice setup; a Whisper alias is never a chat model.
   const voiceEntries = entries.filter((entry) => entry.kind === "voice");
@@ -1757,8 +1777,22 @@ export function parseModelDiscovery(
   const boundedVoice = voiceEntries.slice(0, MAX_DISCOVERED_MODELS);
   for (const entry of [...usable, ...boundedVoice, ...unsupported.slice(0, MAX_DISCOVERED_MODELS)])
     logDiscoveryMerge(entry, correlationId);
-  assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
+  if (options?.allowEmpty !== true)
+    assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
   return discoveredModelLists(usable, boundedVoice, unsupported, wasTruncated);
+}
+
+function discoveryEntries(data: readonly unknown[], runtime: boolean): ClassifiedDiscoveryModel[] {
+  const byId = new Map<string, ClassifiedDiscoveryModel>();
+  for (const item of data) {
+    const classified = classifyDiscoveryItem(item);
+    if (classified === undefined) {
+      if (runtime) throw new Error("runtime model catalog contains an invalid entry");
+      continue;
+    }
+    collectDiscoveryDeployment(byId, classified);
+  }
+  return [...byId.values()];
 }
 
 function collectDiscoveryDeployment(
@@ -2130,6 +2164,7 @@ async function defaultGatewayModelDiscovery(
   trace: SetupDiscoveryTrace,
   callerSignal?: AbortSignal,
   metadataOnly = false,
+  allowEmpty = false,
 ): Promise<GatewayDiscoveredModels> {
   const apiKeyHeaderName = requestedApiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
   // One existing discovery budget covers the management fallbacks and model list together.
@@ -2157,12 +2192,7 @@ async function defaultGatewayModelDiscovery(
       egress,
       signal,
     );
-    const discovered = parseModelDiscovery(
-      litellmModels === undefined
-        ? payload
-        : listedCatalogWithMetadata(payload, litellmModels.payload),
-      correlationId,
-    );
+    const discovered = listedDiscoveryResult(payload, litellmModels, correlationId, allowEmpty);
     trace.modelListOutcome = "available";
     return litellmModels === undefined ? discovered : withLiteLlmTokenCounter(discovered);
   } catch (cause) {
@@ -2181,6 +2211,25 @@ function withLiteLlmTokenCounter(discovered: GatewayDiscoveredModels): GatewayDi
       ]),
     ),
   };
+}
+
+function listedDiscoveryResult(
+  payload: unknown,
+  metadata: Awaited<ReturnType<typeof discoverLiteLlmModelInfo>>,
+  correlationId: string | undefined,
+  allowEmpty: boolean,
+): GatewayDiscoveredModels {
+  if (allowEmpty) assertRuntimeListingComplete(payload);
+  return parseModelDiscovery(
+    metadata === undefined ? payload : listedCatalogWithMetadata(payload, metadata.payload),
+    correlationId,
+    { allowEmpty },
+  );
+}
+
+function assertRuntimeListingComplete(payload: unknown): void {
+  if (discoveryData(payload).some((entry) => classifyDiscoveryItem(entry) === undefined))
+    throw new Error("runtime model catalog contains an invalid entry");
 }
 
 /** Management records enrich exact listed IDs; listing alone is not a live health proof. */
@@ -2222,8 +2271,7 @@ export function liteLlmDiscoveryConnections(config: GatewayConfig): readonly Mod
         .slice(0, index)
         .some(
           (previous) =>
-            previous.tokenCounter === "litellm" &&
-            sharesStoredGatewayConnection(provider, previous),
+            previous.tokenCounter === "litellm" && catalogConnectionMatches(provider, previous),
         ),
   );
 }
@@ -2247,9 +2295,8 @@ function startupCatalogLogger(
   correlationId: string,
   startedAt: number,
 ): StartupCatalogRecorder {
-  const fingerprint = toolCallingConfigurationFingerprint(provider);
-  const configuredModelCount = config.providers.filter(
-    (candidate) => toolCallingConfigurationFingerprint(candidate) === fingerprint,
+  const configuredModelCount = config.providers.filter((candidate) =>
+    catalogConnectionMatches(candidate, provider),
   ).length;
   return (outcome, updatedModelCount, retryable, errorKind): void => {
     logAutomaticCatalog(deps, {
@@ -2271,7 +2318,7 @@ export async function refreshLiteLlmGatewayCatalog(
   correlationId: string,
 ): Promise<StartupCatalogResult> {
   const holder = deps.gatewayConfig;
-  const config = holder?.current();
+  const config = holder?.configured?.() ?? holder?.current();
   if (config === undefined || holder === undefined) return { succeeded: false, retryable: false };
   const generation = holder.generation();
   const trace = createSetupDiscoveryTrace();
@@ -2321,6 +2368,41 @@ function catalogFailureRetryable(outcome: string, failure: SetupMetadataFailure)
   );
 }
 
+function catalogChangeCount(before: GatewayConfig, after: GatewayConfig): number {
+  const previous = new Map(listConfiguredCapabilities(before).map((model) => [model.id, model]));
+  const next = new Map(listConfiguredCapabilities(after).map((model) => [model.id, model]));
+  return [...new Set([...previous.keys(), ...next.keys()])].filter(
+    (id) => JSON.stringify(previous.get(id)) !== JSON.stringify(next.get(id)),
+  ).length;
+}
+
+function currentCatalogConnection(
+  holder: RuntimeGatewayConfig,
+  generation: number,
+  provider: ModelProviderConfig,
+): GatewayConfig | undefined {
+  const configured = holder.configured?.() ?? holder.current();
+  return holder.generation() === generation &&
+    configured?.providers.some((candidate) => catalogConnectionMatches(candidate, provider)) ===
+      true
+    ? configured
+    : undefined;
+}
+
+function commitStartupCatalog(
+  holder: RuntimeGatewayConfig,
+  current: GatewayConfig,
+  updated: GatewayConfig,
+  generation: number,
+  correlationId: string,
+): boolean {
+  if (updated === current) return true;
+  const inventoryChanged = JSON.stringify(updated.providers) !== JSON.stringify(current.providers);
+  if (inventoryChanged) return holder.replaceCatalog?.(updated, generation, correlationId) ?? false;
+  holder.refine?.(updated, correlationId);
+  return true;
+}
+
 function applyStartupCatalog(
   holder: RuntimeGatewayConfig,
   generation: number,
@@ -2329,24 +2411,23 @@ function applyStartupCatalog(
   correlationId: string,
   log: StartupCatalogRecorder,
 ): StartupCatalogResult {
-  if (holder.generation() !== generation) {
+  const current = holder.current();
+  const configured = currentCatalogConnection(holder, generation, provider);
+  if (current === undefined || configured === undefined) {
     log("stale", 0, true);
     return { succeeded: false, retryable: true };
   }
-  const current = holder.current();
-  if (current === undefined) {
-    log("stale", 0, false);
-    return { succeeded: false, retryable: false };
-  }
-  const updated = refreshedLiteLlmCatalog(current, provider, normalizeDiscoveryResult(result));
-  if (updated !== current) holder.refine?.(updated, correlationId);
-  const before = new Map(
-    listConfiguredCapabilities(current).map((model) => [model.id, model.contextWindow]),
+  const updated = refreshedLiteLlmCatalog(
+    current,
+    configured,
+    provider,
+    normalizeDiscoveryResult(result),
   );
-  const count = listConfiguredCapabilities(updated).filter(
-    (model) => model.contextWindow !== before.get(model.id),
-  ).length;
-  log(updated === current ? "unchanged" : "applied", count, false);
+  if (!commitStartupCatalog(holder, current, updated, generation, correlationId)) {
+    log("stale", 0, true);
+    return { succeeded: false, retryable: true };
+  }
+  log(updated === current ? "unchanged" : "applied", catalogChangeCount(current, updated), false);
   return { succeeded: true, retryable: false };
 }
 
@@ -2367,6 +2448,8 @@ function discoverConfiguredGatewayCatalog(
       correlationId,
       trace,
       signal,
+      false,
+      true,
     );
   return awaitSetupOperation(
     deps.gatewayModelDiscovery(
@@ -2380,26 +2463,109 @@ function discoverConfiguredGatewayCatalog(
   );
 }
 
-function refreshedLiteLlmCatalog(
+function catalogConnectionMatches(
+  candidate: ModelProviderConfig,
+  connection: ModelProviderConfig,
+): boolean {
+  return (
+    sharesStoredGatewayConnection(candidate, connection) &&
+    effectiveEndpointStyle(candidate.endpointStyle) ===
+      effectiveEndpointStyle(connection.endpointStyle) &&
+    candidate.apiVersion === connection.apiVersion
+  );
+}
+
+function discoveredProviderConfig(
   config: GatewayConfig,
+  connection: ModelProviderConfig,
+  id: string,
+  discovery: SetupCandidateModels,
+): GatewayConfig {
+  const provider = providerRaw(id, connection.baseUrl, connection.apiKey, {
+    catalogOrigin: "discovered",
+    current: config,
+    apiKeyHeaderName: connection.apiKeyHeaderName,
+    endpointStyle: connection.endpointStyle,
+    apiVersion: connection.apiVersion,
+    timeoutMs: connection.timeoutMs,
+    maxRetries: connection.maxRetries,
+    retryBaseDelayMs: connection.retryBaseDelayMs,
+    embeddingModelIds: discovery.embeddingModelIds,
+    imageInputModelIds: discovery.imageInputModelIds,
+    modelMetadata: { [id]: { ...discovery.modelMetadata[id], tokenCounter: "litellm" } },
+  });
+  return parseGatewayConfig({
+    providers: [
+      {
+        ...provider,
+        ...(connection.circuitBreaker === undefined
+          ? {}
+          : { circuitBreaker: connection.circuitBreaker }),
+        ...(connection.outputTokenParameter === undefined
+          ? {}
+          : { outputTokenParameter: connection.outputTokenParameter }),
+      },
+    ],
+    circuitBreaker: config.circuitBreaker,
+    ...(config.egress === undefined ? {} : { egress: config.egress }),
+  });
+}
+
+function reconcileCatalogInventory(
+  active: GatewayConfig,
+  configured: GatewayConfig,
   connection: ModelProviderConfig,
   discovery: SetupCandidateModels,
 ): GatewayConfig {
-  return listConfiguredCapabilities(config).reduce((updated, model) => {
-    const provider = config.providers.find((candidate) => candidate.modelId === model.id);
+  const listed = new Set(discovery.modelIds);
+  const providers = active.providers.filter(
+    (provider) =>
+      provider.catalogOrigin !== "discovered" ||
+      !catalogConnectionMatches(provider, connection) ||
+      listed.has(provider.modelId) ||
+      discovery.truncated === true,
+  );
+  const capabilities = listConfiguredCapabilities(active).filter((model) =>
+    providers.some((provider) => provider.modelId === model.id),
+  );
+  const automatic = configured.providers.some(
+    (provider) =>
+      provider.catalogOrigin === "discovered" && catalogConnectionMatches(provider, connection),
+  );
+  for (const id of automatic ? discovery.modelIds : []) {
+    if (providers.some((provider) => provider.modelId === id)) continue;
+    const stored = configured.providers.find((provider) => provider.modelId === id);
+    if (stored !== undefined && !catalogConnectionMatches(stored, connection)) continue;
+    const produced = discoveredProviderConfig(configured, connection, id, discovery);
+    providers.push(...produced.providers);
+    capabilities.push(...listConfiguredCapabilities(produced));
+  }
+  return { ...active, providers, capabilities };
+}
+
+function refreshedLiteLlmCatalog(
+  config: GatewayConfig,
+  configured: GatewayConfig,
+  connection: ModelProviderConfig,
+  discovery: SetupCandidateModels,
+): GatewayConfig {
+  const inventory = reconcileCatalogInventory(config, configured, connection, discovery);
+  const refreshed = listConfiguredCapabilities(inventory).reduce((updated, model) => {
+    const provider = inventory.providers.find((candidate) => candidate.modelId === model.id);
     const metadata = discovery.modelMetadata[model.id];
     const window = metadata?.contextWindow;
     if (
       model.kind !== "chat" ||
       provider === undefined ||
-      !sharesStoredGatewayConnection(provider, connection) ||
+      !catalogConnectionMatches(provider, connection) ||
       window === undefined ||
       !declaresContextWindow(metadata) ||
       providerStatementLeavesWindow(model, window)
     )
       return updated;
     return replaceCapabilityContextWindow(updated, model, window);
-  }, config);
+  }, inventory);
+  return JSON.stringify(refreshed) === JSON.stringify(config) ? config : refreshed;
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
@@ -3329,6 +3495,7 @@ interface SetupRequest {
   readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
+  readonly explicitDeploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   /** True when the request stated the list explicitly — discovery must not re-add models then. */
   readonly imageInputModelIdsProvided: boolean;
@@ -5488,6 +5655,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     ...input.credentials,
     timeoutMs: input.timeoutMs,
     deploymentNames: resolved.deploymentNames,
+    explicitDeploymentNames: input.modelLists.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     submittedEmbeddingModelIds: input.modelLists.embeddingModelIds ?? [],
@@ -5627,6 +5795,7 @@ interface SetupVerificationInput {
   readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
+  readonly explicitDeploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   /** True when the request stated the list explicitly — discovery must not re-add models then. */
   readonly imageInputModelIdsProvided: boolean;
@@ -6100,6 +6269,10 @@ async function enrichSelectedDeploymentMetadata(
   }
 }
 
+function setupCatalogOriginOptions(input: SetupVerificationInput): ProviderRawOptions {
+  return { explicitDeploymentNames: input.explicitDeploymentNames, catalogOrigin: "discovered" };
+}
+
 function finalRawConfigForSetup(
   input: SetupVerificationInput,
   testedModelIds: readonly string[],
@@ -6112,6 +6285,7 @@ function finalRawConfigForSetup(
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
     preserveExisting: input.preserveExisting,
+    ...setupCatalogOriginOptions(input),
     apiKeyHeaderName: input.apiKeyHeaderName,
     endpointStyle: input.endpointStyle,
     apiVersion: input.apiVersion,
@@ -7505,6 +7679,7 @@ async function trySetupCandidate(
     apiVersion: request.apiVersion,
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
+    explicitDeploymentNames: request.explicitDeploymentNames,
     imageInputModelIds: request.imageInputModelIds,
     imageInputModelIdsProvided: request.imageInputModelIdsProvided,
     storedEmbeddingModelIds: request.storedEmbeddingModelIds,
@@ -7816,7 +7991,9 @@ function saveExistingConfigUpdate(
     linkLocalGatewayOverrideOptions(deps.env),
   );
   persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps, request.correlationId);
-  gatewayConfig.set(config, true, request.correlationId);
+  if (gatewayConfig.replaceConfigured === undefined)
+    gatewayConfig.set(config, true, request.correlationId);
+  else gatewayConfig.replaceConfigured(config, request.correlationId);
   logVoiceSetupResolution(config, request.correlationId);
   recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
@@ -7999,7 +8176,7 @@ export async function handleGatewaySetup(
     return gatewayUnavailableResult();
   }
   const { gatewayConfig } = deps;
-  const current = currentGatewayConfig(deps);
+  const current = gatewayConfig.configured?.() ?? currentGatewayConfig(deps);
   const stored = durableStoredGatewayConfig(
     current,
     gatewayConfig.storagePath,
@@ -8241,7 +8418,8 @@ function rawConfigForVerifiedCapabilityUpdate(
   storagePath: string,
   deps: UiHandlerDeps,
 ): Record<string, unknown> {
-  const raw = rawConfigFromCurrent(updated, updated.figma?.accessToken);
+  const configured = deps.gatewayConfig?.forPersistence?.(updated) ?? updated;
+  const raw = rawConfigFromCurrent(configured, configured.figma?.accessToken);
   return withPersistedGatewayEgress(raw, storagePath, deps);
 }
 
@@ -8294,12 +8472,9 @@ function applyVerifiedCapabilityUpdate(
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
   // when durable storage fails, allowing the operator to retry the exact verified update.
-  // set() wipes EVERY model's verified-capability observation and bumps the generation —
-  // correct for a credential/endpoint change, but THIS set applies values derived from a live
-  // observation against unchanged connections. Config cannot carry conversationReady (it is
-  // probe-only evidence), so preserve that one readiness fact across the wipe. Never replay
-  // feature observations under a new generation: an unrelated apply must not re-stamp a model's
-  // old tool proof as if the model had just been probed.
+  // Applying feature evidence consumes it. Preserve conversation readiness at its original
+  // checkedAt on unchanged active connections; never re-stamp an unrelated model's old tool proof.
+  // The source-retaining catalog facet also keeps inactive credentials out of the active inventory.
   const observations = updated.providers
     .map((provider) => ({
       modelId: provider.modelId,
@@ -8317,7 +8492,9 @@ function applyVerifiedCapabilityUpdate(
   if (consumeObservation && !gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
-  gatewayConfig.set(updated, true, correlationId);
+  if (gatewayConfig.replaceCatalog === undefined) gatewayConfig.set(updated, true, correlationId);
+  else if (!gatewayConfig.replaceCatalog(updated, generation, correlationId))
+    return staleCapabilityObservationResult();
   for (const entry of observations) {
     gatewayConfig.recordVerifiedCapability(
       entry.modelId,

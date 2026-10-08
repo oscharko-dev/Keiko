@@ -1789,6 +1789,19 @@ function resolveProviderProtocol(
   return { endpointStyle, apiVersion, realtimeAuthMode };
 }
 
+function catalogOriginConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "catalogOrigin"> {
+  if (value === undefined) return {};
+  return {
+    catalogOrigin: requireEnum<"discovered" | "explicit">(value, `${path}.catalogOrigin`, [
+      "discovered",
+      "explicit",
+    ]),
+  };
+}
+
 function parseProviderConfig(
   raw: Record<string, unknown>,
   path: string,
@@ -1824,6 +1837,7 @@ function parseProviderConfig(
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
     ...tokenCounterConfig(raw.tokenCounter, path),
+    ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(

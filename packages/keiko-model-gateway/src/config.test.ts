@@ -3350,3 +3350,23 @@ describe.each(["codingStreaming", "codingReasoningDisplay"] as const)(
     });
   },
 );
+
+describe("automatic catalog origin", () => {
+  it.each(["discovered", "explicit"])("retains the actual %s provider origin", (catalogOrigin) => {
+    const parsed = parseGatewayConfig({ providers: [{ ...validProvider(), catalogOrigin }] });
+    expect(parsed.providers[0]).toHaveProperty("catalogOrigin", catalogOrigin);
+  });
+  it("does not invent provenance for a legacy provider", () => {
+    expect(parseGatewayConfig({ providers: [validProvider()] }).providers[0]).not.toHaveProperty(
+      "catalogOrigin",
+    );
+  });
+  it.each(["automatic", "", true, { origin: "discovered" }])(
+    "refuses invalid supplied catalog provenance %j",
+    (catalogOrigin) => {
+      expect(() =>
+        parseGatewayConfig({ providers: [{ ...validProvider(), catalogOrigin }] }),
+      ).toThrow(ConfigInvalidError);
+    },
+  );
+});

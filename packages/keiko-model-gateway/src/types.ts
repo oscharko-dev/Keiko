@@ -92,6 +92,8 @@ export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProviderConfig {
   readonly modelId: string;
+  /** Actual setup origin; absent on legacy/configured rows without source evidence. */
+  readonly catalogOrigin?: "discovered" | "explicit" | undefined;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string | undefined;

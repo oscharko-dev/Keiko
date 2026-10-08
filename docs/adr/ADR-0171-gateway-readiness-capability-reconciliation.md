@@ -70,11 +70,24 @@ in-flight requests are cached; settled model responses cannot conceal subsequent
 Changed background catalogs notify the existing window bus, so an already open Coding Workbench
 refreshes its source and runtime posture without requiring Settings. This notification adopts the
 catalog already read; it neither invalidates the picker nor triggers a recursive catalog fetch.
-Recognized LiteLLM connections also reuse setup discovery at startup to refresh declared context
-limits for configured models. Startup never expands the operator's selected deployments or copies
-resolved credentials to another model. Context refinements use the current configuration and the
-existing monotonic window-adoption rule, preserving declared ceilings and concurrent refinements.
-Existing connections, policy, and configured models are retained. A bounded serial queue verifies missing or expired
+Recognized LiteLLM connections reuse setup discovery at startup and reload to reconcile their
+active inventory and declared context limits. Setup records whether a model was automatically
+discovered or explicitly selected by the human; legacy configurations without this evidence keep
+their unspecified origin. A complete runtime listing removes omitted automatically discovered
+models and admits newly listed models through the existing provider parser on the same accepted
+connection. Explicit selections remain closed, and unspecified legacy rows are not removed merely
+because a listing omits them. A truncated listing can add valid rows but cannot remove omitted
+rows; malformed entries reject the complete update. Complete empty runtime listings are valid,
+while fresh onboarding still requires a usable model.
+
+The existing runtime configuration holder retains the accepted connection source separately from
+its active inventory, including when the last active model disappears. Discovery continues from
+that accepted source; metadata persistence retains its credential vault and cannot resurrect
+inactive models. A human configuration replacement remains authoritative. Inventory commits require
+the captured generation, reject stale credential responses, and preserve only truly unchanged live
+observations with their original measurement time. Context refinements use the current
+configuration and existing monotonic window-adoption rule, preserving declared ceilings and
+concurrent refinements. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks retry after their one-minute
 cooldown, with exponential startup backoff capped at five minutes. Rejected credentials and

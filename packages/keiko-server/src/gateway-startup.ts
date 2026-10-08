@@ -34,7 +34,7 @@ export function createGatewayStartupChecks(deps: UiHandlerDeps): {
 
 class GatewayStartupChecks {
   private readonly controller = new AbortController();
-  private readonly discovered = new Map<string, number>();
+  private readonly discovered = new Map<string, CatalogDiscoveryState>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly refreshingGenerations = new Set<number>();
   private retry: ReturnType<typeof setTimeout> | undefined;
@@ -61,8 +61,8 @@ class GatewayStartupChecks {
     if (this.refreshingGenerations.has(generation)) return;
     this.refreshingGenerations.add(generation);
     // A browser reload renews completed discovery; an in-flight query or retry backoff is shared.
-    for (const [key, retryAt] of this.discovered) {
-      if (retryAt === Infinity) this.discovered.delete(key);
+    for (const [key, discovery] of this.discovered) {
+      if (discovery.retryAt === Infinity) this.discovered.delete(key);
     }
     const correlationId = newCorrelationId();
     const deps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
@@ -168,39 +168,65 @@ class GatewayStartupChecks {
 async function refreshCatalogs(
   deps: UiHandlerDeps,
   signal: AbortSignal,
-  discovered: Map<string, number>,
+  discovered: Map<string, CatalogDiscoveryState>,
   correlationId: string,
   retryDelayMs: number,
 ): Promise<boolean> {
-  const config = deps.gatewayConfig?.current();
+  const holder = deps.gatewayConfig;
+  const config = holder?.configured?.() ?? holder?.current();
   if (config === undefined) return false;
   let retry = false;
   const connections = liteLlmDiscoveryConnections(config);
   pruneCatalogConnections(discovered, connections);
   for (const provider of connections) {
-    const key = toolCallingConfigurationFingerprint(provider);
-    if (signal.aborted) continue;
-    const retryAt = discovered.get(key);
-    if (retryAt !== undefined && (retryAt === 0 || retryAt > Date.now())) {
-      retry ||= Number.isFinite(retryAt);
-      continue;
-    }
-    discovered.set(key, 0);
-    const result = await refreshLiteLlmGatewayCatalog(deps, provider, signal, correlationId);
-    if (result.retryable) {
-      discovered.set(key, Date.now() + retryDelayMs);
-      retry = true;
-    } else {
-      discovered.set(key, Infinity);
-    }
+    if (signal.aborted) break;
+    retry =
+      (await refreshCatalogConnection(
+        deps,
+        signal,
+        discovered,
+        provider,
+        correlationId,
+        retryDelayMs,
+      )) || retry;
   }
   return retry;
 }
 
+async function refreshCatalogConnection(
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+  discovered: Map<string, CatalogDiscoveryState>,
+  provider: Parameters<typeof toolCallingConfigurationFingerprint>[0],
+  correlationId: string,
+  retryDelayMs: number,
+): Promise<boolean> {
+  const key = toolCallingConfigurationFingerprint(provider);
+  const retryAt = discovered.get(key)?.retryAt;
+  if (retryAt !== undefined && (retryAt === 0 || retryAt > Date.now()))
+    return Number.isFinite(retryAt);
+  const pending = { provider, retryAt: 0 };
+  discovered.set(key, pending);
+  const result = await refreshLiteLlmGatewayCatalog(deps, provider, signal, correlationId);
+  if (discovered.get(key) !== pending) return false;
+  pending.retryAt = result.retryable ? Date.now() + retryDelayMs : Infinity;
+  return result.retryable;
+}
+
+interface CatalogDiscoveryState {
+  readonly provider: Parameters<typeof toolCallingConfigurationFingerprint>[0];
+  retryAt: number;
+}
+
 function pruneCatalogConnections(
-  discovered: Map<string, number>,
+  discovered: Map<string, CatalogDiscoveryState>,
   connections: readonly Parameters<typeof toolCallingConfigurationFingerprint>[0][],
 ): void {
-  const active = new Set(connections.map(toolCallingConfigurationFingerprint));
-  for (const key of discovered.keys()) if (!active.has(key)) discovered.delete(key);
+  for (const [key, state] of discovered) {
+    const current = connections.find(
+      (provider) => toolCallingConfigurationFingerprint(provider) === key,
+    );
+    if (current === undefined || JSON.stringify(current) !== JSON.stringify(state.provider))
+      discovered.delete(key);
+  }
 }

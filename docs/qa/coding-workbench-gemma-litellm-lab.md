@@ -1125,3 +1125,27 @@ real terminal execution. Production native IO authority, full tools and platform
 open. The exact spdx-exceptions 2.5.0 CC-BY-3.0 policy disposition remains open; the private receipt
 records its license refusal, without dropping that dependency or claiming approved distribution.
 Package size, final source-build provenance and fresh payload performance remain qualification work.
+
+### Background model inventory reconciliation (ROOT qualification on 24d072)
+
+ROOT independently verified all nine frozen source owners and 77 source/evidence references, then
+ran the new catalog suite against the unchanged production owners. Ten of its 24 controls failed
+for actual inventory, complete-empty, incomplete-response and credential-rotation behavior. The
+minimal integration records real discovery provenance and reuses the existing configuration holder
+to retain the accepted connection source while replacing only its active inventory. New models,
+removed models, disappearance of the final model, subsequent recovery, stale results and metadata
+saves are covered through the actual producers. Explicit and unspecified legacy selections retain
+their compatibility behavior; a listing is never treated as live serving proof.
+
+Reload still returns the local model projection immediately and only triggers the shared background
+worker. Complete runtime listings can reconcile automatically discovered rows; incomplete listings
+cannot silently remove rows, and fresh onboarding retains its strict empty-catalog validation.
+Credentials remain sealed against the accepted source even after its active inventory becomes empty.
+The ROOT owning checks pass 260 model-configuration tests and 517 server tests, scoped strict types,
+zero-warning lint, fourteen-file formatting and the forced affected package graph. The registered
+log catalog's 97 controls and all twelve error-observability controls pass. An inadvertently invoked
+aggregate also ran 143 log scenarios successfully, but its architecture stage reported stale
+catalog performance evidence; that final-gate artifact is still pending and is not a green release
+claim. An initial standalone diagnostics import used stale compiled output; the fresh graph and
+rerun supersede that setup result. Positive serving-readiness expiry, stale LiteLLM key/team grants
+and optional cached health remain separate acceptance work. The customer-version source audit is not a live customer-gateway test.
