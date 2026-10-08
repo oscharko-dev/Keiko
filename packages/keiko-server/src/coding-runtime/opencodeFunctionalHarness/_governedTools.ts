@@ -4,6 +4,7 @@ import {
   createGeneratedOpenCodeBundle,
   createGeneratedOpenCodeV2Plugins,
 } from "../opencodeRuntimeAdapter.js";
+import { OPENCODE_TOOL_SOURCE_DEFINITIONS } from "../opencodeToolSchemas.js";
 import { projectOpenCodePermissionEvent } from "../opencodeProtocol.js";
 
 interface GeneratedToolContext {
@@ -22,6 +23,7 @@ interface GeneratedTool {
 interface V2ToolPlugin {
   readonly setup: (context: {
     readonly tool: {
+      readonly hook: (name: string, callback: (event: unknown) => void) => Promise<unknown>;
       readonly transform: (
         register: (editor: { add: (tool: unknown) => void }) => void,
       ) => Promise<void>;
@@ -93,10 +95,15 @@ async function generatedTool(
   name: string,
   input: ScriptedGovernedToolsInput,
 ): Promise<GeneratedTool> {
-  const source = generatedToolSources(input)[name];
+  const source =
+    generatedToolSources(input)[input.pluginVersion === "v2" ? "keiko_governed_tools" : name];
   if (source === undefined) throw new Error("functional-generated-tool-unavailable");
   const value = await loadGeneratedTool(source, input);
-  if (input.pluginVersion === "v2") return registeredV2Tool(value, name);
+  if (input.pluginVersion === "v2") {
+    const result = (await registeredV2Tools(value)).get(name);
+    if (result === undefined) throw new Error("functional-generated-v2-tool-unavailable");
+    return result;
+  }
   if (
     typeof value !== "object" ||
     value === null ||
@@ -108,28 +115,36 @@ async function generatedTool(
   return value as GeneratedTool;
 }
 
-async function registeredV2Tool(value: unknown, name: string): Promise<GeneratedTool> {
-  if (!isV2ToolPlugin(value)) {
-    throw new Error("functional-generated-v2-plugin-invalid");
-  }
-  let registered: unknown;
+async function registeredV2Tools(value: unknown): Promise<ReadonlyMap<string, GeneratedTool>> {
+  if (!isV2ToolPlugin(value)) throw new Error("functional-generated-v2-plugin-invalid");
+  const registered = new Map<string, GeneratedTool>();
   await value.setup({
     tool: {
+      hook: (): Promise<unknown> => Promise.resolve({ dispose: (): void => undefined }),
       transform: (register): Promise<void> => {
         register({
           add: (tool): void => {
-            if (registered !== undefined) throw new Error("functional-generated-v2-tool-duplicate");
-            registered = tool;
+            const name =
+              typeof tool === "object" && tool !== null && "name" in tool ? tool.name : undefined;
+            if (typeof name !== "string" || !isV2RegisteredTool(tool, name))
+              throw new Error("functional-generated-v2-tool-invalid");
+            if (registered.has(name)) throw new Error("functional-generated-v2-tool-duplicate");
+            registered.set(name, tool);
           },
         });
         return Promise.resolve();
       },
     },
   });
-  if (!isV2RegisteredTool(registered, name)) {
-    throw new Error("functional-generated-v2-tool-invalid");
-  }
   return registered;
+}
+
+async function generatedV2Tools(
+  input: ScriptedGovernedToolsInput,
+): Promise<ReadonlyMap<string, GeneratedTool>> {
+  const source = createGeneratedOpenCodeV2Plugins().keiko_governed_tools;
+  if (source === undefined) throw new Error("functional-generated-v2-plugin-unavailable");
+  return registeredV2Tools(await loadGeneratedTool(source, input));
 }
 
 function isV2ToolPlugin(value: unknown): value is V2ToolPlugin {
@@ -208,6 +223,8 @@ export async function capturedGeneratedV2Ask(input: {
 export class ScriptedGovernedTools {
   private readonly pending = new Map<string, PendingPermission>();
   private sequence = 0;
+  private v2Tools: Promise<ReadonlyMap<string, GeneratedTool>> | undefined;
+  private readonly invoking = new Map<string, string>();
   public constructor(private readonly input: ScriptedGovernedToolsInput) {}
 
   public rows(): readonly Record<string, unknown>[] {
@@ -247,6 +264,8 @@ export class ScriptedGovernedTools {
     } catch (error) {
       this.phase(call.name, "failed");
       throw error;
+    } finally {
+      this.invoking.delete(`${this.input.sessionId}:${call.id}`);
     }
   }
 
@@ -254,13 +273,13 @@ export class ScriptedGovernedTools {
     call: { readonly id: string; readonly name: string; readonly args: Record<string, unknown> },
     signal: AbortSignal,
   ): Promise<string> {
-    const fetch: typeof globalThis.fetch = async (...args) => {
-      this.phase(call.name, "ipc-requested");
-      const response = await (this.input.fetch ?? globalThis.fetch)(...args);
-      this.phase(call.name, "ipc-returned");
-      return response;
-    };
-    const tool = await generatedTool(call.name, { ...this.input, fetch });
+    this.invoking.set(`${this.input.sessionId}:${call.id}`, call.name);
+    const fetch: typeof globalThis.fetch = (...args) => this.fetchObserved(...args);
+    const tool =
+      this.input.pluginVersion === "v2"
+        ? (await (this.v2Tools ??= generatedV2Tools({ ...this.input, fetch }))).get(call.name)
+        : await generatedTool(call.name, { ...this.input, fetch });
+    if (tool === undefined) throw new Error("functional-generated-tool-unavailable");
     const result = await tool.execute(call.args, {
       id: call.id,
       sessionID: this.input.sessionId,
@@ -276,10 +295,22 @@ export class ScriptedGovernedTools {
     return output;
   }
 
+  private async fetchObserved(...args: Parameters<typeof globalThis.fetch>): Promise<Response> {
+    const body: unknown = typeof args[1]?.body === "string" ? JSON.parse(args[1].body) : undefined;
+    const identity =
+      typeof body === "object" && body !== null && "actionId" in body ? body.actionId : undefined;
+    const name =
+      typeof identity === "string" ? (this.invoking.get(identity) ?? "unknown") : "unknown";
+    this.phase(name, "ipc-requested");
+    const response = await (this.input.fetch ?? globalThis.fetch)(...args);
+    this.phase(name, "ipc-returned");
+    return response;
+  }
+
   private phase(name: string, phase: ScriptedToolPhase["phase"]): void {
     const runId = this.input.env.KEIKO_CODING_RUN_ID;
     if (runId === undefined || !/^run-[A-Za-z0-9-]{1,120}$/u.test(runId)) return;
-    const known = Object.hasOwn(generatedToolSources(this.input), name);
+    const known = OPENCODE_TOOL_SOURCE_DEFINITIONS.some((tool) => tool.name === name);
     this.input.observePhase?.({ runId, tool: known ? name : "unknown", phase });
   }
 

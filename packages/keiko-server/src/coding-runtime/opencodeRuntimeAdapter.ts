@@ -1209,17 +1209,91 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
-/** V2 loads governed tools through plugin transforms instead of V1 tool files. */
+let cachedV2PluginSources: Readonly<Record<string, string>> | undefined;
+
+/** Immutable source shared across runs; each supported setup creates fresh invocation state. */
 export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, string>> {
-  return {
-    ...Object.fromEntries(
-      OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
-        name,
-        toolSource(action, schemas, name, "v2"),
-      ]),
-    ),
+  return (cachedV2PluginSources ??= Object.freeze({
+    keiko_governed_tools: sharedV2ToolPluginSource(),
     keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
-  };
+  }));
+}
+
+function sharedV2ToolPluginSource(): string {
+  return [
+    "export default {",
+    '  id: "keiko.governed-tools",',
+    "  async setup(ctx) {",
+    ...v2InvocationIdentitySource(),
+    '    await ctx.tool.hook("execute.before", (event) => {',
+    '      if (event.tool !== "execute") return;',
+    "      const key = directIdentity(event);",
+    '      if (disposed || parents.has(key) || parents.size >= MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
+    "      parents.set(key, { sessionID: event.sessionID, messageID: event.messageID, agent: event.agent, ordinal: 0, closed: false });",
+    "    });",
+    '    await ctx.tool.hook("execute.after", (event) => {',
+    '      if (event.tool !== "execute") return;',
+    "      const parent = parents.get(directIdentity(event));",
+    "      if (parent) parent.closed = true;",
+    "    });",
+    "    await ctx.tool.transform((editor) => {",
+    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) =>
+      toolSource(action, schemas, name, "v2"),
+    ),
+    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => `      register_${name}(editor);`),
+    "    });",
+    "    return () => { disposed = true; parents.clear(); };",
+    "  },",
+    "};",
+  ].join("\n");
+}
+
+function v2InvocationIdentitySource(): readonly string[] {
+  return [
+    `    const MAX_IDENTITIES = ${String(MAX_RECENT_IDENTITIES)};`,
+    "    const parents = new Map();",
+    "    let disposed = false;",
+    "    const directIdentity = (context) => `${context.sessionID}:${context.id}`;",
+    "    function assertInvocationOpen(context) {",
+    "      const parent = parents.get(directIdentity(context));",
+    '      if (disposed || parent?.closed) throw new Error("keiko-tool-unavailable");',
+    "    }",
+    "    async function captureInvocationIdentity(context) {",
+    '      if (disposed) throw new Error("keiko-tool-unavailable");',
+    "      const key = directIdentity(context);",
+    "      const parent = parents.get(key);",
+    "      if (!parent) return key;",
+    '      if (parent.closed || parent.agent !== context.agent || parent.messageID !== context.messageID) throw new Error("keiko-tool-invalid");',
+    "      const ordinal = ++parent.ordinal;",
+    '      if (ordinal > MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
+    '      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));',
+    '      const hash = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "      const identity = `${parent.sessionID}:cm_${hash}_${ordinal}`;",
+    '      if (identity.length > 256) throw new Error("keiko-tool-invalid");',
+    "      assertInvocationOpen(context);",
+    "      return identity;",
+    "    }",
+  ];
+}
+
+function v2ResultEnvelopeSource(action: GeneratedToolAction): readonly string[] {
+  const schema = toolCatalogDescriptor(action).resultSchema;
+  return [
+    `const resultSchema = ${JSON.stringify(schema)};`,
+    "function validCanonicalEnvelope(value) {",
+    "  if (resultSchema.required.some((key) => !Object.hasOwn(value, key))) return false;",
+    "  if (!resultSchema.properties.status.enum.includes(value.status)) return false;",
+    "  const evidence = resultSchema.properties.evidence;",
+    "  if (!Array.isArray(value.evidence) || value.evidence.length > evidence.maxItems) return false;",
+    "  return value.evidence.every((entry) => {",
+    '    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;',
+    "    const item = evidence.items;",
+    "    return item.required.every((key) => Object.hasOwn(entry, key)) &&",
+    "      Object.keys(entry).every((key) => Object.hasOwn(item.properties, key)) &&",
+    '      Object.entries(item.properties).every(([key, property]) => typeof entry[key] === "string" && entry[key].length <= property.maxLength);',
+    "  });",
+    "}",
+  ];
 }
 
 // #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are
@@ -1385,7 +1459,7 @@ function v2GovernedAskSource(): readonly string[] {
     "  const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     "  const runId = process.env.KEIKO_CODING_RUN_ID;",
     '  if (!endpoint || !capability || !runId) throw new Error("keiko-tool-unavailable");',
-    "  const seed = `${context.sessionID}:${context.id}`;",
+    "  const seed = approvalProof.actionId;",
     '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed));',
     '  const id = "per_" + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);',
     // #3612: the ask names its tool call, so the server can settle the call with the decision.
@@ -1400,8 +1474,62 @@ function v2GovernedAskSource(): readonly string[] {
     '  if (text.length > MAX_RESPONSE_BYTES) throw new Error("keiko-tool-oversized");',
     "  const result = JSON.parse(text);",
     '  if (!validResult(result)) throw new Error("keiko-tool-invalid");',
-    "  return modelContent(result, text);",
+    "  return { content: modelContent(result, text), output: result, metadata: {} };",
   ];
+}
+
+interface ToolSourceFormat {
+  readonly start: readonly string[];
+  readonly validation: readonly string[];
+  readonly statusGuard: string;
+  readonly identity: string;
+  readonly approval: readonly string[];
+  readonly assertOpen: readonly string[];
+  readonly subscribeAbort: readonly string[];
+  readonly unsubscribeAbort: readonly string[];
+  readonly result: string;
+  readonly registrationEnd: readonly string[];
+  readonly end: readonly string[];
+}
+
+function toolSourceFormat(
+  action: GeneratedToolAction,
+  name: string | undefined,
+  version: "v1" | "v2",
+): ToolSourceFormat {
+  if (version === "v1")
+    return {
+      start: [],
+      validation: [],
+      statusGuard:
+        '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
+      identity:
+        "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
+      approval: ["    await askForGovernedPermission(args, context, approvalProof);"],
+      assertOpen: [],
+      subscribeAbort: ['    context.abort.addEventListener("abort", abort, { once: true });'],
+      unsubscribeAbort: ['      context.abort.removeEventListener("abort", abort);'],
+      result: "      return { title: action, output: modelContent(result, text), metadata: {} };",
+      registrationEnd: ["};"],
+      end: [],
+    };
+  return {
+    start: [`function register_${name ?? action}(editor) {`],
+    validation: v2ResultEnvelopeSource(action),
+    statusGuard: "  if (!validCanonicalEnvelope(value)) return false;",
+    identity:
+      "    args = JSON.parse(JSON.stringify(args)); const identity = await captureInvocationIdentity(context);",
+    approval: [
+      "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
+      "    if (refusal !== undefined) return refusal;",
+    ],
+    assertOpen: ["    assertInvocationOpen(context);"],
+    subscribeAbort: [],
+    unsubscribeAbort: [],
+    result: "      return { content: modelContent(result, text), output: result, metadata: {} };",
+    registrationEnd: ["      });"],
+    end: ["}"],
+  };
 }
 
 // eslint-disable-next-line max-lines-per-function -- emitted dependency-free tool source keeps all transport gates visible.
@@ -1412,12 +1540,14 @@ function toolSource(
   version: "v1" | "v2" = "v1",
 ): string {
   const argumentNames = Object.keys(schemas);
+  const format = toolSourceFormat(action, name, version);
   // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
   // `{ operation: "stage", phase: "propose" }`. `git-execute` builds its wire `action` and these
   // fields entirely from the model-supplied `kind` at call time instead (see the `wireAction`
   // override below), so it deliberately keeps the descriptive `action` literal here.
   const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
+    ...format.start,
     `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
     `const TIMEOUT_MS = ${String(toolClientTimeoutMs(action))};`,
     `const action = ${JSON.stringify(action)};`,
@@ -1425,9 +1555,10 @@ function toolSource(
     `const literalFields = ${JSON.stringify(wire.literal)};`,
     `const argumentNames = ${JSON.stringify(argumentNames)};`,
     `const inputSchemas = ${JSON.stringify(schemas)};`,
+    ...format.validation,
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
-    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
+    format.statusGuard,
     '  if ((action !== "read" && action !== "discover" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
@@ -1440,9 +1571,7 @@ function toolSource(
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
-    version === "v2"
-      ? "    const identity = `${context.sessionID}:${context.id}`;"
-      : "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
+    format.identity,
     "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
     '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
@@ -1467,19 +1596,14 @@ function toolSource(
     "      for (const name of argumentNames) delete request[name];",
     "    }",
     "    const approvalProof = await toolApprovalProof(request);",
-    ...(version === "v1"
-      ? ["    await askForGovernedPermission(args, context, approvalProof);"]
-      : [
-          "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
-          "    if (refusal !== undefined) return { content: refusal, metadata: {} };",
-        ]),
+    ...format.assertOpen,
+    ...format.approval,
     "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",
+    ...format.assertOpen,
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",
-    ...(version === "v1"
-      ? ['    context.abort.addEventListener("abort", abort, { once: true });']
-      : []),
+    ...format.subscribeAbort,
     "    const timeout = setTimeout(abort, TIMEOUT_MS);",
     "    try {",
     '      const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: controller.signal, headers: { Authorization: `Bearer ${capability}`, "Content-Type": "application/json" }, body });',
@@ -1500,17 +1624,15 @@ function toolSource(
     '      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);',
     "      const result = JSON.parse(text);",
     '      if (!validResult(result)) throw new Error("keiko-tool-invalid");',
-    version === "v2"
-      ? "      return { content: modelContent(result, text), metadata: {} };"
-      : "      return { title: action, output: modelContent(result, text), metadata: {} };",
+    format.result,
     "    } finally {",
     "      clearTimeout(timeout);",
-    ...(version === "v1" ? ['      context.abort.removeEventListener("abort", abort);'] : []),
+    ...format.unsubscribeAbort,
     "    }",
     "  },",
-    ...(version === "v2" ? ["      });", "    });", "  },"] : []),
-    "};",
+    ...format.registrationEnd,
     ...governedPermissionSource(version),
+    ...format.end,
   ].join("\n");
 }
 
@@ -1527,16 +1649,12 @@ function toolSourceRegistration(
       "  async execute(args, context) {",
     ];
   }
-  const pluginId = `keiko.${name ?? action}`;
   return [
-    "export default {",
-    `  id: ${JSON.stringify(pluginId)},`,
-    "  async setup(ctx) {",
-    "    await ctx.tool.transform((editor) => {",
     "      editor.add({",
     `        name: ${JSON.stringify(name)},`,
     `        description: ${JSON.stringify(toolDescription(action))},`,
     "        input: { type: 'object', properties: inputSchemas, required: argumentNames, additionalProperties: false },",
+    "        output: resultSchema,",
     `        options: { permission: ${JSON.stringify(name)}, codemode: false },`,
     "        async execute(args, context) {",
   ];

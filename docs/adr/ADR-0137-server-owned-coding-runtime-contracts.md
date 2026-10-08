@@ -410,6 +410,16 @@ native hooks plus the process boundary can enforce those contracts; a mapped Kei
 integration mechanism, not a requirement to replace every native executor. Production currently
 continues to deny native workspace effect tools while these boundaries are being qualified.
 
+V2 mapped tools share one supported plugin setup and declare canonical structured outputs beside
+their existing model-facing content. Native Code Mode reuses its outer invocation context for
+inner calls, so the adapter captures a distinct bounded identity for each inner invocation before
+permission or effect IO. Permission proof, effect request and idempotency use that same identity;
+direct invocation identities remain unchanged. Completed-parent and supported Scope disposal
+checks reject late calls. Native cancellation does not guarantee an `execute.after` hook; current
+server authority and budget checks remain mandatory for every request. Code Mode activation still
+requires the exact native execute advertisement, permission, network and lifecycle contracts;
+mapped tools retain `codemode: false` until those contracts are qualified.
+
 The first macOS filesystem foundation composes read-only accepted-workspace access, writable
 private per-run native state and read-only immutable runtime/OS support with the existing exact
 gateway and runtime/attested-Git executable policy. Both direct and supervisor-prepared launches

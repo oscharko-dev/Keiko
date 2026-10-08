@@ -4022,7 +4022,7 @@ function generatedToolContext(callID: string): Parameters<GeneratedVerificationT
 async function loadGeneratedVerificationTool(
   fetchImpl: typeof fetch,
 ): Promise<GeneratedVerificationTool> {
-  const source = createGeneratedOpenCodeV2Plugins().keiko_verification;
+  const source = createGeneratedOpenCodeV2Plugins().keiko_governed_tools;
   if (source === undefined) throw new Error("keiko_verification tool source missing");
   const value: unknown = new Script(
     `${source.replace("export default", "const generated =")}\ngenerated;`,
@@ -4057,10 +4057,17 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
   const setup = plugin.setup as (ctx: unknown) => Promise<void>;
   await setup({
     tool: {
+      hook: (): Promise<unknown> => Promise.resolve({ dispose: (): void => undefined }),
       transform: (transform: (editor: unknown) => void): void => {
         transform({
           add: (tool: unknown): void => {
-            registered = tool;
+            if (
+              typeof tool === "object" &&
+              tool !== null &&
+              "name" in tool &&
+              tool.name === "keiko_verification"
+            )
+              registered = tool;
           },
         });
       },

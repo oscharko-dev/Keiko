@@ -434,6 +434,19 @@ pinned native system-context/startup test passed. Two existing optional server c
 other native cases were not executed. These are producer-call/source-string measurements, not
 measured heap, token or latency improvements. Chat search controls remain unchanged.
 
+The V2 mapped tools now share one supported plugin setup and expose canonical structured results
+beside their existing model-facing content. A genuine original-producer regression demonstrated
+that separate inner Code Mode calls could reuse one identity and conflict. The corrected adapter
+captures distinct bounded inner identities once, preserving each permission proof and effect
+request, while direct identities and replay/conflict behavior remain unchanged. An independent
+execution of the pinned original OpenCode 2.0.10 Code Mode/core runtime and published Promise
+adapter confirmed three distinct inner calls, three exact in-flight duplicate deliveries and
+preserved structured outputs. Independent forced affected-graph and source/test typechecking,
+scoped lint/format, 253 server and unchanged search controls passed. The full V1 generated bundle
+remained byte-identical and canonical log generation remained unchanged. Completed-parent and
+Scope-disposal controls pass; native cancellation does not guarantee an after hook. Code Mode
+flags and native tool permissions remain unchanged pending full activation qualification.
+
 The retained failed-baseline recovery was acknowledged once on clean source `41769633a8f8`
 only after the original captured processes were absent and the new host had no current or
 previously observed surviving child. Both selection guards returned 409 before acknowledgement
