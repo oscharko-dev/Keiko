@@ -1,4 +1,79 @@
 import { UPDATE_PORTABLE_TARGETS, type UpdatePortableTarget } from "./update-session.js";
+import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
+
+/** Fixed bootstrap data only; no tool profile, executable, module or policy selector. */
+export const OPENCODE_SERVICE_HOST_START_PACKET_FIELDS = Object.freeze([
+  "workspace",
+  "stateRoot",
+  "password",
+  "providerURL",
+  "providerCapability",
+  "facadeURL",
+  "facadeCapability",
+  "mode",
+  "runId",
+  "configDigest",
+] as const);
+export const OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES = 16 * 1024;
+
+export type OpenCodeServiceHostStartPacket = Readonly<
+  Record<(typeof OPENCODE_SERVICE_HOST_START_PACKET_FIELDS)[number], string>
+> & { readonly mode: CodingWorkbenchMode };
+
+/** Owned closed data; byte bounds and accepted root/transport bindings remain server-owned. */
+export function copyOpenCodeServiceHostStartPacket(
+  value: unknown,
+): OpenCodeServiceHostStartPacket | undefined {
+  const record = dataRecord(value);
+  if (record === undefined || !isStartPacket(record)) return undefined;
+  // The validated closed fields are copied in canonical order for deterministic packet bytes.
+  return Object.freeze(
+    Object.fromEntries(OPENCODE_SERVICE_HOST_START_PACKET_FIELDS.map((key) => [key, record[key]])),
+  ) as OpenCodeServiceHostStartPacket;
+}
+
+function isStartPacket(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & OpenCodeServiceHostStartPacket {
+  return (
+    Object.keys(value).length === OPENCODE_SERVICE_HOST_START_PACKET_FIELDS.length &&
+    OPENCODE_SERVICE_HOST_START_PACKET_FIELDS.every((key) => boundedPacketString(value[key])) &&
+    validPacketScalars(value) &&
+    validPacketCapabilities(value)
+  );
+}
+
+function boundedPacketString(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 4096 &&
+    !Array.from(value).some((character) => character.charCodeAt(0) < 32)
+  );
+}
+
+function validPacketScalars(value: Record<string, unknown>): boolean {
+  return (
+    isCodingWorkbenchMode(value.mode) &&
+    typeof value.configDigest === "string" &&
+    SHA256.test(value.configDigest) &&
+    typeof value.runId === "string" &&
+    /^[A-Za-z0-9_-]{1,256}$/u.test(value.runId) &&
+    typeof value.password === "string" &&
+    value.password.length >= 32 &&
+    value.password.length <= 128
+  );
+}
+
+function validPacketCapabilities(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.providerCapability === "string" &&
+    value.providerCapability.length >= 32 &&
+    typeof value.facadeCapability === "string" &&
+    value.facadeCapability.length >= 32 &&
+    value.providerCapability !== value.facadeCapability
+  );
+}
 
 /** Closed metadata only. Shape validation never approves, installs, selects, or launches a host. */
 export const OPENCODE_SERVICE_HOST_FIXED_FACTS = Object.freeze({

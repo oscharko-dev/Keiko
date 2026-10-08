@@ -168,6 +168,12 @@ interface VerifiedPortableInput {
 /** Terminal states for a tool action's safe-activity settlement (#2386). */
 type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelled";
 
+import {
+  prepareOpenCodeServiceHostLaunch,
+  type OpenCodeServiceHostDiskReceipt,
+  type PreparedOpenCodeServiceHostLaunch,
+} from "./opencodeServiceHostArtifact.js";
+
 export interface OpenCodeRuntimeCompositionInput {
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
@@ -307,6 +313,11 @@ export interface OpenCodeToolBridgeResponse {
 }
 
 export interface OpenCodeRuntimeComposition {
+  /** Inactive trusted preparation only; host readiness remains separately unqualified. */
+  readonly prepareServiceHost: (
+    request: OpenCodeLifecyclePrepareRequest,
+    receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
+  ) => Promise<OpenCodeLifecyclePrepareResult>;
   readonly manager: CodingRuntimeManager;
   readonly toolBridge: OpenCodeToolBridge;
   readonly runPort: OpenCodeRunPort;
@@ -331,6 +342,7 @@ export interface OpenCodeRunPort {
 }
 
 interface PreparedRun {
+  serviceHostPrepared?: true;
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
@@ -402,6 +414,7 @@ export function createOpenCodeRuntimeComposition(
     ...input.authorityLifecycle,
   });
   return {
+    prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
     manager,
     toolBridge: bridge.publicPort,
     runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
@@ -839,6 +852,7 @@ async function materializePrepare(
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
+  serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
   createPrivateState(runRoot);
   await bridge.start();
@@ -854,18 +868,7 @@ async function materializePrepare(
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-  runs.set(
-    request.runId,
-    preparedRun(
-      request.runId,
-      runRoot,
-      request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
-      password,
-      configDigest,
-      request.verification,
-    ),
-  );
-  return {
+  const result = {
     ok: true,
     parentLifetime: "stdin-eof",
     env: {
@@ -874,7 +877,60 @@ async function materializePrepare(
       KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
       KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
     },
-  };
+  } as const;
+  const program =
+    serviceHost === undefined
+      ? undefined
+      : prepareCompositionServiceHost(serviceHost, request, runRoot, configDigest, result.env);
+  if (serviceHost !== undefined && program === undefined)
+    throw new Error("host-preparation-invalid");
+  persistPreparedRun(runs, request, runRoot, password, configDigest, program);
+  return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
+}
+
+function persistPreparedRun(
+  runs: Map<string, PreparedRun>,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+  password: string,
+  configDigest: string,
+  program: PreparedOpenCodeServiceHostLaunch | undefined,
+): void {
+  const run = preparedRun(
+    request.runId,
+    runRoot,
+    request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
+    password,
+    configDigest,
+    request.verification,
+  );
+  if (program !== undefined) run.serviceHostPrepared = true;
+  runs.set(request.runId, run);
+}
+
+function prepareCompositionServiceHost(
+  receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
+  request: OpenCodeLifecyclePrepareRequest,
+  stateRoot: string,
+  configDigest: string,
+  env: Readonly<Record<string, string>>,
+): PreparedOpenCodeServiceHostLaunch | undefined {
+  return prepareOpenCodeServiceHostLaunch(
+    receipt,
+    {
+      workspace: request.env.KEIKO_CODING_WORKSPACE_ROOT,
+      stateRoot,
+      password: env.OPENCODE_SERVER_PASSWORD,
+      providerURL: `${request.env.KEIKO_MODEL_GATEWAY_URL ?? ""}/chat/completions`,
+      providerCapability: env.KEIKO_MODEL_GATEWAY_CAPABILITY,
+      facadeURL: env.KEIKO_TOOL_FACADE_URL,
+      facadeCapability: env.KEIKO_TOOL_FACADE_CAPABILITY,
+      mode: request.env.KEIKO_CODING_MODE,
+      runId: request.runId,
+      configDigest,
+    },
+    env,
+  );
 }
 
 async function prepare(
@@ -882,7 +938,10 @@ async function prepare(
   bridge: ToolBridgeController,
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
+  serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
+  if (serviceHost !== undefined && (input.toolProfile !== "direct" || runs.has(request.runId)))
+    return { ok: false, reason: "host-preparation-unqualified" };
   if (!verifiedProtocol(request.verification, input.portable.verification)) {
     return { ok: false, reason: "target-attestation-failed" };
   }
@@ -891,7 +950,7 @@ async function prepare(
   }
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
-    return await materializePrepare(input, bridge, runs, request, runRoot);
+    return await materializePrepare(input, bridge, runs, request, runRoot, serviceHost);
   } catch {
     await disposeFailedPrepare(
       bridge,
@@ -936,6 +995,7 @@ async function handshake(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const run = runs.get(request.runId);
   if (run === undefined) return { ok: false, reason: "preparation-missing" };
+  if (run.serviceHostPrepared === true) return { ok: false, reason: "host-readiness-unqualified" };
   run.onPermission = request.onPermission;
   try {
     const endpoint = parseOpenCodeV2ChildEndpoint(
@@ -1356,9 +1416,23 @@ async function createAndEchoV2Session(
 ): Promise<string> {
   const created = await client.createSession(directory, signal);
   const id = created.id;
-  if (typeof id !== "string" || !/^ses_[A-Za-z0-9_-]{1,251}$/u.test(id)) return "";
+  if (!validCreatedSession(id, created.location, directory) || disposalCancelled(signal)) return "";
   const sessions = await client.sessions(signal);
-  return sessions.length === 1 && sessions[0]?.id === id ? id : "";
+  const echoed = sessions[0];
+  return sessions.length === 1 &&
+    echoed?.id === id &&
+    v2Record(echoed.location)?.directory === directory &&
+    !disposalCancelled(signal)
+    ? id
+    : "";
+}
+
+function validCreatedSession(id: unknown, location: unknown, directory: string): id is string {
+  return (
+    typeof id === "string" &&
+    /^ses_[A-Za-z0-9_-]{1,251}$/u.test(id) &&
+    v2Record(location)?.directory === directory
+  );
 }
 
 async function authenticatedV2Health(

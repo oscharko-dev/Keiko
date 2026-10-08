@@ -42,6 +42,9 @@ import {
   type SecureWorkspaceTextReadProcessFactory,
 } from "./secureWorkspaceTextReadProcess.js";
 
+/** Same bound as the native path component scope, sufficient for one complete ancestor load. */
+export const SECURE_WORKSPACE_NATIVE_MAX_WAITERS = 64;
+
 export type SecureWorkspaceTextReadFailure =
   | "unsupported-platform"
   | "workspace-unavailable"
@@ -104,14 +107,18 @@ export type SecureWorkspaceNativeListResult =
       readonly info: SecureWorkspaceNativeFileInfo;
     }
   | SecureWorkspaceNativeIOFailure;
-export interface SecureWorkspaceNativeBytesRequest extends SecureWorkspaceTextReadRequest {
+export interface SecureWorkspaceNativeIORequest extends SecureWorkspaceTextReadRequest {
+  /** Additional veto from the same current parent owner; never grants authority. */
+  readonly isCurrent?: (() => boolean) | undefined;
+}
+export interface SecureWorkspaceNativeBytesRequest extends SecureWorkspaceNativeIORequest {
   readonly range?: { readonly offset: number; readonly length: number };
 }
 /** Private, separately pinned IO primitives; no public model/IPC window or tool admission. */
 export interface SecureWorkspaceNativeFileIO {
   readBytes(request: SecureWorkspaceNativeBytesRequest): Promise<SecureWorkspaceNativeBytesResult>;
-  stat(request: SecureWorkspaceTextReadRequest): Promise<SecureWorkspaceNativeStatResult>;
-  list(request: SecureWorkspaceTextReadRequest): Promise<SecureWorkspaceNativeListResult>;
+  stat(request: SecureWorkspaceNativeIORequest): Promise<SecureWorkspaceNativeStatResult>;
+  list(request: SecureWorkspaceNativeIORequest): Promise<SecureWorkspaceNativeListResult>;
 }
 
 export interface SecureWorkspaceTextReadPort {
@@ -197,25 +204,35 @@ export function createSecureWorkspaceTextReadPort(
   return new SecureWorkspaceTextReadPortImpl(deps);
 }
 
+interface NativeSlotWaiter {
+  readonly signal: AbortSignal;
+  readonly abort: () => void;
+  readonly finish: (acquired: boolean) => void;
+}
+
 class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
   private live = 0;
+  /** Eight running plus at most sixty-four waiting; overflow remains an explicit technical refusal. */
+  private readonly nativeWaiters: NativeSlotWaiter[] = [];
 
   public readonly nativeFileIO: SecureWorkspaceNativeFileIO;
 
   public constructor(private readonly deps: SecureWorkspaceTextReadDeps) {
     this.nativeFileIO = Object.freeze({
-      readBytes: (request: SecureWorkspaceNativeBytesRequest) => this.nativeRead(request, "read"),
+      readBytes: (request: SecureWorkspaceNativeBytesRequest) =>
+        this.nativeRead(captureNativeRequest(request), "read"),
       stat: async (
-        request: SecureWorkspaceTextReadRequest,
+        request: SecureWorkspaceNativeIORequest,
       ): Promise<SecureWorkspaceNativeStatResult> => {
-        const result = await this.nativeRead(request, "stat");
+        const result = await this.nativeRead(captureNativeRequest(request), "stat");
         return result.ok ? { ok: true, info: result.info } : result;
       },
       list: async (
-        request: SecureWorkspaceTextReadRequest,
+        request: SecureWorkspaceNativeIORequest,
       ): Promise<SecureWorkspaceNativeListResult> => {
-        const result = await this.nativeRead(request, "list");
-        return nativeListResult(result, request.relativePath);
+        const captured = captureNativeRequest(request);
+        const result = await this.nativeRead(captured, "list");
+        return nativeListResult(result, captured.relativePath);
       },
     });
   }
@@ -229,36 +246,118 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     const platform = this.deps.platform ?? { os: process.platform, arch: process.arch };
     if (secureWorkspaceReadTargetFor(platform) === undefined)
       return { ok: false, reason: "unsupported-platform" };
-    if (this.live >= SECURE_WORKSPACE_TEXT_READ_MAX_LIVE) return { ok: false, reason: "busy" };
-    this.live += 1;
-    try {
-      return await this.nativeGuarded(request, operation);
-    } finally {
-      this.live -= 1;
-    }
+    return this.nativeGuarded(request, operation, readSignal(request.signal));
   }
 
   private async nativeGuarded(
     request: SecureWorkspaceNativeBytesRequest,
     operation: "read" | "stat" | "list",
+    signal: AbortSignal,
   ): Promise<SecureWorkspaceNativeBytesResult> {
     const material = await resolveVerifiedReadMaterial(this.deps);
     if (!material.ok) return material;
     if (material.verifiedArtifact.nativeProtocol !== "KSR3/KSS3")
       return { ok: false, reason: "native-io-unavailable" };
-    const signal = readSignal(request.signal);
-    if (signal.aborted) return processRunFailure(undefined, signal, request.signal);
+    if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+    if (request.isCurrent?.() === false) return { ok: false, reason: "denied" };
+    const artifact = Object.freeze({ ...material.verifiedArtifact });
+    if (!(await this.acquireNativeSlot(signal))) {
+      return callerCancelled(signal)
+        ? processRunFailure(undefined, signal, request.signal)
+        : { ok: false, reason: "busy" };
+    }
+    try {
+      return await this.nativeAcquired(
+        request,
+        operation,
+        signal,
+        material.workspaceRoot,
+        artifact,
+      );
+    } finally {
+      this.releaseSlot();
+    }
+  }
+
+  private async nativeAcquired(
+    request: SecureWorkspaceNativeBytesRequest,
+    operation: "read" | "stat" | "list",
+    signal: AbortSignal,
+    root: string,
+    artifact: SecureWorkspaceTextReadArtifact,
+  ): Promise<SecureWorkspaceNativeBytesResult> {
+    const verified = await resolveSecureWorkspaceReadArtifact(
+      artifact,
+      this.deps.platform ?? { os: process.platform, arch: process.arch },
+      this.deps.artifactVerifier,
+    );
+    if (verified === undefined) return { ok: false, reason: "artifact-unverified" };
+    const refusal = await this.nativePreflight(request, signal, root);
+    if (refusal !== undefined) return refusal;
     const input: SecureWorkspaceNativeRequest = {
-      root: material.workspaceRoot,
+      root,
       relativePath: request.relativePath,
       operation,
       ...(operation === "read" && request.range !== undefined ? { range: request.range } : {}),
     };
     const frame = encodeSecureWorkspaceNativeRequest(input);
     try {
-      return await this.nativeRun(request, input, material.verifiedArtifact, frame, signal);
+      return await this.nativeRun(request, input, verified, frame, signal);
     } finally {
       frame.fill(0);
+    }
+  }
+
+  private async nativePreflight(
+    request: SecureWorkspaceNativeBytesRequest,
+    signal: AbortSignal,
+    root: string,
+  ): Promise<Extract<SecureWorkspaceTextReadResult, { readonly ok: false }> | undefined> {
+    if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+    if ((await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot)) !== root)
+      return { ok: false, reason: "workspace-unavailable" };
+    if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+    return request.isCurrent?.() === false ? { ok: false, reason: "denied" } : undefined;
+  }
+
+  private acquireNativeSlot(signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    if (this.live < SECURE_WORKSPACE_TEXT_READ_MAX_LIVE && this.nativeWaiters.length === 0) {
+      this.live += 1;
+      return Promise.resolve(true);
+    }
+    if (this.nativeWaiters.length >= SECURE_WORKSPACE_NATIVE_MAX_WAITERS)
+      return Promise.resolve(false);
+    return new Promise((finish) => {
+      const waiter: NativeSlotWaiter = {
+        signal,
+        finish,
+        abort: (): void => {
+          this.removeNativeWaiter(waiter);
+        },
+      };
+      this.nativeWaiters.push(waiter);
+      signal.addEventListener("abort", waiter.abort, { once: true });
+      if (signal.aborted) this.removeNativeWaiter(waiter);
+    });
+  }
+
+  private removeNativeWaiter(waiter: NativeSlotWaiter): void {
+    const index = this.nativeWaiters.indexOf(waiter);
+    if (index === -1) return;
+    this.nativeWaiters.splice(index, 1);
+    waiter.signal.removeEventListener("abort", waiter.abort);
+    waiter.finish(false);
+  }
+
+  private releaseSlot(): void {
+    this.live -= 1;
+    while (this.live < SECURE_WORKSPACE_TEXT_READ_MAX_LIVE && this.nativeWaiters.length > 0) {
+      const waiter = this.nativeWaiters.shift();
+      if (waiter === undefined) return;
+      waiter.signal.removeEventListener("abort", waiter.abort);
+      if (!waiter.signal.aborted) this.live += 1;
+      waiter.finish(!waiter.signal.aborted);
     }
   }
 
@@ -280,6 +379,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       if ((await resolveLiveWorkspaceRoot(this.deps.resolveWorkspaceRoot)) !== input.root)
         return { ok: false, reason: "workspace-unavailable" };
       if (callerCancelled(signal)) return processRunFailure(undefined, signal, request.signal);
+      if (request.isCurrent?.() === false) return { ok: false, reason: "denied" };
       const decoded = decodeNativeHelperResponse(response, input);
       if (decoded.kind === "access-denied")
         return await refinedAccessDenial(input.root, input.relativePath, signal, this.deps.lstat);
@@ -330,7 +430,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     try {
       return await this.readTextGuarded(request, snapshot);
     } finally {
-      this.live -= 1;
+      this.releaseSlot();
     }
   }
 
@@ -590,7 +690,10 @@ function validNativePath(value: string): boolean {
     return false;
   if (value === "") return true;
   const parts = value.split("/");
-  return parts.length <= 64 && parts.every((part) => part !== "" && part !== "." && part !== "..");
+  return (
+    parts.length <= SECURE_WORKSPACE_NATIVE_MAX_WAITERS &&
+    parts.every((part) => part !== "" && part !== "." && part !== "..")
+  );
 }
 
 function validNativeRange(range: SecureWorkspaceNativeBytesRequest["range"]): boolean {
@@ -668,23 +771,23 @@ function exactNativeFileIO(
       request: SecureWorkspaceNativeBytesRequest,
     ): Promise<SecureWorkspaceNativeBytesResult> => {
       if (!current()) return { ok: false, reason: refusal };
-      const result = await read(request);
+      const result = await read(captureNativeRequest(request, current));
       if (current()) return result;
       if (result.ok) result.bytes.fill(0);
       return { ok: false, reason: refusal };
     },
     stat: async (
-      request: SecureWorkspaceTextReadRequest,
+      request: SecureWorkspaceNativeIORequest,
     ): Promise<SecureWorkspaceNativeStatResult> => {
       if (!current()) return { ok: false, reason: refusal };
-      const result = await stat(request);
+      const result = await stat(captureNativeRequest(request, current));
       return current() ? result : { ok: false, reason: refusal };
     },
     list: async (
-      request: SecureWorkspaceTextReadRequest,
+      request: SecureWorkspaceNativeIORequest,
     ): Promise<SecureWorkspaceNativeListResult> => {
       if (!current()) return { ok: false, reason: refusal };
-      const result = await list(request);
+      const result = await list(captureNativeRequest(request, current));
       return current() ? result : { ok: false, reason: refusal };
     },
   });
@@ -716,4 +819,22 @@ function decodeNativeHelperResponse(
   } catch {
     return { kind: "settled", result: { ok: false, reason: "protocol-invalid" } };
   }
+}
+
+function captureNativeRequest(
+  request: SecureWorkspaceNativeBytesRequest,
+  current?: () => boolean,
+): SecureWorkspaceNativeBytesRequest {
+  const relativePath = request.relativePath;
+  const signal = request.signal;
+  const range = request.range;
+  const guard = request.isCurrent;
+  return Object.freeze({
+    relativePath,
+    ...(signal === undefined ? {} : { signal }),
+    ...(range === undefined ? {} : { range: Object.freeze({ ...range }) }),
+    ...(current === undefined && guard === undefined
+      ? {}
+      : { isCurrent: (): boolean => current?.() !== false && guard?.() !== false }),
+  });
 }

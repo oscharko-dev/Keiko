@@ -30,7 +30,11 @@ The inactive private byte/range/stat/list prerequisite now passes eight actual o
 output/error comparisons, including large-file paging, directories and media, through real helper
 executions. Its guarded read/edit port uses the existing current authority and body-free log owner.
 These are private seam controls; initial/global instruction discovery, invocation accounting,
-queued admission, complete platform coverage and production native service ingress remain open.
+complete platform coverage and production native service ingress remain open. The same physical
+IO owner now admits bounded waiting; forty original ancestor instructions retain their complete
+ordered event and output digests with eight physical helpers at most. The BFF validates created and
+echoed native session Location before readiness. The private prepared host transport retains its
+distinct artifact-owned program and packet, but deliberately refuses unqualified host readiness.
 T01 and the other production statuses below therefore remain incomplete native-parity acceptance.
 The owner requires complete functional parity with Standalone OpenCode. Every narrower, disabled
 or missing native capability is therefore an open acceptance item, including extension and

@@ -3,8 +3,12 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   copyOpenCodeServiceHostApproval,
   copyOpenCodeServiceHostApprovals,
+  copyOpenCodeServiceHostStartPacket,
   OPENCODE_SERVICE_HOST_FIXED_FACTS,
+  OPENCODE_SERVICE_HOST_START_PACKET_FIELDS,
+  OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES,
   type OpenCodeServiceHostApproval,
+  type OpenCodeServiceHostStartPacket,
 } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
@@ -104,14 +108,107 @@ export type OpenCodeServiceHostDiskReceipt =
         | "host-bytes-mismatch";
     };
 
-const HOST_DISK_ARTIFACTS = [
+type HostDiskSuccess = Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>;
+const ownedDiskInputs = new WeakMap<HostDiskSuccess, OpenCodeServiceHostDiskInput>();
+
+export interface PreparedOpenCodeServiceHostLaunch {
+  readonly kind: "fixed-service-host";
+  readonly executable: string;
+  readonly args: readonly [string];
+  readonly packet: string;
+  readonly binding: OpenCodeServiceHostStartPacket;
+}
+
+const ownedPrograms = new WeakMap<
+  PreparedOpenCodeServiceHostLaunch,
+  OpenCodeServiceHostDiskInput
+>();
+
+/** Artifact-owned inactive preparation; a caller-supplied lookalike is never a disk receipt. */
+export function prepareOpenCodeServiceHostLaunch(
+  receipt: HostDiskSuccess,
+  input: unknown,
+  env: Readonly<Record<string, string>>,
+): PreparedOpenCodeServiceHostLaunch | undefined {
+  const diskInput = ownedDiskInputs.get(receipt);
+  const binding = copyOpenCodeServiceHostStartPacket(input);
+  if (diskInput === undefined || binding === undefined || !validHostTransport(binding))
+    return undefined;
+  const shape = buildOpenCodeServiceHostLaunchShape({
+    payloadRoot: diskInput.payloadRoot,
+    approval: diskInput.approval,
+    env,
+  });
+  if (!shape.ok || !canonicalHostRoots(binding)) return undefined;
+  const packet = JSON.stringify(binding) + "\n";
+  if (Buffer.byteLength(packet, "utf8") > OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES)
+    return undefined;
+  const result = Object.freeze({
+    kind: "fixed-service-host" as const,
+    executable: shape.executable,
+    args: shape.args,
+    packet,
+    binding,
+  });
+  ownedPrograms.set(result, diskInput);
+  return result;
+}
+
+export function isPreparedOpenCodeServiceHostLaunch(
+  value: PreparedOpenCodeServiceHostLaunch,
+): boolean {
+  return ownedPrograms.has(value);
+}
+
+/** Same fresh full-tree owner; the earlier supplementary receipt is not a launch-freshness cache. */
+export async function reinspectPreparedOpenCodeServiceHost(
+  program: PreparedOpenCodeServiceHostLaunch,
+  env: Readonly<Record<string, string>>,
+  options: PortableHandoffOperationOptions,
+  target: UpdatePortableTarget,
+): Promise<boolean> {
+  const input = ownedPrograms.get(program);
+  if (input?.target !== target || !closedHostEnvironment(env)) return false;
+  return (await inspectOpenCodeServiceHostDisk(input, options)).ok;
+}
+
+/** Fixed builder data asset; never input-supplied source or a per-run module locator. */
+export function createOpenCodeServiceHostPacketDataAsset(): string {
+  return (
+    `export const fields = Object.freeze(${JSON.stringify(OPENCODE_SERVICE_HOST_START_PACKET_FIELDS)});\n` +
+    `export const maxBytes = ${String(OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES)};\n`
+  );
+}
+
+function canonicalHostRoots(binding: OpenCodeServiceHostStartPacket): boolean {
+  return [binding.workspace, binding.stateRoot].every(
+    (root) => isAbsolute(root) && resolve(root) === root,
+  );
+}
+
+function validHostTransport(binding: OpenCodeServiceHostStartPacket): boolean {
+  const provider =
+    /^(http:\/\/127\.0\.0\.1:(\d{1,5}))\/api\/coding-sidecar\/gateway\/chat\/completions$/u.exec(
+      binding.providerURL,
+    );
+  const origin = provider?.[1];
+  const port = Number(provider?.[2]);
+  return (
+    origin !== undefined &&
+    port > 0 &&
+    port <= 65535 &&
+    binding.facadeURL === `${origin}/api/coding-sidecar/tool`
+  );
+}
+
+export const OPENCODE_SERVICE_HOST_DISK_EVIDENCE = Object.freeze([
   [OPENCODE_SERVICE_HOST_FIXED_FACTS.nodeExecutablePath, "nodeExecutableSha256"],
   [OPENCODE_SERVICE_HOST_FIXED_FACTS.bootstrapPath, "bootstrapSha256"],
   ["package-lock.json", "packageLockSha256"],
   ["evidence/sbom.cdx.json", "sbomSha256"],
   ["evidence/installed-package-license-inventory.json", "licenseInventorySha256"],
   ["evidence/build-provenance.json", "buildProvenanceSha256"],
-] as const;
+] as const);
 
 /**
  * Inactive supplementary byte inspection, never runtime selection or launch authority. All six
@@ -139,17 +236,27 @@ export async function inspectOpenCodeServiceHostDisk(
     payloadRoot,
     approval.nodeExecutablePath,
     portableHandoffOperationFrom(options),
-    HOST_DISK_ARTIFACTS.map(([path]) => path),
+    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path),
   );
   if (!sameHostBytes(attestation, approval)) {
     return Object.freeze({ ok: false, reason: "host-bytes-mismatch" });
   }
-  return Object.freeze({
+  const result = Object.freeze({
     ok: true,
     kind: "supplementary-disk-byte-receipt",
     payloadRoot,
     approval,
-  });
+  } as const);
+  ownedDiskInputs.set(
+    result,
+    Object.freeze({
+      payloadRoot,
+      target: input.target,
+      approval,
+      trustedSupplement: Object.freeze({ [input.target]: trusted }),
+    }),
+  );
+  return result;
 }
 
 function sameHostSupplement(
@@ -168,7 +275,7 @@ function sameHostBytes(
 ): boolean {
   return (
     attestation.treeSha256 === approval.payloadTreeSha256 &&
-    HOST_DISK_ARTIFACTS.every(
+    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.every(
       ([path, field]) => attestation.selectedFileSha256ByPath?.[path] === approval[field],
     )
   );

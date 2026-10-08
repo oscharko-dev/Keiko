@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -12,8 +13,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { PassThrough, Writable } from "node:stream";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -63,6 +64,13 @@ import {
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
+import { attestPortableSidecarTreeSync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import {
+  inspectOpenCodeServiceHostDisk,
+  prepareOpenCodeServiceHostLaunch,
+  OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
+  type PreparedOpenCodeServiceHostLaunch,
+} from "./opencodeServiceHostArtifact.js";
 
 const tempDirs: string[] = [];
 const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
@@ -304,6 +312,7 @@ function testSandboxPlanner(
 }
 
 interface CodingRuntimeSpawnHandle {
+  readonly stdin?: Writable;
   readonly stdout: PassThrough;
   readonly stderr: PassThrough;
   readonly pid?: number | undefined;
@@ -354,6 +363,7 @@ class TestRuntimeProcessBackend implements RuntimeProcessBackend {
       stdout: child.stdout,
       stderr: child.stderr,
       child,
+      ...(child.stdin === undefined ? {} : { stdin: child.stdin }),
       onTreeExit: (callback): void => {
         state.exitCallbacks.push(callback);
       },
@@ -5434,4 +5444,321 @@ it("aborts the private cleanup signal when OpenCode disposal explicitly refuses 
   });
   expect(disposalSignal?.aborted).toBe(true);
   expect(release).not.toHaveBeenCalled();
+});
+
+async function preparedHostFixture(workspace: string): Promise<PreparedOpenCodeServiceHostLaunch> {
+  const payloadRoot = tempDir("keiko-prepared-host-");
+  mkdirSync(join(payloadRoot, "runtime"));
+  mkdirSync(join(payloadRoot, "evidence"));
+  for (const [path] of OPENCODE_SERVICE_HOST_DISK_EVIDENCE)
+    writeFileSync(join(payloadRoot, path), "inactive byte fixture");
+  writeFileSync(join(payloadRoot, "guard-seams.mjs"), "original byte fixture");
+  const measured = attestPortableSidecarTreeSync(
+    payloadRoot,
+    "runtime/node",
+    Date.now() + 5000,
+    undefined,
+    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path),
+  );
+  const base = (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { readonly approval: Record<string, unknown> }
+  ).approval;
+  const approval = {
+    ...base,
+    platformTarget: "windows-x64",
+    payloadTreeSha256: measured.treeSha256,
+    ...Object.fromEntries(
+      OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path, field]) => [
+        field,
+        measured.selectedFileSha256ByPath?.[path],
+      ]),
+    ),
+  };
+  const receipt = await inspectOpenCodeServiceHostDisk(
+    {
+      payloadRoot,
+      approval,
+      target: "windows-x64",
+      trustedSupplement: { "windows-x64": approval },
+    },
+    { deadline: Date.now() + 5000 },
+  );
+  if (!receipt.ok) throw new Error("Expected inactive supplementary receipt");
+  const program = prepareOpenCodeServiceHostLaunch(
+    receipt,
+    {
+      workspace,
+      stateRoot: tempDir("keiko-prepared-state-"),
+      password: "p".repeat(43),
+      providerURL: "http://127.0.0.1:1983/api/coding-sidecar/gateway/chat/completions",
+      facadeURL: "http://127.0.0.1:1983/api/coding-sidecar/tool",
+      providerCapability: "m".repeat(32),
+      facadeCapability: "t".repeat(32),
+      mode: "supervised-coding",
+      runId: "run-1988",
+      configDigest: "f".repeat(64),
+    },
+    {},
+  );
+  if (program === undefined) throw new Error("Expected inactive fixed program");
+  return program;
+}
+
+function hostTransportHarness(input: {
+  readonly program: PreparedOpenCodeServiceHostLaunch;
+  readonly stdin?: Writable;
+  readonly lifetime?: true;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly canSpawn?: () => boolean;
+  readonly reaps?: boolean;
+  readonly onSpawn?: () => void;
+}): {
+  readonly manager: CodingRuntimeManager;
+  readonly captures: { executable: string; args: readonly string[]; cwd: string }[];
+  readonly handshake: Mock<() => Promise<{ readonly ok: true }>>;
+  readonly events: CodingWorkbenchRuntimeEvent[];
+  readonly diagnostics: ServerDiagnosticRecord[];
+} {
+  const child = fakeChild();
+  const captures: { executable: string; args: readonly string[]; cwd: string }[] = [];
+  const events: CodingWorkbenchRuntimeEvent[] = [];
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const handshake = vi.fn(() => Promise.resolve({ ok: true as const }));
+  const manager = createTestCodingRuntimeManager({
+    processEnv: {},
+    diagnostics: {
+      record: (record): void => {
+        diagnostics.push(record);
+      },
+    },
+    supervisor: testSupervisor(
+      (executable, args, _env, cwd) => {
+        captures.push({ executable, args, cwd });
+        input.onSpawn?.();
+        return {
+          ...child.handle,
+          ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+          kill: (signal): void => {
+            child.kills.push(signal);
+            if (input.reaps !== false) child.exit();
+          },
+        };
+      },
+      undefined,
+      input.lifetime,
+    ),
+    canSpawnRuntime: input.canSpawn,
+    openCodeLifecycleAdapter: {
+      prepare: () =>
+        Promise.resolve({
+          ok: true as const,
+          parentLifetime: "stdin-eof" as const,
+          serviceHost: input.program,
+          env: input.env,
+        }),
+      handshake,
+    },
+    onRuntimeEvent: (event): void => {
+      events.push(event);
+    },
+  });
+  return { manager, captures, handshake, events, diagnostics };
+}
+
+function startHostTransport(
+  manager: CodingRuntimeManager,
+  workspace: string,
+  extra: Partial<CodingRuntimeLaunchRequest> = {},
+): ReturnType<CodingRuntimeManager["start"]> {
+  const fixture = createManagedFixture();
+  return manager.start({
+    ...launchRequest(workspace, fixture.managedRoot, fixture.executablePath),
+    ...extra,
+  });
+}
+
+describe("inactive fixed host prepared transport", () => {
+  it("preserves artifact-owned Node/bootstrap and writes one owned packet before readiness", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    const chunks: Buffer[] = [];
+    const stdin = new Writable({
+      write(chunk: Buffer, _encoding, done): void {
+        chunks.push(Buffer.from(chunk));
+        setImmediate(done);
+      },
+    });
+    const harness = hostTransportHarness({ program, stdin, lifetime: true });
+    harness.handshake.mockImplementation(() => {
+      expect(Buffer.concat(chunks).toString("utf8")).toBe(program.packet);
+      return Promise.resolve({ ok: true as const });
+    });
+    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(harness.captures).toEqual([
+      { executable: program.executable, args: program.args, cwd: workspace },
+    ]);
+    expect(chunks).toHaveLength(1);
+    expect(Buffer.byteLength(program.packet)).toBeLessThanOrEqual(16384);
+    expect(program.packet.endsWith("\n")).toBe(true);
+    expect(stdin.writableEnded).toBe(false);
+    expect(harness.handshake).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an unsupported stdin lease without falling back to CLI", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    const harness = hostTransportHarness({ program, stdin: new PassThrough() });
+    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(harness.captures).toHaveLength(0);
+    expect(harness.handshake).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "broken"])(
+    "refuses %s owned stdin through existing cleanup",
+    async (control) => {
+      const workspace = tempDir("keiko-host-workspace-");
+      const program = await preparedHostFixture(workspace);
+      const stdin = new Writable({
+        write(_chunk, _encoding, done): void {
+          done(new Error("EPIPE"));
+        },
+      });
+      const harness = hostTransportHarness({
+        program,
+        lifetime: true,
+        ...(control === "missing" ? {} : { stdin }),
+      });
+      await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+        ok: false,
+      });
+      expect(harness.handshake).not.toHaveBeenCalled();
+      expect(harness.manager.health().status).toBe("stopped");
+      expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
+    },
+  );
+
+  it("aborts a blocked write and never invokes readiness after its late callback", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    let callback: (() => void) | undefined;
+    const stdin = new Writable({
+      write(_chunk, _encoding, done): void {
+        callback = done;
+      },
+    });
+    const harness = hostTransportHarness({ program, stdin, lifetime: true });
+    const controller = new AbortController();
+    const starting = startHostTransport(harness.manager, workspace, { signal: controller.signal });
+    await vi.waitFor(() => {
+      expect(callback).toBeDefined();
+    });
+    controller.abort();
+    await expect(starting).resolves.toMatchObject({ ok: false, failureCode: "start-aborted" });
+    callback?.();
+    await settle();
+    expect(harness.handshake).not.toHaveBeenCalled();
+    expect(harness.manager.health().status).toBe("stopped");
+  });
+
+  it("retains recovery when a timed-out packet writer cannot prove process reap", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    const stdin = new Writable({
+      write(): void {
+        /* Noncooperative test transport. */
+      },
+    });
+    const harness = hostTransportHarness({ program, stdin, lifetime: true, reaps: false });
+    await expect(
+      startHostTransport(harness.manager, workspace, { startTimeoutMs: 20 }),
+    ).resolves.toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(harness.handshake).not.toHaveBeenCalled();
+    expect(harness.manager.health().status).toBe("recovery-required");
+  });
+
+  it("freshly refuses changed host bytes before spawn", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    writeFileSync(join(dirname(program.args[0]), "guard-seams.mjs"), "changed module");
+    const harness = hostTransportHarness({ program, stdin: new PassThrough(), lifetime: true });
+    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(harness.captures).toHaveLength(0);
+    expect(harness.handshake).not.toHaveBeenCalled();
+  });
+
+  it("rechecks authority after spawn before writing any bootstrap capability", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    const stdin = new PassThrough();
+    let accepted = true;
+    const harness = hostTransportHarness({
+      program,
+      stdin,
+      lifetime: true,
+      canSpawn: () => accepted,
+      onSpawn: (): void => {
+        accepted = false;
+      },
+    });
+    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(stdin.readableLength).toBe(0);
+    expect(harness.handshake).not.toHaveBeenCalled();
+    expect(harness.manager.health().status).toBe("stopped");
+  });
+
+  it("refuses a copied program or a different accepted workspace before spawn", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    for (const control of [
+      { program: { ...program }, workspace },
+      { program, workspace: tempDir("keiko-other-host-workspace-") },
+    ]) {
+      const harness = hostTransportHarness({
+        program: control.program,
+        stdin: new PassThrough(),
+        lifetime: true,
+      });
+      await expect(startHostTransport(harness.manager, control.workspace)).resolves.toMatchObject({
+        ok: false,
+      });
+      expect(harness.captures).toHaveLength(0);
+      expect(harness.handshake).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses current-authority revocation and final ambient Node injection before spawn", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    for (const control of [
+      { canSpawn: (): false => false },
+      { env: { NODE_OPTIONS: "--import evil.mjs" } },
+    ]) {
+      const harness = hostTransportHarness({
+        program,
+        stdin: new PassThrough(),
+        lifetime: true,
+        ...control,
+      });
+      await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+        ok: false,
+      });
+      expect(harness.captures).toHaveLength(0);
+    }
+  });
 });

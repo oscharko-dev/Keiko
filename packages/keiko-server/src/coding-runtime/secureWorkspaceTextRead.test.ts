@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi, type Mock } from "vitest";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 import {
@@ -28,8 +28,10 @@ import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 import {
   createSecureWorkspaceTextReadPort,
   exactWorkspaceRead,
+  SECURE_WORKSPACE_NATIVE_MAX_WAITERS,
   type SecureWorkspaceTextReadResult,
   type SecureWorkspaceNativeFileIO,
+  type SecureWorkspaceNativeStatResult,
 } from "./secureWorkspaceTextRead.js";
 import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
 import type { WorkspacePathLstat } from "./secureWorkspaceTextReadAbsence.js";
@@ -1156,15 +1158,15 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
         ok: false,
         reason: "busy",
       });
-      await expect(io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
-        ok: false,
-        reason: "busy",
-      });
+      const waiting = io.stat({ relativePath: "nested/visible.ts" });
+      await Promise.resolve();
+      expect(run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
       pending.forEach((work) => {
         work.resolve(Buffer.from(frame));
       });
       const results = await Promise.all(calls);
       expect(results.every((result) => !result.ok && result.reason === "cancelled")).toBe(true);
+      await expect(waiting).resolves.toMatchObject({ ok: true });
       await expect(io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
         ok: true,
       });
@@ -1203,6 +1205,263 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
       expect(read).toHaveBeenCalledOnce();
     });
 
+    it("queues private native effects while public reads retain their existing busy result", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const total = SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + 4;
+      const settled: number[] = [];
+      const calls = Array.from({ length: total }, (_, index) =>
+        fixture.io.stat({ relativePath: "nested/visible.ts" }).then((result) => {
+          settled.push(index);
+          return result;
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      expect(settled).toHaveLength(0);
+      await expect(
+        fixture.port.readText({ relativePath: "nested/visible.ts" }),
+      ).resolves.toMatchObject({ ok: false, reason: "busy" });
+      fixture.release();
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(total);
+      });
+      fixture.release();
+      expect((await Promise.all(calls)).every((result) => result.ok)).toBe(true);
+    });
+
+    it("removes cancelled private waiters without spawning their helper", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const controller = new AbortController();
+      const queued = fixture.io.stat({
+        relativePath: "nested/visible.ts",
+        signal: controller.signal,
+      });
+      await Promise.resolve();
+      controller.abort();
+      await expect(queued).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+      fixture.release();
+      await Promise.all(active);
+      expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+    });
+
+    it("expires a queued private deadline without a child or leaked slot", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const deadline = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      const queued = fixture.io.stat({ relativePath: "nested/visible.ts" });
+      await Promise.resolve();
+      deadline.abort();
+      timeout.mockRestore();
+      await expect(queued).resolves.toMatchObject({ ok: false, reason: "timeout" });
+      fixture.release();
+      await Promise.all(active);
+      expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+    });
+
+    it.each(["authority", "root"] as const)(
+      "rechecks %s after waiting before a physical helper",
+      async (kind) => {
+        let currentRoot = root;
+        let current = true;
+        const fixture = heldNativeFixture(root, executable, () => currentRoot);
+        const active = fillNativeSlots(fixture.io);
+        await vi.waitFor(() => {
+          expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+        });
+        const request = { relativePath: "nested/visible.ts", isCurrent: (): boolean => current };
+        const queued = fixture.io.stat(request);
+        await Promise.resolve();
+        if (kind === "root") currentRoot = `${root}-changed`;
+        else current = false;
+        fixture.release();
+        await expect(queued).resolves.toMatchObject({
+          ok: false,
+          reason: kind === "root" ? "workspace-unavailable" : "denied",
+        });
+        await Promise.all(active);
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      },
+    );
+
+    it("bounds private wait capacity without reserving a physical slot for overflow", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const queued = fillNativeSlots(fixture.io, SECURE_WORKSPACE_NATIVE_MAX_WAITERS);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect(fixture.io.stat({ relativePath: "nested/visible.ts" })).resolves.toMatchObject({
+        ok: false,
+        reason: "busy",
+      });
+      for (
+        let count = SECURE_WORKSPACE_TEXT_READ_MAX_LIVE;
+        count <= SECURE_WORKSPACE_NATIVE_MAX_WAITERS;
+        count += SECURE_WORKSPACE_TEXT_READ_MAX_LIVE
+      ) {
+        fixture.release();
+        await vi.waitFor(() => {
+          expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + count);
+        });
+      }
+      fixture.release();
+      expect((await Promise.all([...active, ...queued])).every((result) => result.ok)).toBe(true);
+    });
+
+    it("captures private request getters once before waiting and ignores subsequent path mutation", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      let path = "nested/visible.ts";
+      const getter = vi.fn(() => path);
+      const guard = vi.fn(() => (): boolean => true);
+      const queued = fixture.io.stat({
+        get relativePath() {
+          return getter();
+        },
+        get isCurrent() {
+          return guard();
+        },
+      });
+      path = ".env";
+      fixture.release();
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + 1);
+      });
+      const stdin = fixture.run.mock.calls.at(-1)?.[0].stdin;
+      expect(stdin).toBeDefined();
+      expect(stdin).toEqual(
+        encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "stat",
+        }),
+      );
+      fixture.release();
+      await Promise.all(active);
+      await expect(queued).resolves.toMatchObject({ ok: true });
+      expect(getter).toHaveBeenCalledOnce();
+      expect(guard).toHaveBeenCalledOnce();
+    });
+
+    it("captures private range, signal and callback before a queued read", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      const range = { offset: 1, length: 2 };
+      const controller = new AbortController();
+      const signal = vi.fn((): AbortSignal | undefined => undefined);
+      const request = {
+        relativePath: "nested/visible.ts",
+        range,
+        get signal(): AbortSignal | undefined {
+          return signal();
+        },
+        isCurrent: (): boolean => true,
+      };
+      const queued = fixture.io.readBytes(request);
+      range.offset = 4;
+      range.length = 1;
+      request.isCurrent = (): boolean => false;
+      signal.mockReturnValue(controller.signal);
+      controller.abort();
+      fixture.release();
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE + 1);
+      });
+      expect(fixture.run.mock.calls.at(-1)?.[0].stdin).toEqual(
+        encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: "nested/visible.ts",
+          operation: "read",
+          range: { offset: 1, length: 2 },
+        }),
+      );
+      fixture.release();
+      await Promise.all(active);
+      const result = await queued;
+      expect(result.ok).toBe(true);
+      if (result.ok)
+        expect(result.bytes).toEqual(readFileSync(join(root, "nested/visible.ts")).subarray(1, 3));
+      expect(signal).toHaveBeenCalledOnce();
+    });
+
+    it("passes the exact workspace guard into queued native effects before helper spawn", async () => {
+      const fixture = heldNativeFixture(root, executable);
+      const active = fillNativeSlots(fixture.io);
+      await vi.waitFor(() => {
+        expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+      });
+      let current = true;
+      const wrapped = requireNativeFacet(
+        exactWorkspaceRead(fixture.port, () => current, "workspace-unavailable"),
+      );
+      const queued = wrapped.stat({ relativePath: "nested/visible.ts" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      current = false;
+      fixture.release();
+      await Promise.all(active);
+      await expect(queued).resolves.toMatchObject({ ok: false, reason: "workspace-unavailable" });
+      expect(fixture.run).toHaveBeenCalledTimes(SECURE_WORKSPACE_TEXT_READ_MAX_LIVE);
+    });
+
+    it.each(["root", "authority", "cancel"] as const)(
+      "rechecks %s after post-wait artifact verification",
+      async (kind) => {
+        const blocked = deferred<boolean>();
+        let currentRoot = root;
+        let current = true;
+        const controller = new AbortController();
+        const run = vi.fn((): Promise<Uint8Array> => Promise.reject(new Error("must-not-spawn")));
+        let verifications = 0;
+        const io = requireNativeFacet(
+          createSecureWorkspaceTextReadPort({
+            resolveWorkspaceRoot: () => currentRoot,
+            artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+            artifactVerifier: { verify: () => (++verifications === 1 ? true : blocked.promise) },
+            platform: { os: "darwin", arch: "arm64" },
+            processFactory: { create: () => ({ run }) },
+          }),
+        );
+        const reading = io.stat({
+          relativePath: "nested/visible.ts",
+          signal: controller.signal,
+          isCurrent: () => current,
+        });
+        await vi.waitFor(() => {
+          expect(verifications).toBe(2);
+        });
+        if (kind === "root") currentRoot = `${root}-changed`;
+        else if (kind === "authority") current = false;
+        else controller.abort();
+        blocked.resolve(true);
+        await expect(reading).resolves.toMatchObject({
+          ok: false,
+          reason:
+            kind === "root"
+              ? "workspace-unavailable"
+              : kind === "authority"
+                ? "denied"
+                : "cancelled",
+        });
+        expect(run).not.toHaveBeenCalled();
+      },
+    );
+
     it("keeps native capability unavailable on currently pinned text helpers", async () => {
       const io = requireNativeFacet(nativeFixturePort(root, executable, {}, true));
       await expect(io.stat({ relativePath: "nested" })).resolves.toMatchObject({
@@ -1212,3 +1471,54 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     });
   },
 );
+
+function heldNativeFixture(
+  root: string,
+  executable: string,
+  resolveRoot = (): string => root,
+): {
+  readonly port: ReturnType<typeof createSecureWorkspaceTextReadPort>;
+  readonly io: SecureWorkspaceNativeFileIO;
+  readonly run: Mock<
+    (request: { readonly stdin: Uint8Array; readonly signal: AbortSignal }) => Promise<Uint8Array>
+  >;
+  readonly release: () => void;
+} {
+  const held: {
+    readonly work: ReturnType<typeof deferred<Uint8Array>>;
+    readonly frame: Uint8Array;
+  }[] = [];
+  const run = vi.fn(
+    (_request: {
+      readonly stdin: Uint8Array;
+      readonly signal: AbortSignal;
+    }): Promise<Uint8Array> => {
+      const work = deferred<Uint8Array>();
+      held.push({ work, frame: execFileSync(executable, { input: _request.stdin }) });
+      return work.promise;
+    },
+  );
+  const port = createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: resolveRoot,
+    artifact: { ...artifact, nativeProtocol: "KSR3/KSS3" },
+    artifactVerifier: { verify: (): boolean => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run }) },
+  });
+  return {
+    port,
+    io: requireNativeFacet(port),
+    run,
+    release: (): void => {
+      held.splice(0).forEach(({ work, frame }) => {
+        work.resolve(Buffer.from(frame));
+      });
+    },
+  };
+}
+function fillNativeSlots(
+  io: SecureWorkspaceNativeFileIO,
+  count = SECURE_WORKSPACE_TEXT_READ_MAX_LIVE,
+): readonly Promise<SecureWorkspaceNativeStatResult>[] {
+  return Array.from({ length: count }, () => io.stat({ relativePath: "nested/visible.ts" }));
+}

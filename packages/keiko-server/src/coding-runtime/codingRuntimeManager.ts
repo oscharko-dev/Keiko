@@ -105,6 +105,11 @@ import {
   type CodingRuntimeStderrSummary,
 } from "./codingRuntimeProcessIo.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import {
+  isPreparedOpenCodeServiceHostLaunch,
+  reinspectPreparedOpenCodeServiceHost,
+  type PreparedOpenCodeServiceHostLaunch,
+} from "./opencodeServiceHostArtifact.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -349,6 +354,8 @@ export type OpenCodeLifecyclePrepareResult =
       readonly ok: true;
       readonly env?: Readonly<Record<string, string>> | undefined;
       readonly parentLifetime?: "stdin-eof" | undefined;
+      /** Inactive artifact-owned program; ordinary preparation keeps the existing CLI shape. */
+      readonly serviceHost?: PreparedOpenCodeServiceHostLaunch | undefined;
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -1160,6 +1167,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     lifecycleAdapter?: OpenCodeLifecycleAdapter,
     parentLifetime?: "stdin-eof",
     deadline?: number,
+    serviceHost?: PreparedOpenCodeServiceHostLaunch,
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
     if (this.active !== undefined && this.active.status !== "stopped")
       return this.recordLaunchFailure(request, failure("runtime-already-running", true));
@@ -1168,6 +1176,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       request.workspaceRoot,
     );
     if (!proof.ok)
+      return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
+    if (serviceHost !== undefined && serviceHost.binding.workspace !== proof.cwd)
       return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const eligible = runtimeSpawnEligibilityFailure(request, this.deps, deadline);
     if (eligible !== undefined) return this.recordLaunchFailure(request, eligible);
@@ -1187,8 +1197,17 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (!observeSandboxAttestation(this.deps, request.runId, launched.sandboxAttestation)) {
       return this.failCodexStart(request, active, "runtime-egress-unenforceable");
     }
+    return this.completeAttestedRuntime(request, active, lifecycleAdapter, serviceHost);
+  }
+
+  private completeAttestedRuntime(
+    request: CodingRuntimeLaunchRequest,
+    active: ActiveRuntime,
+    lifecycleAdapter?: OpenCodeLifecycleAdapter,
+    serviceHost?: PreparedOpenCodeServiceHostLaunch,
+  ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
     if (request.adapterKind === "opencode-compatible" && lifecycleAdapter !== undefined) {
-      return this.completeOpenCodeStart(request, active, lifecycleAdapter);
+      return this.completeOpenCodeStart(request, active, lifecycleAdapter, serviceHost?.packet);
     }
     active.status = "ready";
     this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
@@ -1212,6 +1231,9 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       portable.verification,
     );
     if (!prepared.ok) return this.recordLaunchFailure(request, prepared);
+    if (prepared.serviceHost !== undefined) {
+      return await this.spawnPreparedServiceHost(request, prepared, portable, adapter);
+    }
     const parentLifetime =
       this.deps.supervisor.supportsStdinLifetime === true ? prepared.parentLifetime : undefined;
     return await this.spawnRuntime(
@@ -1222,6 +1244,39 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       parentLifetime === undefined ? FIXED_OPENCODE_ARGS : FIXED_OPENCODE_STDIN_ARGS,
       adapter,
       parentLifetime,
+    );
+  }
+
+  private async spawnPreparedServiceHost(
+    request: CodingRuntimeLaunchRequest,
+    prepared: PreparedOpenCodeLaunch,
+    portable: ResolvedPortableRuntime,
+    adapter: OpenCodeLifecycleAdapter,
+  ): Promise<CodingRuntimeStartResult> {
+    const program = prepared.serviceHost;
+    if (program === undefined || !validPreparedHostBinding(program, request))
+      return this.recordLaunchFailure(request, failure("protocol-schema-mismatch", false));
+    if (this.deps.supervisor.supportsStdinLifetime !== true)
+      return this.recordLaunchFailure(request, failure("runtime-unqualified", false));
+    const deadline = this.deps.now() + request.startTimeoutMs;
+    const unavailable = await preparedHostAvailabilityFailure(
+      program,
+      prepared.env,
+      portable,
+      request,
+      this.deps,
+      deadline,
+    );
+    if (unavailable !== undefined) return this.recordLaunchFailure(request, unavailable);
+    return await this.spawnAttestedRuntime(
+      request,
+      program.executable,
+      prepared.env,
+      program.args,
+      adapter,
+      "stdin-eof",
+      deadline,
+      program,
     );
   }
 
@@ -1377,6 +1432,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     request: CodingRuntimeLaunchRequest,
     active: ActiveRuntime,
     adapter: OpenCodeLifecycleAdapter,
+    startupPacket?: string,
   ): Promise<CodingRuntimeStartResult> {
     const handshakeFailure = await openCodeHandshakeFailure(
       adapter,
@@ -1387,6 +1443,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       },
       this.deps.diagnostics,
       this.deps.now,
+      this.hostBootstrapPacket(request, active, startupPacket),
     );
     active.startupOutput?.close();
     active.startupOutput = undefined;
@@ -1415,6 +1472,19 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.status = "stopped";
     this.active = undefined;
     return handshakeFailure;
+  }
+
+  private hostBootstrapPacket(
+    request: CodingRuntimeLaunchRequest,
+    active: ActiveRuntime,
+    packet: string | undefined,
+  ): OpenCodeBootstrapPacket | undefined {
+    if (packet === undefined) return undefined;
+    return {
+      packet,
+      canWrite: (): boolean =>
+        this.active === active && hostPacketWriteEligible(request, this.deps),
+    };
   }
 
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
@@ -1986,6 +2056,65 @@ async function portableAvailabilityFailureAsync(
   }
 }
 
+function validPreparedHostBinding(
+  program: PreparedOpenCodeServiceHostLaunch,
+  request: CodingRuntimeLaunchRequest,
+): boolean {
+  return (
+    isPreparedOpenCodeServiceHostLaunch(program) &&
+    program.binding.runId === request.runId &&
+    program.binding.mode === request.effectiveMode
+  );
+}
+
+function hostPacketWriteEligible(
+  request: CodingRuntimeLaunchRequest,
+  deps: NormalizedCodingRuntimeManagerDeps,
+): boolean {
+  return (
+    runtimeSpawnEligibilityFailure(request, deps, undefined) === undefined &&
+    proveSpawnWorkspaceRoot(deps.resolveWorkspaceRootAccess, request.workspaceRoot).ok
+  );
+}
+
+async function preparedHostAvailabilityFailure(
+  program: PreparedOpenCodeServiceHostLaunch,
+  env: Readonly<Record<string, string>>,
+  portable: ResolvedPortableRuntime,
+  request: CodingRuntimeLaunchRequest,
+  deps: NormalizedCodingRuntimeManagerDeps,
+  deadline: number,
+): Promise<FailureResult | undefined> {
+  try {
+    const current = await reinspectPreparedOpenCodeServiceHost(
+      program,
+      env,
+      {
+        signal: request.signal,
+        deadline,
+        now: deps.now,
+        securityLogSink: bindSecurityLogCorrelation(processServerLogSink(), request.runId),
+      },
+      portable.target,
+    );
+    return current ? undefined : failure("executable-tree-digest-mismatch", false);
+  } catch (error) {
+    if (error instanceof PortableTreeAttestationError && error.kind === "cancelled")
+      return failure("start-aborted", true);
+    if (error instanceof PortableTreeAttestationError && error.kind === "timeout")
+      return failure("start-timeout", true);
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: request.runId,
+      timestamp: new Date(deps.now()).toISOString(),
+      operation: "coding-runtime.payload-attestation",
+      source: "coding-runtime-manager.preparedHostAvailabilityFailure",
+      ...describeError(error),
+      message: "runtime-start-failed",
+    });
+    return failure("payload-missing", false);
+  }
+}
+
 function cancellationFailure(
   request: CodingRuntimeLaunchRequest,
   deps: NormalizedCodingRuntimeManagerDeps,
@@ -2231,20 +2360,20 @@ async function prepareCodexLaunch(
   return outcome.value;
 }
 
+interface PreparedOpenCodeLaunch {
+  readonly ok: true;
+  readonly env: Record<string, string>;
+  readonly parentLifetime?: "stdin-eof";
+  readonly serviceHost?: PreparedOpenCodeServiceHostLaunch;
+}
+
 async function prepareOpenCodeLaunch(
   adapter: OpenCodeLifecycleAdapter,
   request: CodingRuntimeLaunchRequest,
   executablePath: string,
   env: Record<string, string>,
   verification: PortableSidecarRuntimeVerification,
-): Promise<
-  | {
-      readonly ok: true;
-      readonly env: Record<string, string>;
-      readonly parentLifetime?: "stdin-eof";
-    }
-  | FailureResult
-> {
+): Promise<PreparedOpenCodeLaunch | FailureResult> {
   if (adapter.prepare === undefined) return { ok: true, env };
   try {
     const result = await adapter.prepare({
@@ -2260,6 +2389,7 @@ async function prepareOpenCodeLaunch(
       ok: true,
       env: mergePreparedOpenCodeEnv(env, result.env),
       ...(result.parentLifetime === "stdin-eof" ? { parentLifetime: result.parentLifetime } : {}),
+      ...(result.serviceHost === undefined ? {} : { serviceHost: result.serviceHost }),
     };
   } catch {
     return failure(request.signal?.aborted === true ? "start-aborted" : "start-timeout", true);
@@ -2283,6 +2413,11 @@ function mergePreparedOpenCodeEnv(
   return merged;
 }
 
+interface OpenCodeBootstrapPacket {
+  readonly packet: string;
+  readonly canWrite: () => boolean;
+}
+
 async function openCodeHandshakeFailure(
   adapter: OpenCodeLifecycleAdapter,
   request: CodingRuntimeLaunchRequest,
@@ -2290,6 +2425,7 @@ async function openCodeHandshakeFailure(
   onPermission: (event: SidecarPermissionEvent) => void,
   diagnostics: ServerDiagnosticSink | undefined,
   now: () => number,
+  bootstrap?: OpenCodeBootstrapPacket,
 ): Promise<FailureResult | undefined> {
   const controller = new AbortController();
   let resolveCancellation: ((outcome: OpenCodeHandshakeSettlement) => void) | undefined;
@@ -2307,7 +2443,14 @@ async function openCodeHandshakeFailure(
     resolveCancellation?.({ kind: "timeout" });
   }, request.startTimeoutMs);
   timer.unref();
-  const handshake = settleOpenCodeHandshake(adapter, request, active, onPermission, controller);
+  const handshake = settleOpenCodeHandshake(
+    adapter,
+    request,
+    active,
+    onPermission,
+    controller,
+    bootstrap,
+  );
   try {
     const outcome = await Promise.race([handshake, cancellation]);
     if (outcome.kind === "ok") return undefined;
@@ -2331,22 +2474,75 @@ function settleOpenCodeHandshake(
   active: ActiveRuntime,
   onPermission: (event: SidecarPermissionEvent) => void,
   controller: AbortController,
+  bootstrap?: OpenCodeBootstrapPacket,
 ): Promise<OpenCodeHandshakeSettlement> {
   return Promise.resolve()
-    .then(() =>
-      adapter.handshake({
-        runId: request.runId,
-        startupOutput: active.startupOutput ?? closedStartupOutput,
-        onPermission,
-        signal: controller.signal,
-        timeoutMs: request.startTimeoutMs,
-      }),
-    )
+    .then(async () => {
+      if (
+        bootstrap !== undefined &&
+        (!bootstrap.canWrite() ||
+          !(await writeOwnedHostPacket(active, bootstrap.packet, controller.signal)))
+      )
+        return { kind: "failed" as const, reason: "bootstrap-packet" };
+      if (controller.signal.aborted) return { kind: "aborted" as const };
+      return adapter
+        .handshake({
+          runId: request.runId,
+          startupOutput: active.startupOutput ?? closedStartupOutput,
+          onPermission,
+          signal: controller.signal,
+          timeoutMs: request.startTimeoutMs,
+        })
+        .then((result): OpenCodeHandshakeSettlement =>
+          result.ok ? { kind: "ok" } : { kind: "failed", reason: result.reason },
+        );
+    })
     .then(
-      (result): OpenCodeHandshakeSettlement =>
-        result.ok ? { kind: "ok" } : { kind: "failed", reason: result.reason },
+      (result): OpenCodeHandshakeSettlement => result,
       (): OpenCodeHandshakeSettlement => ({ kind: "failed", reason: "handshake-rejected" }),
     );
+}
+
+function writeOwnedHostPacket(
+  active: ActiveRuntime,
+  packet: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const stream = active.tree.stdin;
+  if (
+    stream === undefined ||
+    stream.destroyed ||
+    !stream.writable ||
+    signal.aborted ||
+    active.stopRequested
+  )
+    return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const cleanup = (): void => {
+      stream.off("error", fail).off("close", close);
+      signal.removeEventListener("abort", fail);
+    };
+    const fail = (): void => {
+      signal.removeEventListener("abort", fail);
+      resolve(false);
+      // Keep the error listener until close: a failed write callback precedes Node's EPIPE event.
+      stream.destroy();
+    };
+    const close = (): void => {
+      cleanup();
+      resolve(false);
+    };
+    stream.once("error", fail).once("close", close);
+    signal.addEventListener("abort", fail, { once: true });
+    stream.write(packet, "utf8", (error) => {
+      if (error !== null && error !== undefined) {
+        fail();
+        return;
+      }
+      cleanup();
+      resolve(!signal.aborted && !active.stopRequested);
+    });
+  });
 }
 
 const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
@@ -2366,6 +2562,8 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
   "readiness-failed",
   "handshake-rejected",
   "timeout",
+  "bootstrap-packet",
+  "host-readiness-unqualified",
 ]);
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {

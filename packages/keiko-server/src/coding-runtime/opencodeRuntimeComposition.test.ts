@@ -83,7 +83,18 @@ import { dirname } from "node:path";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
-import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type {
+  CodingRuntimeManager,
+  OpenCodeLifecycleAdapter,
+  OpenCodeLifecyclePrepareRequest,
+  OpenCodeLifecyclePrepareResult,
+} from "./codingRuntimeManager.js";
+import {
+  inspectOpenCodeServiceHostDisk,
+  OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
+  type OpenCodeServiceHostDiskReceipt,
+} from "./opencodeServiceHostArtifact.js";
+import { attestPortableSidecarTreeSync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import {
   createGeneratedOpenCodeV2Plugins,
@@ -157,6 +168,10 @@ function materializedV2PluginPaths(runRoot: string): readonly string[] {
 }
 
 interface OpenCodeRuntimeComposition {
+  readonly prepareServiceHost: (
+    request: OpenCodeLifecyclePrepareRequest,
+    receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
+  ) => Promise<OpenCodeLifecyclePrepareResult>;
   readonly manager: CodingRuntimeManager;
   readonly toolBridge: {
     readonly url: string;
@@ -436,6 +451,14 @@ type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
   readonly workspaceRoot?: string;
+  readonly gatewayUrl?: string;
+  readonly signal?: AbortSignal;
+  readonly sessionLocation?: {
+    readonly created?: "wrong" | "missing";
+    readonly echoed?: "wrong" | "missing";
+    readonly stages?: string[];
+    readonly afterCreated?: () => void;
+  };
   readonly toolFacadeCapability?: string;
   readonly readToolProfile?: () => "direct" | "code-mode";
   readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
@@ -603,6 +626,51 @@ function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   };
 }
 
+function fixtureGatewayUrl(control: StartBridgeControl | undefined): string {
+  return control?.gatewayUrl ?? "http://127.0.0.1:1983/api/coding-sidecar/gateway";
+}
+
+function fixturePreparation(
+  captured: RuntimeSupervisorLaunchRequest | undefined,
+  executablePath: string,
+  verification: PortableSidecarRuntimeVerification,
+): OpenCodeLifecyclePrepareRequest {
+  return {
+    runId: FIXTURE_RUN_ID,
+    executablePath,
+    env: captured?.env ?? {},
+    verification,
+    timeoutMs: 100,
+  };
+}
+
+/** Exact Info.location.directory shape qualified by original pinned native HTTP create/get. */
+function fixtureNativeSession(
+  id: string,
+  directory: string,
+  stage: "created" | "echoed",
+  control: StartBridgeControl | undefined,
+): Readonly<Record<string, unknown>> {
+  const locationControl = control?.sessionLocation;
+  locationControl?.stages?.push(stage);
+  if (stage === "created") locationControl?.afterCreated?.();
+  const disposition = locationControl?.[stage];
+  return {
+    id,
+    ...(disposition === "missing"
+      ? {}
+      : {
+          location: {
+            directory: disposition === "wrong" ? join(directory, "other-workspace") : directory,
+          },
+        }),
+  };
+}
+
+function fixtureSignal(control: StartBridgeControl | undefined): AbortSignal | undefined {
+  return control?.signal;
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -610,18 +678,24 @@ async function startBridgeFixture(
     maxInFlight: 1,
   },
   control?: StartBridgeControl,
-): Promise<{ readonly runtime: OpenCodeRuntimeComposition; stop(): Promise<void> }> {
+): Promise<{
+  readonly runtime: OpenCodeRuntimeComposition;
+  readonly preparation: OpenCodeLifecyclePrepareRequest;
+  stop(): Promise<void>;
+}> {
   const root = tempDir("keiko-opencode-tool-bridge-");
   const resourceRoot = join(root, "resources");
   const portable = portableFixture(resourceRoot);
   mkdirSync(join(root, "workspace"), { recursive: true });
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  let capturedLaunch: RuntimeSupervisorLaunchRequest | undefined;
   const supervisor = createRuntimeProcessSupervisor({
     backend: {
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
       ...fixtureStdinOwnership(control),
       spawnOwnedTree: (request): RuntimeProcessTree => {
+        capturedLaunch = request;
         control?.onSpawn?.();
         stdout.end(fixtureStartupLine(request, control));
         return {
@@ -708,6 +782,7 @@ async function startBridgeFixture(
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
     if (path.endsWith("/prompt")) {
+      control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
         readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string") {
@@ -757,9 +832,16 @@ async function startBridgeFixture(
     }
     if (path === "/api/session" && init?.method === "POST") {
       control?.sessionCreateCalls?.push("ses_tool");
-      return Promise.resolve(v2Envelope({ id: "ses_tool" }));
+      return Promise.resolve(
+        v2Envelope(fixtureNativeSession("ses_tool", capturedLaunch?.cwd ?? "", "created", control)),
+      );
     }
-    if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_tool" }]));
+    if (path === "/api/session")
+      return Promise.resolve(
+        v2Envelope([
+          fixtureNativeSession("ses_tool", capturedLaunch?.cwd ?? "", "echoed", control),
+        ]),
+      );
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
@@ -823,12 +905,13 @@ async function startBridgeFixture(
       effectiveMode: mode,
       executablePath: portable.executablePath,
       managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      gatewayUrl: fixtureGatewayUrl(control),
       modelProfileId: "coding-safe-openai-compatible",
       args: [],
       inheritedEnvAllowlist: [],
       shutdownTimeoutMs: fixtureShutdownTimeout(control),
       startTimeoutMs: control?.startTimeoutMs ?? 100,
+      signal: fixtureSignal(control),
       confinement: {
         platform: "darwin",
         arch: "arm64",
@@ -841,8 +924,14 @@ async function startBridgeFixture(
     control?.expectedStart ?? { ok: true, runId: FIXTURE_RUN_ID, status: "ready" },
   );
   await control?.afterStart?.(runtime, join(root, "state", FIXTURE_RUN_ID));
+  const preparation = fixturePreparation(
+    capturedLaunch,
+    portable.executablePath,
+    portable.verification,
+  );
   return {
     runtime,
+    preparation,
     stop: async (): Promise<void> => {
       await runtime.manager.stop(FIXTURE_RUN_ID);
     },
@@ -931,6 +1020,7 @@ function turnHistory(
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -1127,8 +1217,11 @@ describe("unmounted OpenCode runtime composition", () => {
         );
       }
       if (path === "/api/session" && init?.method === "POST")
-        return Promise.resolve(v2Envelope({ id: "ses_1" }));
-      if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_1" }]));
+        return Promise.resolve(v2Envelope({ id: "ses_1", location: { directory: workspaceRoot } }));
+      if (path === "/api/session")
+        return Promise.resolve(
+          v2Envelope([{ id: "ses_1", location: { directory: workspaceRoot } }]),
+        );
       return Promise.resolve(new Response("", { status: 404 }));
     });
     const fetch = fetchMock as unknown as typeof globalThis.fetch;
@@ -4839,3 +4932,211 @@ it.each(["direct", "code-mode"] as const)(
     }
   },
 );
+
+async function preparationReceipt(): Promise<
+  Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>
+> {
+  const payloadRoot = tempDir("keiko-host-composition-bytes-");
+  mkdirSync(join(payloadRoot, "runtime"));
+  mkdirSync(join(payloadRoot, "evidence"));
+  for (const [path] of OPENCODE_SERVICE_HOST_DISK_EVIDENCE)
+    writeFileSync(join(payloadRoot, path), "inactive byte fixture");
+  const measured = attestPortableSidecarTreeSync(
+    payloadRoot,
+    "runtime/node",
+    Date.now() + 5000,
+    undefined,
+    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path),
+  );
+  const base = (
+    JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { readonly approval: Record<string, unknown> }
+  ).approval;
+  const approval = {
+    ...base,
+    payloadTreeSha256: measured.treeSha256,
+    ...Object.fromEntries(
+      OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path, field]) => [
+        field,
+        measured.selectedFileSha256ByPath?.[path],
+      ]),
+    ),
+  };
+  const receipt = await inspectOpenCodeServiceHostDisk(
+    {
+      payloadRoot,
+      target: "macos-arm64",
+      approval,
+      trustedSupplement: { "macos-arm64": approval },
+    },
+    { deadline: Date.now() + 5000 },
+  );
+  if (!receipt.ok) throw new Error("Expected supplementary byte receipt");
+  return receipt;
+}
+
+async function stoppedPreparationFixture(
+  profile: "direct" | "code-mode" = "direct",
+): ReturnType<typeof startBridgeFixture> {
+  const fixture = await startBridgeFixture(
+    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+    undefined,
+    {
+      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+      readToolProfile: () => profile,
+    },
+  );
+  await fixture.stop();
+  return fixture;
+}
+
+describe("inactive fixed-host preparation at existing captured composition", () => {
+  it("derives fixed packet config/capabilities/root from the actual accepted CLI producer values", async () => {
+    const fixture = await stoppedPreparationFixture();
+    const receipt = await preparationReceipt();
+    const result = await fixture.runtime.prepareServiceHost(fixture.preparation, receipt);
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.serviceHost === undefined)
+      throw new Error("Expected inactive host preparation");
+    const { binding, packet } = result.serviceHost;
+    const root = result.env?.OPENCODE_CONFIG_DIR;
+    if (root === undefined) throw new Error("Expected captured config root");
+    const config = readFileSync(join(root, "opencode.json"));
+    expect(binding.configDigest).toBe(createHash("sha256").update(config).digest("hex"));
+    expect(binding.workspace).toBe(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
+    expect(binding.mode).toBe(fixture.preparation.env.KEIKO_CODING_MODE);
+    expect(binding.password).toBe(result.env?.OPENCODE_SERVER_PASSWORD);
+    expect(binding.providerCapability).toBe(MODEL_CAPABILITY);
+    expect(binding.facadeCapability).toBe(TOOL_CAPABILITY);
+    expect(binding.facadeURL).toBe(fixture.runtime.toolBridge.url);
+    expect(JSON.parse(packet)).toEqual(binding);
+    await expect(
+      fixture.runtime.runPort.submitTask(fixture.preparation.runId, "must remain inactive"),
+    ).resolves.toBe(false);
+    await expect(fixture.runtime.prepareServiceHost(fixture.preparation, receipt)).resolves.toEqual(
+      { ok: false, reason: "host-preparation-unqualified" },
+    );
+  });
+
+  it("fails host readiness before reading startup or opening an adapter through the same lifecycle owner", async () => {
+    const managerModule = await import("./codingRuntimeManager.js");
+    const original = managerModule.createCodingRuntimeManager;
+    let lifecycle: OpenCodeLifecycleAdapter | undefined;
+    vi.spyOn(managerModule, "createCodingRuntimeManager").mockImplementation((input) => {
+      lifecycle = input.openCodeLifecycleAdapter;
+      return original(input);
+    });
+    const fixture = await stoppedPreparationFixture();
+    const result = await fixture.runtime.prepareServiceHost(
+      fixture.preparation,
+      await preparationReceipt(),
+    );
+    expect(result.ok).toBe(true);
+    let reads = 0;
+    if (lifecycle === undefined) throw new Error("Expected actual lifecycle owner");
+    await expect(
+      lifecycle.handshake({
+        runId: fixture.preparation.runId,
+        timeoutMs: 100,
+        startupOutput: {
+          nextLine: (): Promise<string> => {
+            reads += 1;
+            return Promise.reject(new Error("must not read"));
+          },
+        },
+        onPermission: (): void => undefined,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "host-readiness-unqualified" });
+    expect(reads).toBe(0);
+  });
+
+  it("refuses CodeMode while fixed host assets are direct and rejects a copied receipt", async () => {
+    const codeMode = await stoppedPreparationFixture("code-mode");
+    const receipt = await preparationReceipt();
+    await expect(
+      codeMode.runtime.prepareServiceHost(codeMode.preparation, receipt),
+    ).resolves.toEqual({ ok: false, reason: "host-preparation-unqualified" });
+    const direct = await stoppedPreparationFixture();
+    await expect(
+      direct.runtime.prepareServiceHost(direct.preparation, { ...receipt }),
+    ).resolves.toEqual({ ok: false, reason: "config-materialization-failed" });
+    await expect(
+      direct.runtime.prepareServiceHost(direct.preparation, receipt),
+    ).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe("accepted original native session Location binding", () => {
+  it.each([
+    { created: "wrong" as const },
+    { created: "missing" as const },
+    { echoed: "wrong" as const },
+    { echoed: "missing" as const },
+  ])("refuses inconsistent native Location before model readiness: %j", async (fault) => {
+    const stages: string[] = [];
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        sessionLocation: { ...fault, stages },
+        diagnostics,
+        expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+      },
+    );
+    expect(stages).not.toContain("prompt");
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "coding-runtime.handshake",
+        code: "session-echo",
+        correlationId: FIXTURE_RUN_ID,
+      }),
+    );
+    const record = JSON.stringify(diagnostics.record.mock.calls);
+    expect(record).not.toContain("other-workspace");
+    expect(record).not.toContain(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+
+  it("keeps the actual original Location shape bound to the supervisor-proved accepted root", async () => {
+    const stages: string[] = [];
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      { sessionLocation: { stages } },
+    );
+    expect(stages.slice(0, 2)).toEqual(["created", "echoed"]);
+    expect(stages).toContain("prompt");
+    expect(fixture.runtime.manager.health().status).toBe("ready");
+    await fixture.stop();
+  });
+
+  it("refuses cancellation after original creation before echo/model readiness", async () => {
+    const controller = new AbortController();
+    const stages: string[] = [];
+    const fixture = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        signal: controller.signal,
+        sessionLocation: {
+          stages,
+          afterCreated: (): void => {
+            controller.abort();
+          },
+        },
+        expectedStart: { ok: false, failureCode: "start-aborted", retryable: true },
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stages).toEqual(["created"]);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+});

@@ -211,6 +211,31 @@ Three exact closed-result failure-path dispositions identify this concrete log o
 expanding the legacy register. Shared private waiting, one-parent invocation accounting, links,
 initial instructions, Windows, fresh packed approval and production service activation remain open.
 
+The subsequent same-owner native waiting increment independently reproduces five real unchanged
+private-port failures, then preserves all forty original ancestor instructions and their exact
+ordered event/output digests through 41 actual helpers. Physical concurrency peaks at eight and
+every child closes. The previous waiting-eight candidate fails that same forty-instruction control;
+an initial root receipt-file collision is retained separately from the qualified behavioral RED.
+Captured path/range/signal and current authority/root are checked before physical admission;
+cancelled or expired waiters spawn no helper. Waiting overflow is an honest technical failure.
+This remains per-Read SessionInstructions qualification, not initial/global discovery or live model
+acceptance. Fixture verification does not establish release signature or final payload approval.
+
+Root also reproduces thirteen genuine unchanged Manager/Composition transport failures and five
+session Location failures, with the healthy Location control passing. The corrected private transport
+keeps artifact-owned Node/bootstrap arguments, freshly checks the same full tree, requires the
+owned stdin lease and writes one bounded LF packet before readiness. Copying the program/receipt,
+ambient loader injection, changed bytes, revocation and blocked or broken writes fail closed through
+the existing cleanup/recovery owners. Created and echoed original session Location must both match
+the captured accepted workspace before prompting. These use controlled process/transport fixtures;
+host readiness intentionally stays unqualified before the ordinary CLI adapter opens.
+
+The combined six server suites pass 563 tests with one explicit platform skip, and the leaf packet
+suite passes 48. Strict ten-owner source/test types, a forced affected graph and scoped lint pass.
+The fixed native entry itself retains its separately qualified database/cwd correction; these
+controls neither launch that entry through the production Manager nor qualify fresh packaged
+assets, canonical native IO admission, full platform coverage or complete Standalone parity.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

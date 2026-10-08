@@ -502,10 +502,16 @@ It also supplies a private additional currentness veto for physical IO admission
 wipes returned bytes before refusal. This facet does not grant a model-visible tool or a native
 host ingress. Actual original Read controls retain paging, directory, image/PDF and binary handling;
 the original instruction service retains its own loading and deduplication. Initial/global
-instruction discovery, queued admission, parent invocation accounting and complete native service
+instruction discovery, parent invocation accounting and complete native service
 qualification remain separate requirements. Symlink content, hardlinks and cross-device content
 are still refused; Windows native IO and Linux/Intel execution are not qualified by the macOS
 controls. Those limits remain open native-parity work rather than permanent capability exclusions.
+Private native IO now waits on the same eight physical slots used by public text reads. Its bounded
+waiting capacity admits one complete supported ancestor-instruction load. Captured requests retain
+their original path, range and cancellation signal; root, artifact and currentness are checked again
+after waiting and immediately before physical IO. Cancellation removes waiters, while an admitted
+slot remains held until the actual process settles. Public text reads retain their existing busy
+result. Overflow is an explicit technical refusal, never partial instruction success.
 
 An original Node service host has its own supplemental immutable artifact identity: final npm
 payload and archive, fixed Node executable and bootstrap, dependency lock, license inventory,
@@ -529,10 +535,16 @@ one bounded immutable binding packet, publishes readiness after acquisition and 
 scope on stdin EOF. Its executable refuses a process cwd outside the packet's canonical workspace
 before acquiring the original graph. Its database and freshness check use the existing launch
 producer's `<stateRoot>/state/opencode.db` path. Original default session creation and its echo
-retain that workspace Location. These entry controls do not establish the BFF's accepted-session
-Location validation or current native filesystem authority. Existing authenticated Fetch factory
-behavior remains available. This transport prerequisite still needs the same Manager/supervisor
-lifetime, accepted-session Location validation, sealed selected-profile assets, current native IO authority and
+retain that workspace Location. These entry controls do not establish current native filesystem
+authority. The BFF separately checks the original created and echoed
+session Location against the captured accepted workspace, and rechecks cancellation after each
+await before proceeding to model readiness. Existing authenticated Fetch factory behavior remains
+available. The existing Manager can privately prepare the distinct owned Node/bootstrap program,
+freshly reattest it and write its single bounded packet through the owned stdin lifetime lease before
+handshake. Unsupported or failed writes follow existing cleanup and recovery; a copied program or
+receipt cannot replace the artifact owner's binding. Host readiness remains unqualified before the
+ordinary CLI adapter can open, so this transport path does not activate the service. This prerequisite
+still needs actual platform/process-lifetime controls, sealed selected-profile assets, current native IO authority and
 fresh final-payload qualification before production selection or launch. EOF closure alone does
 not prove settlement of delegated effects.
 

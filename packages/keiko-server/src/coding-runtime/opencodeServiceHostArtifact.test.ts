@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenCodeServiceHostApproval } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+import {
+  OPENCODE_SERVICE_HOST_START_PACKET_FIELDS,
+  OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES,
+  type OpenCodeServiceHostApproval,
+} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { attestPortableSidecarTreeSync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import type { PortableHandoffOperationOptions } from "../update-portable-handoff-tree.js";
@@ -22,6 +26,10 @@ import {
 
 import {
   buildOpenCodeServiceHostLaunchShape,
+  prepareOpenCodeServiceHostLaunch,
+  reinspectPreparedOpenCodeServiceHost,
+  createOpenCodeServiceHostPacketDataAsset,
+  OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
   inspectOpenCodeServiceHostDisk,
   type OpenCodeServiceHostDiskInput,
 } from "./opencodeServiceHostArtifact.js";
@@ -159,14 +167,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-const EVIDENCE = [
-  ["runtime/node", "nodeExecutableSha256"],
-  ["host.mjs", "bootstrapSha256"],
-  ["package-lock.json", "packageLockSha256"],
-  ["evidence/sbom.cdx.json", "sbomSha256"],
-  ["evidence/installed-package-license-inventory.json", "licenseInventorySha256"],
-  ["evidence/build-provenance.json", "buildProvenanceSha256"],
-] as const;
+const EVIDENCE = OPENCODE_SERVICE_HOST_DISK_EVIDENCE;
 
 function producedDiskApproval(payloadRoot: string): OpenCodeServiceHostApproval {
   const produced = attestPortableSidecarTreeSync(
@@ -551,5 +552,91 @@ describe("inactive original-host supplementary disk-byte receipt", () => {
       ),
     ).rejects.toMatchObject({ kind: "integrity" });
     expect(changed).toBe(true);
+  });
+});
+
+function startBinding(): Record<string, unknown> {
+  return {
+    workspace: resolve(tmpdir(), "accepted-workspace"),
+    stateRoot: resolve(tmpdir(), "private-state"),
+    password: "p".repeat(43),
+    providerURL: "http://127.0.0.1:1983/api/coding-sidecar/gateway/chat/completions",
+    facadeURL: "http://127.0.0.1:1983/api/coding-sidecar/tool",
+    providerCapability: "m".repeat(32),
+    facadeCapability: "t".repeat(32),
+    mode: "supervised-coding",
+    runId: "accepted-run",
+    configDigest: "f".repeat(64),
+  };
+}
+
+describe("inactive artifact-owned fixed host packet", () => {
+  it("captures the same independently inspected identity and one immutable bounded LF packet", async () => {
+    const { input } = diskFixture();
+    const receipt = await inspectOpenCodeServiceHostDisk(input, options());
+    if (!receipt.ok) throw new Error("Expected byte receipt");
+    const binding = startBinding();
+    const output = prepareOpenCodeServiceHostLaunch(receipt, binding, {});
+    expect(output).toBeDefined();
+    expect(output?.args).toEqual([join(input.payloadRoot, "host.mjs")]);
+    expect(output?.executable).toBe(join(input.payloadRoot, "runtime/node"));
+    expect(Object.isFrozen(output)).toBe(true);
+    expect(Object.isFrozen(output?.binding)).toBe(true);
+    expect(output?.packet).toBe(JSON.stringify(output?.binding) + "\n");
+    expect(Buffer.byteLength(output?.packet ?? "")).toBeLessThanOrEqual(
+      OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES,
+    );
+    binding.password = "late-substitution";
+    expect(output?.binding.password).toBe("p".repeat(43));
+    expect(prepareOpenCodeServiceHostLaunch({ ...receipt }, startBinding(), {})).toBeUndefined();
+  });
+  it("refuses oversized UTF8, substituted program environment and unbound transports", async () => {
+    const { input } = diskFixture();
+    const receipt = await inspectOpenCodeServiceHostDisk(input, options());
+    if (!receipt.ok) throw new Error("Expected byte receipt");
+    for (const extra of [
+      { providerCapability: "ä".repeat(4096), facadeCapability: "ö".repeat(4096) },
+      { providerURL: "http://remote.invalid/api/coding-sidecar/gateway/chat/completions" },
+      { facadeURL: "http://127.0.0.1:1984/api/coding-sidecar/tool" },
+      { workspace: "relative" },
+    ])
+      expect(
+        prepareOpenCodeServiceHostLaunch(receipt, { ...startBinding(), ...extra }, {}),
+      ).toBeUndefined();
+    expect(
+      prepareOpenCodeServiceHostLaunch(receipt, startBinding(), {
+        NODE_OPTIONS: "--import other.mjs",
+      }),
+    ).toBeUndefined();
+  });
+  it("recomputes current bytes and rejects changed tree or wrong platform without caching the receipt", async () => {
+    const { input } = diskFixture();
+    const receipt = await inspectOpenCodeServiceHostDisk(input, options());
+    if (!receipt.ok) throw new Error("Expected byte receipt");
+    const output = prepareOpenCodeServiceHostLaunch(receipt, startBinding(), {});
+    if (output === undefined) throw new Error("Expected fixed program");
+    await expect(
+      reinspectPreparedOpenCodeServiceHost(output, {}, options(), input.target),
+    ).resolves.toBe(true);
+    await expect(
+      reinspectPreparedOpenCodeServiceHost(output, {}, options(), "windows-x64"),
+    ).resolves.toBe(false);
+    writeFileSync(join(input.payloadRoot, "guard-seams.mjs"), "mutated module");
+    await expect(
+      reinspectPreparedOpenCodeServiceHost(output, {}, options(), input.target),
+    ).resolves.toBe(false);
+  });
+  it("produces the fixed builder data asset from the same canonical packet constants", async () => {
+    const source = createOpenCodeServiceHostPacketDataAsset();
+    const asset = (await import(
+      "data:text/javascript;base64," + Buffer.from(source).toString("base64")
+    )) as {
+      readonly fields: readonly string[];
+      readonly maxBytes: number;
+    };
+    expect(asset.fields).toEqual(OPENCODE_SERVICE_HOST_START_PACKET_FIELDS);
+    expect(Object.isFrozen(asset.fields)).toBe(true);
+    expect(asset.maxBytes).toBe(OPENCODE_SERVICE_HOST_START_PACKET_MAX_BYTES);
+    expect(source).not.toContain("process.env");
   });
 });
