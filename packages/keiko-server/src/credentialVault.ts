@@ -257,6 +257,11 @@ function planProviderCredential(
   const modelId = typeof provider.modelId === "string" ? provider.modelId : "";
   const apiKey = typeof provider.apiKey === "string" ? provider.apiKey : "";
   const cleaned = stripCredentialFields(provider);
+  // Source-bound aliases resolve the accepted source at parse time, including env rotation.
+  // Their resolved bytes are never independent durable credentials.
+  if (typeof provider.apiKeySourceModelId === "string" && provider.apiKeySourceModelId.length > 0) {
+    return { provider: cleaned };
+  }
   if (modelId.length === 0) {
     return { provider: cleaned };
   }

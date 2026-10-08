@@ -37,7 +37,7 @@ Cross-vault replay is prevented by **key separation, not by the AAD**: every vau
 
 ### D2 — Secret references in config, resolution behind the Model Gateway
 
-A persisted provider carries `apiKeySecretRef` (an opaque `cred:<modelId>` string) instead of `apiKey`. The gateway config parser gains an optional, crypto-free `secretResolver` seam: `parseGatewayConfig(raw, env, { secretResolver })` / `loadConfigFromFile(...)`. A provider's effective apiKey resolves in precedence order:
+A persisted provider carries `apiKeySecretRef` (an opaque `cred:` reference) instead of `apiKey`. The gateway config parser gains an optional, crypto-free `secretResolver` seam: `parseGatewayConfig(raw, env, { secretResolver })` / `loadConfigFromFile(...)`. A provider's effective apiKey resolves in precedence order:
 
 1. per-model env `KEIKO_MODEL_<ID>_API_KEY` (transient operator override, highest),
 2. `secretResolver(apiKeySecretRef)` (the durable encrypted vault),
@@ -45,6 +45,15 @@ A persisted provider carries `apiKeySecretRef` (an opaque `cred:<modelId>` strin
 4. `KEIKO_DEFAULT_API_KEY` (final fallback).
 
 The gateway stays deterministic and free of filesystem/keychain/crypto: `keiko-server` and `keiko-cli` inject a vault-backed resolver; a resolver fault degrades to the next source so a locked or tampered vault surfaces as the existing "apiKey must be set" config error, never a crash. The credential-vault policy (reference scheme, vault location next to the config, env/keychain namespace) lives in `keiko-server/credentialVault.ts`, exported under the `./credential-vault` subpath so the offline `keiko run`/`keiko repair` commands resolve and detect credentials without loading the full BFF runtime.
+
+Automatically discovered model aliases retain `apiKeySourceModelId`, a private reference to an
+independent accepted provider on the same connection. Parsing resolves that source regardless of
+provider order and reuses its normal credential precedence after restart or environment rotation.
+Dangling, chained, self, cross-connection and ambiguous direct-credential bindings fail closed.
+A per-alias environment override remains transient. Neither resolved source bytes nor a manufactured
+alias vault reference is persisted, and the private source binding is omitted from safe projections.
+An independent provider retains its actual durable vault reference beneath a transient environment
+override, so removing that override restores the same durable source.
 
 ### D3 — Setup writes references; the Figma PAT routes to its vault
 

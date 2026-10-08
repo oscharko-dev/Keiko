@@ -52,6 +52,56 @@ function envWith(key: string): EnvSource {
   return { KEIKO_PROVIDER_CREDENTIALS_KEY: key };
 }
 
+it("retains a source-bound alias without vaulting its resolved source bytes", () => {
+  const configPath = tempConfigPath();
+  const env = { ...envWith(KEY1), KEIKO_MODEL_SOURCE_API_KEY: "transient-source-key" };
+  const sealed = prepareSealedProviderApiKeys({
+    configPath,
+    env,
+    raw: {
+      providers: [
+        { modelId: "source", baseUrl: "https://gw", apiKey: "transient-source-key" },
+        {
+          modelId: "derived",
+          baseUrl: "https://gw",
+          apiKey: "transient-source-key",
+          apiKeySourceModelId: "source",
+        },
+      ],
+    },
+  });
+  expect(sealed.providers[1]).toEqual({
+    modelId: "derived",
+    baseUrl: "https://gw",
+    apiKeySourceModelId: "source",
+  });
+  expect(sealed.activeSecretRefs).toEqual([]);
+  expect(existsSync(join(credentialVaultDir(configPath), "provider-credentials.vault"))).toBe(
+    false,
+  );
+});
+
+it("retains the source's durable reference while an alias shares the same accepted source", () => {
+  const configPath = tempConfigPath();
+  const env = envWith(KEY1);
+  const vault = openProviderCredentialVault({ configPath, env });
+  vault.set("existing-source-reference", "durable-source-key");
+  const sealed = prepareSealedProviderApiKeys({
+    configPath,
+    env,
+    raw: {
+      providers: [
+        { modelId: "source", baseUrl: "https://gw", apiKeySecretRef: "existing-source-reference" },
+        { modelId: "derived", baseUrl: "https://gw", apiKeySourceModelId: "source" },
+      ],
+    },
+  });
+  expect(sealed.activeSecretRefs).toEqual(["existing-source-reference"]);
+  pruneProviderCredentialVault({ configPath, env }, sealed.activeSecretRefs);
+  expect(vault.get("existing-source-reference")).toBe("durable-source-key");
+  expect(vault.get(providerSecretRef("derived"))).toBeUndefined();
+});
+
 describe("providerSecretRef / credentialVaultDir", () => {
   it("derives a stable, prefixed reference from the modelId", () => {
     expect(providerSecretRef("gpt-x")).toBe("cred:gpt-x");

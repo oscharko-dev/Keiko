@@ -1,4 +1,12 @@
-import { mkdtempSync, openSync, readSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,7 +21,12 @@ import { createBrowserHandoffPoll } from "./ui-browser-handoff.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, openSync: vi.fn(actual.openSync), readSync: vi.fn(actual.readSync) };
+  return {
+    ...actual,
+    openSync: vi.fn(actual.openSync),
+    readSync: vi.fn(actual.readSync),
+    rmSync: vi.fn(actual.rmSync),
+  };
 });
 
 const directories: string[] = [];
@@ -27,7 +40,7 @@ function fixture(): {
   readonly events: readonly SecurityLogEvent[];
   readonly poll: () => void;
   readonly open: ReturnType<typeof vi.fn>;
-  readonly write: () => void;
+  readonly write: (correlationId?: string, pid?: number, host?: "127.0.0.1" | "localhost") => void;
 } {
   const stateDir = mkdtempSync(join(tmpdir(), "keiko-browser-request-failure-"));
   directories.push(stateDir);
@@ -38,8 +51,8 @@ function fixture(): {
     stateDir,
     events,
     open,
-    write: (): void => {
-      writeBrowserOpenRequest(stateDir, 42, launchId);
+    write: (correlationId, pid = 42, host): void => {
+      writeBrowserOpenRequest(stateDir, pid, launchId, correlationId, host);
     },
     poll: createBrowserHandoffPoll({
       stateDir,
@@ -111,4 +124,112 @@ it("records a changed technical cause while suppressing repeated identical refus
   expect(subject.events.map((event) => event.extra?.failureKind)).toEqual(["EACCES", "EIO"]);
   expect(subject.open).not.toHaveBeenCalled();
   expect(JSON.stringify(subject.events)).not.toContain("PRIVATE_");
+});
+
+it("keeps the empty exclusive publication window silent until the actual request arrives", async () => {
+  const subject = fixture();
+  writeFileSync(join(subject.stateDir, "ui.browser-open"), "", { mode: 0o600 });
+  subject.poll();
+  expect(subject.events).toEqual([]);
+  subject.write();
+  subject.poll();
+  await vi.waitFor(
+    () => {
+      expect(subject.open).toHaveBeenCalledTimes(1);
+    },
+    { timeout: 10_000 },
+  );
+});
+
+it("joins each distinct mismatched request to its own validated requester", () => {
+  const subject = fixture();
+  const parents = ["00000000-0000-4000-8000-000000000081", "00000000-0000-4000-8000-000000000082"];
+  for (const parent of parents) {
+    subject.write(parent, 41);
+    subject.poll();
+    expect(existsSync(join(subject.stateDir, "ui.browser-open"))).toBe(false);
+    subject.poll();
+  }
+  expect(subject.events).toHaveLength(2);
+  subject.events.forEach((event, index) => {
+    const line = formatActivityLogProofLine(event);
+    expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+    expect(JSON.parse(line)).toMatchObject({
+      outcome: "refused",
+      reason: "identity-mismatch",
+      parentCorrelationId: parents[index],
+      level: "info",
+    });
+  });
+  expect(subject.open).not.toHaveBeenCalled();
+});
+
+it("logs a removal fault once per actual request without opening or leaking its body", () => {
+  const subject = fixture();
+  const parent = "00000000-0000-4000-8000-000000000083";
+  subject.write(parent);
+  const fail = (): never => {
+    throw Object.assign(new Error(`PRIVATE_REMOVE ${subject.stateDir}`), { code: "EACCES" });
+  };
+  for (let index = 0; index < 3; index += 1) {
+    vi.mocked(rmSync).mockImplementationOnce(fail);
+    subject.poll();
+  }
+  expect(subject.events).toHaveLength(1);
+  const line = formatActivityLogProofLine(subject.events[0] ?? {});
+  expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+  expect(JSON.parse(line)).toMatchObject({
+    outcome: "failed",
+    parentCorrelationId: parent,
+    failureKind: "EACCES",
+  });
+  expect(line).not.toContain("PRIVATE_REMOVE");
+  expect(line).not.toContain(subject.stateDir);
+  expect(subject.open).not.toHaveBeenCalled();
+  subject.write("00000000-0000-4000-8000-000000000084");
+  vi.mocked(rmSync).mockImplementationOnce(fail);
+  subject.poll();
+  expect(subject.events).toHaveLength(2);
+});
+
+it.each(["invalid-request", "unsafe-request"] as const)(
+  "proves %s fields through the actual formatter",
+  (reason) => {
+    const subject = fixture();
+    subject.write();
+    if (reason === "invalid-request")
+      writeFileSync(join(subject.stateDir, "ui.browser-open"), "invalid\n");
+    else chmodSync(join(subject.stateDir, "ui.browser-open"), 0o644);
+    subject.poll();
+    const line = formatActivityLogProofLine(subject.events[0] ?? {});
+    expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+    expect(JSON.parse(line)).toMatchObject({ outcome: "refused", reason, level: "info" });
+    expect(subject.open).not.toHaveBeenCalled();
+  },
+);
+
+it("preserves localhost and records an opener failure under the real request parent", async () => {
+  const subject = fixture();
+  const parent = "00000000-0000-4000-8000-000000000085";
+  subject.open.mockImplementationOnce(() => {
+    throw new Error("PRIVATE_OPEN");
+  });
+  subject.write(parent, 42, "localhost");
+  subject.poll();
+  await vi.waitFor(
+    () => {
+      expect(subject.events).toHaveLength(1);
+    },
+    { timeout: 5_000 },
+  );
+  const line = formatActivityLogProofLine(subject.events[0] ?? {});
+  expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+  expect(JSON.parse(line)).toMatchObject({
+    outcome: "failed",
+    parentCorrelationId: parent,
+    attestationProvided: true,
+  });
+  expect(new URL(String(subject.open.mock.calls[0]?.[0])).hostname).toBe("localhost");
+  expect(line).not.toContain("PRIVATE_OPEN");
+  expect(line).not.toContain("keiko-app-session");
 });

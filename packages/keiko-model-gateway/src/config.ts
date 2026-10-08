@@ -1826,6 +1826,7 @@ function parseProviderConfig(
     modelId,
     baseUrl,
     apiKey,
+    ...providerCredentialReference(raw),
     apiKeyHeaderName: resolveApiKeyHeaderName(
       raw.apiKeyHeaderName,
       `${path}.apiKeyHeaderName`,
@@ -1847,6 +1848,14 @@ function parseProviderConfig(
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
     ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
+}
+
+function providerCredentialReference(
+  raw: Record<string, unknown>,
+): Pick<ModelProviderConfig, "apiKeySecretRef"> {
+  return typeof raw.apiKeySecretRef === "string" && raw.apiKeySecretRef.length > 0
+    ? { apiKeySecretRef: raw.apiKeySecretRef }
+    : {};
 }
 
 function parseProvider(
@@ -2282,9 +2291,7 @@ function buildGatewayConfig(
   egress: OutboundHttpEgressConfig | undefined,
   options: ParseGatewayConfigOptions,
 ): GatewayConfig {
-  const parsed = providersRaw.map((item, index) =>
-    parseProvider(item, index, env, egress, options),
-  );
+  const parsed = parseProviders(providersRaw, env, egress, options);
   const providers = providersWithEgress(parsed, egress);
   assertUniqueProviderModelIds(providers);
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
@@ -2311,6 +2318,73 @@ function buildGatewayConfig(
     ...(branding !== undefined ? { branding } : {}),
     ...(groundedAnswers !== undefined ? { groundedAnswers } : {}),
   };
+}
+
+function hasProviderCredentialSource(raw: unknown): raw is Record<string, unknown> {
+  return isRecord(raw) && raw.apiKeySourceModelId !== undefined;
+}
+
+function assertCredentialSourceConnection(
+  provider: ModelProviderConfig,
+  source: ModelProviderConfig,
+): void {
+  if (
+    provider.baseUrl !== source.baseUrl ||
+    provider.apiKeyHeaderName !== source.apiKeyHeaderName ||
+    provider.endpointStyle !== source.endpointStyle ||
+    provider.apiVersion !== source.apiVersion
+  ) {
+    throw new ConfigInvalidError("Provider credential source must use the same connection");
+  }
+}
+
+function parseLinkedProvider(
+  raw: Record<string, unknown>,
+  index: number,
+  sources: ReadonlyMap<string, ParsedProvider>,
+  env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
+  options: ParseGatewayConfigOptions,
+): ParsedProvider {
+  const sourceId = requireNonEmptyString(
+    raw.apiKeySourceModelId,
+    `providers[${String(index)}].apiKeySourceModelId`,
+  );
+  const source = sources.get(sourceId)?.provider;
+  if (source === undefined || sourceId === raw.modelId) {
+    throw new ConfigInvalidError(
+      "Provider credential source must reference an independent provider",
+    );
+  }
+  if (raw.apiKey !== undefined || raw.apiKeySecretRef !== undefined) {
+    throw new ConfigInvalidError("Provider credential source cannot also declare a credential");
+  }
+  const parsed = parseProvider({ ...raw, apiKey: source.apiKey }, index, env, egress, options);
+  assertCredentialSourceConnection(parsed.provider, source);
+  return { ...parsed, provider: { ...parsed.provider, apiKeySourceModelId: sourceId } };
+}
+
+function parseProviders(
+  providersRaw: readonly unknown[],
+  env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
+  options: ParseGatewayConfigOptions,
+): readonly ParsedProvider[] {
+  const independent = new Map<number, ParsedProvider>();
+  for (const [index, raw] of providersRaw.entries()) {
+    if (!hasProviderCredentialSource(raw)) {
+      independent.set(index, parseProvider(raw, index, env, egress, options));
+    }
+  }
+  const sources = new Map(
+    [...independent.values()].map((entry) => [entry.provider.modelId, entry]),
+  );
+  return providersRaw.map((raw, index) => {
+    const parsed = independent.get(index);
+    if (parsed !== undefined) return parsed;
+    if (!hasProviderCredentialSource(raw)) throw new ConfigInvalidError("Invalid provider source");
+    return parseLinkedProvider(raw, index, sources, env, egress, options);
+  });
 }
 
 export function parseGatewayConfig(

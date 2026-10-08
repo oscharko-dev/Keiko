@@ -32,6 +32,7 @@ import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contra
 import {
   absoluteExistingPath,
   resolvePreferredInstallLayout,
+  installLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidence,
 } from "./install-layout.js";
 import { LauncherError } from "./launcher-platforms.js";
@@ -548,6 +549,59 @@ export function resolveExternalOpener(
   return { command: "xdg-open", args: [url] };
 }
 
+const BROWSER_OPENER_ENVIRONMENT = [
+  "PATH",
+  "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "LOCALAPPDATA",
+  "APPDATA",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "XDG_RUNTIME_DIR",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CONFIG_DIRS",
+  "XDG_CURRENT_DESKTOP",
+  "DESKTOP_SESSION",
+  "KDE_FULL_SESSION",
+  "BROWSER",
+  "LANG",
+  "LC_ALL",
+] as const;
+
+function waitForExternalOpener(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error): void => {
+      clearTimeout(timer);
+      child.removeListener("error", onError);
+      child.removeListener("close", onClose);
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onError = (error: Error): void => {
+      finish(error);
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      finish(code === 0 && signal === null ? undefined : new Error("Browser opener failed"));
+    };
+    const timer = setTimeout(() => {
+      finish(new Error("Browser opener result timed out"));
+    }, 5_000);
+    child.once("error", onError);
+    child.once("close", onClose);
+    child.once("spawn", () => {
+      child.unref();
+    });
+  });
+}
+
 export async function defaultOpenExternal(
   url: string,
   platform: NodeJS.Platform,
@@ -558,30 +612,9 @@ export async function defaultOpenExternal(
   const child = spawn(opener.command, [...opener.args], {
     detached: true,
     stdio: "ignore",
-    env: buildSandboxEnv(env, [
-      "PATH",
-      "HOME",
-      "USERPROFILE",
-      "SystemRoot",
-      "WINDIR",
-      "TEMP",
-      "TMP",
-      "DISPLAY",
-      "WAYLAND_DISPLAY",
-      "XAUTHORITY",
-      "XDG_RUNTIME_DIR",
-      "DBUS_SESSION_BUS_ADDRESS",
-      "LANG",
-      "LC_ALL",
-    ]),
+    env: buildSandboxEnv(env, BROWSER_OPENER_ENVIRONMENT),
   });
-  await new Promise<void>((resolveSpawn, rejectSpawn) => {
-    child.once("error", rejectSpawn);
-    child.once("spawn", () => {
-      child.unref();
-      resolveSpawn();
-    });
-  });
+  await waitForExternalOpener(child);
 }
 
 async function maybeOpenBrowser(
@@ -736,11 +769,11 @@ function keepAlreadyRunningUi(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   record: PidRecord,
-): void {
+): boolean {
   io.out(`Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(record.pid)}).\n`);
   if (!options.openBrowser) {
     emitBrowserHandoff(deps.securityLogSink, { outcome: "headless", attestationProvided: false });
-    return;
+    return true;
   }
   const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
   if (record.launchId === undefined || !verify(record.pid, record.launchId)) {
@@ -750,16 +783,36 @@ function keepAlreadyRunningUi(
       attestationProvided: false,
       reason: record.launchId === undefined ? "launch-id-missing" : "identity-unverified",
     });
-    return;
+    return true;
   }
-  writeBrowserOpenRequest(
-    options.stateDir,
-    record.pid,
-    record.launchId,
-    deps.correlationId,
-    options.host === "localhost" ? "localhost" : "127.0.0.1",
-  );
+  if (record.browserOpenSupported !== true) {
+    io.out("Run `keiko restart` to open an authenticated browser for this older launch.\n");
+    emitBrowserHandoff(deps.securityLogSink, {
+      outcome: "restart-required",
+      attestationProvided: false,
+      reason: "channel-unsupported",
+    });
+    return true;
+  }
+  try {
+    writeBrowserOpenRequest(
+      options.stateDir,
+      record.pid,
+      record.launchId,
+      deps.correlationId,
+      options.host === "localhost" ? "localhost" : "127.0.0.1",
+    );
+  } catch (error) {
+    emitBrowserHandoff(deps.securityLogSink, {
+      outcome: "failed",
+      attestationProvided: false,
+      error,
+    });
+    io.err("keiko start: failed to request a browser from the running UI.\n");
+    return false;
+  }
   emitBrowserHandoff(deps.securityLogSink, { outcome: "delegated", attestationProvided: false });
+  return true;
 }
 
 async function handleStaleRunning(
@@ -770,8 +823,7 @@ async function handleStaleRunning(
 ): Promise<number | "start"> {
   const health = await deps.healthProbe(healthUrl(options));
   if (health.version === SDK_VERSION) {
-    keepAlreadyRunningUi(options, io, deps, running);
-    return 0;
+    return keepAlreadyRunningUi(options, io, deps, running) ? 0 : 1;
   }
   io.out(
     `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running.pid)}.\n`,
@@ -821,7 +873,7 @@ function publishPidOrKillChild(
   launchId: string,
 ): boolean {
   try {
-    writeExclusivePidFile(pidFile(options), pid, launchId);
+    writeExclusivePidFile(pidFile(options), pid, launchId, true);
     return true;
   } catch (error) {
     deps.killProcess(pid, "SIGKILL");
@@ -1080,6 +1132,10 @@ function parseWithStateDirGuard(
   return { kind: "options", value: parsed };
 }
 
+function lifecycleInvocationCorrelationId(env: EnvSource): string {
+  return installLayoutOverrideEvidence(env)?.correlationId ?? randomUUID();
+}
+
 export async function runLifecycleCli(
   command: LifecycleCommand,
   args: readonly string[],
@@ -1104,7 +1160,7 @@ export async function runLifecycleCli(
   }
 
   const options = outcome.value;
-  const correlationId = randomUUID();
+  const correlationId = lifecycleInvocationCorrelationId(env);
   writeInstallLayoutOverrideEvidence(deps.securityLogSinkFactory?.(options.stateDir), env);
   const securityLogSink =
     bindSecurityLogCorrelation(deps.securityLogSink, correlationId) ??

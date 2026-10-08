@@ -34,6 +34,7 @@ const BROWSER_HANDOFF_OPERATION = defineActivityLogOperation({
         "identity-mismatch",
         "launch-id-missing",
         "identity-unverified",
+        "channel-unsupported",
       ],
     },
   },
@@ -61,7 +62,7 @@ type BrowserHandoffResult =
   | {
       readonly outcome: "restart-required";
       readonly attestationProvided: false;
-      readonly reason: "launch-id-missing" | "identity-unverified";
+      readonly reason: "launch-id-missing" | "identity-unverified" | "channel-unsupported";
     };
 
 /** Record the launcher decision without retaining the boot URL, attestation, or process secret. */

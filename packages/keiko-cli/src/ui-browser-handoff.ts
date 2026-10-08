@@ -37,18 +37,9 @@ export function createBrowserHandoffPoll(input: BrowserHandoffPollInput): () => 
       const request = takeBrowserOpenRequest(input.stateDir, input.pid, launchId, (error) => {
         failure = error;
       });
-      if (request.state === "refused") {
-        const identity =
-          failure === undefined
-            ? request.reason
-            : `${request.reason}:${securityErrorKind(failure)}`;
-        if (refused !== identity)
-          emitBrowserHandoff(handoffSink(input.sink), {
-            outcome: "refused",
-            attestationProvided: false,
-            reason: request.reason,
-            ...(failure === undefined ? {} : { error: failure }),
-          });
+      if (request.state === "refused" || request.state === "failed") {
+        const identity = blockedRequestIdentity(request, failure);
+        if (refused !== identity) reportBlockedBrowserRequest(input.sink, request, failure);
         refused = identity;
         return;
       }
@@ -67,6 +58,37 @@ export function createBrowserHandoffPoll(input: BrowserHandoffPollInput): () => 
       });
     }
   };
+}
+
+function blockedRequestIdentity(
+  request: Extract<BrowserOpenRequestOutcome, { state: "refused" | "failed" }>,
+  error: unknown,
+): string {
+  return [
+    request.state,
+    request.requestFingerprint,
+    request.correlationId,
+    request.state === "refused" ? request.reason : undefined,
+    error === undefined ? undefined : securityErrorKind(error),
+  ].join(":");
+}
+
+function reportBlockedBrowserRequest(
+  sink: SecurityLogSink | undefined,
+  request: Extract<BrowserOpenRequestOutcome, { state: "refused" | "failed" }>,
+  error: unknown,
+): void {
+  emitBrowserHandoff(
+    handoffSink(sink, request.correlationId),
+    request.state === "failed"
+      ? { outcome: "failed", attestationProvided: false, error }
+      : {
+          outcome: "refused",
+          attestationProvided: false,
+          reason: request.reason,
+          ...(error === undefined ? {} : { error }),
+        },
+  );
 }
 
 async function openRequestedBrowser(

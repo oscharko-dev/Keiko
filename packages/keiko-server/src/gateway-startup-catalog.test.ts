@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -22,6 +22,8 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import type { ServerLogEvent } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
+
+import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
 
 const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
@@ -978,4 +980,171 @@ it("reuses the actual metadata and models transport after a producer-derived bou
   deps.gatewayConfig?.set(parseGatewayConfig(rawConfigFromCurrent(current, undefined, 2000)), true);
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(countModels()).toBe(1);
+});
+
+function stubReadyToolChat(): void {
+  vi.stubGlobal("fetch", (_input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    const calls =
+      typeof init?.body === "string" && init.body.includes("report_readiness")
+        ? [{ function: { name: "report_readiness", arguments: '{"status":"ok"}' } }]
+        : undefined;
+    return Promise.resolve(
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: "OK",
+              ...(calls === undefined ? {} : { tool_calls: calls }),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+    );
+  });
+}
+
+function envCatalogState(): { configPath: string; env: Record<string, string> } {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-startup-env-source-"));
+  directories.push(dir);
+  const configPath = join(dir, "keiko.config.json");
+  const config = managedStartupConfig("discovered");
+  const raw = rawConfigFromCurrent(config, undefined);
+  raw.providers = config.providers.map(({ apiKey: _key, ...provider }) => provider);
+  writeFileSync(configPath, JSON.stringify(raw));
+  return {
+    configPath,
+    env: {
+      KEIKO_MODEL_CHAT_MODEL_API_KEY: "synthetic-env-only-credential",
+      KEIKO_PROVIDER_CREDENTIALS_KEY: Buffer.alloc(32, 0x21).toString("base64"),
+    },
+  };
+}
+
+function configuredEnvCatalog(
+  configPath: string,
+  env: Record<string, string>,
+  modelIds: readonly string[],
+): UiHandlerDeps {
+  const deps = buildUiHandlerDeps({
+    configPath,
+    env,
+    uiDbPath: `${configPath}.ui.db`,
+    evidenceDir: `${configPath}.evidence`,
+    gatewayModelDiscovery: () =>
+      Promise.resolve({ modelIds, chatModelIds: modelIds, embeddingModelIds: [] }),
+  });
+  compositions.push(deps);
+  return deps;
+}
+
+interface StoredCredentialProvider {
+  readonly modelId: string;
+  readonly apiKey?: string;
+  readonly apiKeySecretRef?: string;
+  readonly apiKeySourceModelId?: string;
+}
+
+function persistedCredentialProviders(configPath: string): readonly StoredCredentialProvider[] {
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as {
+    providers: readonly StoredCredentialProvider[];
+  };
+  return raw.providers;
+}
+
+it("keeps a connection env-only credential transient on newly discovered aliases", async () => {
+  stubReadyToolChat();
+  const { configPath, env } = envCatalogState();
+  const deps = configuredEnvCatalog(configPath, env, ["chat-model", "new-chat"]);
+  await vi.waitFor(() => {
+    expect(startupModels(deps).find((model) => model.id === "new-chat")?.toolCalling).toBe(true);
+  });
+  const persisted = persistedCredentialProviders(configPath);
+  expect(persisted.find((provider) => provider.modelId === "new-chat")).toMatchObject({
+    apiKeySourceModelId: "chat-model",
+  });
+  expect(
+    persisted.find((provider) => provider.modelId === "new-chat")?.apiKeySecretRef,
+  ).toBeUndefined();
+  expect(persisted.every((provider) => provider.apiKey === undefined)).toBe(true);
+  expect(
+    openProviderCredentialVault({ configPath, env }).get(providerSecretRef("new-chat")),
+  ).toBeUndefined();
+});
+
+function activeCredentialProviders(deps: UiHandlerDeps): readonly string[] {
+  return deps.gatewayConfig?.current()?.providers.map((provider) => provider.modelId) ?? [];
+}
+
+function configuredAliasKey(deps: UiHandlerDeps): string | undefined {
+  return deps.gatewayConfig
+    ?.configured?.()
+    ?.providers.find((provider) => provider.modelId === "new-chat")?.apiKey;
+}
+
+async function expectReadyAlias(deps: UiHandlerDeps): Promise<void> {
+  await vi.waitFor(() => {
+    expect(startupModels(deps).find((model) => model.id === "new-chat")?.toolCalling).toBe(true);
+  });
+}
+
+it("retains credential sources across actual reconciliation, empty inventory, restart and rotation", async () => {
+  stubReadyToolChat();
+  const { configPath, env } = envCatalogState();
+  const initial = configuredEnvCatalog(configPath, env, ["chat-model", "new-chat"]);
+  await expectReadyAlias(initial);
+  await initial.dispose?.();
+  const rotatedEnv = { ...env, KEIKO_MODEL_CHAT_MODEL_API_KEY: "rotated-transient-source" };
+  const empty = configuredEnvCatalog(configPath, rotatedEnv, []);
+  await vi.waitFor(() => {
+    expect(empty.gatewayConfig?.current()?.providers).toEqual([]);
+  });
+  expect(configuredAliasKey(empty)).toBe("rotated-transient-source");
+  expect(persistedCredentialProviders(configPath).map((provider) => provider.modelId)).toEqual([
+    "chat-model",
+    "new-chat",
+  ]);
+  await empty.dispose?.();
+  const restored = configuredEnvCatalog(configPath, rotatedEnv, ["new-chat"]);
+  await vi.waitFor(() => {
+    expect(activeCredentialProviders(restored)).toEqual(["new-chat"]);
+  });
+  await expectReadyAlias(restored);
+  expect(configuredAliasKey(restored)).toBe("rotated-transient-source");
+  expect(
+    persistedCredentialProviders(configPath).find((provider) => provider.modelId === "chat-model"),
+  ).toBeDefined();
+  expect(
+    openProviderCredentialVault({ configPath, env }).get(providerSecretRef("new-chat")),
+  ).toBeUndefined();
+});
+
+it("preserves the actual durable source reference after transient alias reconciliation and restart", async () => {
+  stubReadyToolChat();
+  const { configPath, env } = envCatalogState();
+  const reference = "existing-source-reference";
+  const vault = openProviderCredentialVault({ configPath, env });
+  vault.set(reference, "durable-source-credential");
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  raw.providers = persistedCredentialProviders(configPath).map((provider) => ({
+    ...provider,
+    apiKeySecretRef: reference,
+  }));
+  writeFileSync(configPath, JSON.stringify(raw));
+  const initial = configuredEnvCatalog(configPath, env, ["chat-model", "new-chat"]);
+  await expectReadyAlias(initial);
+  expect(
+    persistedCredentialProviders(configPath).find((provider) => provider.modelId === "chat-model")
+      ?.apiKeySecretRef,
+  ).toBe(reference);
+  await initial.dispose?.();
+  const { KEIKO_MODEL_CHAT_MODEL_API_KEY: _override, ...durableEnv } = env;
+  const restored = configuredEnvCatalog(configPath, durableEnv, ["new-chat"]);
+  await vi.waitFor(() => {
+    expect(activeCredentialProviders(restored)).toEqual(["new-chat"]);
+  });
+  await expectReadyAlias(restored);
+  expect(configuredAliasKey(restored)).toBe("durable-source-credential");
+  expect(vault.get(reference)).toBe("durable-source-credential");
+  expect(vault.get(providerSecretRef("new-chat"))).toBeUndefined();
 });

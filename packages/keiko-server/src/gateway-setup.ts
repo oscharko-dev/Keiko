@@ -1320,7 +1320,7 @@ function rawProviderFromCurrent(
   return {
     modelId: provider.modelId,
     baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
+    ...rawProviderCredential(provider),
     apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...storedCatalogOrigin(provider),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
@@ -1343,6 +1343,17 @@ function rawProviderFromCurrent(
     ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
     ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
   };
+}
+
+function rawProviderCredential(provider: ModelProviderConfig): Record<string, unknown> {
+  return provider.apiKeySourceModelId === undefined
+    ? {
+        apiKey: provider.apiKey,
+        ...(provider.apiKeySecretRef === undefined
+          ? {}
+          : { apiKeySecretRef: provider.apiKeySecretRef }),
+      }
+    : { apiKeySourceModelId: provider.apiKeySourceModelId };
 }
 
 // The operator's coding opt-outs (owner decision 2026-10-06: live streaming and the model
@@ -2495,7 +2506,7 @@ function discoveredProviderConfig(
     imageInputModelIds: discovery.imageInputModelIds,
     modelMetadata: { [id]: { ...discovery.modelMetadata[id], tokenCounter: "litellm" } },
   });
-  return parseGatewayConfig({
+  const produced = parseGatewayConfig({
     providers: [
       {
         ...provider,
@@ -2510,6 +2521,16 @@ function discoveredProviderConfig(
     circuitBreaker: config.circuitBreaker,
     ...(config.egress === undefined ? {} : { egress: config.egress }),
   });
+  const sourceId = connection.apiKeySourceModelId ?? connection.modelId;
+  return id === sourceId
+    ? produced
+    : {
+        ...produced,
+        providers: produced.providers.map((candidate) => ({
+          ...candidate,
+          apiKeySourceModelId: sourceId,
+        })),
+      };
 }
 
 function reconcileCatalogInventory(

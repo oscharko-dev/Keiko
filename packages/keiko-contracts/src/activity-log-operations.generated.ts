@@ -2102,6 +2102,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "identity-mismatch",
           "launch-id-missing",
           "identity-unverified",
+          "channel-unsupported",
         ],
       },
     },

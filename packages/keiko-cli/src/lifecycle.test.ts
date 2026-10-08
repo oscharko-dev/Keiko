@@ -33,6 +33,7 @@ import {
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
+import { writeExclusivePidFile } from "./state-paths.js";
 
 const TEST_LAUNCH_ID = "ab".repeat(16);
 
@@ -474,7 +475,7 @@ describe("runLifecycleCli", () => {
     );
     expect(spawn.opts.argv0).toBe("Keiko");
     const pidFileText = readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8");
-    expect(pidFileText).toMatch(/^12345\n[0-9a-f]{32}\n$/);
+    expect(pidFileText).toMatch(/^12345\n[0-9a-f]{32}\nbrowser-open-v1\n$/);
     const launchId = pidFileText.split("\n")[1];
     expect(spawn.args).toEqual(expect.arrayContaining(["--launch-id", launchId]));
     expect(spawn.opts.env).toMatchObject({
@@ -517,7 +518,9 @@ describe("runLifecycleCli", () => {
     expect(code).toBe(0);
     expect(spawned[0]?.args).toEqual(expect.arrayContaining(["--launch-id", launchId]));
     expect(spawned[0]?.opts.env).toMatchObject({ KEIKO_UI_LAUNCH_ID: launchId });
-    expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe(`12345\n${launchId}\n`);
+    expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe(
+      `12345\n${launchId}\nbrowser-open-v1\n`,
+    );
   });
 
   it("prefers the active published CLI entry when KEIKO_CLI_BIN_PATH is set", async () => {
@@ -856,7 +859,7 @@ describe("runLifecycleCli", () => {
   it("delegates browser pairing to the running launcher without exposing its secret", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    writeExclusivePidFile(join(root, ".keiko", "ui.pid"), 12345, TEST_LAUNCH_ID, true);
     const c = makeIo();
     const openExternal = vi.fn();
 
@@ -879,9 +882,14 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(0);
     expect(openExternal).not.toHaveBeenCalled();
-    expect(readFileSync(join(root, ".keiko", "ui.browser-open"), "utf8")).toBe(
-      `12345\n${TEST_LAUNCH_ID}\n`,
-    );
+    const request = readFileSync(join(root, ".keiko", "ui.browser-open"), "utf8").split("\n");
+    expect(request).toEqual([
+      "12345",
+      TEST_LAUNCH_ID,
+      expect.stringMatching(/^[0-9a-f-]{36}$/u),
+      "127.0.0.1",
+      "",
+    ]);
   });
 
   it("keeps an already-running UI when the health version matches the installed package", async () => {
@@ -915,7 +923,7 @@ describe("runLifecycleCli", () => {
   it("reopens the browser for an already-running UI when --open is requested", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    writeExclusivePidFile(join(root, ".keiko", "ui.pid"), 12345, TEST_LAUNCH_ID, true);
     const c = makeIo();
     const spawnFn = vi.fn();
     const openExternal = vi.fn();
@@ -994,7 +1002,9 @@ describe("runLifecycleCli", () => {
     expect(c.out()).toContain("stale");
     expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
     expect(spawned).toHaveLength(1);
-    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toMatch(/^67890\n[0-9a-f]{32}\n$/);
+    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toMatch(
+      /^67890\n[0-9a-f]{32}\nbrowser-open-v1\n$/,
+    );
   });
 
   it("restarts an existing process when health is reachable but does not expose a version", async () => {
@@ -1040,7 +1050,9 @@ describe("runLifecycleCli", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("health check did not return the current Keiko version");
     expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
-    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toMatch(/^67890\n[0-9a-f]{32}\n$/);
+    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toMatch(
+      /^67890\n[0-9a-f]{32}\nbrowser-open-v1\n$/,
+    );
   });
 
   it("restarts an existing process when its health endpoint is unreachable", async () => {
@@ -1811,7 +1823,9 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     // hostile name and creates a brand-new, single-link inode there instead of refusing outright,
     // so the command still succeeds and the real pid is published safely.
     expect(code).toBe(0);
-    expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toMatch(/^12345\n[0-9a-f]{32}\n$/);
+    expect(readFileSync(join(stateDir, "ui.pid"), "utf8")).toMatch(
+      /^12345\n[0-9a-f]{32}\nbrowser-open-v1\n$/,
+    );
     expect(lstatSync(join(stateDir, "ui.pid")).nlink).toBe(1);
   });
 });

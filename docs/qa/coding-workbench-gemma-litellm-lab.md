@@ -1395,3 +1395,35 @@ evaluation retains the existing **spdx-exceptions 2.5.0 / CC-BY-3.0** policy ref
 `private-functional-unapproved` and unreleasable; no ignore, exclusion or approval override is added.
 The earlier full private packed-tree proof does not qualify this changed dependency tree. A new
 complete packed-runtime attestation and final global gates remain pending.
+
+### Frozen-scope review closeout: credential sources and browser handoff
+
+ROOT reproduced **nine credential regressions** against unchanged parser, vault and actual catalog
+reconciliation producers. New aliases retain the accepted connection's private source binding,
+resolve it after restart and key rotation, and never vault resolved environment bytes as an alias
+credential. The actual source reference survives a transient override, and empty active inventory
+does not destroy the accepted connection source. Unsafe or ambiguous source references refuse.
+Safe frontend projections are unchanged. ROOT passed **735 tests across four owning suites**,
+strict types, a fresh package/server graph, seven-file lint and formatting. ADR-0046 records this
+existing parser/vault extension; no new secret store or credential-value-derived provenance exists.
+
+ROOT also reproduced **five phase-one start failures**, followed by **74 green tests**. The actual
+external opener exit and timeout now determine its existing outcome; a bounded desktop/profile
+allowlist retains the environment needed to open the browser, excluding launcher/provider secrets.
+Request-write failure preserves the healthy server and records the original failed outcome.
+Collector and handoff use the same persisted install-layout correlation.
+
+Phase two reproduces four behavioral failures plus five stale PID-format assertions. The current
+channel advertises `browser-open-v1`; legacy PID/shutdown layouts remain accepted, and a legacy
+process without that channel reports restart-required. The empty exclusive-publication window
+remains pending, validated request parents and refusal classes deduplicate failures, and only verified
+owner-private malformed or mismatched requests are removed. Unsafe artifacts remain refused and
+retained. The separate intermediate safe-artifact regression and cold-import setup failure remain
+in the frozen handoff evidence, with distinct classifications. ROOT passed **137 tests across four
+owning suites**, strict types, seven-file lint and formatting. These controls establish successful
+opener exit, not browser rendering, pairing-cookie delivery or native Windows execution.
+
+ROOT regenerated the combined canonical catalog after a fresh Contracts build: **539/539 proofs,
+30/30 scenarios and zero violations**; all **97 drift controls** pass after rebuilding the affected
+graph. No new operation, browser transport, model queue or authority bypass is added. Final global
+quality, coverage, Sonar, Linux owner evidence and live qualification remain pending.

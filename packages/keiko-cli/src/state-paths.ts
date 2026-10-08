@@ -24,6 +24,7 @@ import {
   writeSync,
 } from "node:fs";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
@@ -225,10 +226,17 @@ export function isKeikoUiLaunchId(value: string): boolean {
 export interface PidRecord {
   readonly pid: number;
   readonly launchId?: string | undefined;
+  readonly browserOpenSupported?: true;
 }
 
-export function writeExclusivePidFile(path: string, pid: number, launchId?: string): void {
-  writeExclusiveStateFile(path, encodePidFile(pid, launchId));
+export function writeExclusivePidFile(
+  path: string,
+  pid: number,
+  launchId?: string,
+  browserOpenSupported = false,
+): void {
+  const capability = browserOpenSupported && launchId !== undefined ? "browser-open-v1\n" : "";
+  writeExclusiveStateFile(path, `${encodePidFile(pid, launchId)}${capability}`);
 }
 
 function writeExclusiveStateFile(path: string, contents: string): void {
@@ -274,17 +282,22 @@ export function writeBrowserOpenRequest(
   );
 }
 
+interface BrowserRequestIdentity {
+  readonly correlationId?: string;
+  readonly requestFingerprint?: string;
+}
+
 export type BrowserOpenRequestOutcome =
   | { readonly state: "absent" }
-  | {
+  | ({
       readonly state: "refused";
       readonly reason: "unsafe-request" | "invalid-request" | "identity-mismatch";
-    }
-  | {
+    } & BrowserRequestIdentity)
+  | ({ readonly state: "failed" } & BrowserRequestIdentity)
+  | ({
       readonly state: "accepted";
-      readonly correlationId?: string;
       readonly host?: "127.0.0.1" | "localhost";
-    };
+    } & BrowserRequestIdentity);
 
 export function takeBrowserOpenRequest(
   stateDir: string,
@@ -294,9 +307,18 @@ export function takeBrowserOpenRequest(
 ): BrowserOpenRequestOutcome {
   const path = join(stateDir, UI_BROWSER_OPEN_REQUEST_FILE);
   const record = readBrowserRequest(path, pid, launchId, onFailure);
-  if (record.state !== "accepted") return record;
-  rmSync(path, { force: true });
-  return record;
+  if (
+    record.state === "absent" ||
+    (record.state === "refused" && record.reason === "unsafe-request")
+  )
+    return record;
+  try {
+    rmSync(path, { force: true });
+    return record;
+  } catch (error) {
+    reportBrowserRequestFailure(onFailure, error);
+    return record.state === "accepted" ? { ...record, state: "failed" } : record;
+  }
 }
 
 function readBrowserRequest(
@@ -304,7 +326,7 @@ function readBrowserRequest(
   pid: number,
   launchId: string,
   onFailure: ((error: unknown) => void) | undefined,
-): BrowserOpenRequestOutcome {
+): Exclude<BrowserOpenRequestOutcome, { state: "failed" }> {
   let fd: number;
   try {
     fd = openPidFileNoFollow(path, fsConstants.O_RDONLY);
@@ -313,17 +335,33 @@ function readBrowserRequest(
     reportBrowserRequestFailure(onFailure, error);
     return { state: "refused", reason: "unsafe-request" };
   }
+  let requestFingerprint: string | undefined;
   try {
     assertRegularSingleLinkFile(fd, path);
-    if (!isOwnerPrivateDescriptor(fd)) return { state: "refused", reason: "unsafe-request" };
+    const stat = fstatSync(fd);
+    requestFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify([stat.dev, stat.ino, stat.mtimeMs, stat.ctimeMs, stat.size, stat.mode]),
+      )
+      .digest("hex");
+    if (!isOwnerPrivateDescriptor(fd))
+      return { state: "refused", reason: "unsafe-request", requestFingerprint };
     const buffer = Buffer.alloc(256);
     const bytes = readSync(fd, buffer, 0, buffer.length, 0);
-    if (bytes === 0 || bytes === buffer.length)
-      return { state: "refused", reason: "invalid-request" };
-    return parseBrowserRequest(buffer.subarray(0, bytes).toString("utf8"), pid, launchId);
+    if (bytes === 0) return { state: "absent" };
+    if (bytes === buffer.length)
+      return { state: "refused", reason: "invalid-request", requestFingerprint };
+    return {
+      ...parseBrowserRequest(buffer.subarray(0, bytes).toString("utf8"), pid, launchId),
+      requestFingerprint,
+    };
   } catch (error) {
     reportBrowserRequestFailure(onFailure, error);
-    return { state: "refused", reason: "unsafe-request" };
+    return {
+      state: "refused",
+      reason: "unsafe-request",
+      ...(requestFingerprint === undefined ? {} : { requestFingerprint }),
+    };
   } finally {
     closeSync(fd);
   }
@@ -340,7 +378,7 @@ function parseBrowserRequest(
   raw: string,
   pid: number,
   launchId: string,
-): BrowserOpenRequestOutcome {
+): Exclude<BrowserOpenRequestOutcome, { state: "absent" | "failed" }> {
   const lines = raw.split("\n");
   const record = parsePidRecord(raw);
   const metadata = browserRequestMetadata(lines);
@@ -348,7 +386,11 @@ function parseBrowserRequest(
     return { state: "refused", reason: "invalid-request" };
   }
   if (record.pid !== pid || record.launchId !== launchId)
-    return { state: "refused", reason: "identity-mismatch" };
+    return {
+      state: "refused",
+      reason: "identity-mismatch",
+      ...(metadata.correlationId === undefined ? {} : { correlationId: metadata.correlationId }),
+    };
   return {
     state: "accepted",
     ...metadata,
@@ -436,7 +478,11 @@ function parsePidRecord(raw: string): PidRecord | undefined {
   if (pidLine === undefined || !/^[1-9]\d*$/.test(pidLine)) return undefined;
   const launchLine = lines[1]?.trim();
   if (launchLine !== undefined && isKeikoUiLaunchId(launchLine)) {
-    return { pid: Number(pidLine), launchId: launchLine };
+    return {
+      pid: Number(pidLine),
+      launchId: launchLine,
+      ...(lines[2] === "browser-open-v1" ? { browserOpenSupported: true } : {}),
+    };
   }
   return { pid: Number(pidLine) };
 }

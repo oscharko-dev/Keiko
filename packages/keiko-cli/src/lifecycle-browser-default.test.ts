@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
@@ -18,8 +26,24 @@ import { KEIKO_START_SCRIPT } from "./init.js";
 import { defaultOpenExternal, runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
 import { createBrowserHandoffPoll } from "./ui-browser-handoff.js";
 import { KEIKO_UI_LAUNCH_ID_ENV, writeBrowserOpenRequest } from "./state-paths.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 
 const directories: string[] = [];
+const PLATFORM_SESSION_NAMES = [
+  "LOCALAPPDATA",
+  "APPDATA",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_CONFIG_DIRS",
+  "XDG_CURRENT_DESKTOP",
+  "DESKTOP_SESSION",
+  "KDE_FULL_SESSION",
+  "BROWSER",
+] as const;
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -33,9 +57,11 @@ it.skipIf(process.platform === "win32")(
     const fixture = launchFixture();
     const capture = join(fixture.root, "opener-env");
     const probe = join(fixture.root, "probe.cjs");
+    const launcherKey = CODING_APP_SESSION_LAUNCHER_SECRET_ENV;
+    const launchIdKey = KEIKO_UI_LAUNCH_ID_ENV;
     writeFileSync(
       probe,
-      `const fs = require("node:fs"); fs.writeFileSync(process.argv[2], JSON.stringify({ launcher: process.env.${CODING_APP_SESSION_LAUNCHER_SECRET_ENV} !== undefined, launchId: process.env.${KEIKO_UI_LAUNCH_ID_ENV} !== undefined, provider: process.env.KEIKO_DEFAULT_API_KEY !== undefined, path: process.env.PATH === process.argv[3] }));`,
+      `const fs = require("node:fs"); const session = {}; for (const name of ${JSON.stringify(PLATFORM_SESSION_NAMES)}) session[name] = process.env[name]; fs.writeFileSync(process.argv[2], JSON.stringify({ launcher: process.env.${launcherKey} !== undefined, launchId: process.env.${launchIdKey} !== undefined, provider: process.env.KEIKO_DEFAULT_API_KEY !== undefined, path: process.env.PATH === process.argv[3], session }));`,
     );
     writeFileSync(
       join(fixture.root, "xdg-open"),
@@ -46,18 +72,105 @@ it.skipIf(process.platform === "win32")(
     vi.stubEnv(CODING_APP_SESSION_LAUNCHER_SECRET_ENV, "synthetic-launcher-secret");
     vi.stubEnv(KEIKO_UI_LAUNCH_ID_ENV, "synthetic-launch-id");
     vi.stubEnv("KEIKO_DEFAULT_API_KEY", "synthetic-provider-secret");
+    for (const name of PLATFORM_SESSION_NAMES) vi.stubEnv(name, `synthetic-${name}`);
     await defaultOpenExternal("http://127.0.0.1:1983", "linux", process.env);
     await vi.waitFor(() => {
-      expect(existsSync(capture)).toBe(true);
-    });
-    expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual({
-      launcher: false,
-      launchId: false,
-      provider: false,
-      path: true,
+      expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual({
+        launcher: false,
+        launchId: false,
+        provider: false,
+        path: true,
+        session: Object.fromEntries(
+          PLATFORM_SESSION_NAMES.map((name) => [name, `synthetic-${name}`]),
+        ),
+      });
     });
   },
 );
+
+it.skipIf(process.platform === "win32")(
+  "waits for the actual opener result instead of its spawn event",
+  async () => {
+    const fixture = launchFixture();
+    const started = join(fixture.root, "started");
+    const release = join(fixture.root, "release");
+    const exited = join(fixture.root, "exited");
+    const probe = join(fixture.root, "opener.cjs");
+    writeFileSync(
+      probe,
+      `const fs = require("node:fs"); fs.writeFileSync(process.argv[2], "started"); const timer = setInterval(() => { if (fs.existsSync(process.argv[3])) { clearInterval(timer); fs.writeFileSync(process.argv[4], "exited"); } }, 10);`,
+    );
+    writeFileSync(
+      join(fixture.root, "xdg-open"),
+      `#!/bin/sh\nexec '${process.execPath}' '${probe}' '${started}' '${release}' '${exited}'\n`,
+      { mode: 0o700 },
+    );
+    let completed = false;
+    const opening = defaultOpenExternal("http://127.0.0.1:1983", "linux", {
+      PATH: fixture.root,
+    }).then(() => {
+      completed = true;
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(existsSync(started)).toBe(true);
+      });
+      expect(completed).toBe(false);
+    } finally {
+      writeFileSync(release, "release");
+      await opening;
+      await vi.waitFor(() => {
+        expect(existsSync(exited)).toBe(true);
+      });
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "reports a spawned opener's unsuccessful exit as a handoff failure",
+  async () => {
+    const fixture = launchFixture();
+    writeFileSync(join(fixture.root, "xdg-open"), "#!/bin/sh\nexit 3\n", { mode: 0o700 });
+    await expect(
+      defaultOpenExternal("http://127.0.0.1:1983", "linux", { PATH: fixture.root }),
+    ).rejects.toThrow();
+  },
+);
+
+it("reports a browser request write fault without losing the healthy server", async () => {
+  const fixture = launchFixture();
+  await runLifecycleCli("start", ["--no-open"], io, {}, fixture.deps);
+  mkdirSync(join(fixture.root, ".keiko", "ui.browser-open"));
+  fixture.events.length = 0;
+  await expect(
+    runLifecycleCli("start", [], io, {}, { ...fixture.deps, verifyLaunchIdentity: () => true }),
+  ).resolves.toBe(1);
+  expect(fixture.spawned).toHaveLength(1);
+  expectHandoff(fixture.events, "failed", false);
+  expect(JSON.stringify(fixture.events)).not.toContain(fixture.root);
+});
+
+it("delegates with the same persisted install-layout invocation correlation", async () => {
+  const fixture = launchFixture();
+  await runLifecycleCli("start", ["--no-open"], io, {}, fixture.deps);
+  const correlationId = "00000000-0000-4000-8000-000000000071";
+  await runLifecycleCli(
+    "start",
+    [],
+    io,
+    {
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+    },
+    { ...fixture.deps, verifyLaunchIdentity: () => true },
+  );
+  expect(readFileSync(join(fixture.root, ".keiko", "ui.browser-open"), "utf8").split("\n")[2]).toBe(
+    correlationId,
+  );
+  expect(fixture.events.find((event) => event.extra?.outcome === "delegated")?.correlationId).toBe(
+    correlationId,
+  );
+});
 
 function launchFixture(): {
   readonly root: string;
@@ -291,4 +404,49 @@ it("contains an asynchronous opener failure in the same hand-off evidence", asyn
     ),
   ).toBe(0);
   expectHandoff(fixture.events, "failed", true);
+});
+
+it("requires channel support even when a legacy launch identity and version match", async () => {
+  const subject = launchFixture();
+  await runLifecycleCli("start", ["--no-open"], io, {}, subject.deps);
+  const launchId = subject.spawned[0]?.env?.[KEIKO_UI_LAUNCH_ID_ENV];
+  writeFileSync(join(subject.root, ".keiko", "ui.pid"), `424242\n${String(launchId)}\n`);
+  subject.events.length = 0;
+  expect(
+    await runLifecycleCli(
+      "start",
+      [],
+      io,
+      {},
+      { ...subject.deps, verifyLaunchIdentity: () => true },
+    ),
+  ).toBe(0);
+  expect(subject.spawned).toHaveLength(1);
+  expect(existsSync(join(subject.root, ".keiko", "ui.browser-open"))).toBe(false);
+  const line = formatActivityLogProofLine(subject.events[0] ?? {});
+  expect(JSON.parse(line)).toMatchObject({
+    outcome: "restart-required",
+    reason: "channel-unsupported",
+    level: "info",
+  });
+});
+
+it("records the verified identity refusal with its real formatter fields", async () => {
+  const subject = launchFixture();
+  await runLifecycleCli("start", ["--no-open"], io, {}, subject.deps);
+  subject.events.length = 0;
+  await runLifecycleCli(
+    "start",
+    [],
+    io,
+    {},
+    { ...subject.deps, verifyLaunchIdentity: () => false },
+  );
+  const line = formatActivityLogProofLine(subject.events[0] ?? {});
+  expectActivityLogProof("cli.lifecycle.browser-handoff.outcome", line);
+  expect(JSON.parse(line)).toMatchObject({
+    outcome: "restart-required",
+    reason: "identity-unverified",
+    level: "info",
+  });
 });
