@@ -49,6 +49,9 @@ import {
 } from "./codingToolIpc.js";
 import type {
   CodingToolFacade,
+  CodingAcceptedInitializationFacet,
+  CodingAcceptedInitializationReadPort,
+  CodingAcceptedInitializationResult,
   CodingToolFacadeInput,
   CodingToolNativeTextReadFacet,
   CodingToolNativeTextSnapshotResult,
@@ -279,6 +282,8 @@ type SafeToolSettlement = NonNullable<
 >["settleTool"];
 
 export interface OpenCodeToolBridge {
+  /** Inactive initial acquisition on the SAME physical-work gate; never HTTP/model callable. */
+  readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive server-private byte facet; model/HTTP dispatch never selects this surface. */
   readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
   readonly url: string;
@@ -1795,7 +1800,9 @@ function createToolBridge(
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
   const nativeTextRead = nativeToolBridgeFacet(deps, gate, () => listening);
+  const acceptedInitialization = initializationBridgeFacet(deps, gate, () => listening);
   const publicPort: OpenCodeToolBridge = {
+    ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
     get url(): string {
       return toolFacadeOrigin;
@@ -2748,4 +2755,49 @@ export function readBoundedBody(request: IncomingMessage, signal: AbortSignal): 
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
   });
+}
+
+function initializationBridgeFacet(
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+  active: () => boolean,
+): CodingAcceptedInitializationFacet | undefined {
+  const facet = deps.facade.acceptedInitialization;
+  const producer = facet?.run.bind(facet);
+  if (producer === undefined) return undefined;
+  return Object.freeze({
+    run: <T>(
+      initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<CodingAcceptedInitializationResult<T>> => {
+      if (!active()) return Promise.resolve({ ok: false, reason: "initialization-closed" });
+      if (signal?.aborted === true) return Promise.resolve({ ok: false, reason: "cancelled" });
+      const admission = gate.admit(gate.limits.requestDeadlineMs);
+      if (admission === undefined) return Promise.resolve({ ok: false, reason: "busy" });
+      const detach = bindExternalAbort(signal, admission);
+      return executeBridgeInitialization(deps, producer, initialize, admission).finally(detach);
+    },
+  });
+}
+
+async function executeBridgeInitialization<T>(
+  deps: ToolBridgeExecutionDeps,
+  producer: CodingAcceptedInitializationFacet["run"],
+  initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+  admission: AdmittedToolRequest,
+): Promise<CodingAcceptedInitializationResult<T>> {
+  const signal = admission.controller.signal;
+  const work = Promise.resolve().then(() => producer(initialize, signal));
+  releaseAdmissionWhenSettled(work, admission);
+  try {
+    return await raceAbort(work, signal);
+  } catch (error) {
+    if (signal.aborted) {
+      if (abortReason(signal) !== DEADLINE_ABORT) return { ok: false, reason: "cancelled" };
+      emitToolBridgeDeadlineDiagnostic(deps.diagnostics, undefined, admission);
+      return { ok: false, reason: "timeout" };
+    }
+    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
+    return { ok: false, reason: "initialization-failed" };
+  }
 }

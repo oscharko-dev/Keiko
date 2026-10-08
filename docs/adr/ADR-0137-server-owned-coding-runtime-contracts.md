@@ -502,6 +502,18 @@ facet still uses the bounded private text snapshot and public read-path parser; 
 long paths, the full original Files surface and real service transport require further integration.
 It creates no replay cache of file contents and does not activate a native model-visible tool.
 
+The inactive accepted-initialization callback projects one genuinely accepted STARTING lease
+through the existing pending-spawn revalidation owner. Its captured envelope, workspace binding,
+deadline and cancellation signal remain current before each native instruction read and after
+the callback. It supplies only the existing logged byte/stat/list primitives with the fixed
+`native-instructions` purpose; it neither invents a tool context nor consumes model tool calls.
+The one-shot scope closes when its callback settles or accepted authority is revoked. Pending raw
+IO retains the same physical-work reservation until actual settlement, including when transport
+timeout or cancellation has already answered. Accessor, inherited and extra request fields are
+refused before IO. Technical failures retain the original unavailable instruction state.
+This prerequisite covers accepted-workspace initial acquisition only. It does not authorize global
+or above-root reads, watcher refresh, a model/HTTP selector or production host activation.
+
 A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
 immediate directory entries to original native file consumers. Its collected output limit is
 64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused
@@ -537,7 +549,9 @@ network or process-lifetime qualification and do not activate native tools.
 The inactive supplemental disk inspection matches declared canonical metadata to the server-owned
 target supplement, then obtains the complete tree and six fixed Node/bootstrap/lock/SBOM/license/
 provenance digests from one fresh stable pass through the existing attestation owner. Its immutable
-receipt binds the inspected root and reports only supplementary byte qualification. It neither
+receipt binds the inspected root and the platform captured before IO, and reports only
+supplementary byte qualification. Mutation of an input platform during attestation cannot change
+the later prepared-program target. It neither
 measures the archive/count/source claims nor proves executable suitability, current authority or
 point-of-launch freshness. Missing or unsafe files, cancellation and deadlines retain the owning
 attestation errors and registered body-free log. The inactive fixed executable entry now serves the original public `createRoutes` graph through
@@ -563,8 +577,8 @@ The closed canonical startup packet now carries the same captured `direct` or `c
 as the immutable run configuration. The shared contracts package owns that enum and the eleven
 packet fields. A fixed generated data asset supplies those fields, profiles and the 16 KiB ceiling
 to the native host and executable entry. Static imports select the existing fixed direct or Code
-Mode factory; input cannot name a module, executable or source locator. Missing, copied, mutable or
-arbitrary profiles refuse rather than silently choosing direct. The existing factory algorithms
+Mode factory; input cannot name a module, executable or source locator. Missing or arbitrary profiles refuse rather than silently choosing direct; valid mutable input
+is captured before asynchronous work. A copied artifact receipt remains invalid. The existing factory algorithms
 and default model projections remain unchanged. Actual original Tool/Plugin/Location acquisition
 and provider request serialization qualify both selected mapped profiles, including the original
 Code Mode inventory. That inventory includes two additional native items beyond the seventeen

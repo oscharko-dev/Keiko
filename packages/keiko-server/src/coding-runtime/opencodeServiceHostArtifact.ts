@@ -224,9 +224,10 @@ export async function inspectOpenCodeServiceHostDisk(
   input: OpenCodeServiceHostDiskInput,
   options: PortableHandoffOperationOptions,
 ): Promise<OpenCodeServiceHostDiskReceipt> {
+  const target = input.target;
   const approval = copyOpenCodeServiceHostApproval(input.approval);
   if (approval === undefined) return Object.freeze({ ok: false, reason: "host-metadata-invalid" });
-  const trusted = copyOpenCodeServiceHostApprovals(input.trustedSupplement)?.[input.target];
+  const trusted = copyOpenCodeServiceHostApprovals(input.trustedSupplement)?.[target];
   if (trusted === undefined || !sameHostSupplement(approval, trusted)) {
     return Object.freeze({ ok: false, reason: "host-supplement-mismatch" });
   }
@@ -253,9 +254,9 @@ export async function inspectOpenCodeServiceHostDisk(
     result,
     Object.freeze({
       payloadRoot,
-      target: input.target,
+      target,
       approval,
-      trustedSupplement: Object.freeze({ [input.target]: trusted }),
+      trustedSupplement: Object.freeze({ [target]: trusted }),
     }),
   );
   return result;

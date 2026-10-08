@@ -9,13 +9,14 @@ import {
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
+  createProductionAcceptedInitializationAuthority,
   operatorDecisionRequester,
   runManifestAdmission,
 } from "./productionCodingRuntimeResolver.js";
@@ -1278,4 +1279,167 @@ describe("production pending-spawn lease binding", () => {
       expect(backend.canSpawnRuntime(changed)).toBe(false);
     },
   );
+});
+
+import {
+  catalogRuntimeFixture,
+  RUNTIME_NOW,
+} from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
+import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
+import { productionRuntimeAuthorityFacts } from "./productionRuntimeWorkspaceAuthority.js";
+
+function acceptedInitializationProjectionFixture() {
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  roots.push(dirname(dirname(base.root)));
+  const authority = new CodingRuntimeAuthorityService(
+    new EditorAgentAuthorityRegistry(),
+    () => "run-1",
+    () => "nonce-init",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-init",
+    command: "start" as const,
+    taskIntent: "Read initial project instructions",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const confirmation = authority.confirmStart(
+    intent,
+    base.trusted.taskId,
+    base.trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, base.trusted, confirmation, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected actual initial mint");
+  const active = {
+    instance: {
+      workspaceId: base.trusted.workspaceId,
+      repositoryId: base.trusted.projectId,
+      repositoryRoot: base.root,
+      managedWorktreePath: base.root,
+      taskId: base.trusted.taskId,
+      taskBranch: base.trusted.branchRef,
+      baseBranch: "dev",
+      lastVerifiedHead: "1".repeat(40),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    },
+    binding: { activeRoot: base.root },
+  };
+  const workspace = {
+    workspaceLifecycle: { getActive: () => active } as never,
+    managedTaskWorkspaceRoot: dirname(dirname(base.root)),
+    deploymentCeiling: "autonomous-delivery" as const,
+    readWorkspaceHead: () => "1".repeat(40),
+    now: () => new Date(),
+  };
+  const controller = new AbortController();
+  const input = {
+    minted,
+    authority,
+    context: base.trusted,
+    liveFacts: () => productionRuntimeAuthorityFacts(workspace, base.trusted),
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task" as const,
+      canonicalRoot: base.root,
+      repositoryRoot: base.root,
+      fs: nodeWorkspaceFs,
+    }),
+    signal: controller.signal,
+    now: () => new Date(),
+  };
+  return { input, controller, base, minted, authority };
+}
+
+describe("accepted initialization STARTING projection", () => {
+  function fixture() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(RUNTIME_NOW));
+    return acceptedInitializationProjectionFixture();
+  }
+  it("captures the actual accepted binding and budget without delegation or authority renewal", () => {
+    const f = fixture();
+    const delegation = vi.spyOn(f.authority, "resolveCapabilityForDelegation");
+    const projection = createProductionAcceptedInitializationAuthority(f.input);
+    const guard = projection?.resolve();
+    expect(guard?.check()).toBe(true);
+    expect(guard?.binding).toMatchObject({
+      ...f.minted.authorityRef,
+      workspaceId: f.input.liveFacts().binding.workspaceId,
+    });
+    expect(guard?.executionBudget?.deadlineAtMs).toBeLessThanOrEqual(
+      Date.parse(f.base.trusted.expiresAt),
+    );
+    expect(delegation).not.toHaveBeenCalled();
+    expect(projection?.resolve()).toBeUndefined();
+  });
+  it.each(["run", "digest", "audience"] as const)(
+    "refuses copied %s authority instead of granting an initialization guard",
+    (change) => {
+      const f = fixture();
+      const minted = {
+        ...f.minted,
+        authorityRef: {
+          ...f.minted.authorityRef,
+          ...(change === "run" ? { runId: "foreign-run" } : {}),
+          ...(change === "digest" ? { envelopeDigest: "f".repeat(64) } : {}),
+        },
+        ...(change === "audience" ? { toolFacadeCapability: f.minted.modelGatewayCapability } : {}),
+      };
+      expect(
+        createProductionAcceptedInitializationAuthority({ ...f.input, minted }),
+      ).toBeUndefined();
+    },
+  );
+  it("captures immutable mint/context/callback fields once while revalidating actual live facts", () => {
+    const f = fixture();
+    const reference = vi.fn(() => f.minted.authorityRef);
+    const projection = createProductionAcceptedInitializationAuthority({
+      ...f.input,
+      minted: {
+        ...f.minted,
+        get authorityRef() {
+          return reference();
+        },
+      },
+    });
+    const guard = projection?.resolve();
+    expect(reference).toHaveBeenCalledOnce();
+    expect(guard?.check()).toBe(true);
+    f.authority.transition("run-1", "ready", RUNTIME_NOW);
+    expect(guard?.check()).toBe(false);
+    expect(reference).toHaveBeenCalledOnce();
+  });
+  it("refuses changed envelope bytes on a later actual pending-spawn resolution", () => {
+    const f = fixture();
+    const revalidate = f.authority.revalidateCapabilityForPendingSpawn.bind(f.authority);
+    let changed = false;
+    vi.spyOn(f.authority, "revalidateCapabilityForPendingSpawn").mockImplementation((input) => {
+      const actual = revalidate(input);
+      if (!changed || !actual.ok) return actual;
+      return {
+        ...actual,
+        envelope: {
+          ...actual.envelope,
+          authority: { ...actual.envelope.authority, expiresAt: "2026-09-10T12:30:00.000Z" },
+        },
+      };
+    });
+    const guard = createProductionAcceptedInitializationAuthority(f.input)?.resolve();
+    expect(guard?.check()).toBe(true);
+    changed = true;
+    expect(guard?.check()).toBe(false);
+  });
+  it("refuses current-run duration exhaustion before expiry without widening operator phases", () => {
+    const f = fixture();
+    const guard = createProductionAcceptedInitializationAuthority(f.input)?.resolve();
+    expect(guard?.check()).toBe(true);
+    vi.setSystemTime(new Date(Date.parse(RUNTIME_NOW) + f.base.trusted.budget.maxRuntimeMs));
+    expect(guard?.check()).toBe(false);
+  });
 });

@@ -9,7 +9,11 @@ import type {
   CodingToolActionRequest,
   CodingToolResult,
 } from "./codingToolIpc.js";
-import type { GovernedTextSnapshotResult } from "./codingToolReadEditPorts.js";
+import type {
+  GovernedTextSnapshotResult,
+  GovernedNativeFileIO,
+  GovernedNativeFileRequest,
+} from "./codingToolReadEditPorts.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
 export interface CodingToolProducerBinding {
@@ -271,8 +275,53 @@ export interface CodingToolNativeReadOwner {
   readonly revoke: () => void;
 }
 
+/** Server-owned accepted STARTING projection; never populated by a tool or browser request. */
+export interface CodingAcceptedInitializationAuthority {
+  /** Same accepted-run cancellation owner; an additional veto, never an authority grant. */
+  readonly signal: AbortSignal;
+  readonly resolve: (signal?: AbortSignal) => CodingToolMutationGuard | undefined;
+}
+
+export type CodingAcceptedInitializationRequest = Omit<GovernedNativeFileRequest, "purpose">;
+
+export interface CodingAcceptedInitializationReadPort {
+  readonly readBytes: (
+    request: CodingAcceptedInitializationRequest,
+  ) => ReturnType<GovernedNativeFileIO["readBytes"]>;
+  readonly stat: (
+    request: CodingAcceptedInitializationRequest,
+  ) => ReturnType<GovernedNativeFileIO["stat"]>;
+  readonly list: (
+    request: CodingAcceptedInitializationRequest,
+  ) => ReturnType<GovernedNativeFileIO["list"]>;
+}
+
+export type CodingAcceptedInitializationResult<T> =
+  // Completion says the callback settled under current authority, not that native sources exist.
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "initialization-closed"
+        | "initialization-refused"
+        | "initialization-failed"
+        | "cancelled"
+        | "timeout"
+        | "busy";
+    };
+
+export interface CodingAcceptedInitializationFacet {
+  /** One initial acquisition only. Watch refresh cannot reuse this private callback lifetime. */
+  readonly run: <T>(
+    initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+    signal?: AbortSignal,
+  ) => Promise<CodingAcceptedInitializationResult<T>>;
+}
+
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /** Inactive accepted initial acquisition; no model/HTTP dispatch surface. */
+  readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */
   readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
 }

@@ -64,6 +64,7 @@ import {
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type {
   RepositorySemanticSearchLease,
   RepositorySemanticSearchResolver,
@@ -82,7 +83,18 @@ import {
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
-import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolEditOutcome,
+  CodingAcceptedInitializationReadPort,
+} from "./codingToolFacadePorts.js";
+import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
+import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
+import type {
+  SecureWorkspaceNativeFileIO,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
 import { humanDecisionToolResult } from "./codingToolFacade.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
@@ -4686,5 +4698,568 @@ describe("inactive private native text snapshot admission", () => {
     ).resolves.toEqual({ ok: false, reason: "invalid-request" });
     expect(f.processRun).not.toHaveBeenCalled();
     expect(f.activity.map((event) => event.op)).not.toContain("tool-catalog.invocation-started");
+  });
+});
+
+function startingInstructionMint(): ReturnType<typeof catalogRuntimeFixture> {
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  const trusted = { ...base.trusted, budget: { ...base.trusted.budget, maxToolCalls: 1 } };
+  const registry = new EditorAgentAuthorityRegistry();
+  const authority = new CodingRuntimeAuthorityService(
+    registry,
+    () => "run-1",
+    () => "nonce-init",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-init",
+    command: "start" as const,
+    taskIntent: "Read accepted project instructions",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const confirmation = authority.confirmStart(
+    intent,
+    trusted.taskId,
+    trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, trusted, confirmation, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected actual STARTING mint");
+  return { ...base, trusted, registry, authority, minted };
+}
+
+interface InitialInstructionFixture {
+  readonly facade: ReturnType<typeof createProductionManagedWorktreeToolFacade>;
+  readonly facadeInput: ProductionManagedWorktreeToolInput;
+  readonly projectionInput: Parameters<typeof createProductionAcceptedInitializationAuthority>[0];
+  readonly runtime: ReturnType<typeof catalogRuntimeFixture>;
+  readonly read: ReturnType<typeof vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>>;
+  readonly bytes: Uint8Array;
+  readonly activity: ServerLogEvent[];
+  readonly diagnostics: ServerDiagnosticRecord[];
+  readonly controller: AbortController;
+  readonly moveRoot: () => void;
+}
+
+function initialInstructionFixture(
+  effect?: SecureWorkspaceNativeFileIO["readBytes"],
+  makeProjection = true,
+  secure?: SecureWorkspaceTextReadPort,
+): InitialInstructionFixture {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(RUNTIME_NOW));
+  const runtime = startingInstructionMint();
+  const workspace = snapshotWorkspaceInput(runtime);
+  const controller = new AbortController();
+  let root = runtime.root;
+  const access = (): WorkspaceRootAccess => ({
+    kind: "managed-task" as const,
+    canonicalRoot: root,
+    repositoryRoot: runtime.root,
+    fs: nodeWorkspaceFs,
+  });
+  const liveFacts = (): CodingWorkbenchRuntimeAuthorityFacts =>
+    productionRuntimeAuthorityFacts(workspace, runtime.trusted);
+  const projectionInput: InitialInstructionFixture["projectionInput"] = {
+    minted: runtime.minted,
+    authority: runtime.authority,
+    context: runtime.trusted,
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    signal: controller.signal,
+    now: () => new Date(),
+  };
+  const bytes = new TextEncoder().encode("PRIVATE_INITIAL_INSTRUCTIONS");
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -2000 };
+  const read = vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>(
+    effect ??
+      ((): Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>> =>
+        Promise.resolve({ ok: true, bytes, info })),
+  );
+  const activity: ServerLogEvent[] = [];
+  const diagnostics: ServerDiagnosticRecord[] = [];
+  const facadeInput: ProductionManagedWorktreeToolInput = {
+    authority: runtime.authority,
+    authorityRef: runtime.minted.authorityRef,
+    workspaceRoot: runtime.root,
+    authorityExpiresAt: runtime.trusted.expiresAt,
+    deploymentCeiling: "autonomous-delivery" as const,
+    effectiveMode: "autonomous-delivery" as const,
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    secureWorkspaceTextRead: secure ?? {
+      readText: () => Promise.resolve({ ok: true as const, text: "public-read", byteCount: 11 }),
+      nativeFileIO: {
+        readBytes: read,
+        stat: vi.fn(() => Promise.resolve({ ok: true as const, info })),
+        list: vi.fn(() =>
+          Promise.resolve({
+            ok: true as const,
+            info: { ...info, type: "directory" as const },
+            entries: [],
+          }),
+        ),
+      },
+    },
+    editorAgentClient: { action: vi.fn() },
+    onRuntimeEvent: vi.fn(),
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: createCodingToolInvocationRegistry(),
+    activityLog: { write: (event: ServerLogEvent) => void activity.push(event) },
+    diagnostics: { record: (event: ServerDiagnosticRecord) => void diagnostics.push(event) },
+  };
+  const initializationAuthority = makeProjection
+    ? createProductionAcceptedInitializationAuthority(projectionInput)
+    : undefined;
+  const facade = createProductionManagedWorktreeToolFacade({
+    ...facadeInput,
+    initializationAuthority,
+  });
+  return {
+    facade,
+    facadeInput,
+    projectionInput,
+    runtime,
+    read,
+    bytes,
+    activity,
+    diagnostics,
+    controller,
+    moveRoot: (): void => {
+      root = runtime.root + "-moved";
+    },
+  };
+}
+
+function initialInstructionSecurePort(
+  resolveWorkspaceRoot: () => string,
+  run: SecureWorkspaceTextReadProcess["run"],
+): SecureWorkspaceTextReadPort {
+  return createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot,
+    artifact: {
+      target: "darwin-arm64",
+      installRelativePath: "runtime/native/keiko-secure-workspace-read",
+      sha256: DIGEST,
+      protocol: "KSR1/KSS1",
+      nativeProtocol: "KSR3/KSS3",
+      sourceCommit: "b".repeat(40),
+      sourceTreeSha256: DIGEST,
+      signed: true,
+    },
+    artifactVerifier: { verify: () => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run }) },
+  });
+}
+
+function initialInstructionWaiterCount(secure: SecureWorkspaceTextReadPort): number {
+  const waiters: unknown = Object.getOwnPropertyDescriptor(secure, "nativeWaiters")?.value;
+  if (!Array.isArray(waiters)) throw new TypeError("Expected the actual secure-port waiter owner");
+  return waiters.length;
+}
+
+describe("accepted initial instruction acquisition", () => {
+  const instructionFixtures: ReturnType<typeof initialInstructionFixture>[] = [];
+  afterEach(() => {
+    for (const f of instructionFixtures.splice(0)) {
+      f.facadeInput.invocationRegistry.dispose();
+      f.runtime.dispose();
+    }
+    vi.useRealTimers();
+  });
+  function fixture(
+    effect?: SecureWorkspaceNativeFileIO["readBytes"],
+    projection = true,
+    secure?: SecureWorkspaceTextReadPort,
+  ): InitialInstructionFixture {
+    const f = initialInstructionFixture(effect, projection, secure);
+    instructionFixtures.push(f);
+    return f;
+  }
+
+  it("retains the existing registered read formatter and redaction for initial metadata and bytes", async () => {
+    const f = fixture();
+    await f.facade.acceptedInitialization?.run(async (io) => {
+      expect((await io.stat({ relativePath: "PRIVATE_INITIAL_PATH.md" })).ok).toBe(true);
+      expect((await io.list({ relativePath: "PRIVATE_INITIAL_FOLDER" })).ok).toBe(true);
+      expect((await io.readBytes({ relativePath: "PRIVATE_INITIAL_PATH.md" })).ok).toBe(true);
+    });
+    const records = f.activity
+      .filter((e) => e.op === "coding-runtime.workspace-read")
+      .map((event) =>
+        expectActivityLogProof(
+          "coding-runtime.workspace-read.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      );
+    expect(records).toHaveLength(3);
+    for (const record of records)
+      expect(record).toMatchObject({
+        state: "completed",
+        purpose: "native-instructions",
+        correlationId: correlationIdOrUnknown(f.runtime.minted.authorityRef.runId),
+      });
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_INITIAL");
+    expect(JSON.stringify(records)).not.toContain(f.runtime.root);
+  });
+
+  it.each([".env", "../escape.md"])(
+    "refuses sensitive or escaped %s initial paths before private IO",
+    async (relativePath) => {
+      let root = "";
+      const run = vi.fn<SecureWorkspaceTextReadProcess["run"]>();
+      const secure = initialInstructionSecurePort(() => root, run);
+      const f = fixture(undefined, true, secure);
+      root = f.runtime.root;
+      const reason = relativePath === ".env" ? "preflight-refused" : "denied";
+      expect(
+        await f.facade.acceptedInitialization?.run((io) => io.readBytes({ relativePath })),
+      ).toEqual({ ok: true, value: { ok: false, reason } });
+      expect(run).not.toHaveBeenCalled();
+      expect(f.activity.at(-1)?.extra).toMatchObject({
+        state: "failed",
+        reason,
+        purpose: "native-instructions",
+      });
+    },
+  );
+
+  it.each(["accessor", "inherited", "symbol", "range-extra", "range-accessor"])(
+    "rejects %s request properties without invoking getters or admitting IO",
+    async (shape) => {
+      const f = fixture();
+      const getter = vi.fn(() => "AGENTS.md");
+      const request = { relativePath: "AGENTS.md" };
+      if (shape === "accessor") Object.defineProperty(request, "relativePath", { get: getter });
+      if (shape === "inherited") Object.setPrototypeOf(request, { purpose: "native-tool-io" });
+      if (shape === "symbol") Object.defineProperty(request, Symbol("authority"), { value: true });
+      if (shape === "range-extra")
+        Object.assign(request, { range: { offset: 0, length: 1, purpose: "native-tool-io" } });
+      if (shape === "range-accessor")
+        Object.assign(request, {
+          range: {
+            get offset(): string {
+              return getter();
+            },
+            length: 1,
+          },
+        });
+      expect(await f.facade.acceptedInitialization?.run((io) => io.readBytes(request))).toEqual({
+        ok: false,
+        reason: "initialization-failed",
+      });
+      expect(getter).not.toHaveBeenCalled();
+      expect(f.read).not.toHaveBeenCalled();
+      expect(f.diagnostics.at(-1)?.errorClass).toBe("TypeError");
+    },
+  );
+
+  it.each(["acquisition", "postflight"])(
+    "reports an actual %s current-authority technical exception as a closed initialization failure",
+    async (phase) => {
+      const f = fixture(undefined, false);
+      let fail = false;
+      const authority = createProductionAcceptedInitializationAuthority({
+        ...f.projectionInput,
+        resolveWorkspaceRootAccess: () => {
+          if (fail) throw new Error("PRIVATE_CURRENT_AUTHORITY_ERROR_BODY");
+          return f.projectionInput.resolveWorkspaceRootAccess();
+        },
+      });
+      const facade = createProductionManagedWorktreeToolFacade({
+        ...f.facadeInput,
+        initializationAuthority: authority,
+      });
+      const initialize = vi.fn(async (io: CodingAcceptedInitializationReadPort) => {
+        const read = await io.readBytes({ relativePath: "AGENTS.md" });
+        expect(read.ok).toBe(true);
+        fail = true;
+        return "original-value";
+      });
+      fail = phase === "acquisition";
+      expect(await facade.acceptedInitialization?.run(initialize)).toEqual({
+        ok: false,
+        reason: "initialization-failed",
+      });
+      expect(initialize).toHaveBeenCalledTimes(phase === "acquisition" ? 0 : 1);
+      expect(f.read).toHaveBeenCalledTimes(phase === "acquisition" ? 0 : 1);
+      expect(f.diagnostics.at(-1)?.code).toBe("initialization-failed");
+      expect(f.diagnostics.at(-1)?.correlationId).toBe(
+        correlationIdOrUnknown(f.runtime.minted.authorityRef.runId),
+      );
+      expect(JSON.stringify(f.diagnostics)).not.toContain("PRIVATE_CURRENT_AUTHORITY_ERROR_BODY");
+    },
+  );
+
+  it("refuses selectors and logs the closed failure without exposing callback error bodies", async () => {
+    const f = fixture();
+    expect(
+      await f.facade.acceptedInitialization?.run((io) =>
+        io.readBytes({ relativePath: "AGENTS.md", purpose: "native-tool-io" } as never),
+      ),
+    ).toEqual({ ok: false, reason: "initialization-failed" });
+    expect(f.read).not.toHaveBeenCalled();
+    expect(f.diagnostics.at(-1)?.errorClass).toBe("TypeError");
+  });
+
+  it.each(["cancelled", "revoked", "expired", "root"] as const)(
+    "revalidates %s queued initial reads without releasing eight held raw helper slots",
+    async (change) => {
+      let root = "";
+      let release!: (packet: Buffer) => void;
+      const held = new Promise<Buffer>((resolve) => {
+        release = resolve;
+      });
+      const run = vi.fn<SecureWorkspaceTextReadProcess["run"]>(() => held);
+      const secure = initialInstructionSecurePort(() => root, run);
+      const f = fixture(undefined, true, secure);
+      root = f.runtime.root;
+      const native = secure.nativeFileIO;
+      if (native === undefined) throw new TypeError("Expected the private native IO producer");
+      const fills = Array.from({ length: 8 }, () =>
+        native.readBytes({ relativePath: "fixture.ts" }),
+      );
+      let queued = 0;
+      const pending = f.facade.acceptedInitialization?.run(async (io) => {
+        const reads = Array.from({ length: 8 }, (_, index) => {
+          queued++;
+          return io.readBytes({ relativePath: `nested${String(index)}/AGENTS.md` });
+        });
+        return await Promise.all(reads);
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(run).toHaveBeenCalledTimes(8);
+          expect(queued).toBe(8);
+          expect(initialInstructionWaiterCount(secure)).toBe(8);
+        });
+        if (change === "cancelled") f.controller.abort();
+        if (change === "revoked") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+        if (change === "root") f.moveRoot();
+        if (change === "expired") vi.setSystemTime(new Date(f.runtime.trusted.expiresAt));
+        if (change === "cancelled") {
+          expect(await pending).toEqual({ ok: false, reason: "cancelled" });
+          expect(initialInstructionWaiterCount(secure)).toBe(0);
+          expect(await secure.readText({ relativePath: "fixture.ts" })).toEqual({
+            ok: false,
+            reason: "busy",
+          });
+        }
+        release(Buffer.alloc(0));
+        await Promise.all(fills);
+        expect(await pending).toEqual({
+          ok: false,
+          reason: change === "cancelled" ? "cancelled" : "initialization-refused",
+        });
+        expect(run).toHaveBeenCalledTimes(8);
+        expect(
+          f.activity.filter(
+            (e) =>
+              e.op === "coding-runtime.workspace-read" &&
+              e.extra?.purpose === "native-instructions",
+          ),
+        ).toHaveLength(8);
+      } finally {
+        release(Buffer.alloc(0));
+        await Promise.all(fills);
+        await pending;
+      }
+    },
+  );
+
+  it("offers the inactive initial facet only with the actual accepted STARTING projection", () => {
+    const f = fixture();
+    expect(f.runtime.authority.state().state).toBe("starting");
+    expect(f.facade.acceptedInitialization?.run).toBeTypeOf("function");
+    expect(fixture(undefined, false).facade.acceptedInitialization).toBeUndefined();
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it("keeps actual one-tool mint usage zero for initial reads, then admits exactly one real tool", async () => {
+    const f = fixture();
+    const admit = vi.spyOn(f.runtime.authority, "resolveCapabilityForDelegation");
+    const fits = (): boolean =>
+      f.runtime.registry.runtimeDelegationFits(
+        f.runtime.minted.authorityRef,
+        f.runtime.root,
+        "autonomous-delivery",
+        { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+        RUNTIME_NOW,
+      );
+    const result = await f.facade.acceptedInitialization?.run(async (io) => {
+      for (const relativePath of ["AGENTS.md", "nested/AGENTS.md"])
+        expect((await io.readBytes({ relativePath })).ok).toBe(true);
+      return "original-native-value";
+    });
+    expect(result).toEqual({ ok: true, value: "original-native-value" });
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(admit).not.toHaveBeenCalled();
+    expect(fits()).toBe(true);
+    f.runtime.authority.transition("run-1", "ready", RUNTIME_NOW);
+    f.runtime.authority.transition("run-1", "running", RUNTIME_NOW);
+    const request = (id: string): { readonly capability: string; readonly body: string } => ({
+      capability: f.runtime.minted.toolFacadeCapability,
+      body: JSON.stringify({
+        action: "read",
+        relativePath: "fixture.ts",
+        actionId: id,
+        idempotencyKey: id,
+      }),
+    });
+    expect((await f.facade.execute(request("after-instructions"))).status).toBe("completed");
+    expect(fits()).toBe(false);
+    expect((await f.facade.execute(request("exhausted-next-read"))).status).toBe("denied");
+    expect(admit.mock.calls.reduce((sum, [input]) => sum + input.usage.toolCalls, 0)).toBe(2);
+    expect(f.read).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["root", "revoked", "expired", "cancelled", "ready"] as const)(
+    "refuses %s before initial acquisition and never borrows operator authority",
+    async (change) => {
+      const f = fixture();
+      if (change === "root") f.moveRoot();
+      if (change === "revoked") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+      if (change === "expired") vi.setSystemTime(new Date(f.runtime.trusted.expiresAt));
+      if (change === "cancelled") f.controller.abort();
+      if (change === "ready") f.runtime.authority.transition("run-1", "ready", RUNTIME_NOW);
+      const initialize = vi.fn(() => Promise.resolve("must-not-initialize"));
+      expect(await f.facade.acceptedInitialization?.run(initialize)).toEqual({
+        ok: false,
+        reason: "initialization-refused",
+      });
+      expect(initialize).not.toHaveBeenCalled();
+      expect(f.read).not.toHaveBeenCalled();
+      expect(f.diagnostics.at(-1)?.code).toBe("initialization-refused");
+    },
+  );
+
+  it.each(["root", "revoked", "expired", "cancelled"] as const)(
+    "refuses %s after raw work and wipes bytes rather than completing initial instructions",
+    async (change) => {
+      let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+      const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+        (resolve) => {
+          release = resolve;
+        },
+      );
+      const f = fixture(() => held);
+      const pending = f.facade.acceptedInitialization?.run(async (io) =>
+        io.readBytes({ relativePath: "AGENTS.md" }),
+      );
+      await vi.waitFor(() => {
+        expect(f.read).toHaveBeenCalledOnce();
+      });
+      if (change === "root") f.moveRoot();
+      if (change === "revoked") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+      if (change === "expired") vi.setSystemTime(new Date(f.runtime.trusted.expiresAt));
+      if (change === "cancelled") f.controller.abort();
+      release({
+        ok: true,
+        bytes: f.bytes,
+        info: { type: "file", size: f.bytes.length, mtimeMs: -2000 },
+      });
+      expect(await pending).toEqual({
+        ok: false,
+        reason: change === "cancelled" ? "cancelled" : "initialization-refused",
+      });
+      expect(f.bytes.every((byte) => byte === 0)).toBe(true);
+      expect(
+        f.activity.some(
+          (e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "failed",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("closes the original initialization IO after settlement and refuses a second/watch acquisition", async () => {
+    const f = fixture();
+    let captured!: CodingAcceptedInitializationReadPort;
+    expect(
+      await f.facade.acceptedInitialization?.run((io) => {
+        captured = io;
+        return Promise.resolve("done");
+      }),
+    ).toEqual({ ok: true, value: "done" });
+    expect(await captured.readBytes({ relativePath: "AGENTS.md" })).toEqual({
+      ok: false,
+      reason: "preflight-refused",
+    });
+    expect(
+      await f.facade.acceptedInitialization?.run(() => Promise.resolve("watch-refresh")),
+    ).toEqual({
+      ok: false,
+      reason: "initialization-closed",
+    });
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it("retains started raw IO even when the original callback fails and does not await it", async () => {
+    let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+    const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+      (resolve) => {
+        release = resolve;
+      },
+    );
+    const f = fixture(() => held);
+    let settled = false;
+    const pending = f.facade.acceptedInitialization
+      ?.run((io) => {
+        void io.readBytes({ relativePath: "AGENTS.md" });
+        return Promise.reject(new Error("PRIVATE_INITIALIZATION_ERROR_BODY"));
+      })
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    expect(settled).toBe(false);
+    release({
+      ok: true,
+      bytes: f.bytes,
+      info: { type: "file", size: f.bytes.length, mtimeMs: -2000 },
+    });
+    expect(await pending).toEqual({ ok: false, reason: "initialization-failed" });
+    expect(JSON.stringify(f.diagnostics)).not.toContain("PRIVATE_INITIALIZATION_ERROR_BODY");
+    expect(f.diagnostics.at(-1)?.code).toBe("initialization-failed");
+  });
+
+  it("preserves original instruction unavailable value instead of inventing successful source data", async () => {
+    const f = fixture(() => Promise.resolve({ ok: false, reason: "process-failed" }));
+    const result = await f.facade.acceptedInitialization?.run(async (io) => {
+      const read = await io.readBytes({ relativePath: "AGENTS.md" });
+      return read.ok ? { state: "available" } : { state: "unavailable" };
+    });
+    expect(result).toEqual({ ok: true, value: { state: "unavailable" } });
+    expect(
+      f.activity.some(
+        (e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("captures immutable request fields before a caller mutation and fixes the instructions purpose", async () => {
+    const f = fixture();
+    const request = { relativePath: "AGENTS.md", range: { offset: 1, length: 2 } };
+    await f.facade.acceptedInitialization?.run(async (io) => {
+      const pending = io.readBytes(request);
+      request.relativePath = "elsewhere.md";
+      request.range.offset = 9;
+      return await pending;
+    });
+    expect(f.read.mock.calls[0]?.[0]).toMatchObject({
+      relativePath: "AGENTS.md",
+      range: { offset: 1, length: 2 },
+    });
+    expect(
+      f.activity
+        .filter((e) => e.op === "coding-runtime.workspace-read" && e.extra?.state === "completed")
+        .at(-1)?.extra?.purpose,
+    ).toBe("native-instructions");
   });
 });

@@ -71,6 +71,11 @@ import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
 import type {
   CodingToolEditOutcome,
+  CodingAcceptedInitializationAuthority,
+  CodingAcceptedInitializationFacet,
+  CodingAcceptedInitializationReadPort,
+  CodingAcceptedInitializationRequest,
+  CodingAcceptedInitializationResult,
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
@@ -526,6 +531,8 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
 }
 
 export interface ProductionManagedWorktreeToolInput {
+  /** Inactive server-owned initial acquisition projection; absent in ordinary compositions. */
+  readonly initializationAuthority?: CodingAcceptedInitializationAuthority | undefined;
   /** Server-captured catalog projection; legacy compositions retain direct tools. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
@@ -757,7 +764,7 @@ export function createProductionManagedWorktreeToolFacade(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolFacade {
   const readEdit = createReadEditPorts(input);
-  return createRuntimeCodingToolFacade(
+  const facade = createRuntimeCodingToolFacade(
     input.authority,
     managedWorktreeAuthorityContext(input),
     governedPorts(input, readEdit),
@@ -783,6 +790,8 @@ export function createProductionManagedWorktreeToolFacade(
         : { observeEditOutcome: input.observeEditOutcome }),
     },
   );
+  const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
+  return acceptedInitialization === undefined ? facade : { ...facade, acceptedInitialization };
 }
 
 function managedWorktreeAuthorityContext(
@@ -2467,4 +2476,203 @@ function verificationKind(value: string): VerificationKind | undefined {
     default:
       return undefined;
   }
+}
+
+interface AcceptedInitializationScope {
+  open: boolean;
+  readonly pending: Set<Promise<unknown>>;
+  readonly signal: AbortSignal | undefined;
+  readonly guard: CodingToolMutationGuard;
+  readonly refuse: () => void;
+}
+
+function acceptedInitializationFacet(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+): CodingAcceptedInitializationFacet | undefined {
+  const authority = input.initializationAuthority;
+  const resolve = authority?.resolve.bind(authority);
+  const acceptedSignal = authority?.signal;
+  if (resolve === undefined || acceptedSignal === undefined) return undefined;
+  let used = false;
+  return Object.freeze({
+    run: <T>(
+      initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<CodingAcceptedInitializationResult<T>> => {
+      if (used) {
+        reportInitializationFailure(input, "initialization-refused");
+        return Promise.resolve({ ok: false, reason: "initialization-closed" });
+      }
+      used = true;
+      const combined =
+        signal === undefined ? acceptedSignal : AbortSignal.any([acceptedSignal, signal]);
+      return prepareAcceptedInitialization(input, readEdit, initialize, resolve, combined);
+    },
+  });
+}
+
+async function prepareAcceptedInitialization<T>(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+  initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+  resolve: CodingAcceptedInitializationAuthority["resolve"],
+  signal: AbortSignal,
+): Promise<CodingAcceptedInitializationResult<T>> {
+  try {
+    const guard = resolve(signal);
+    if (guard === undefined) {
+      reportInitializationFailure(input, "initialization-refused");
+      return { ok: false, reason: "initialization-refused" };
+    }
+    return await executeAcceptedInitialization(input, readEdit, initialize, {
+      open: true,
+      pending: new Set(),
+      signal,
+      guard,
+      refuse: (): void => {
+        reportInitializationFailure(input, "initialization-refused");
+      },
+    });
+  } catch (error) {
+    reportInitializationFailure(input, "initialization-failed", error);
+    return { ok: false, reason: "initialization-failed" };
+  }
+}
+
+async function executeAcceptedInitialization<T>(
+  input: ProductionManagedWorktreeToolInput,
+  readEdit: CodingToolReadEditPorts,
+  initialize: (io: CodingAcceptedInitializationReadPort) => Promise<T>,
+  scope: AcceptedInitializationScope,
+): Promise<CodingAcceptedInitializationResult<T>> {
+  const close = (): void => {
+    scope.open = false;
+  };
+  scope.signal?.addEventListener("abort", close, { once: true });
+  let result: CodingAcceptedInitializationResult<T>;
+  try {
+    result = { ok: true, value: await initialize(initializationReadPort(readEdit, scope)) };
+  } catch (error) {
+    reportInitializationFailure(input, "initialization-failed", error);
+    result = { ok: false, reason: "initialization-failed" };
+  } finally {
+    close();
+    scope.signal?.removeEventListener("abort", close);
+    await Promise.allSettled(scope.pending);
+  }
+  if (scope.signal?.aborted === true) return { ok: false, reason: "cancelled" };
+  if (!scope.guard.check()) {
+    reportInitializationFailure(input, "initialization-refused");
+    return { ok: false, reason: "initialization-refused" };
+  }
+  return result;
+}
+
+function initializationReadPort(
+  readEdit: CodingToolReadEditPorts,
+  scope: AcceptedInitializationScope,
+): CodingAcceptedInitializationReadPort {
+  const guard = Object.freeze({
+    ...scope.guard,
+    check: (): boolean => scope.open && scope.guard.check(),
+  });
+  const native = readEdit.nativeFileIO;
+  const read = native.readBytes.bind(native);
+  const stat = native.stat.bind(native);
+  const list = native.list.bind(native);
+  return Object.freeze({
+    readBytes: (request: CodingAcceptedInitializationRequest) => {
+      const owned = captureInitializationRequest(request);
+      return retainInitializationWork(scope, () => read(owned, scope.signal, guard));
+    },
+    stat: (request: CodingAcceptedInitializationRequest) => {
+      const owned = captureInitializationRequest(request);
+      return retainInitializationWork(scope, () => stat(owned, scope.signal, guard));
+    },
+    list: (request: CodingAcceptedInitializationRequest) => {
+      const owned = captureInitializationRequest(request);
+      return retainInitializationWork(scope, () => list(owned, scope.signal, guard));
+    },
+  });
+}
+
+function captureInitializationRequest(
+  request: CodingAcceptedInitializationRequest,
+): CodingAcceptedInitializationRequest & { readonly purpose: "native-instructions" } {
+  const fields = initializationDataRecord(request, ["relativePath", "range"]);
+  const relativePath: unknown = fields.relativePath?.value;
+  const range: unknown = fields.range?.value;
+  if (typeof relativePath !== "string") throw new TypeError("Invalid initial instruction path");
+  return Object.freeze({
+    relativePath,
+    purpose: "native-instructions",
+    ...(range === undefined ? {} : { range: captureInitializationRange(range) }),
+  });
+}
+
+function captureInitializationRange(value: unknown): {
+  readonly offset: number;
+  readonly length: number;
+} {
+  const fields = initializationDataRecord(value, ["offset", "length"]);
+  const offset: unknown = fields.offset?.value;
+  const length: unknown = fields.length?.value;
+  if (typeof offset !== "number" || typeof length !== "number")
+    throw new TypeError("Invalid initial instruction range");
+  return Object.freeze({ offset, length });
+}
+
+function initializationDataRecord(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, PropertyDescriptor> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    throw new TypeError("Invalid initial instruction request");
+  const fields = Object.getOwnPropertyDescriptors(value);
+  if (
+    Reflect.ownKeys(value).some((key) => typeof key !== "string" || !keys.includes(key)) ||
+    Object.values(fields).some((field) => !("value" in field))
+  )
+    throw new TypeError("Invalid initial instruction request fields");
+  return fields;
+}
+
+function retainInitializationWork<T>(
+  scope: AcceptedInitializationScope,
+  invoke: () => Promise<T>,
+): Promise<T | { readonly ok: false; readonly reason: "preflight-refused" }> {
+  if (!scope.open || scope.signal?.aborted === true || !scope.guard.check()) {
+    scope.refuse();
+    return Promise.resolve({ ok: false, reason: "preflight-refused" });
+  }
+  const work = Promise.resolve().then(invoke);
+  scope.pending.add(work);
+  void work.then(
+    () => scope.pending.delete(work),
+    () => scope.pending.delete(work),
+  );
+  return work;
+}
+
+function reportInitializationFailure(
+  input: ProductionManagedWorktreeToolInput,
+  code: "initialization-refused" | "initialization-failed",
+  error?: unknown,
+): void {
+  emitServerDiagnostic(input.diagnostics, {
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.accepted-initialization",
+    source: "production-managed-worktree-tools.accepted-initialization",
+    errorClass: error === undefined ? "AuthorityDenied" : contentFreeErrorClass(error),
+    code,
+    message: "server-operation-failed",
+  });
 }

@@ -275,6 +275,24 @@ match both selected mapped profiles with zero model or facade requests. Code Mod
 managed handlers within nineteen inventory items; the two additional items remain unqualified.
 No final package approval, production activation, native workspace tool or complete parity follows.
 
+Root independently qualifies all 10,036 frozen accepted-initializer inputs, then reproduces three
+missing-owner RED controls before merging seven owners while retaining parent Read, selected host
+profile and Location controls. A separate platform-capture regression fails before its fix: mutable
+inspection input must not change the originally captured artifact platform across attestation.
+The combined four owning suites pass 415 tests; strict nine-owner source/test types, scoped lint
+and the forced affected graph pass. Runner-path and duplicate-import setup failures remain recorded
+separately and are not behavioral RED evidence.
+
+The root's rebuilt pinned-original project-instruction graph uses the same workspace for its
+standalone and accepted-STARTING comparisons. Without the initial owner it returns the original
+unavailable state; with it, all forty ordered instructions match exactly. Eighty-one actual C-helper
+children settle and are reaped, with peak concurrency eight. Initialization uses zero model tool
+calls; a subsequent actual model read completes and consumes the one ordinary allowance. A saved
+callback port cannot start more physical IO after closure. An injected primitive failure retains
+the original unavailable instruction result rather than a fabricated empty success. Controlled
+watcher setup, synthetic private helper approval and absence of service/model transport mean this
+is an inactive prerequisite, not global/above-root/watch-refresh or production parity acceptance.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

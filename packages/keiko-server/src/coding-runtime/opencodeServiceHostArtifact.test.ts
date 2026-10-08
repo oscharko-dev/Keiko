@@ -270,6 +270,24 @@ describe("inactive original-host supplementary disk-byte receipt", () => {
     expect(Object.isFrozen(sourceApproval)).toBe(false);
   });
 
+  it("retains the initially inspected platform when mutable input changes during attestation", async () => {
+    const { input } = diskFixture();
+    const sourceInput = { ...input };
+    const acceptedTarget = input.target;
+    const pending = inspectOpenCodeServiceHostDisk(sourceInput, options());
+    sourceInput.target = "windows-x64";
+    const receipt = await pending;
+    if (!receipt.ok) throw new Error("Expected owned supplementary receipt");
+    const program = prepareOpenCodeServiceHostLaunch(receipt, startBinding(), {});
+    if (program === undefined) throw new Error("Expected captured owned program");
+    await expect(
+      reinspectPreparedOpenCodeServiceHost(program, {}, options(), acceptedTarget),
+    ).resolves.toBe(true);
+    await expect(
+      reinspectPreparedOpenCodeServiceHost(program, {}, options(), sourceInput.target),
+    ).resolves.toBe(false);
+  });
+
   it("does not confuse equivalent metadata key order with a different supplement", async () => {
     const { input, approval } = diskFixture();
     const reordered = Object.fromEntries(Object.entries(approval).reverse());

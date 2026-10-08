@@ -46,6 +46,7 @@ import {
 import {
   EditorAgentAuthorityRegistry,
   editorAgentAuthorityRegistry,
+  editorAgentAuthorityEnvelopeDigest,
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import {
@@ -74,6 +75,8 @@ import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegist
 import type {
   CodingRuntimeEditOutcomeObserver,
   CodingToolEditOutcome,
+  CodingAcceptedInitializationAuthority,
+  CodingToolMutationGuard,
   CodingToolFacade,
 } from "./codingToolFacadePorts.js";
 import type { OpenCodeToolBridge } from "./opencodeRuntimeComposition.js";
@@ -1765,4 +1768,130 @@ function launchRequest(
     treeBindingId: minted.treeBindingId,
     authorityEnvelopeDigest: minted.authorityRef.envelopeDigest,
   };
+}
+
+interface AcceptedInitializationProjectionInput {
+  readonly minted: MintedRuntime;
+  readonly authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForPendingSpawn">;
+  readonly context: CodingRuntimeTrustedContext;
+  readonly liveFacts: () => ReturnType<typeof productionRuntimeAuthorityFacts>;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly signal: AbortSignal;
+  readonly now: () => Date;
+}
+
+type AcceptedInitializationProjection = ReturnType<typeof captureAcceptedInitialization>;
+
+/** Inactive server-private projection of one genuine accepted STARTING lease. */
+export function createProductionAcceptedInitializationAuthority(
+  input: AcceptedInitializationProjectionInput,
+): CodingAcceptedInitializationAuthority | undefined {
+  const projection = captureAcceptedInitialization(input);
+  const first = projection.resolution();
+  if (
+    !first.ok ||
+    first.envelope.authority.runId !== projection.runId ||
+    editorAgentAuthorityEnvelopeDigest(first.envelope.authority) !== projection.envelopeDigest ||
+    !first.envelope.authority.actionClasses.includes("workspace-read")
+  )
+    return undefined;
+  const binding = Object.freeze({
+    runId: projection.runId,
+    envelopeDigest: projection.envelopeDigest,
+    workspaceId: first.envelope.binding.workspaceId,
+    workspaceRootDigest: first.envelope.binding.workspaceRootDigest,
+    expiresAt: first.envelope.authority.expiresAt,
+  });
+  const deadlineAtMs = Math.min(
+    Date.parse(binding.expiresAt),
+    Date.parse(first.envelope.issuedAt) + first.envelope.authority.budget.maxRuntimeMs,
+  );
+  let claimed = false;
+  return Object.freeze({
+    signal: projection.signal,
+    resolve: (caller?: AbortSignal): CodingToolMutationGuard | undefined => {
+      if (claimed) return undefined;
+      claimed = true;
+      const check = (): boolean =>
+        currentInitializationProjection(projection, binding, deadlineAtMs, caller);
+      return check()
+        ? Object.freeze({
+            binding,
+            check,
+            executionBudget: Object.freeze({
+              deadlineAtMs,
+              nowMs: (): number => projection.now().getTime(),
+            }),
+          })
+        : undefined;
+    },
+  });
+}
+
+function captureAcceptedInitialization(input: AcceptedInitializationProjectionInput): {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+  readonly workspaceRoot: string;
+  readonly signal: AbortSignal;
+  readonly now: () => Date;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly resolution: () => ReturnType<
+    CodingRuntimeAuthorityService["revalidateCapabilityForPendingSpawn"]
+  >;
+} {
+  const { authority, liveFacts, resolveWorkspaceRootAccess, signal, now, minted, context } = input;
+  const revalidate = authority.revalidateCapabilityForPendingSpawn.bind(authority);
+  const capability = minted.toolFacadeCapability;
+  const reference = minted.authorityRef;
+  const workspaceRoot = context.workspaceRoot;
+  const deploymentCeiling = context.deploymentCeiling;
+  const kind = adapterKind(context);
+  return Object.freeze({
+    runId: reference.runId,
+    envelopeDigest: reference.envelopeDigest,
+    workspaceRoot,
+    signal,
+    now,
+    resolveWorkspaceRootAccess,
+    resolution: () =>
+      revalidate({
+        capability,
+        adapterKind: kind,
+        liveFacts: liveFacts(),
+        workspaceRoot,
+        deploymentCeiling,
+        nowIso: now().toISOString(),
+      }),
+  });
+}
+
+function currentInitializationProjection(
+  projection: AcceptedInitializationProjection,
+  binding: NonNullable<CodingToolMutationGuard["binding"]>,
+  deadlineAtMs: number,
+  caller?: AbortSignal,
+): boolean {
+  if (!initializationRootCurrent(projection, deadlineAtMs, caller)) return false;
+  const checked = projection.resolution();
+  return (
+    checked.ok &&
+    checked.envelope.authority.runId === binding.runId &&
+    editorAgentAuthorityEnvelopeDigest(checked.envelope.authority) === binding.envelopeDigest &&
+    checked.envelope.binding.workspaceId === binding.workspaceId &&
+    checked.envelope.binding.workspaceRootDigest === binding.workspaceRootDigest &&
+    checked.envelope.authority.actionClasses.includes("workspace-read")
+  );
+}
+
+function initializationRootCurrent(
+  projection: AcceptedInitializationProjection,
+  deadlineAtMs: number,
+  caller?: AbortSignal,
+): boolean {
+  return (
+    !projection.signal.aborted &&
+    caller?.aborted !== true &&
+    projection.now().getTime() < deadlineAtMs &&
+    projection.resolveWorkspaceRootAccess()?.canonicalRoot === projection.workspaceRoot
+  );
 }

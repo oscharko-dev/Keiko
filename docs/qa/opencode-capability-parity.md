@@ -44,6 +44,12 @@ canonical startup profile as the run configuration. Actual original Tool/Plugin/
 provider request serialization match both current mapped profiles. Code Mode lists seventeen
 managed handlers plus two additional native inventory items; the latter remain unqualified. This
 selected-profile correction neither admits original native Read nor activates the host.
+The inactive accepted-starting initializer now runs the original project-instruction producer
+without a fabricated Tool.Context or tool-budget charge. A root comparison loads forty ancestor
+instructions in the exact original order through eighty-one real helper children, with at most
+eight live at once and all reaped. Closed callback scopes admit no further IO; subsequent real
+model reads consume the ordinary tool allowance. Global sources, above-root discovery, watcher
+refresh and cross-process service transport remain open acceptance items.
 T01 and the other production statuses below therefore remain incomplete native-parity acceptance.
 The owner requires complete functional parity with Standalone OpenCode. Every narrower, disabled
 or missing native capability is therefore an open acceptance item, including extension and

@@ -61,6 +61,8 @@ import {
 import type {
   CodingToolFacade,
   CodingToolFacadeInput,
+  CodingAcceptedInitializationReadPort,
+  CodingAcceptedInitializationFacet,
   CodingToolNativeTextReadFacet,
   CodingToolNativeReadBeginInput,
   CodingToolNativeTextSnapshotResult,
@@ -75,6 +77,8 @@ import {
   encodeSecureWorkspaceSnapshotResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
 import type { SecureWorkspaceTextReadProcess } from "./secureWorkspaceTextReadProcess.js";
+import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
+import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
   catalogRuntimeFixture,
   RUNTIME_NOW,
@@ -84,6 +88,7 @@ import {
   type ProductionWorkspaceAuthorityInput,
 } from "./productionRuntimeWorkspaceAuthority.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { dirname } from "node:path";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
@@ -182,6 +187,7 @@ interface OpenCodeRuntimeComposition {
     readonly url: string;
     readonly requestDeadlineMs: number;
     readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
+    readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
     handle(input: {
       readonly method: "POST";
       readonly headers: Headers;
@@ -622,7 +628,9 @@ function fixtureToolCapability(control: StartBridgeControl | undefined): string 
 
 function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   const nativeTextRead = facade.nativeTextRead;
+  const acceptedInitialization = facade.acceptedInitialization;
   return {
+    ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
     execute: (input) =>
       input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
@@ -5545,4 +5553,280 @@ it("captures the host profile once and keeps it aligned with materialized config
     "utf8",
   );
   expect(config.includes('{"action":"execute","resource":"*","effect":"allow"}')).toBe(true);
+});
+
+function initialBridgeAuthority(): ReturnType<typeof catalogRuntimeFixture> {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(RUNTIME_NOW));
+  const base = catalogRuntimeFixture("autonomous-delivery");
+  dirs.push(dirname(dirname(base.root)));
+  const authority = new CodingRuntimeAuthorityService(
+    new EditorAgentAuthorityRegistry(),
+    () => FIXTURE_RUN_ID,
+    () => "nonce-initial-bridge",
+    undefined,
+    createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.now() }),
+  );
+  const intent = {
+    schemaVersion: "1" as const,
+    requestId: "request-initial-bridge",
+    command: "start" as const,
+    taskIntent: "Load original accepted project instructions",
+    requestedMode: "autonomous-delivery" as const,
+    modelSource: "keiko-model-gateway" as const,
+  };
+  const proof = authority.confirmStart(
+    intent,
+    base.trusted.taskId,
+    base.trusted.operatorId,
+    RUNTIME_NOW,
+  );
+  const minted = authority.mintStart(intent, base.trusted, proof, RUNTIME_NOW);
+  if (!minted.ok) throw new TypeError("Expected accepted initial bridge mint");
+  return { ...base, authority, minted };
+}
+
+function initialBridgeProducer(effect?: SecureWorkspaceNativeFileIO["readBytes"]): {
+  readonly runtime: ReturnType<typeof catalogRuntimeFixture>;
+  readonly facade: CodingToolFacade;
+  readonly read: ReturnType<typeof vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>>;
+  readonly bytes: Uint8Array;
+  readonly info: { readonly type: "file"; readonly size: number; readonly mtimeMs: number };
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly control: Pick<StartBridgeControl, "workspaceRoot" | "toolFacadeCapability">;
+} {
+  const runtime = initialBridgeAuthority();
+  const workspace = nativeBridgeWorkspace(runtime);
+  const liveFacts = (): ReturnType<typeof productionRuntimeAuthorityFacts> =>
+    productionRuntimeAuthorityFacts(workspace, runtime.trusted);
+  const access = (): WorkspaceRootAccess => ({
+    kind: "managed-task" as const,
+    canonicalRoot: runtime.root,
+    repositoryRoot: runtime.root,
+    fs: nodeWorkspaceFs,
+  });
+  const projection = createProductionAcceptedInitializationAuthority({
+    minted: runtime.minted,
+    authority: runtime.authority,
+    context: runtime.trusted,
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    signal: new AbortController().signal,
+    now: (): Date => new Date(),
+  });
+  const bytes = new Uint8Array([65, 71, 69, 78, 84, 83]);
+  const info = { type: "file" as const, size: bytes.length, mtimeMs: -1 };
+  const read = vi.fn<SecureWorkspaceNativeFileIO["readBytes"]>(
+    effect ??
+      ((): Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>> =>
+        Promise.resolve({ ok: true, bytes, info })),
+  );
+  const registry = createCodingToolInvocationRegistry();
+  const facade = createProductionManagedWorktreeToolFacade({
+    authority: runtime.authority,
+    authorityRef: runtime.minted.authorityRef,
+    workspaceRoot: runtime.root,
+    authorityExpiresAt: runtime.trusted.expiresAt,
+    effectiveMode: "autonomous-delivery",
+    deploymentCeiling: "autonomous-delivery",
+    liveFacts,
+    resolveWorkspaceRootAccess: access,
+    secureWorkspaceTextRead: {
+      readText: vi.fn(),
+      nativeFileIO: {
+        readBytes: read,
+        stat: vi.fn(),
+        list: vi.fn(),
+      },
+    },
+    initializationAuthority: projection,
+    editorAgentClient: { action: vi.fn() },
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: registry,
+    onRuntimeEvent: vi.fn(),
+    activityLog: createBufferedServerLogSink(),
+  });
+  return {
+    runtime,
+    facade,
+    read,
+    bytes,
+    info,
+    registry,
+    control: {
+      workspaceRoot: runtime.root,
+      toolFacadeCapability: runtime.minted.toolFacadeCapability,
+    },
+  };
+}
+
+it("offers the accepted initialization callback only on the inactive private bridge", async () => {
+  const f = initialBridgeProducer();
+  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
+  try {
+    expect(fixture.runtime.toolBridge.acceptedInitialization?.run).toBeTypeOf("function");
+    expect(
+      await fixture.runtime.toolBridge.acceptedInitialization?.run(async (io) => {
+        const read = await io.readBytes({ relativePath: "AGENTS.md" });
+        return read.ok ? read.bytes.length : -1;
+      }),
+    ).toEqual({ ok: true, value: 6 });
+    expect(f.read).toHaveBeenCalledOnce();
+    expect(f.runtime.authority.state().state).toBe("starting");
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("retains initial raw IO through callback failure, interrupted preparation and recovery release", async () => {
+  let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = initialBridgeProducer(() => held);
+  const onRelease = vi.fn();
+  let root = "";
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { requestDeadlineMs: 1000, maxInFlight: 1 },
+    {
+      ...f.control,
+      onRelease,
+      afterStart: (_runtime, runRoot) => {
+        root = runRoot;
+      },
+    },
+  );
+  const pending = fixture.runtime.toolBridge.acceptedInitialization?.run((io) => {
+    void io.readBytes({ relativePath: "AGENTS.md" });
+    return Promise.reject(new Error("PRIVATE_NATIVE_INITIAL_FAILURE"));
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    expect(await pending).toEqual({ ok: false, reason: "cancelled" });
+    expect(() => {
+      accessSync(root);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    release({ ok: true, bytes: f.bytes, info: f.info });
+    await vi.waitFor(() => {
+      expect(f.bytes.every((byte) => byte === 0)).toBe(true);
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect(() => {
+      accessSync(root);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    release({ ok: true, bytes: f.bytes, info: f.info });
+    await pending;
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("shares the existing admission capacity with initial acquisition instead of a second gate", async () => {
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const f = initialBridgeProducer();
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 1000 },
+    f.control,
+  );
+  let entered = false;
+  const pending = fixture.runtime.toolBridge.acceptedInitialization?.run(async () => {
+    entered = true;
+    await held;
+    return "ready";
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(entered).toBe(true);
+    });
+    expect(
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${f.runtime.minted.toolFacadeCapability}` }),
+        body: JSON.stringify({
+          action: "read",
+          relativePath: "AGENTS.md",
+          actionId: "ordinary-call",
+          idempotencyKey: "ordinary-call",
+        }),
+      }),
+    ).toMatchObject({ status: 429 });
+    expect(
+      await fixture.runtime.toolBridge.acceptedInitialization?.run(() =>
+        Promise.resolve("second-start"),
+      ),
+    ).toEqual({ ok: false, reason: "busy" });
+    finish();
+    expect(await pending).toEqual({ ok: true, value: "ready" });
+    expect(
+      await fixture.runtime.toolBridge.acceptedInitialization?.run(() =>
+        Promise.resolve("watch-refresh"),
+      ),
+    ).toEqual({ ok: false, reason: "initialization-closed" });
+  } finally {
+    finish();
+    await pending;
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
+it("returns initial deadline refusal promptly while the actual raw producer remains held", async () => {
+  let release!: (result: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
+  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  const f = initialBridgeProducer(() => held);
+  const fixture = await startBridgeFixture(
+    f.facade,
+    { maxInFlight: 1, requestDeadlineMs: 60 },
+    f.control,
+  );
+  let late!: CodingAcceptedInitializationReadPort;
+  const pending = fixture.runtime.toolBridge.acceptedInitialization?.run((io) => {
+    late = io;
+    return io.readBytes({ relativePath: "AGENTS.md" });
+  });
+  try {
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    expect(await pending).toEqual({ ok: false, reason: "timeout" });
+    expect(await late.readBytes({ relativePath: "nested/AGENTS.md" })).toEqual({
+      ok: false,
+      reason: "preflight-refused",
+    });
+    expect(f.read).toHaveBeenCalledOnce();
+  } finally {
+    release({ ok: true, bytes: f.bytes, info: f.info });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await fixture.stop();
+    f.registry.dispose();
+  }
 });
