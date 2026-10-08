@@ -68,7 +68,7 @@ function hostOptions(host) {
   return {
     app: { name: "keiko-opencode-service-host", version: "2.0.10" },
     password: host.binding.password,
-    database: { path: join(host.binding.stateRoot, "opencode.db") },
+    database: { path: join(host.binding.stateRoot, "state", "opencode.db") },
     config: {
       directory: join(host.binding.stateRoot, "config", "opencode"),
       project: false,
@@ -82,7 +82,8 @@ function hostOptions(host) {
 function acquireHost(input) {
   const binding = copyHostBinding(input);
   const config = readFixedConfig(binding);
-  if (existsSync(join(binding.stateRoot, "opencode.db"))) throw new Error("host-state-not-fresh");
+  if (existsSync(join(binding.stateRoot, "state", "opencode.db")))
+    throw new Error("host-state-not-fresh");
   const rawFetch = globalThis.fetch;
   if (rawFetch === denyAmbientFetch) throw new Error("host-already-owned");
   const providerFetch = fixedPostTransport(rawFetch, {
@@ -301,6 +302,15 @@ function pluginOverride(plugins) {
   );
 }
 
+function makeFixedHostEntry(input) {
+  return Effect.suspend(() => {
+    const binding = copyHostBinding(input);
+    if (realpathSync(process.cwd()) !== binding.workspace)
+      return Effect.fail(new TypeError("host-workspace-mismatch"));
+    return makeFixedOpenCodeServiceHostRoutes(binding);
+  });
+}
+
 // The attested program remains this exact fixed entry; no packet/env field chooses executable code.
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  process.exitCode = await runFixedHostEntry(makeFixedOpenCodeServiceHostRoutes);
+  process.exitCode = await runFixedHostEntry(makeFixedHostEntry);

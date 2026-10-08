@@ -173,6 +173,17 @@ Location binding, one per-run database path, sealed selected-profile assets, Man
 original byte/range/stat/list/FSUtil/search/write/command effects, fresh packed approval, live-model
 comparisons and final complete gates remain open.
 
+The following inactive native-entry correction derives its fixture from the real launch-profile
+producer. Three focused controls genuinely fail against the unchanged host: it opens a different
+database path, accepts that producer's stale database and starts from a different process cwd.
+The corrected host uses `<stateRoot>/state/opencode.db` for both SQLite and freshness, and refuses
+a cwd outside its bound canonical workspace before graph acquisition. Root then passes all
+31 original native service controls with the qualified Node 24.18.0 and OpenCode 2.0.10 inputs,
+including actual original default session creation and its echo retaining the accepted directory.
+Two-file lint, syntax and format checks pass. Refusal retains the existing body-free entry diagnostic.
+This qualifies the entry's database convention and default session context, not BFF accepted-session
+Location validation, an active production host, native IO authority or full Standalone parity.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

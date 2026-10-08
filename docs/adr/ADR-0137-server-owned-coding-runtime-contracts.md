@@ -510,9 +510,13 @@ point-of-launch freshness. Missing or unsafe files, cancellation and deadlines r
 attestation errors and registered body-free log. The inactive fixed executable entry now serves the original public `createRoutes` graph through
 the original Node HTTP/WebSocket server, preserving before-acquisition replacements. It accepts
 one bounded immutable binding packet, publishes readiness after acquisition and closes its native
-scope on stdin EOF. Existing authenticated Fetch factory behavior remains available. This
-transport prerequisite still needs the same Manager/supervisor lifetime, exact workspace location,
-consistent per-run database path, sealed selected-profile assets, current native IO authority and
+scope on stdin EOF. Its executable refuses a process cwd outside the packet's canonical workspace
+before acquiring the original graph. Its database and freshness check use the existing launch
+producer's `<stateRoot>/state/opencode.db` path. Original default session creation and its echo
+retain that workspace Location. These entry controls do not establish the BFF's accepted-session
+Location validation or current native filesystem authority. Existing authenticated Fetch factory
+behavior remains available. This transport prerequisite still needs the same Manager/supervisor
+lifetime, accepted-session Location validation, sealed selected-profile assets, current native IO authority and
 fresh final-payload qualification before production selection or launch. EOF closure alone does
 not prove settlement of delegated effects.
 

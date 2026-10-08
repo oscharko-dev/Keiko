@@ -10,6 +10,7 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -52,18 +53,24 @@ function fixture() {
     join(root, "keiko-native-context.mjs"),
     generated.createGeneratedOpenCodeV2Plugins().keiko_native_context,
   );
-  const config = JSON.stringify(
-    profile.createFixedOpenCodeV2Config({
+  const launch = profile.buildOpenCodeLaunchProfile({
+    executable: process.execPath,
+    stateRoot,
+    contextGeometry: {
       contextWindowTokens: 32768,
       maxInputTokens: 28672,
       maxOutputTokens: 4096,
-    }),
-  );
+    },
+  });
+  assert.equal(launch.ok, true);
+  const config = launch.config;
+  const databasePath = launch.env.OPENCODE_DB;
+  assert.equal(typeof databasePath, "string");
   writeFileSync(join(stateRoot, "config", "opencode", "opencode.json"), config, { mode: 0o600 });
   const input = {
     workspace,
     stateRoot,
-    password: "p".repeat(32),
+    password: launch.env.OPENCODE_SERVER_PASSWORD,
     providerURL: "http://127.0.0.1:1/api/coding-sidecar/gateway/chat/completions",
     providerCapability: "a".repeat(32),
     facadeURL: "http://127.0.0.1:1/api/coding-sidecar/tool",
@@ -72,15 +79,20 @@ function fixture() {
     runId: "run-fixed-entry-test",
     configDigest: sha(config),
   };
-  return { root, input, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return {
+    root,
+    input,
+    databasePath,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
 }
 
-function start(own, args = [], environment = {}) {
+function start(own, args = [], environment = {}, cwd = own.input.workspace) {
   const env = { ...process.env, ...environment };
   delete env.NODE_OPTIONS;
   if ("NODE_OPTIONS" in environment) env.NODE_OPTIONS = environment.NODE_OPTIONS;
   const child = spawn(process.execPath, [join(own.root, "host.mjs"), ...args], {
-    cwd: own.root,
+    cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -277,6 +289,85 @@ test("malformed UTF-8 is refused rather than replaced before JSON validation", a
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "host-entry-refused\n");
   } finally {
+    own.cleanup();
+  }
+});
+
+test("the fixed entry opens the existing launch producer's single database path", async () => {
+  const own = fixture();
+  const owned = start(own);
+  try {
+    owned.child.stdin.write(JSON.stringify(own.input) + "\n");
+    await ready(owned);
+    assert.equal(existsSync(own.databasePath), true);
+    assert.equal(readFileSync(own.databasePath).subarray(0, 16).toString(), "SQLite format 3\0");
+  } finally {
+    await finish(owned);
+    own.cleanup();
+  }
+});
+
+test("the fixed entry refuses the existing launch producer's stale database before readiness", async () => {
+  const own = fixture();
+  writeFileSync(own.databasePath, "PRIVATE_PRIOR_NATIVE_STATE", { mode: 0o600 });
+  const owned = start(own);
+  try {
+    owned.child.stdin.write(JSON.stringify(own.input) + "\n");
+    const result = await Promise.race([
+      owned.exited,
+      ready(owned).then(() => ({ code: 0, stdout: "unexpected-ready", stderr: "" })),
+    ]);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "host-entry-refused\n");
+    assert.equal(readFileSync(own.databasePath, "utf8"), "PRIVATE_PRIOR_NATIVE_STATE");
+  } finally {
+    await finish(owned);
+    own.cleanup();
+  }
+});
+
+test("the fixed entry refuses a cwd different from its bound canonical workspace", async () => {
+  const own = fixture();
+  const owned = start(own, [], {}, own.root);
+  try {
+    owned.child.stdin.write(JSON.stringify(own.input) + "\n");
+    const result = await Promise.race([
+      owned.exited,
+      ready(owned).then(() => ({ code: 0, stdout: "unexpected-ready", stderr: "" })),
+    ]);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "host-entry-refused\n");
+    assert.equal(existsSync(own.databasePath), false);
+  } finally {
+    await finish(owned);
+    own.cleanup();
+  }
+});
+
+test("the original native session and its echo retain the fixed entry's workspace Location", async () => {
+  const own = fixture();
+  const owned = start(own);
+  try {
+    owned.child.stdin.write(JSON.stringify(own.input) + "\n");
+    const url = await ready(owned);
+    const created = await fetch(url + "/api/session", {
+      method: "POST",
+      headers: { ...authenticated(own.input), "content-type": "application/json" },
+      body: JSON.stringify({ title: "native workspace Location control" }),
+    });
+    assert.equal(created.status, 200);
+    const session = await created.json();
+    assert.equal(session.data.location.directory, own.input.workspace);
+    const listed = await fetch(url + "/api/session", { headers: authenticated(own.input) });
+    assert.equal(listed.status, 200);
+    const echo = await listed.json();
+    assert.equal(echo.data.length, 1);
+    assert.equal(echo.data[0].id, session.data.id);
+    assert.equal(echo.data[0].location.directory, own.input.workspace);
+  } finally {
+    await finish(owned);
     own.cleanup();
   }
 });
