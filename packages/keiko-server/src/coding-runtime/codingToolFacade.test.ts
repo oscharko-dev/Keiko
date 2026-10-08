@@ -2305,14 +2305,17 @@ it("never emits an admitted delegate observation for revoked guards, cancellatio
     capability,
     onDelegateStarted,
   };
+  const cancelled = facade();
+  const wire = facade();
   await createCodingToolFacade(ports).execute(input);
-  await createCodingToolFacade(facade()).execute({ ...input, signal: AbortSignal.abort() });
-  await createCodingToolFacade(facade()).execute({
+  await createCodingToolFacade(cancelled).execute({ ...input, signal: AbortSignal.abort() });
+  await createCodingToolFacade(wire).execute({
     ...input,
     body: requestBody({ action: "command", commandId: "test", onDelegateStarted: true }),
   });
   expect(onDelegateStarted).not.toHaveBeenCalled();
-  expect(ports.delegate.execute).not.toHaveBeenCalled();
+  for (const subject of [ports, cancelled, wire])
+    expect(subject.delegate.execute).not.toHaveBeenCalled();
 });
 
 it("observes a claimed edit once while real in-flight duplicates and replay never execute again", async () => {

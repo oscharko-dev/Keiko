@@ -38,9 +38,9 @@ const SHARED = {
   adapterVersion: "2",
   licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
   protocolSchemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
-  helperSourceCommit: "4013c892f0bce15a17454b28b033e67b69cc88a2",
+  helperSourceCommit: "330a71436d0d739bac2cfe7f8dd4c577f6344cf9",
   helperMaxBytes: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
-  helperSourceTreeSha256: "ee3e196f62b6e0a1498d9f7d8e62314d267b48d917abffab18b4f57afd1226a8",
+  helperSourceTreeSha256: "88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b",
 } as const;
 
 export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
@@ -51,16 +51,16 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
     executableTreeSha256: "3b54ba4d809b06ddcbdd87862593c160ad5d96fffcea944000227a9e0785c8fe",
     sbomSha256: "99a6c65ad998b01362c9f2d1e2412643bf19df8e912a9fac8b31e05e38e0ece5",
-    helperSha256: "b03cbaffc4c183a760cf80ad6d745cf1370d1f9b7e5df8e140e6b20e9f12b88d",
-    helperSizeBytes: 34_504,
+    helperSha256: "1c758e0c05e90daac97ed6615ed4f6cc0a324c0304b5ea0d40417fdeb759b6a7",
+    helperSizeBytes: 34_888,
   }),
   "macos-x64": Object.freeze({
     ...SHARED,
     packageName: "@oscharko-dev/keiko-coding-runtime-darwin-x64",
     executableTreeSha256: "df5ade313d45afb848c6ce2f5634c62f47ad0fa8f7c889e9cbd58f6903632710",
     sbomSha256: "e6aec95fa10da6afc27f8116960c80f37ae6fb49be8d908f8fb12139c2795bbf",
-    helperSha256: "bbc3affcee61439468e5b1a6df0e68094003f995073406870d0b07c1949e421f",
-    helperSizeBytes: 13_664,
+    helperSha256: "2b722685dc1059a9eec75164e8f5157602a7802cf6a5b27da6f2a9fd78e07ac6",
+    helperSizeBytes: 18_160,
   }),
 });
 

@@ -2164,16 +2164,25 @@ it.each(["late-bytes", "technical-rejection"] as const)(
     const log = createBufferedServerLogSink();
     const registry = createCodingToolInvocationRegistry({ now: () => 0 });
     const diagnostics: unknown[] = [];
-    const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
-      nativeTextRead: producer,
-      invocationRegistry: registry,
-      catalogActivityLog: log,
-      catalogDiagnostics: {
-        record: (record): void => {
-          diagnostics.push(record);
+    let contextUnavailable = false;
+    const facade = createRuntimeCodingToolFacade(
+      authority,
+      () => {
+        if (contextUnavailable) throw new Error("PRIVATE_CONTEXT_AFTER_PRODUCER");
+        return { ...runtimeContext(), correlationId: "native-producer-correlation" };
+      },
+      governedPorts(),
+      {
+        nativeTextRead: producer,
+        invocationRegistry: registry,
+        catalogActivityLog: log,
+        catalogDiagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
         },
       },
-    });
+    );
     const abort = new AbortController();
     let returned = false;
     const pending = facade.nativeTextRead
@@ -2206,8 +2215,25 @@ it.each(["late-bytes", "technical-rejection"] as const)(
         ),
       ).toBe(true);
       expect(returned).toBe(false);
+      contextUnavailable = outcome === "technical-rejection";
       finish();
       expect(await pending).toEqual({ ok: false, reason: "dispatch-refused" });
+      if (outcome === "technical-rejection") {
+        const failure = log.events.find(
+          (event) => event.extra?.reason === "native-producer-failed",
+        );
+        expect(failure).toMatchObject({
+          op: "coding-runtime.tool-result",
+          correlationId: "native-producer-correlation",
+          errorKind: "unavailable",
+          extra: { reason: "native-producer-failed", state: "discarded" },
+        });
+        expect(diagnostics).toContainEqual(
+          expect.objectContaining({
+            correlationId: "native-producer-correlation",
+          }),
+        );
+      }
       expect(JSON.stringify({ events: log.events, diagnostics })).not.toMatch(
         /PRIVATE_LATE_NATIVE/u,
       );
@@ -2326,14 +2352,15 @@ it("records an original-read child failure without exposing its body and release
     await begun.settled;
     expect(f.settles).toHaveBeenCalledOnce();
     expect(
-      f.log.events.filter((event) => event.extra?.reason === "authority-resolution-failed"),
+      f.log.events.filter((event) => event.extra?.reason === "native-producer-failed"),
     ).toMatchObject([
       {
         op: "coding-runtime.tool-result",
+        correlationId: "run-authority-a",
         extra: {
           actionKind: "read",
           state: "discarded",
-          reason: "authority-resolution-failed",
+          reason: "native-producer-failed",
         },
       },
     ]);
@@ -2810,7 +2837,7 @@ it("emits the existing body-free failure proof for rejected real private byte wo
     ).toMatchObject({
       actionKind: "read",
       state: "discarded",
-      reason: "authority-resolution-failed",
+      reason: "native-producer-failed",
     });
     expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_BYTE_REJECTION_SENTINEL");
     expect(await f.facet.close(begun.identity, "failed")).toBe(false);
@@ -2820,3 +2847,222 @@ it("emits the existing body-free failure proof for rejected real private byte wo
     f.registry.dispose();
   }
 });
+
+describe("private original-read request and failure boundaries", () => {
+  it.each(['{"action":"read"', "{}"])(
+    "classifies malformed begin %s before any authority or producer work",
+    async (body) => {
+      const f = nativeInvocationAuthorityFixture();
+      try {
+        expect(await f.facet.begin({ ...originalReadBeginInput(), body })).toEqual({
+          ok: false,
+          reason: "invalid-request",
+        });
+        expect(f.charges).not.toHaveBeenCalled();
+        expect(f.producer).not.toHaveBeenCalled();
+        expect(
+          f.log.events.filter((event) => event.op === "tool-catalog.dispatch-unbound"),
+        ).toHaveLength(1);
+        expect(
+          f.log.events.some((event) => event.extra?.reason === "authority-resolution-failed"),
+        ).toBe(false);
+      } finally {
+        f.registry.dispose();
+      }
+    },
+  );
+
+  it("preserves an unexpected parser fault as a body-free technical failure", async () => {
+    const f = nativeInvocationAuthorityFixture();
+    const input = originalReadBeginInput();
+    const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+      throw new TypeError("PRIVATE_NATIVE_PARSE_FAULT");
+    });
+    try {
+      expect(await f.facet.begin(input)).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(f.charges).not.toHaveBeenCalled();
+      expect(f.producer).not.toHaveBeenCalled();
+      expect(f.log.events.find((event) => event.op === "coding-runtime.tool-result")).toMatchObject(
+        { errorKind: "unavailable", extra: { reason: "authority-resolution-failed" } },
+      );
+      expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_PARSE_FAULT");
+    } finally {
+      parse.mockRestore();
+      f.registry.dispose();
+    }
+  });
+
+  it.each(["actionId", "idempotencyKey"] as const)(
+    "rejects over-unit %s before CI admission while retaining matching boundary identities",
+    async (field) => {
+      for (const value of ["a".repeat(257), "a".repeat(300), "漢".repeat(256)]) {
+        const f = nativeInvocationAuthorityFixture();
+        const input = originalReadBeginInput();
+        try {
+          expect(
+            await f.facet.begin({
+              ...input,
+              body: JSON.stringify({
+                action: "read",
+                relativePath: "fixture.ts",
+                actionId: "native-original",
+                idempotencyKey: "native-original",
+                [field]: value,
+              }),
+            }),
+          ).toEqual({ ok: false, reason: "invalid-request" });
+          expect(f.charges).not.toHaveBeenCalled();
+          expect(f.producer).not.toHaveBeenCalled();
+        } finally {
+          f.registry.dispose();
+        }
+      }
+      for (const value of ["a".repeat(256), "é".repeat(256), "😀".repeat(128)]) {
+        const f = nativeInvocationAuthorityFixture();
+        try {
+          const begun = await f.facet.begin({
+            ...originalReadBeginInput(),
+            body: JSON.stringify({
+              action: "read",
+              relativePath: "fixture.ts",
+              actionId: "native-original",
+              idempotencyKey: "native-original",
+              [field]: value,
+            }),
+          });
+          expect(begun.ok).toBe(true);
+          if (!begun.ok) throw new TypeError("Expected valid boundary identity");
+          expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+          await begun.settled;
+          expect(f.charges).toHaveBeenCalledOnce();
+          expect(f.settles).toHaveBeenCalledOnce();
+        } finally {
+          f.registry.dispose();
+        }
+      }
+    },
+  );
+
+  it("records genuine child packet capacity as unavailable while replay and closed parents remain denied", async () => {
+    const f = nativeInvocationAuthorityFixture();
+    try {
+      const begun = await f.facet.begin(originalReadBeginInput());
+      if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+      let accepted = 0;
+      for (let ordinal = 1; ordinal <= 2_049; ordinal++) {
+        const result = await f.facet.readTextSnapshot(begun.identity, {
+          ordinal,
+          relativePath: "fixture.ts",
+        });
+        if (!result.ok) {
+          expect(result.reason).toBe("busy");
+          break;
+        }
+        accepted++;
+      }
+      expect(accepted).toBe(2_048);
+      expect(f.producer).toHaveBeenCalledTimes(accepted);
+      const capacity = f.log.events.at(-1);
+      expect(capacity).toMatchObject({
+        op: "coding-runtime.tool-result",
+        correlationId: "run-authority-a",
+        errorKind: "unavailable",
+        extra: { actionKind: "read", state: "discarded", reason: "unavailable" },
+      });
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.tool-result.emitted-line",
+          formatActivityLogProofLine(capacity ?? {}),
+        ),
+      ).toMatchObject({
+        reason: "unavailable",
+        errorKind: "unavailable",
+        correlationId: "run-authority-a",
+      });
+      for (const packet of [
+        { ordinal: 1, relativePath: "fixture.ts" },
+        { ordinal: 1, relativePath: "other.ts" },
+      ]) {
+        expect(await f.facet.readTextSnapshot(begun.identity, packet)).toEqual({
+          ok: false,
+          reason: "dispatch-refused",
+        });
+        expect(f.log.events.at(-1)).toMatchObject({
+          errorKind: "authority-denied",
+          extra: { reason: "denied" },
+        });
+      }
+      expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+      await begun.settled;
+      expect(
+        await f.facet.readTextSnapshot(begun.identity, {
+          ordinal: 2_049,
+          relativePath: "fixture.ts",
+        }),
+      ).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(f.log.events.at(-1)).toMatchObject({
+        errorKind: "authority-denied",
+        extra: { reason: "denied" },
+      });
+      expect(f.charges).toHaveBeenCalledOnce();
+      expect(f.settles).toHaveBeenCalledOnce();
+      expect(f.producer).toHaveBeenCalledTimes(accepted);
+    } finally {
+      f.registry.dispose();
+    }
+  });
+});
+
+it.each(["context", "producer"] as const)(
+  "records an undefined %s failure exactly once at its actual stage",
+  async (stage) => {
+    const log = createBufferedServerLogSink();
+    const diagnostics: unknown[] = [];
+    const producer = { readTextSnapshot: vi.fn().mockRejectedValue(undefined) };
+    const delegated = vi.fn(() => ({ ok: true as const, envelope: fullyAuthorizedEnvelope }));
+    const authority: Parameters<typeof createRuntimeCodingToolFacade>[0] = {
+      resolveCapabilityForDelegation: delegated,
+      revalidateCapabilityForMutation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
+    };
+    const contextFailure = (error: unknown): never => {
+      throw error;
+    };
+    const context = (): ReturnType<typeof runtimeContext> & { readonly correlationId: string } => {
+      if (stage === "context") contextFailure(undefined);
+      return { ...runtimeContext(), correlationId: "undefined-producer-correlation" };
+    };
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const facade = createRuntimeCodingToolFacade(authority, context, governedPorts(), {
+      nativeTextRead: producer,
+      invocationRegistry: registry,
+      catalogActivityLog: log,
+      catalogDiagnostics: {
+        record: (record): void => {
+          diagnostics.push(record);
+        },
+      },
+    });
+    try {
+      expect(
+        await facade.nativeTextRead?.readTextSnapshot({
+          body: originalReadBeginInput().body,
+          capability: "runtime-capability-secret",
+        }),
+      ).toEqual({ ok: false, reason: "dispatch-refused" });
+      const facts = log.events.filter((event) => event.op === "coding-runtime.tool-result");
+      expect(facts).toHaveLength(1);
+      expect(facts[0]).toMatchObject({
+        correlationId:
+          stage === "context" ? "unknown-correlation-id" : "undefined-producer-correlation",
+        extra: {
+          reason: stage === "context" ? "authority-resolution-failed" : "native-producer-failed",
+        },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(producer.readTextSnapshot).toHaveBeenCalledTimes(stage === "context" ? 0 : 1);
+      expect(delegated).toHaveBeenCalledTimes(stage === "context" ? 0 : 1);
+    } finally {
+      registry.dispose();
+    }
+  },
+);

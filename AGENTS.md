@@ -369,9 +369,12 @@ sent back.
   sandbox egress boundary — never route it around that.
 - **Keep evidence redacted.** Manifests, audit exports, and diagnostics report counts, statuses,
   scopes, and hashes — never raw memory bodies, secrets, or customer data.
-- **Tests are hermetic.** No real network, no shared mutable global state, no wall-clock/ordering
-  races, no reliance on a port being free. `await` a condition instead of sleeping. Fixtures are
-  deterministic and self-contained.
+- **Tests are hermetic.** No external network or shared services in ordinary fixtures, no shared
+  mutable global state, no wall-clock/ordering races, no reliance on a port being free. OS and HTTP
+  integration proofs may use fixture-owned loopback listeners on ephemeral ports, with awaited
+  readiness, a reachable positive control, and cleanup in `finally`. `await` a condition instead of
+  sleeping. Fixtures are deterministic and self-contained; separately authorized live-provider
+  qualification records its actual environment and never masquerades as a hermetic unit test.
 - **A behavioural change is documented where decisions live.** If it changes an architectural
   decision, add or update an ADR (and the index). If it's release-impacting, update the
   release-impact catalog / issue metadata.

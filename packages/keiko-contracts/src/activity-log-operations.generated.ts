@@ -9573,6 +9573,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "expired",
           "unavailable",
           "authority-resolution-failed",
+          "native-producer-failed",
         ],
       },
       proposalId: {

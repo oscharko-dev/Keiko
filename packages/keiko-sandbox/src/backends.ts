@@ -53,6 +53,7 @@ function roBindTryArgs(paths: readonly string[]): readonly string[] {
 function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
   // Execution-root mode is for untrusted generated tests. It exposes the disposable root read-write,
   // enough read-only system/toolchain paths to execute Node tooling, and /tmp + /dev + /proc.
+  // Its private PID namespace denies host process access and reaps detached descendants on exit.
   // /tmp is a symlink back into the disposable root so hardcoded temp writes stay contained.
   // It deliberately does not bind /home, /run, /var/run, or the host root as a writable filesystem.
   const commandDir = dirname(plan.command);
@@ -63,6 +64,7 @@ function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
     ...(plan.network === "none" ? ["--unshare-net"] : []),
     "--die-with-parent",
     "--new-session",
+    "--unshare-pid",
     "--proc",
     "/proc",
     "--dev",

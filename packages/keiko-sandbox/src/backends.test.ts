@@ -58,6 +58,7 @@ describe("buildWrappedCommand", () => {
       "--unshare-net",
       "--die-with-parent",
       "--new-session",
+      "--unshare-pid",
       "--proc",
       "/proc",
       "--dev",
@@ -120,6 +121,7 @@ describe("buildWrappedCommand", () => {
       "--unshare-net",
       "--die-with-parent",
       "--new-session",
+      "--unshare-pid",
       "--proc",
       "/proc",
       "--dev",
@@ -171,6 +173,19 @@ describe("buildWrappedCommand", () => {
       "-e",
       "process.exit(0)",
     ]);
+  });
+
+  it("keeps execution-root process confinement when networking is explicitly inherited", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("bubblewrap", {
+        ...plan,
+        filesystem: "execution-root",
+        network: "inherit",
+      }),
+    );
+    expect(wrapped.command).toBe("bwrap");
+    expect(wrapped.args).toContain("--unshare-pid");
+    expect(wrapped.args).not.toContain("--unshare-net");
   });
 
   it("unshare maps root and creates a fresh network namespace", () => {

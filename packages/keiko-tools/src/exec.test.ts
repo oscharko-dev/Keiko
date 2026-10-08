@@ -1987,6 +1987,7 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
       spawn.child.emit("close", 0, null);
       const result = await promise;
       const call = spawn.calls()[0];
+      expect(call?.args).toContain("--unshare-pid");
       expect(call?.args).toEqual(
         expect.arrayContaining(["--bind", realpathSync(root), "/keiko-execution-root"]),
       );

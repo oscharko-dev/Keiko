@@ -186,6 +186,12 @@ Both assured pre-filter execution and in-place repository verification request
 including ordinary package scripts and targeted tests, but repository code may write only inside
 that root and sandbox temporary storage. The governed command runner uses the same existing policy.
 Strict bubblewrap on Linux or Docker/Podman must enforce the requested execution-root boundary.
+Linux execution-root bubblewrap always uses `--unshare-pid`, including explicit inherited-network
+runs. Its private `/proc` excludes host processes, confined code cannot signal them, and the PID
+namespace reaps detached descendants when the main command exits. The compatibility network-only
+wrapper retains its existing contract. Actual compiled `runCommand` controls qualify both an owned
+foreign-process signal/visibility refusal and zero acting descendants after successful settlement,
+with a held-main detached-write positive control.
 On macOS, assured execution-root runs select Docker/Podman with its existing private PID namespace
 and container lifetime; without one, admission fails closed before spawn. Filesystem-scoped Seatbelt
 cannot own a detached `setsid` descendant after the command exits, so it no longer qualifies for
@@ -198,9 +204,11 @@ uses library-file reads and toolchain metadata; it does not receive a general Ho
 Only the dyld boot directories themselves and the selected OS runtime subtree are readable; unrelated
 Preboot children stay denied. Writes and the ephemeral HOME/TMPDIR stay within the accepted root,
 including writes from descendants. Symlink escapes and service-mediated filesystem escapes stay denied.
-Signals and process inspection are restricted to the same sandbox and the process itself.
-Those native profile controls prove individual file, network, signal and process-information
-restrictions only; they do not attest command lifetime. The actual isolated regression returned
+The direct native profile restricts its scoped signal and process-info APIs to the sandbox and
+process itself. Those controls do not provide a PID namespace or exclude every process metadata
+API: sysctl process-table and argument queries are outside that qualified proof. They prove
+individual file, network, signal and process-info restrictions only, not full process isolation
+or command lifetime. The actual isolated regression returned
 `exitCode:0` while a detached owned child could still write after settlement. Signaling the original
 process group cannot contain a child that has left it. Native macOS assured execution may qualify
 again only with the existing attested descendant owner wired through the command lifecycle, with

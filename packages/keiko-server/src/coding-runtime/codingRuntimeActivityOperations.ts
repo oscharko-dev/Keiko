@@ -51,6 +51,7 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
         "expired",
         "unavailable",
         "authority-resolution-failed",
+        "native-producer-failed",
       ],
     },
     proposalId: {

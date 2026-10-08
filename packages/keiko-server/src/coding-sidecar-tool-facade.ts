@@ -360,6 +360,7 @@ export async function handleCodingSidecarToolFacade(
     return parsed;
   }
   const disconnect = bindRouteDisconnect(ctx);
+  const deadlineAtMs = Date.now() + bridge.requestDeadlineMs;
   try {
     const result = await bridge.handle({
       method: "POST",
@@ -367,7 +368,8 @@ export async function handleCodingSidecarToolFacade(
       body: JSON.stringify(parsed),
       signal: disconnect.signal,
     });
-    if (result.nativeBytes !== undefined) return await deliverNativeToolBytes(ctx, result);
+    if (result.nativeBytes !== undefined)
+      return await deliverNativeToolBytes(ctx, result, disconnect.signal, deadlineAtMs);
     if (result.nativeResult === true) {
       if (result.status !== 200)
         logToolFacadeRejection(
@@ -388,6 +390,8 @@ export async function handleCodingSidecarToolFacade(
 async function deliverNativeToolBytes(
   ctx: RouteContext,
   result: OpenCodeToolBridgeResponse,
+  signal: AbortSignal,
+  deadlineAtMs: number,
 ): Promise<HandlerOutcome> {
   const bytes = result.nativeBytes;
   if (bytes === undefined) throw new TypeError("native-response-missing");
@@ -400,7 +404,7 @@ async function deliverNativeToolBytes(
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
     });
-    await writeNativeBytes(ctx, bytes);
+    await writeNativeBytes(ctx, bytes, signal, deadlineAtMs);
   } catch (error) {
     reportNativeDeliveryFailure(ctx, error);
     ctx.res.destroy();
@@ -410,10 +414,21 @@ async function deliverNativeToolBytes(
   return STREAMING;
 }
 
-function writeNativeBytes(ctx: RouteContext, bytes: Uint8Array): Promise<void> {
+function writeNativeBytes(
+  ctx: RouteContext,
+  bytes: Uint8Array,
+  signal: AbortSignal,
+  deadlineAtMs: number,
+): Promise<void> {
+  const refusal = nativeDeliveryRefusal(signal, deadlineAtMs);
+  if (refusal !== undefined) return Promise.reject(refusal);
   return new Promise((resolve, reject) => {
     let offset = 0;
+    let settled = false;
+    let detachLifetime = (): void => undefined;
     const cleanup = (): void => {
+      settled = true;
+      detachLifetime();
       ctx.res.removeListener("drain", write);
       ctx.res.removeListener("finish", finished);
       ctx.res.removeListener("close", closed);
@@ -432,17 +447,10 @@ function writeNativeBytes(ctx: RouteContext, bytes: Uint8Array): Promise<void> {
       else reportNativeWriteFailure(new Error("native-response-disconnected"));
     };
     const write = (): void => {
+      if (settled) return;
       try {
-        while (offset < bytes.byteLength) {
-          const end = Math.min(offset + 65536, bytes.byteLength);
-          const part = bytes.subarray(offset, end);
-          offset = end;
-          if (!ctx.res.write(part)) {
-            ctx.res.once("drain", write);
-            return;
-          }
-        }
-        ctx.res.end();
+        offset = writeNativeChunks(ctx, bytes, offset);
+        if (!ctx.res.writableEnded) ctx.res.once("drain", write);
       } catch (error) {
         reportNativeWriteFailure(error);
       }
@@ -450,13 +458,62 @@ function writeNativeBytes(ctx: RouteContext, bytes: Uint8Array): Promise<void> {
     ctx.res.once("finish", finished);
     ctx.res.once("close", closed);
     ctx.res.once("error", reportNativeWriteFailure);
+    detachLifetime = bindNativeDeliveryLifetime(signal, deadlineAtMs, reportNativeWriteFailure);
     if (ctx.res.destroyed) closed();
     else write();
   });
 }
 
+function nativeDeliveryRefusal(
+  signal: AbortSignal,
+  deadlineAtMs: number,
+): DOMException | undefined {
+  if (signal.aborted) return new DOMException("native-response-aborted", "AbortError");
+  if (deadlineAtMs <= Date.now())
+    return new DOMException("native-response-deadline", "TimeoutError");
+  return undefined;
+}
+
+function writeNativeChunks(ctx: RouteContext, bytes: Uint8Array, start: number): number {
+  let offset = start;
+  while (offset < bytes.byteLength) {
+    const end = Math.min(offset + 65536, bytes.byteLength);
+    const part = bytes.subarray(offset, end);
+    offset = end;
+    if (!ctx.res.write(part)) return offset;
+  }
+  ctx.res.end();
+  return offset;
+}
+
+function bindNativeDeliveryLifetime(
+  signal: AbortSignal,
+  deadlineAtMs: number,
+  reportFailure: (error: unknown) => void,
+): () => void {
+  const onAbort = (): void => {
+    reportFailure(new DOMException("native-response-aborted", "AbortError"));
+  };
+  const timer = setTimeout(
+    () => {
+      reportFailure(new DOMException("native-response-deadline", "TimeoutError"));
+    },
+    Math.max(0, deadlineAtMs - Date.now()),
+  );
+  signal.addEventListener("abort", onAbort, { once: true });
+  return (): void => {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+  };
+}
+
 function reportNativeDeliveryFailure(ctx: RouteContext, error: unknown): void {
-  logToolFacadeRejection(ctx, 502, "native-response-failed");
+  const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+  logToolFacadeRejection(
+    ctx,
+    timedOut ? 408 : 502,
+    timedOut ? "deadline" : "native-response-failed",
+  );
   emitServerDiagnostic(undefined, {
     correlationId: correlationIdOrUnknown(ctx.correlationId),
     timestamp: new Date().toISOString(),

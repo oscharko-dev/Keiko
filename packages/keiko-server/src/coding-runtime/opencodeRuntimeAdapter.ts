@@ -1256,8 +1256,8 @@ function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "
     '    await ctx.tool.hook("execute.before", (event) => {',
     '      if (event.tool !== "execute") return;',
     "      const key = directIdentity(event);",
-    '      if (disposed || parents.has(key) || parents.size >= MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
-    "      parents.set(key, { sessionID: event.sessionID, messageID: event.messageID, agent: event.agent, ordinal: 0, closed: false });",
+    '      if (disposed || parents.has(key) || closedParents.has(key) || parents.size >= MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
+    "      parents.set(key, { sessionID: event.sessionID, messageID: event.messageID, agent: event.agent, ordinal: 0 });",
     "    });",
     '    await ctx.tool.hook("execute.after", (event) => {',
     '      if (event.tool !== "execute") return;',
@@ -1269,7 +1269,7 @@ function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "
     ),
     ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => `      register_${name}(editor);`),
     "    });",
-    "    return () => { disposed = true; parents.clear(); };",
+    "    return () => { disposed = true; parents.clear(); closedParents.clear(); };",
     "  },",
     "};",
     ...(host ? ["  return plugin;", "};"] : []),
@@ -1280,32 +1280,38 @@ function v2InvocationIdentitySource(host: boolean): readonly string[] {
   return [
     `    const MAX_IDENTITIES = ${String(MAX_RECENT_IDENTITIES)};`,
     "    const parents = new Map();",
+    "    const closedParents = new Set();",
     "    let disposed = false;",
     "    const directIdentity = (context) => `${context.sessionID}:${context.id}`;",
     "    function closeParent(context) {",
-    "      const parent = parents.get(directIdentity(context));",
-    "      if (!parent || parent.closed) return false;",
-    "      parent.closed = true;",
+    "      const key = directIdentity(context);",
+    "      if (!parents.has(key)) return false;",
+    "      parents.delete(key);",
+    "      closedParents.add(key);",
+    "      if (closedParents.size > MAX_IDENTITIES) closedParents.delete(closedParents.values().next().value);",
     ...(host ? ["      onParentClosed?.(context);"] : []),
     "      return true;",
     "    }",
-    "    function assertInvocationOpen(context) {",
-    "      const parent = parents.get(directIdentity(context));",
-    '      if (disposed || parent?.closed) throw new Error("keiko-tool-unavailable");',
+    "    function assertInvocationOpen(context, requireParent = false) {",
+    "      const key = directIdentity(context);",
+    '      if (disposed || closedParents.has(key) || (requireParent && !parents.has(key))) throw new Error("keiko-tool-unavailable");',
     "    }",
-    "    async function captureInvocationIdentity(context) {",
+    "    async function captureInvocationIdentity(context, requireParent = false) {",
     '      if (disposed) throw new Error("keiko-tool-unavailable");',
     "      const key = directIdentity(context);",
     "      const parent = parents.get(key);",
-    "      if (!parent) return key;",
-    '      if (parent.closed || parent.agent !== context.agent || parent.messageID !== context.messageID) throw new Error("keiko-tool-invalid");',
+    "      if (!parent) {",
+    '        if (requireParent || closedParents.has(key)) throw new Error("keiko-tool-invalid");',
+    "        return key;",
+    "      }",
+    '      if (parent.agent !== context.agent || parent.messageID !== context.messageID) throw new Error("keiko-tool-invalid");',
     "      const ordinal = ++parent.ordinal;",
     '      if (ordinal > MAX_IDENTITIES) throw new Error("keiko-tool-invalid");',
     '      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));',
     '      const hash = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");',
     "      const identity = `${parent.sessionID}:cm_${hash}_${ordinal}`;",
     '      if (identity.length > 256) throw new Error("keiko-tool-invalid");',
-    "      assertInvocationOpen(context);",
+    "      assertInvocationOpen(context, true);",
     "      return identity;",
     "    }",
   ];
@@ -1531,6 +1537,7 @@ function toolSourceFormat(
   action: GeneratedToolAction,
   name: string | undefined,
   version: "v1" | "v2",
+  nativeCodeMode: boolean,
 ): ToolSourceFormat {
   if (version === "v1")
     return {
@@ -1552,13 +1559,12 @@ function toolSourceFormat(
     start: [`function register_${name ?? action}(editor) {`],
     validation: v2ResultEnvelopeSource(action),
     statusGuard: "  if (!validCanonicalEnvelope(value)) return false;",
-    identity:
-      "    args = JSON.parse(JSON.stringify(args)); const identity = await captureInvocationIdentity(context);",
+    identity: `    args = JSON.parse(JSON.stringify(args)); const identity = await captureInvocationIdentity(context, ${String(nativeCodeMode)});`,
     approval: [
       "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
       "    if (refusal !== undefined) return refusal;",
     ],
-    assertOpen: ["    assertInvocationOpen(context);"],
+    assertOpen: [`    assertInvocationOpen(context, ${String(nativeCodeMode)});`],
     subscribeAbort: [],
     unsubscribeAbort: [],
     result: "      return { content: modelContent(result, text), output: result, metadata: {} };",
@@ -1576,7 +1582,7 @@ function toolSource(
   nativeCodeMode = false,
 ): string {
   const argumentNames = Object.keys(schemas);
-  const format = toolSourceFormat(action, name, version);
+  const format = toolSourceFormat(action, name, version, nativeCodeMode);
   // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
   // `{ operation: "stage", phase: "propose" }`. `git-execute` builds its wire `action` and these
   // fields entirely from the model-supplied `kind` at call time instead (see the `wireAction`
