@@ -2,8 +2,20 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import {
   copyOpenCodeServiceHostApproval,
+  copyOpenCodeServiceHostApprovals,
+  OPENCODE_SERVICE_HOST_FIXED_FACTS,
   type OpenCodeServiceHostApproval,
 } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+
+import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import {
+  attestPortableSidecarTree,
+  type PortableSidecarTreeAttestation,
+} from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import {
+  portableHandoffOperationFrom,
+  type PortableHandoffOperationOptions,
+} from "../update-portable-handoff-tree.js";
 
 export interface OpenCodeServiceHostLaunchInput {
   readonly payloadRoot: string;
@@ -66,4 +78,98 @@ function closedHostEnvironment(env: Readonly<Record<string, string>> | undefined
   } catch {
     return false;
   }
+}
+
+export interface OpenCodeServiceHostDiskInput {
+  readonly payloadRoot: string;
+  readonly target: UpdatePortableTarget;
+  readonly approval: unknown;
+  /** Supplemental catalog metadata supplied by the existing server-owned approval owner. */
+  readonly trustedSupplement: unknown;
+}
+
+export type OpenCodeServiceHostDiskReceipt =
+  | {
+      readonly ok: true;
+      readonly kind: "supplementary-disk-byte-receipt";
+      readonly payloadRoot: string;
+      readonly approval: OpenCodeServiceHostApproval;
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "host-metadata-invalid"
+        | "host-supplement-mismatch"
+        | "host-root-invalid"
+        | "host-bytes-mismatch";
+    };
+
+const HOST_DISK_ARTIFACTS = [
+  [OPENCODE_SERVICE_HOST_FIXED_FACTS.nodeExecutablePath, "nodeExecutableSha256"],
+  [OPENCODE_SERVICE_HOST_FIXED_FACTS.bootstrapPath, "bootstrapSha256"],
+  ["package-lock.json", "packageLockSha256"],
+  ["evidence/sbom.cdx.json", "sbomSha256"],
+  ["evidence/installed-package-license-inventory.json", "licenseInventorySha256"],
+  ["evidence/build-provenance.json", "buildProvenanceSha256"],
+] as const;
+
+/**
+ * Inactive supplementary byte inspection, never runtime selection or launch authority. All six
+ * file digests come from the same fresh stable full-tree pass. IO/cancellation/deadline failures
+ * propagate with the existing attestation owner's body-free logging. Archive/count/source facts
+ * are matched to the trusted supplement, not measured or upgraded by this disk receipt. Platform,
+ * executable suitability, current authority, final launch freshness and service lifetime remain
+ * obligations of the existing portable/supervisor owners before any host activation.
+ */
+export async function inspectOpenCodeServiceHostDisk(
+  input: OpenCodeServiceHostDiskInput,
+  options: PortableHandoffOperationOptions,
+): Promise<OpenCodeServiceHostDiskReceipt> {
+  const approval = copyOpenCodeServiceHostApproval(input.approval);
+  if (approval === undefined) return Object.freeze({ ok: false, reason: "host-metadata-invalid" });
+  const trusted = copyOpenCodeServiceHostApprovals(input.trustedSupplement)?.[input.target];
+  if (trusted === undefined || !sameHostSupplement(approval, trusted)) {
+    return Object.freeze({ ok: false, reason: "host-supplement-mismatch" });
+  }
+  const payloadRoot = input.payloadRoot;
+  if (!isAbsolute(payloadRoot) || resolve(payloadRoot) !== payloadRoot) {
+    return Object.freeze({ ok: false, reason: "host-root-invalid" });
+  }
+  const attestation = await attestPortableSidecarTree(
+    payloadRoot,
+    approval.nodeExecutablePath,
+    portableHandoffOperationFrom(options),
+    HOST_DISK_ARTIFACTS.map(([path]) => path),
+  );
+  if (!sameHostBytes(attestation, approval)) {
+    return Object.freeze({ ok: false, reason: "host-bytes-mismatch" });
+  }
+  return Object.freeze({
+    ok: true,
+    kind: "supplementary-disk-byte-receipt",
+    payloadRoot,
+    approval,
+  });
+}
+
+function sameHostSupplement(
+  declared: OpenCodeServiceHostApproval,
+  trusted: OpenCodeServiceHostApproval,
+): boolean {
+  // Both inputs are canonical owned data records; field order conveys no approval semantics.
+  return Object.entries(declared).every(
+    ([key, value]) => Object.getOwnPropertyDescriptor(trusted, key)?.value === value,
+  );
+}
+
+function sameHostBytes(
+  attestation: PortableSidecarTreeAttestation,
+  approval: OpenCodeServiceHostApproval,
+): boolean {
+  return (
+    attestation.treeSha256 === approval.payloadTreeSha256 &&
+    HOST_DISK_ARTIFACTS.every(
+      ([path, field]) => attestation.selectedFileSha256ByPath?.[path] === approval[field],
+    )
+  );
 }

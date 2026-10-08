@@ -487,6 +487,15 @@ approval checks retain their pre-build path; supplemental host checks require th
 canonical contract. These shape checks do not replace disk, platform, current-authority,
 network or process-lifetime qualification and do not activate native tools.
 
+The inactive supplemental disk inspection matches declared canonical metadata to the server-owned
+target supplement, then obtains the complete tree and six fixed Node/bootstrap/lock/SBOM/license/
+provenance digests from one fresh stable pass through the existing attestation owner. Its immutable
+receipt binds the inspected root and reports only supplementary byte qualification. It neither
+measures the archive/count/source claims nor proves executable suitability, current authority or
+point-of-launch freshness. Missing or unsafe files, cancellation and deadlines retain the owning
+attestation errors and registered body-free log. The exported service factory still needs its fixed
+executable stdin/listener entry and supervisor lifetime integration before selection or launch.
+
 Portable CLI discovery derives executable, license and SBOM digests from one fresh, bounded
 content pass over stable file descriptors. Those evidence digests and the payload digest belong
 to the same before/after tree snapshot; a separately read provenance file is not sufficient.

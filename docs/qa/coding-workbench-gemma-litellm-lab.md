@@ -100,6 +100,19 @@ passes all twelve real call sites. Catalog performance evidence still requires q
 the current producer, and the complete Activity Log aggregate has not been rerun. Final complete
 quality and Standalone OpenCode functional parity remain open.
 
+The inactive host disk inspection now matches declared metadata to the canonical server-owned
+target supplement and reuses one fresh stable full-tree pass for six fixed selected-file digests.
+Root independently reproduced 34 failures against the unchanged host source, then passed all
+65 tests in three owning/cross-owner suites, strict source/test TypeScript and scoped lint/format.
+The fixtures derive disk digests from the real attestation producer; inert Node/evidence fixture
+bytes are never executed. Missing files and unchanged-byte links fail through the existing owner,
+and module mutation after an earlier pass cannot reuse its result. Cancellation/deadline and actual
+registered body-free attestation lines are checked. The earlier packed `94a319` identity is a
+negative control for the new source, not its approval. This receipt does not verify archive/count/
+source claims, executable/platform suitability, current authority or final launch freshness.
+The current host module exports an inactive factory; its executable stdin/listener entry, real
+supervisor lifecycle, native effects and complete Standalone parity still require implementation.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had
