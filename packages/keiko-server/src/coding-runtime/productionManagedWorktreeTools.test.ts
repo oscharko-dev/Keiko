@@ -1,9 +1,20 @@
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+  rmSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  readFileSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Script } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -29,7 +40,25 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
-import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
+import {
+  createSecureWorkspaceTextReadPort,
+  secureWorkspaceTextDigest,
+} from "./secureWorkspaceTextRead.js";
+import type { SecureWorkspaceTextReadProcess } from "./secureWorkspaceTextReadProcess.js";
+import {
+  encodeSecureWorkspaceReadResponse,
+  encodeSecureWorkspaceSnapshotResponse,
+} from "./secureWorkspaceTextReadProtocol.js";
+import {
+  catalogRuntimeFixture,
+  RUNTIME_NOW,
+} from "../tool-catalog/__fixtures__/catalogRuntimeFixture.js";
+import {
+  productionRuntimeAuthorityFacts,
+  type ProductionWorkspaceAuthorityInput,
+} from "./productionRuntimeWorkspaceAuthority.js";
+import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import { CODING_TOOL_MAX_READ_BYTES, CODING_TOOL_READ_MAX_WINDOW_LINES } from "./codingToolIpc.js";
 import {
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
@@ -4243,5 +4272,419 @@ describe("verificationLivenessRefusal", () => {
     expect(
       verificationLivenessRefusal(liveInput, liveGuard, new AbortController().signal),
     ).toBeUndefined();
+  });
+});
+
+// Real minted runtime authority and the real snapshot codec, with a hermetic helper transport.
+function snapshotWorkspaceInput(
+  f: ReturnType<typeof catalogRuntimeFixture>,
+): ProductionWorkspaceAuthorityInput {
+  const c = f.trusted;
+  const active = {
+    instance: {
+      workspaceId: c.workspaceId,
+      repositoryId: c.projectId,
+      repositoryRoot: f.root,
+      managedWorktreePath: f.root,
+      taskId: c.taskId,
+      taskBranch: c.branchRef,
+      baseBranch: c.branch.baseRef,
+      lastVerifiedHead: "1".repeat(40),
+      lifecycleState: "active",
+      health: "healthy",
+      driftMarkers: [],
+    },
+    binding: { activeRoot: f.root },
+  };
+  return {
+    workspaceLifecycle: { getActive: () => active } as unknown as WorkspaceLifecycleService,
+    managedTaskWorkspaceRoot: dirname(dirname(f.root)),
+    deploymentCeiling: "autonomous-delivery",
+    readWorkspaceHead: () => "1".repeat(40),
+    now: () => new Date(RUNTIME_NOW),
+  };
+}
+
+function snapshotFrame(path: string, rich = true): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const info = fstatSync(fd);
+    const bytes = readFileSync(fd);
+    if (!rich) return encodeSecureWorkspaceReadResponse({ status: "ok", bytes });
+    return encodeSecureWorkspaceSnapshotResponse({
+      status: "ok",
+      bytes,
+      info: { type: "file", size: info.size, mtimeMs: info.mtimeMs },
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function privateSnapshotFixture(
+  text: string,
+  options: {
+    readonly ciRepairBudget?: CiRepairExecutionBudget;
+    readonly snapshotAvailable?: boolean;
+  } = {},
+): {
+  readonly facade: ReturnType<typeof createProductionManagedWorktreeToolFacade>;
+  readonly runtime: ReturnType<typeof catalogRuntimeFixture>;
+  readonly processRun: ReturnType<typeof vi.fn<SecureWorkspaceTextReadProcess["run"]>>;
+  readonly activity: ServerLogEvent[];
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly liveFacts: () => CodingWorkbenchRuntimeAuthorityFacts;
+} {
+  const runtime = catalogRuntimeFixture("autonomous-delivery");
+  const input = snapshotWorkspaceInput(runtime);
+  writeFileSync(join(runtime.root, "fixture.ts"), text);
+  const processRun = vi.fn<SecureWorkspaceTextReadProcess["run"]>(({ stdin }) =>
+    Promise.resolve(
+      snapshotFrame(
+        join(runtime.root, "fixture.ts"),
+        Buffer.from(stdin.subarray(0, 4)).toString("ascii") === "KSR2",
+      ),
+    ),
+  );
+  const secureWorkspaceTextRead = createSecureWorkspaceTextReadPort({
+    resolveWorkspaceRoot: () => runtime.root,
+    artifact: {
+      target: "darwin-arm64",
+      installRelativePath: "runtime/native/keiko-secure-workspace-read",
+      sha256: DIGEST,
+      protocol: "KSR1/KSS1",
+      snapshotProtocol: "KSR2/KSS2",
+      sourceCommit: "b".repeat(40),
+      sourceTreeSha256: DIGEST,
+      signed: true,
+    },
+    artifactVerifier: { verify: () => true },
+    platform: { os: "darwin", arch: "arm64" },
+    processFactory: { create: () => ({ run: processRun }) },
+  });
+  const activity: ServerLogEvent[] = [];
+  const registry = createCodingToolInvocationRegistry({ now: () => Date.parse(RUNTIME_NOW) });
+  const liveFacts = (): CodingWorkbenchRuntimeAuthorityFacts =>
+    productionRuntimeAuthorityFacts(input, runtime.trusted);
+  const facade = createProductionManagedWorktreeToolFacade({
+    authority: runtime.authority,
+    authorityRef: runtime.minted.authorityRef,
+    workspaceRoot: runtime.root,
+    authorityExpiresAt: runtime.trusted.expiresAt,
+    deploymentCeiling: "autonomous-delivery",
+    effectiveMode: "autonomous-delivery",
+    liveFacts,
+    resolveWorkspaceRootAccess: () => ({
+      kind: "managed-task",
+      canonicalRoot: runtime.root,
+      repositoryRoot: runtime.root,
+      fs: nodeWorkspaceFs,
+    }),
+    secureWorkspaceTextRead:
+      options.snapshotAvailable === false
+        ? { readText: secureWorkspaceTextRead.readText.bind(secureWorkspaceTextRead) }
+        : secureWorkspaceTextRead,
+    ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
+    editorAgentClient: { action: vi.fn() },
+    onRuntimeEvent: vi.fn(),
+    verificationRunner: { runToReport: vi.fn() },
+    invocationRegistry: registry,
+    activityLog: { write: (event): void => void activity.push(event) },
+  });
+  return { facade, runtime, processRun, activity, registry, liveFacts };
+}
+
+function privateSnapshotInput(
+  f: ReturnType<typeof privateSnapshotFixture>,
+  overrides: Readonly<Record<string, unknown>> = {},
+): {
+  readonly capability: string;
+  readonly body: string;
+} {
+  return {
+    capability: f.runtime.minted.toolFacadeCapability,
+    body: JSON.stringify({
+      action: "read",
+      relativePath: "fixture.ts",
+      actionId: "native-snapshot-1",
+      idempotencyKey: "native-snapshot-1",
+      ...overrides,
+    }),
+  };
+}
+
+describe("inactive private native text snapshot admission", () => {
+  const disposals: (() => void)[] = [];
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const dispose of disposals.splice(0)) dispose();
+  });
+  function fixture(
+    text: string,
+    options: Parameters<typeof privateSnapshotFixture>[1] = {},
+  ): ReturnType<typeof privateSnapshotFixture> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(RUNTIME_NOW));
+    const f = privateSnapshotFixture(text, options);
+    disposals.push(f.runtime.dispose);
+    return f;
+  }
+
+  it.each([
+    ["bytes", "x".repeat(CODING_TOOL_MAX_READ_BYTES + 1)],
+    ["lines", "safe source\n".repeat(CODING_TOOL_READ_MAX_WINDOW_LINES + 1)],
+  ])(
+    "completes a whole-file %s snapshot beyond the public model read window",
+    async (_kind, text) => {
+      const f = fixture(text);
+      const result = await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f));
+      expect(result).toMatchObject({ ok: true, text, info: { type: "file" } });
+      expect(f.processRun).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("settles the actual same-FD pre-epoch timestamp snapshot without rewriting metadata", async () => {
+    const f = fixture("Pre-epoch file content");
+    const path = join(f.runtime.root, "fixture.ts");
+    const timestamp = new Date("1969-12-31T23:59:58.000Z");
+    utimesSync(path, timestamp, timestamp);
+    const fd = openSync(path, "r");
+    let mtimeMs: number;
+    try {
+      mtimeMs = fstatSync(fd).mtimeMs;
+    } finally {
+      closeSync(fd);
+    }
+    expect(Number.isFinite(mtimeMs)).toBe(true);
+    expect(mtimeMs).toBeLessThan(0);
+    const result = await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f));
+    expect(result).toMatchObject({ ok: true, info: { type: "file", mtimeMs } });
+    expect(f.processRun).toHaveBeenCalledOnce();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({
+      toolCanonicalId: "keiko.native.workspace.text.snapshot",
+      status: "completed",
+      reason: "none",
+    });
+  });
+
+  it("keeps the actual completion receipt compact and refuses receipt-only replay", async () => {
+    const text = "PRIVATE_NATIVE_TEXT_SENTINEL".repeat(3000);
+    const f = fixture(text);
+    const input = privateSnapshotInput(f);
+    const result = await f.facade.nativeTextRead?.readTextSnapshot(input);
+    expect(result).toMatchObject({ ok: true, text });
+    const retained = f.registry.inspect({
+      runId: f.runtime.minted.authorityRef.runId,
+      actionId: "native-snapshot-1",
+      idempotencyKey: "native-snapshot-1",
+    });
+    expect(retained).toMatchObject({
+      kind: "terminal",
+      receipt: { status: "completed", effectStarted: true, budgetDisposition: "committed" },
+    });
+    expect(JSON.stringify(retained)).not.toContain(text);
+    expect(JSON.stringify(retained)).not.toContain("snapshot");
+    const settled = f.activity.filter((event) => event.op === "tool-catalog.invocation-settled");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.extra).toMatchObject({
+      toolCanonicalId: "keiko.native.workspace.text.snapshot",
+      toolContractVersion: 1,
+      status: "completed",
+      reason: "none",
+    });
+    expect(Number(settled[0]?.extra?.outputBytes)).toBeLessThan(1024);
+    const logs = JSON.stringify(f.activity);
+    expect(logs).not.toContain("PRIVATE_NATIVE_TEXT_SENTINEL");
+    expect(logs).not.toContain("fixture.ts");
+    expect(logs).not.toContain(f.runtime.minted.toolFacadeCapability);
+    await expect(f.facade.nativeTextRead?.readTextSnapshot(input)).resolves.toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.processRun).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { startLine: 1 },
+    { maxLines: 1 },
+    { startLine: 1, maxLines: 5000 },
+    { purpose: "native-instructions" },
+    { profile: "code-mode" },
+    { module: "private" },
+    { action: "discover", query: "*", maxResults: 1 },
+  ])("refuses windows and untrusted selectors before admission: %j", async (extra) => {
+    const f = fixture("safe source\n");
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f, extra)),
+    ).resolves.toEqual({ ok: false, reason: "invalid-request" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(f.activity.map((event) => event.op)).toContain("tool-catalog.dispatch-unbound");
+    expect(f.activity.map((event) => event.op)).not.toContain("tool-catalog.invocation-started");
+  });
+
+  it("refuses sensitive paths before the actual helper transport", async () => {
+    const f = fixture("safe source\n");
+    const result = await f.facade.nativeTextRead?.readTextSnapshot(
+      privateSnapshotInput(f, { relativePath: ".env" }),
+    );
+    expect(result).toMatchObject({ ok: false });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "invalid-request" });
+    expect(f.activity.map((event) => event.op)).toContain("tool-catalog.dispatch-unbound");
+  });
+
+  it("refuses an unavailable rich producer without calling legacy IO", async () => {
+    const f = fixture("safe source\n", { snapshotAvailable: false });
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f)),
+    ).resolves.toEqual({ ok: false, reason: "snapshot-unavailable" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "invalid", reason: "unsupported-capability" });
+  });
+
+  it("honors exhausted genuine runtime tool authority before IO", async () => {
+    const f = fixture("safe source\n");
+    const charged = f.runtime.authority.resolveCapabilityForDelegation({
+      capability: f.runtime.minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar",
+      liveFacts: f.liveFacts(),
+      delegationId: "consume-authorized-budget",
+      idempotencyKey: "consume-authorized-budget",
+      usage: { toolCalls: f.runtime.trusted.budget.maxToolCalls, patchBytes: 0, promptTokens: 0 },
+      workspaceRoot: f.runtime.root,
+      deploymentCeiling: "autonomous-delivery",
+      nowIso: RUNTIME_NOW,
+    });
+    expect(charged.ok).toBe(true);
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f)),
+    ).resolves.toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "denied", reason: "hard-denial" });
+  });
+
+  it("honors the existing CI repair budget before snapshot IO", async () => {
+    const admitTool = vi.fn(() => undefined);
+    const f = fixture("safe source\n", {
+      ciRepairBudget: {
+        admitTool,
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt: () => ({ accepted: true }),
+        observed: vi.fn(),
+      },
+    });
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f)),
+    ).resolves.toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(admitTool).toHaveBeenCalledOnce();
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(
+      f.activity.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "denied", reason: "budget-exhausted" });
+  });
+
+  it.each(["revocation", "expiry", "cancellation"] as const)(
+    "discards whole-file bytes after actual %s during IO",
+    async (change) => {
+      const f = fixture("PRIVATE_NATIVE_TEXT_SENTINEL");
+      const abort = new AbortController();
+      f.processRun.mockImplementationOnce(() => {
+        if (change === "revocation") f.runtime.registry.revoke(f.runtime.minted.authorityRef);
+        else if (change === "expiry")
+          vi.setSystemTime(new Date(Date.parse(f.runtime.trusted.expiresAt) + 1));
+        else abort.abort();
+        return Promise.resolve(snapshotFrame(join(f.runtime.root, "fixture.ts")));
+      });
+      const result = await f.facade.nativeTextRead?.readTextSnapshot({
+        ...privateSnapshotInput(f),
+        signal: abort.signal,
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_NATIVE_TEXT_SENTINEL");
+      expect(f.processRun).toHaveBeenCalledOnce();
+      expect(
+        f.activity
+          .filter((event) => event.op === "tool-catalog.invocation-settled")
+          .every((event) => event.extra?.status !== "completed"),
+      ).toBe(true);
+    },
+  );
+
+  it("checks the same CI lease again before completing a genuine snapshot", async () => {
+    let leaseLive = true;
+    const settle = vi.fn();
+    const f = fixture("PRIVATE_NATIVE_TEXT_SENTINEL", {
+      ciRepairBudget: {
+        admitTool: () => ({ check: (): boolean => leaseLive, settle }),
+        canChargePrompt: () => ({ accepted: true }),
+        chargePrompt: () => ({ accepted: true }),
+        observed: vi.fn(),
+      },
+    });
+    f.processRun.mockImplementationOnce(() => {
+      leaseLive = false;
+      return Promise.resolve(snapshotFrame(join(f.runtime.root, "fixture.ts")));
+    });
+    expect(await f.facade.nativeTextRead?.readTextSnapshot(privateSnapshotInput(f))).toMatchObject({
+      ok: false,
+    });
+    expect(settle).toHaveBeenCalledOnce();
+    expect(
+      f.activity
+        .filter((event) => event.op === "tool-catalog.invocation-settled")
+        .every((event) => event.extra?.status !== "completed"),
+    ).toBe(true);
+  });
+
+  it("keeps public model reads bounded even with the private whole-file facet installed", async () => {
+    const f = fixture("x".repeat(CODING_TOOL_MAX_READ_BYTES + 1));
+    const result = await f.facade.execute(privateSnapshotInput(f, { startLine: 1, maxLines: 1 }));
+    expect(result).toMatchObject({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "workspace-read-too-large" }],
+    });
+    expect("snapshot" in result).toBe(false);
+    expect("text" in result).toBe(false);
+  });
+
+  it("refuses an in-flight duplicate without a second admitted snapshot", async () => {
+    const f = fixture("safe source\n");
+    let release!: (frame: Uint8Array) => void;
+    f.processRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const input = privateSnapshotInput(f);
+    const first = f.facade.nativeTextRead?.readTextSnapshot(input);
+    await vi.waitFor(() => {
+      expect(f.processRun).toHaveBeenCalledOnce();
+    });
+    await expect(f.facade.nativeTextRead?.readTextSnapshot(input)).resolves.toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.processRun).toHaveBeenCalledOnce();
+    release(snapshotFrame(join(f.runtime.root, "fixture.ts")));
+    await expect(first).resolves.toMatchObject({ ok: true, text: "safe source\n" });
+  });
+
+  it("refuses HTTP-origin material at the private server facet", async () => {
+    const f = fixture("safe source\n");
+    await expect(
+      f.facade.nativeTextRead?.readTextSnapshot({
+        ...privateSnapshotInput(f),
+        headers: { origin: "https://private.invalid" },
+      }),
+    ).resolves.toEqual({ ok: false, reason: "invalid-request" });
+    expect(f.processRun).not.toHaveBeenCalled();
+    expect(f.activity.map((event) => event.op)).not.toContain("tool-catalog.invocation-started");
   });
 });

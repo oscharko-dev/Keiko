@@ -181,14 +181,17 @@ const OPENCODE_RESULT_SCHEMA: CatalogJsonObject = {
   additionalProperties: true,
 };
 
-function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
+function entryFor(
+  spec: OpenCodeToolSpec,
+  resultSchema: CatalogJsonObject = OPENCODE_RESULT_SCHEMA,
+): CatalogSetEntry {
   return {
     alias: spec.alias,
     descriptor: createToolDescriptor({
       toolRef: createToolRef(spec.canonicalId, 1),
       description: spec.description,
       inputSchema: spec.inputSchema,
-      resultSchema: OPENCODE_RESULT_SCHEMA,
+      resultSchema,
       effects: spec.effects,
       actionMapping: [{ action: spec.alias, effects: spec.effects }],
       policyReferences: spec.effects,
@@ -226,6 +229,15 @@ function discoverSpec(): OpenCodeToolSpec {
   };
 }
 
+function workspaceTextPathSchema(): CatalogJsonObject {
+  return {
+    type: "string",
+    minLength: 1,
+    maxLength: 512,
+    pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
+  };
+}
+
 function readSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.workspace.read",
@@ -237,15 +249,7 @@ function readSpec(): OpenCodeToolSpec {
       "exactly; never calculate a hash from a partial window.",
     inputSchema: managedObjectSchema(
       {
-        relativePath: {
-          type: "string",
-          minLength: 1,
-          maxLength: 512,
-          // #3414 AC1: schema.ts now supports `pattern` — this is the exact real wire pattern
-          // (opencodeToolSchemas.ts WORKSPACE_READ_SCHEMA.relativePath), no longer a format check
-          // this advisory projection had to omit.
-          pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).+$`,
-        },
+        relativePath: workspaceTextPathSchema(),
         startLine: { type: "integer", minimum: 1, maximum: OPENCODE_READ_MAX_START_LINE },
         maxLines: { type: "integer", minimum: 1, maximum: OPENCODE_READ_MAX_WINDOW_LINES },
       },
@@ -717,6 +721,70 @@ export function opencodeRegistrationSet(
       gitPullRequestSpec(),
       gitExecuteSpec(),
       ciStatusSpec(),
-    ].map(entryFor),
+    ].map((spec) => entryFor(spec)),
   };
+}
+
+/** Server-private same-descriptor snapshot contract; never composed into a model advertisement. */
+export function nativeTextSnapshotRegistrationSet(): CatalogRegistrationSet {
+  return {
+    profile: { id: "opencode-native-text-io", version: 1 },
+    adapterDialect: OPENCODE_DIALECT,
+    adapterRuntime: OPENCODE_RUNTIME,
+    nativeExtensions: [],
+    compatibility: [],
+    entries: [
+      entryFor(
+        {
+          canonicalId: "keiko.native.workspace.text.snapshot",
+          alias: "native_workspace_text_snapshot",
+          description:
+            "Capture one bounded whole-file UTF-8 snapshot for the private native file service. Only a compact receipt enters catalog settlement; source text stays invocation-local.",
+          inputSchema: managedObjectSchema({ relativePath: workspaceTextPathSchema() }, [
+            "relativePath",
+          ]),
+          effects: ["workspace-read"],
+          idempotency: "read-only",
+          handlerId: "opencode-native-text-snapshot-port",
+        },
+        nativeTextSnapshotReceiptSchema(),
+      ),
+    ],
+  };
+}
+
+function nativeTextSnapshotReceiptSchema(): CatalogJsonObject {
+  return managedObjectSchema(
+    {
+      status: { type: "string", enum: ["completed"] },
+      evidence: {
+        type: "array",
+        minItems: 1,
+        maxItems: 1,
+        items: managedObjectSchema(
+          {
+            kind: { type: "string", enum: ["native-text-snapshot"] },
+            code: { type: "string", enum: ["completed"] },
+          },
+          ["kind", "code"],
+        ),
+      },
+      snapshot: managedObjectSchema(
+        {
+          digest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          byteCount: { type: "integer", minimum: 0 },
+          info: managedObjectSchema(
+            {
+              type: { type: "string", enum: ["file"] },
+              size: { type: "integer", minimum: 0 },
+              mtimeMs: { type: "number" },
+            },
+            ["type", "size", "mtimeMs"],
+          ),
+        },
+        ["digest", "byteCount", "info"],
+      ),
+    },
+    ["status", "evidence", "snapshot"],
+  );
 }

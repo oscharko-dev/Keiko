@@ -357,9 +357,10 @@ type QuestionRunPort = Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" 
 export function createOpenCodeRuntimeComposition(
   configured: OpenCodeRuntimeCompositionInput,
 ): OpenCodeRuntimeComposition {
-  const toolProfile = configured.toolProfile ?? "direct";
+  const captured = { ...configured };
+  const toolProfile = captured.toolProfile ?? "direct";
   openCodeVisibleToolNames(toolProfile);
-  const input = { ...configured, toolProfile };
+  const input = { ...captured, toolProfile };
   const runs = new Map<string, PreparedRun>();
   const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
@@ -379,6 +380,7 @@ export function createOpenCodeRuntimeComposition(
   const manager = createCodingRuntimeManager({
     supervisor: input.supervisor,
     processEnv: {},
+    diagnostics: input.diagnostics,
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
     canSpawnRuntime: input.canSpawnRuntime,
@@ -730,26 +732,47 @@ function lifecycleAdapter(
             dispose();
           };
     },
-    dispose: async (runId): Promise<boolean> => {
-      input.safeActivity?.clear();
-      bridge.approvals.close();
-      const run = runs.get(runId);
-      if (run === undefined) return true;
-      run.ready = false;
-      input.gatewayReadiness.clear(runId);
-      try {
-        await run.runtimeAdapter?.close();
-        await bridge.close();
-        rmSync(run.runRoot, { recursive: true, force: true });
-      } catch {
-        // Surface disposal failure on the port's boolean channel; the manager routes a false
-        // result into the same reap-failure handling it applies to a thrown disposal today.
-        return false;
-      }
-      runs.delete(runId);
-      return true;
-    },
+    dispose: (runId, signal): Promise<boolean> => disposeRun(input, bridge, runs, runId, signal),
   };
+}
+
+async function disposeRun(
+  input: OpenCodeRuntimeCompositionInput,
+  bridge: ToolBridgeController,
+  runs: Map<string, PreparedRun>,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const run = runs.get(runId);
+  if (run !== undefined) run.ready = false;
+  try {
+    const drained = bridge.close(signal);
+    input.safeActivity?.clear();
+    input.gatewayReadiness.clear(runId);
+    if (!(await drained)) return false;
+    if (run === undefined) return true;
+    if (!currentDisposal(runs, run, signal)) return false;
+    await run.runtimeAdapter?.close();
+    if (!currentDisposal(runs, run, signal)) return false;
+    rmSync(run.runRoot, { recursive: true, force: true });
+    runs.delete(runId);
+    return true;
+  } catch (error) {
+    recordCompositionDisposalFailure(input.diagnostics, runId, "run-dispose", error);
+    return false;
+  }
+}
+
+function disposalCancelled(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function currentDisposal(
+  runs: ReadonlyMap<string, PreparedRun>,
+  run: PreparedRun,
+  signal: AbortSignal | undefined,
+): boolean {
+  return !disposalCancelled(signal) && runs.get(run.runId) === run;
 }
 
 // KEIKO-0320: the prepare cleanup calls (bridge.close, rmSync) can each throw on their own — a
@@ -759,19 +782,23 @@ function lifecycleAdapter(
 // redacted operator diagnostic when the disposal itself fails (#3099 P2 follow-up: previously
 // the failure was silently swallowed, so a permission-error leak left the private run root on
 // disk with no diagnostic and no retry hook).
-function recordPrepareDisposalFailure(
+function recordCompositionDisposalFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
-  operation: "prepare-bridge-close" | "prepare-run-root-remove",
+  operation: "prepare-bridge-close" | "prepare-run-root-remove" | "run-dispose",
   error: unknown,
 ): void {
+  const detail = describeError(error);
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.opencode-composition",
     source: `opencode-runtime-composition.${operation}`,
     errorClass: contentFreeErrorClass(error),
-    message: operation,
+    message: operation === "run-dispose" ? "server-operation-failed" : operation,
+    code: operation,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
   });
 }
 
@@ -780,17 +807,22 @@ async function disposeFailedPrepare(
   runRoot: string,
   runId: string,
   diagnostics: ServerDiagnosticSink | undefined,
+  signal: AbortSignal,
 ): Promise<void> {
   try {
-    await bridge.close();
+    if (!(await bridge.close(signal))) {
+      recordCompositionDisposalFailure(diagnostics, runId, "prepare-bridge-close", signal.reason);
+      return;
+    }
   } catch (error) {
-    recordPrepareDisposalFailure(diagnostics, runId, "prepare-bridge-close", error);
+    recordCompositionDisposalFailure(diagnostics, runId, "prepare-bridge-close", error);
+    return;
   }
   try {
     rmSync(runRoot, { recursive: true, force: true });
   } catch (error) {
     // The private run root may persist on disk; the operator record makes the leak diagnosable.
-    recordPrepareDisposalFailure(diagnostics, runId, "prepare-run-root-remove", error);
+    recordCompositionDisposalFailure(diagnostics, runId, "prepare-run-root-remove", error);
   }
 }
 
@@ -853,7 +885,15 @@ async function prepare(
   try {
     return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch {
-    await disposeFailedPrepare(bridge, runRoot, request.runId, input.diagnostics);
+    await disposeFailedPrepare(
+      bridge,
+      runRoot,
+      request.runId,
+      input.diagnostics,
+      request.signal === undefined
+        ? AbortSignal.timeout(request.timeoutMs)
+        : AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)]),
+    );
     return { ok: false, reason: "config-materialization-failed" };
   }
 }
@@ -1555,7 +1595,7 @@ interface ToolBridgeController {
   readonly publicPort: OpenCodeToolBridge;
   readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
   start(): Promise<void>;
-  close(): Promise<void>;
+  close(signal?: AbortSignal): Promise<boolean>;
   active(): boolean;
 }
 
@@ -1575,6 +1615,8 @@ interface ToolBridgeAdmissionGate {
   readonly limits: ToolBridgeLimits;
   readonly admit: (requestDeadlineMs: number) => AdmittedToolRequest | undefined;
   readonly abortAll: () => void;
+  readonly drained: () => boolean;
+  readonly drain: (signal: AbortSignal) => Promise<boolean>;
 }
 
 const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = 30_000;
@@ -1653,6 +1695,7 @@ function createToolBridge(
   const { approvals, runs } = v2;
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let listening = false;
+  let closing: Promise<boolean> | undefined;
   const gate = createToolBridgeAdmissionGate(limits);
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
@@ -1668,14 +1711,21 @@ function createToolBridge(
     approvals,
     active: () => listening,
     start: (): Promise<void> => {
+      if (closing !== undefined || !gate.drained()) return Promise.reject(new Error(CLOSE_ABORT));
       listening = true;
       return Promise.resolve();
     },
-    close: (): Promise<void> => {
+    close: (signal): Promise<boolean> => {
       listening = false;
       approvals.close();
       gate.abortAll();
-      return Promise.resolve();
+      closing ??= gate
+        .drain(signal ?? AbortSignal.timeout(limits.requestDeadlineMs))
+        .then((drained): boolean => {
+          closing = undefined;
+          return drained;
+        });
+      return closing;
     },
   };
 }
@@ -1819,35 +1869,79 @@ function bindExternalAbort(
   };
 }
 
+interface ToolBridgeDrainWait {
+  readonly completion: Promise<boolean>;
+  finish(drained: boolean): void;
+}
+
+function toolBridgeDrainWait(signal: AbortSignal, clear: () => void): ToolBridgeDrainWait {
+  let resolve!: (drained: boolean) => void;
+  const completion = new Promise<boolean>((done) => {
+    resolve = done;
+  });
+  const finish = (drained: boolean): void => {
+    signal.removeEventListener("abort", onAbort);
+    clear();
+    resolve(drained);
+  };
+  const onAbort = (): void => {
+    finish(false);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  return { completion, finish };
+}
+
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
   let admitted = 0;
+  let pendingDrain: ToolBridgeDrainWait | undefined;
   const controllers = new Set<AbortController>();
+  const release = (controller: AbortController): void => {
+    controllers.delete(controller);
+    admitted -= 1;
+    if (admitted === 0) pendingDrain?.finish(true);
+  };
   return {
     limits,
-    admit: (requestDeadlineMs: number): AdmittedToolRequest | undefined => {
+    admit: (requestDeadlineMs): AdmittedToolRequest | undefined => {
       if (admitted >= limits.maxInFlight) return undefined;
       admitted += 1;
       const controller = new AbortController();
       controllers.add(controller);
-      const timer = setTimeout(() => {
-        controller.abort(new Error(DEADLINE_ABORT));
-      }, requestDeadlineMs);
-      timer.unref();
-      let released = false;
-      return {
-        controller,
-        deadlineMs: requestDeadlineMs,
-        release: (): void => {
-          if (released) return;
-          released = true;
-          clearTimeout(timer);
-          controllers.delete(controller);
-          admitted -= 1;
-        },
-      };
+      return admittedToolRequest(controller, requestDeadlineMs, release);
     },
     abortAll: (): void => {
       for (const controller of controllers) controller.abort(new Error(CLOSE_ABORT));
+    },
+    drained: (): boolean => admitted === 0,
+    drain: (signal): Promise<boolean> => {
+      if (admitted === 0) return Promise.resolve(true);
+      if (signal.aborted) return Promise.resolve(false);
+      pendingDrain ??= toolBridgeDrainWait(signal, (): void => {
+        pendingDrain = undefined;
+      });
+      return pendingDrain.completion;
+    },
+  };
+}
+
+function admittedToolRequest(
+  controller: AbortController,
+  deadlineMs: number,
+  release: (controller: AbortController) => void,
+): AdmittedToolRequest {
+  const timer = setTimeout(() => {
+    controller.abort(new Error(DEADLINE_ABORT));
+  }, deadlineMs);
+  timer.unref();
+  let released = false;
+  return {
+    controller,
+    deadlineMs,
+    release: (): void => {
+      if (released) return;
+      released = true;
+      clearTimeout(timer);
+      release(controller);
     },
   };
 }

@@ -23,7 +23,11 @@ export {
   CHILD_WORKSPACE_READ_ALIAS,
   CHILD_WORKSPACE_READ_HANDLER_REQUIREMENT,
 } from "./child.js";
-export { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
+export {
+  opencodeRegistrationSet,
+  nativeTextSnapshotRegistrationSet,
+  OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+} from "./opencode.js";
 export type { OpenCodeNativeExtensionDefinition } from "./opencode.js";
 export { createKeikoToolCatalog } from "./composer.js";
 export type { CatalogRegistrationSet, CatalogSetEntry } from "./composer.js";

@@ -9,6 +9,7 @@ import type {
   CodingToolActionRequest,
   CodingToolResult,
 } from "./codingToolIpc.js";
+import type { GovernedTextSnapshotResult } from "./codingToolReadEditPorts.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 
 export interface CodingToolProducerBinding {
@@ -200,6 +201,22 @@ export interface CodingToolFacadeInput {
   readonly signal?: AbortSignal | undefined;
 }
 
+export type CodingToolNativeTextSnapshotResult =
+  | GovernedTextSnapshotResult
+  | {
+      readonly ok: false;
+      readonly reason: "invalid-request" | "dispatch-refused";
+    };
+
+export interface CodingToolNativeTextReadFacet {
+  /** Fixed server-only whole-file purpose. Windowed/model requests cannot enter this facet. */
+  readonly readTextSnapshot: (
+    input: CodingToolFacadeInput,
+  ) => Promise<CodingToolNativeTextSnapshotResult>;
+}
+
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */
+  readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
 }

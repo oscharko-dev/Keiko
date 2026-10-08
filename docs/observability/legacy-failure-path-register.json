@@ -2937,12 +2937,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "lifecycleAdapter",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
       "owner": "prepare",
       "kind": "unregistered-catch",
       "count": 1

@@ -9,6 +9,7 @@ import {
   VERIFICATION_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
+import * as registrationOwners from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
 import { createCatalogProfileDeclaration } from "./profile.js";
@@ -464,5 +465,39 @@ describe("complete explicit Code Mode native declaration", () => {
         nativeExtensions: [{ alias: "question", contractVersion: 1 }],
       }),
     ).toThrow("unrepresentable-projection");
+  });
+});
+
+describe("private native text snapshot registration", () => {
+  it("compiles one honest path-only private contract without changing model advertisements", () => {
+    expect(registrationOwners.nativeTextSnapshotRegistrationSet).toBeTypeOf("function");
+    const set = registrationOwners.nativeTextSnapshotRegistrationSet();
+    const catalog = createKeikoToolCatalog([set]);
+    const projection = compileToolProjection(catalog, set.profile);
+    expect(projection.tools).toHaveLength(1);
+    const tool = projection.tools[0];
+    if (tool === undefined) throw new TypeError("Expected private snapshot descriptor");
+    expect(tool.toolRef.canonicalId).toBe("keiko.native.workspace.text.snapshot");
+    expect(matchesCatalogSchema(tool.inputSchema, { relativePath: "src/deep/file.ts" })).toBe(true);
+    expect(
+      matchesCatalogSchema(tool.inputSchema, {
+        relativePath: "src/deep/file.ts",
+        startLine: 1,
+        maxLines: 1,
+      }),
+    ).toBe(false);
+    expect(matchesCatalogSchema(tool.inputSchema, { relativePath: "../secret.ts" })).toBe(false);
+    for (const profile of [undefined, "code-mode"] as const) {
+      const original = opencodeRegistrationSet(profile);
+      expect(
+        original.entries.some(
+          (entry) => entry.descriptor.toolRef.canonicalId === tool.toolRef.canonicalId,
+        ),
+      ).toBe(false);
+      expect(original.nativeExtensions).not.toContainEqual({
+        alias: tool.alias,
+        contractVersion: 1,
+      });
+    }
   });
 });

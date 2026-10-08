@@ -63,7 +63,8 @@ after aborting the delegate signal but before the real admitted delegate promise
 The controlled delegate then completed one effect after that resolved close. This used the actual
 bridge and facade bodies with a controlled admission port; it was not a live authority or filesystem
 test. The existing capacity reservation remained tied to the real promise. Cancellation signalling
-therefore does not yet prove effect drainage, and this prerequisite remains open.
+alone does not prove effect drainage. The qualified follow-up below repairs the existing owner;
+future native IO must explicitly join that same owner before activation.
 
 The next combined inactive increment fixes real inner-call observation and adds the fixed external
 host factory. Root independently passed 607 tests in thirteen affected suites, strict eleven-file
@@ -112,6 +113,32 @@ negative control for the new source, not its approval. This receipt does not ver
 source claims, executable/platform suitability, current authority or final launch freshness.
 The current host module exports an inactive factory; its executable stdin/listener entry, real
 supervisor lifecycle, native effects and complete Standalone parity still require implementation.
+
+The combined private snapshot/drain increment preserves the published actual-admission callback
+and reuses the existing canonical catalog, registry, authority and invocation owners. Only the
+actual current completed invocation receives transient text; its compact catalog receipt contains
+no text, and replay cannot recreate a snapshot. This remains a bounded UTF-8 regular-file
+prerequisite, with the existing one-MiB and path limits, rather than original native Files parity.
+
+Root independently passed 778 tests in seven owning suites and 32 leaf tests before the final
+timestamp correction, plus 97 generated-registry controls, strict fourteen-file source/test types,
+scoped lint/format and a fresh server graph. Five independent actual bridge/facade control groups
+require real delegate settlement, fold concurrent close waits, detach abort listeners, block
+reopening while undrained and preserve roots/current state after canceled or stale cleanup.
+Authority/recovery is retained on an unproven bounded disposal; cancellation alone is insufficient.
+These controlled admission tests are not native-host or live authority qualification.
+
+A real temporary file dated before 1970 then reproduced one root regression: its actual same-FD
+mtime of -2000 was refused by the new private receipt schema. The correction removes only that
+nonnegative receipt restriction, preserving finite validation and the actual metadata. The named
+root test executed and failed against the unchanged receipt producer.
+Final root qualification passes 779 tests in the seven owning suites and 32 leaf tests (811 total),
+plus the packed public export smoke and all twelve actual error-observability sites. Public direct
+and Code Mode catalog/projection bytes match the prior producer. Removing the logged disposal
+catch also prunes exactly its obsolete legacy exception; the complete owned failure-path inventory
+is clean. The exact root integration freeze binds sources and results.
+Native tool-context capture, original paging/directories/media/search/mutations/commands and the
+fixed executable service/supervisor path remain open. No full Standalone parity is claimed.
 
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`

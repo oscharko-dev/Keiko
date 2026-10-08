@@ -25,6 +25,9 @@ import type {
   CodingToolAuthorityPort,
   CodingToolFacade,
   CodingToolFacadeOptions,
+  CodingToolFacadeInput,
+  CodingToolNativeTextReadFacet,
+  CodingToolNativeTextSnapshotResult,
   CodingToolProducerBinding,
   MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
@@ -34,7 +37,13 @@ import {
   createCodingToolGovernedDelegate,
   type CodingToolGovernedPorts,
 } from "./codingToolGovernedDelegate.js";
-import { codingToolRequiredActionClasses, type CodingToolActionRequest } from "./codingToolIpc.js";
+import {
+  CODING_TOOL_MAX_BODY_BYTES,
+  parseCodingToolRequest,
+  codingToolRequiredActionClasses,
+  type CodingToolActionRequest,
+  type CodingToolResult,
+} from "./codingToolIpc.js";
 import {
   isApprovableToolRequest,
   commitClaim,
@@ -45,13 +54,22 @@ import {
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogFacadeBridge,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
+import {
+  wholeFileDigest,
+  WORKSPACE_READ_REFUSAL_CODES,
+  type CodingToolReadEditPorts,
+  type GovernedTextSnapshotResult,
+} from "./codingToolReadEditPorts.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import { CatalogDispatchFault } from "../tool-catalog/catalogToolRuntimeAuthority.js";
 import type { CatalogToolBudgetPort } from "../tool-catalog/catalogToolPorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 
 const CODING_RUNTIME_TOOL_AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -124,6 +142,7 @@ interface CodingToolAuthorityPortOptions {
 
 interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly toolProfile?: OpenCodeToolProfile | undefined;
+  readonly nativeTextRead?: CodingToolReadEditPorts["nativeTextRead"] | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
@@ -552,33 +571,42 @@ export function createRuntimeCodingToolFacade(
   governedPorts: CodingToolGovernedPorts,
   options: RuntimeCodingToolFacadeOptions = {},
 ): CodingToolFacade {
-  const activityLog = options.catalogActivityLog ?? processServerLogSink();
+  const configuration = { ...options };
+  const activityLog = configuration.catalogActivityLog ?? processServerLogSink();
   const authorityPort = createCodingToolAuthorityPort(authority, context, {
-    approvalProofVerifier: options.approvalProofVerifier,
+    approvalProofVerifier: configuration.approvalProofVerifier,
     activityLog,
     requireProducerBinding: true,
-    reserveEditDelegation: options.reserveEditDelegation === true,
+    reserveEditDelegation: configuration.reserveEditDelegation === true,
   });
-  return createCodingToolFacade(
+  const catalogBridge =
+    configuration.disableCatalogBridge === true
+      ? undefined
+      : catalogFacadeBridgeFor(authority, authorityPort, context, configuration, activityLog);
+  const facade = createCodingToolFacade(
     {
       authority: authorityPort,
-      delegate: createCodingToolGovernedDelegate(governedPorts, options.ciRepairBudget),
+      delegate: createCodingToolGovernedDelegate(governedPorts, configuration.ciRepairBudget),
     },
     {
-      ...options,
+      ...configuration,
       requireInvocationRegistryForEdits: true,
-      catalogBridge:
-        options.disableCatalogBridge === true
-          ? undefined
-          : catalogFacadeBridgeFor(authority, authorityPort, context, options, activityLog),
+      catalogBridge,
     },
   );
+  const nativeTextRead = nativeTextReadFacet(
+    catalogBridge,
+    governedPorts,
+    configuration,
+    activityLog,
+  );
+  return nativeTextRead === undefined ? facade : { ...facade, nativeTextRead };
 }
 
 /** F8 (#3413): the production CatalogToolBinder-backed bridge for the facade's covered actions
  * (see catalogToolFacadeBridge.ts). Built from the same real catalog used to advertise tools to
- * the model (createOpenCodeGatewayToolCatalogAdvertisement), so there is exactly one catalog, not
- * a second one grown for this integration. */
+ * the model (createOpenCodeGatewayToolCatalogAdvertisement). The fixed private text snapshot
+ * contract is compiled by the same catalog owner, without entering that advertisement. */
 function catalogFacadeBridgeFor(
   authority: Pick<
     CodingRuntimeAuthorityService,
@@ -594,6 +622,7 @@ function catalogFacadeBridgeFor(
     createCodingToolInvocationRegistry({ now: lazyContextClock(context) });
   return createCanonicalCatalogFacadeBridge({
     toolProfile: options.toolProfile,
+    nativeTextSnapshotAvailable: options.nativeTextRead !== undefined,
     authority: authorityPort,
     previewAuthority: createCodingToolAuthorityPreview(authority, context, {
       approvalProofVerifier: options.approvalProofVerifier,
@@ -1039,4 +1068,179 @@ function deliveryHasScopedApproval(
   request: Extract<CodingToolActionRequest, { readonly action: "delivery" }>,
 ): boolean {
   return request.intent === "commit" || isDraftToolRequest(request);
+}
+
+function nativeTextReadFacet(
+  bridge: CanonicalCatalogFacadeBridge | undefined,
+  ports: CodingToolGovernedPorts,
+  options: RuntimeCodingToolFacadeOptions,
+  activityLog: ServerLogSink,
+): CodingToolNativeTextReadFacet | undefined {
+  const producer = options.nativeTextRead;
+  const execute = bridge?.executeTextSnapshot;
+  const budget = options.ciRepairBudget;
+  const maxBodyBytes = Math.min(
+    options.maxBodyBytes ?? CODING_TOOL_MAX_BODY_BYTES,
+    CODING_TOOL_MAX_BODY_BYTES,
+  );
+  if (bridge === undefined || execute === undefined || producer === undefined) return undefined;
+  return Object.freeze({
+    readTextSnapshot: async (
+      input: CodingToolFacadeInput,
+    ): Promise<CodingToolNativeTextSnapshotResult> => {
+      try {
+        const request = parseCodingToolRequest(input.body, maxBodyBytes);
+        if (
+          input.headers !== undefined ||
+          request?.action !== "read" ||
+          request.startLine !== undefined ||
+          request.maxLines !== undefined
+        ) {
+          bridge.recordUnbound({ action: "read" }, input);
+          return { ok: false, reason: "invalid-request" };
+        }
+        return await dispatchNativeTextSnapshot(
+          request,
+          input,
+          execute,
+          ports,
+          producer,
+          budget,
+          activityLog,
+        );
+      } catch (error) {
+        reportNativeSnapshotFailure(activityLog, options.catalogDiagnostics, error);
+        return { ok: false, reason: "dispatch-refused" };
+      }
+    },
+  });
+}
+
+async function dispatchNativeTextSnapshot(
+  request: Extract<CodingToolActionRequest, { readonly action: "read" }>,
+  input: CodingToolFacadeInput,
+  execute: NonNullable<CanonicalCatalogFacadeBridge["executeTextSnapshot"]>,
+  ports: CodingToolGovernedPorts,
+  producer: CodingToolReadEditPorts["nativeTextRead"],
+  budget: CiRepairExecutionBudget | undefined,
+  activityLog: ServerLogSink,
+): Promise<CodingToolNativeTextSnapshotResult> {
+  let snapshot: GovernedTextSnapshotResult | undefined;
+  const delegate = createCodingToolGovernedDelegate(
+    {
+      ...ports,
+      repositoryRead: {
+        execute: async (read, signal, guard) => {
+          snapshot = await producer.readTextSnapshot(
+            { relativePath: read.relativePath, purpose: "native-tool-io" },
+            signal,
+            guard,
+          );
+          return snapshot.ok ? { status: "completed" } : snapshotFailure(snapshot.reason);
+        },
+      },
+    },
+    budget,
+    activityLog,
+  );
+  const result = await execute(request, input, async (signal, guard): Promise<CodingToolResult> => {
+    const outcome = await delegate.execute(request, signal, guard);
+    return completedSnapshotOutcome(outcome) && snapshot?.ok === true
+      ? nativeSnapshotReceipt(snapshot)
+      : nativeSnapshotFailureOutcome(outcome);
+  });
+  if (result.status === "completed" && snapshot?.ok === true) return snapshot;
+  if (snapshot?.ok === false) return snapshot;
+  return { ok: false, reason: "dispatch-refused" };
+}
+
+function snapshotFailure(
+  reason: Extract<GovernedTextSnapshotResult, { readonly ok: false }>["reason"],
+): {
+  readonly status: "failed";
+  readonly reasonCode?: string;
+} {
+  const code = Object.entries(WORKSPACE_READ_REFUSAL_CODES).find(([key]) => key === reason)?.[1];
+  const reasonCode =
+    reason === "snapshot-unavailable"
+      ? "native-snapshot-unavailable"
+      : reason === "preflight-refused" || reason === "postflight-refused"
+        ? "native-snapshot-refused"
+        : code;
+  return { status: "failed", ...(reasonCode === undefined ? {} : { reasonCode }) };
+}
+
+function completedSnapshotOutcome(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "outcome" in value &&
+    value.outcome === "completed"
+  );
+}
+
+function nativeSnapshotFailureOutcome(value: unknown): CodingToolResult {
+  const code =
+    typeof value === "object" &&
+    value !== null &&
+    "reasonCode" in value &&
+    typeof value.reasonCode === "string"
+      ? value.reasonCode
+      : "failed";
+  if (code === "native-snapshot-unavailable")
+    throw new CatalogDispatchFault("invalid", "unsupported-capability");
+  if (code === "native-snapshot-refused") throw new CatalogDispatchFault("denied", "hard-denial");
+  if (code === "ci-repair-budget-blocked")
+    throw new CatalogDispatchFault("denied", "budget-exhausted");
+  if (code === "ci-observation-required") throw new CatalogDispatchFault("denied", "hard-denial");
+  return { status: "failed", evidence: [{ kind: "native-text-snapshot", code }] };
+}
+
+function nativeSnapshotReceipt(
+  snapshot: Extract<GovernedTextSnapshotResult, { readonly ok: true }>,
+): CodingToolResult {
+  const result = {
+    status: "completed" as const,
+    evidence: [{ kind: "native-text-snapshot", code: "completed" }],
+    snapshot: {
+      digest: wholeFileDigest(snapshot.text),
+      byteCount: snapshot.info.size,
+      info: snapshot.info,
+    },
+  };
+  return result;
+}
+
+function reportNativeSnapshotFailure(
+  activityLog: ServerLogSink,
+  diagnostics: ServerDiagnosticSink | undefined,
+  error: unknown,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+      },
+      {
+        actionKind: "read",
+        state: "discarded",
+        reason: "authority-resolution-failed",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
+  emitServerDiagnostic(
+    diagnostics,
+    serverDiagnosticFromError({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      operation: "coding-runtime.tool-result",
+      source: "coding-runtime.native-text-snapshot",
+      error,
+      redact: () => "native-snapshot-authority-unavailable",
+    }),
+  );
 }

@@ -363,7 +363,7 @@ export interface OpenCodeLifecycleAdapter {
     request: OpenCodeLifecycleHandshakeRequest,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
   monitor?: ((request: OpenCodeLifecycleMonitorRequest) => (() => void) | undefined) | undefined;
-  dispose?: ((runId: string) => boolean | Promise<boolean>) | undefined;
+  dispose?: ((runId: string, signal?: AbortSignal) => boolean | Promise<boolean>) | undefined;
 }
 
 /**
@@ -1628,7 +1628,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     try {
       if (
         active.openCodeLifecycleAdapter?.dispose !== undefined &&
-        !(await active.openCodeLifecycleAdapter.dispose(active.context.runId))
+        !(await boundedLifecycleDisposal(
+          (signal): boolean | Promise<boolean> =>
+            active.openCodeLifecycleAdapter?.dispose?.(active.context.runId, signal) ?? false,
+          active.shutdownTimeoutMs,
+          (error): void => {
+            emitRuntimeDisposalFailure(this.deps, active.context.runId, error);
+          },
+        ))
       ) {
         return false;
       }
@@ -2092,13 +2099,18 @@ async function codexCheck(
 }
 
 async function boundedLifecycleDisposal(
-  dispose: () => boolean | Promise<boolean>,
+  dispose: (signal: AbortSignal) => boolean | Promise<boolean>,
   timeoutMs: number,
+  onFailure?: (error: unknown) => void,
 ): Promise<boolean> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<false>((resolve) => {
     timer = setTimeout(
       () => {
+        const error = new Error("runtime-disposal-timeout");
+        controller.abort(error);
+        onFailure?.(error);
         resolve(false);
       },
       Math.max(0, timeoutMs),
@@ -2106,12 +2118,35 @@ async function boundedLifecycleDisposal(
     timer.unref();
   });
   try {
-    return await Promise.race([Promise.resolve().then(dispose), timeout]);
-  } catch {
+    const disposed = await Promise.race([
+      Promise.resolve().then(() => dispose(controller.signal)),
+      timeout,
+    ]);
+    if (!disposed) controller.abort(new Error("runtime-disposal-unproven"));
+    return disposed;
+  } catch (error) {
+    controller.abort(error);
+    onFailure?.(error);
     return false;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+function emitRuntimeDisposalFailure(
+  deps: NormalizedCodingRuntimeManagerDeps,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: runId,
+    timestamp: new Date(deps.now()).toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "coding-runtime-manager.opencode-dispose",
+    ...describeError(error),
+    message: "server-operation-failed",
+    code: "runtime-disposal-failed",
+  });
 }
 
 function runtimeStreamDrainCompletion(

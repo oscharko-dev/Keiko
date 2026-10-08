@@ -29,6 +29,8 @@ vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
   };
 });
 
+import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
+import { nativeTextSnapshotRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
@@ -794,4 +796,110 @@ it("derives mapped aliases from the existing canonical request producer", () => 
   ).toBe("keiko_git_execute");
   expect(new Set(COVERED.map(openCodeCatalogAliasFor)).size).toBe(COVERED.length);
   for (const request of UNCOVERED) expect(openCodeCatalogAliasFor(request)).toBeUndefined();
+});
+
+describe("private native snapshot canonical binding", () => {
+  const request = {
+    action: "read" as const,
+    relativePath: "src/private.ts",
+    actionId: "native-private-1",
+    idempotencyKey: "native-private-1",
+  };
+  it("does not add windowless reads to public coverage or create the private profile by default", () => {
+    const { bridge } = createBridge();
+    expect(bridge.covers(request)).toBe(false);
+    expect(bridge.executeTextSnapshot).toBeUndefined();
+  });
+  it("refuses private windows before the canonical handler executes", async () => {
+    const { bridge, log } = createBridge({ nativeTextSnapshotAvailable: true });
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] }));
+    expect(
+      await bridge.executeTextSnapshot?.(
+        { ...request, startLine: 1, maxLines: 1 },
+        facadeInput(),
+        run,
+      ),
+    ).toEqual({ status: "invalid", evidence: [] });
+    expect(run).not.toHaveBeenCalled();
+    expect(log.events.map((event) => event.op)).toEqual(["tool-catalog.dispatch-unbound"]);
+  });
+  it.each([
+    { status: "completed" as const, evidence: [] },
+    {
+      status: "completed" as const,
+      evidence: [],
+      snapshot: {
+        digest: "a".repeat(64),
+        byteCount: 0,
+        info: { type: "file", size: 0, mtimeMs: 0 },
+      },
+    },
+    {
+      status: "completed" as const,
+      evidence: [],
+      read: {
+        text: "PRIVATE_NATIVE_TEXT_SENTINEL",
+        byteCount: 28,
+        totalLines: 1,
+        digest: "a".repeat(64),
+      },
+    },
+  ])(
+    "rejects a fabricated model-read completion under the closed private receipt schema",
+    async (result) => {
+      const { bridge, log } = createBridge({ nativeTextSnapshotAvailable: true });
+      const run = vi.fn(
+        (_signal: AbortSignal, guard: CodingToolMutationGuard): Promise<CodingToolResult> => {
+          expect(guard.check()).toBe(true);
+          return Promise.resolve(result);
+        },
+      );
+      expect(await bridge.executeTextSnapshot?.(request, facadeInput(), run)).toEqual({
+        status: "failed",
+        evidence: [],
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(
+        log.events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+      ).toMatchObject({ status: "failed", reason: "result-contract-failed" });
+      expect(JSON.stringify(log.events)).not.toContain("PRIVATE_NATIVE_TEXT_SENTINEL");
+      expect(JSON.stringify(log.events)).not.toContain("src/private.ts");
+    },
+  );
+
+  it("expires the actual private descriptor invocation and withholds late completion", async () => {
+    let elapsed = 0;
+    const { bridge, log } = createBridge({
+      nativeTextSnapshotAvailable: true,
+      elapsedNow: () => elapsed,
+    });
+    const completion = deferred<CodingToolResult>();
+    let captured: CodingToolMutationGuard | undefined;
+    const run = vi.fn(
+      (_signal: AbortSignal, guard: CodingToolMutationGuard): Promise<CodingToolResult> => {
+        captured = guard;
+        expect(guard.check()).toBe(true);
+        return completion.promise;
+      },
+    );
+    const pending = bridge.executeTextSnapshot?.(request, facadeInput(), run);
+    await vi.waitFor(() => {
+      expect(run).toHaveBeenCalledOnce();
+    });
+    const descriptor = nativeTextSnapshotRegistrationSet().entries[0]?.descriptor;
+    if (descriptor === undefined) throw new TypeError("Expected private descriptor");
+    elapsed = descriptor.bounds.maxDurationMs + 1;
+    expect(captured?.check()).toBe(false);
+    await expect(pending).resolves.toEqual({ status: "timeout", evidence: [] });
+    completion.resolve({ status: "completed", evidence: [] });
+    await vi.waitFor(() => {
+      expect(log.events.some((event) => event.op === "tool-catalog.completion-discarded")).toBe(
+        true,
+      );
+    });
+    expect(captured?.check()).toBe(false);
+    expect(
+      log.events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "timeout", reason: "deadline-exceeded" });
+  });
 });

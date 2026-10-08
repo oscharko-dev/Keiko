@@ -2013,3 +2013,110 @@ describe("CodingToolAuthorityPort", () => {
     });
   });
 });
+
+describe("private native snapshot constructor admission", () => {
+  const authority = {
+    resolveCapabilityForDelegation: (): {
+      readonly ok: true;
+      readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope;
+    } => ({
+      ok: true as const,
+      envelope: fullyAuthorizedEnvelope,
+    }),
+    revalidateCapabilityForMutation: (): {
+      readonly ok: true;
+      readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope;
+    } => ({
+      ok: true as const,
+      envelope: fullyAuthorizedEnvelope,
+    }),
+  };
+  it("keeps the private facet absent without its actual producer or canonical bridge", () => {
+    expect(
+      createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts()).nativeTextRead,
+    ).toBeUndefined();
+    const producer = { readTextSnapshot: vi.fn() };
+    expect(
+      createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+        nativeTextRead: producer,
+        disableCatalogBridge: true,
+      }).nativeTextRead,
+    ).toBeUndefined();
+    expect(producer.readTextSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("captures the actual private producer once without changing the model execute method", async () => {
+    const log = createBufferedServerLogSink();
+    const original = {
+      readTextSnapshot: vi.fn(() =>
+        Promise.resolve({ ok: false as const, reason: "snapshot-unavailable" as const }),
+      ),
+    };
+    const replacement = { readTextSnapshot: vi.fn() };
+    let selected = original;
+    const readSelection = vi.fn(() => selected);
+    const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+      get nativeTextRead() {
+        return readSelection();
+      },
+      catalogActivityLog: log,
+    });
+    selected = replacement;
+    expect(Object.isFrozen(facade.nativeTextRead)).toBe(true);
+    const result = await facade.nativeTextRead?.readTextSnapshot({
+      capability: "runtime-capability-secret",
+      body: JSON.stringify({
+        action: "read",
+        actionId: "private-constructor",
+        idempotencyKey: "private-constructor",
+        relativePath: "src/a.ts",
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: "snapshot-unavailable" });
+    expect(original.readTextSnapshot).toHaveBeenCalledOnce();
+    expect(replacement.readTextSnapshot).not.toHaveBeenCalled();
+    expect(readSelection).toHaveBeenCalledOnce();
+    expect(typeof facade.execute).toBe("function");
+  });
+  it("fails a technically unavailable private authority context closed with body-free evidence", async () => {
+    const log = createBufferedServerLogSink();
+    const diagnostics: unknown[] = [];
+    const producer = { readTextSnapshot: vi.fn() };
+    const facade = createRuntimeCodingToolFacade(
+      authority,
+      () => {
+        throw new Error("PRIVATE_NATIVE_AUTHORITY_CONTEXT_SENTINEL");
+      },
+      governedPorts(),
+      {
+        nativeTextRead: producer,
+        invocationRegistry: createCodingToolInvocationRegistry({ now: () => 0 }),
+        catalogActivityLog: log,
+        catalogDiagnostics: { record: (value): void => void diagnostics.push(value) },
+      },
+    );
+    await expect(
+      facade.nativeTextRead?.readTextSnapshot({
+        capability: "runtime-capability-secret",
+        body: JSON.stringify({
+          action: "read",
+          actionId: "private-context",
+          idempotencyKey: "private-context",
+          relativePath: "src/private.ts",
+        }),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(producer.readTextSnapshot).not.toHaveBeenCalled();
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.tool-result",
+        extra: { actionKind: "read", state: "discarded", reason: "authority-resolution-failed" },
+      },
+    ]);
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify({ events: log.events, diagnostics })).not.toContain(
+      "PRIVATE_NATIVE_AUTHORITY_CONTEXT_SENTINEL",
+    );
+    expect(JSON.stringify({ events: log.events, diagnostics })).not.toContain("src/private.ts");
+  });
+});

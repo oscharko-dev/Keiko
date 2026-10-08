@@ -177,6 +177,7 @@ interface OpenCodeRuntimeCompositionModule {
   createOpenCodeRuntimeComposition(input: {
     readonly activityLog?: ServerLogSink;
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
+    readonly toolProfile?: "direct" | "code-mode" | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
@@ -405,6 +406,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly readToolProfile?: () => "direct" | "code-mode";
   readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
   readonly onSpawn?: (() => void) | undefined;
   readonly stdinLifetime?: {
@@ -414,6 +416,8 @@ interface StartBridgeControl {
   };
   readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
+  readonly shutdownTimeoutMs?: number;
+  readonly onRelease?: (runId: string) => void;
   readonly historyResponse?: Promise<Response>;
   readonly historyResponseFactory?: (signal?: AbortSignal) => Promise<Response>;
   readonly expectedStart?: Readonly<Record<string, unknown>>;
@@ -538,6 +542,15 @@ function fixtureStartupLine(
   return control?.stdinLifetime === undefined
     ? "server listening on http://127.0.0.1:43123\n"
     : '{"url":"http://127.0.0.1:43123"}\n';
+}
+
+function fixtureShutdownTimeout(control: StartBridgeControl | undefined): number {
+  return control?.shutdownTimeoutMs ?? 20;
+}
+
+function fixtureRelease(control: StartBridgeControl | undefined, runId: string): true {
+  control?.onRelease?.(runId);
+  return true;
 }
 
 async function startBridgeFixture(
@@ -706,6 +719,9 @@ async function startBridgeFixture(
         : facade.execute(input),
   };
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
+    get toolProfile(): "direct" | "code-mode" | undefined {
+      return control?.readToolProfile?.();
+    },
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
     contextGeometry: {
@@ -745,7 +761,7 @@ async function startBridgeFixture(
       revokeRuntime: (): true => true,
       abortInFlightActions: (): true => true,
       markRuntimeRecoveryRequired: (): true => true,
-      releaseRuntimeAfterReap: (): true => true,
+      releaseRuntimeAfterReap: (runId): true => fixtureRelease(control, runId),
     },
   });
   const mode = runtimeMode(control);
@@ -767,7 +783,7 @@ async function startBridgeFixture(
       modelProfileId: "coding-safe-openai-compatible",
       args: [],
       inheritedEnvAllowlist: [],
-      shutdownTimeoutMs: 20,
+      shutdownTimeoutMs: fixtureShutdownTimeout(control),
       startTimeoutMs: control?.startTimeoutMs ?? 100,
       confinement: {
         platform: "darwin",
@@ -1731,6 +1747,38 @@ describe("private OpenCode run control", () => {
     }
     return permission.requestId;
   };
+
+  it("closes a pending human permission without starting a delegate or retaining authority", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const delegate = vi.fn((): Promise<unknown> => Promise.resolve({ outcome: "completed" }));
+    const realFacade = createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: delegate },
+    });
+    const onRelease = vi.fn();
+    const fixture = await startBridgeFixture(realFacade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      onRelease,
+    });
+    try {
+      const decision = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await governedAsk("call_pending_close")),
+      });
+      await permissionRequested(runtimeEvents);
+      expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+        ok: true,
+        status: "stopped",
+      });
+      expect(await decision).toMatchObject({ status: 403, rejection: "approval-cancelled" });
+      expect(delegate).not.toHaveBeenCalled();
+      expect(onRelease).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.stop();
+    }
+  });
 
   it("aliases live permission ids and resolves only the run-owned upstream request", async () => {
     const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
@@ -3737,5 +3785,262 @@ it("keeps real delegate admission private for duplicate and replay bridge respon
     resolve({ outcome: "completed" });
     await fixture.stop();
     registry.dispose();
+  }
+});
+
+it("retains private state and authority release until the real admitted facade effect settles", async () => {
+  let release!: (value: unknown) => void;
+  let effectSettled = false;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const delegate = vi.fn(async (): Promise<unknown> => {
+    const result = await pending;
+    effectSettled = true;
+    return result;
+  });
+  const facade = createCodingToolFacade({
+    authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+    delegate: { execute: delegate },
+  });
+  const onRelease = vi.fn();
+  let runRoot = "";
+  const fixture = await startBridgeFixture(
+    facade,
+    { requestDeadlineMs: 1_000, maxInFlight: 1 },
+    {
+      onRelease,
+      afterStart: (_runtime, path): void => {
+        runRoot = path;
+      },
+    },
+  );
+  try {
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+      body: JSON.stringify({
+        action: "command",
+        commandId: "test",
+        actionId: "tool:call_drain",
+        idempotencyKey: "drain",
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(delegate).toHaveBeenCalledOnce();
+    });
+    vi.useFakeTimers();
+    const stopping = fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+    await vi.advanceTimersByTimeAsync(21);
+    expect(await stopping).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(effectSettled).toBe(false);
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await handled).toMatchObject({ status: 502 });
+    expect(
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify({
+          action: "command",
+          commandId: "test",
+          actionId: "tool:call_after_close",
+          idempotencyKey: "after-close",
+        }),
+      }),
+    ).toMatchObject({ status: 503 });
+    expect(delegate).toHaveBeenCalledOnce();
+    const reconciling = fixture.runtime.manager.reconcile(FIXTURE_RUN_ID);
+    await vi.advanceTimersByTimeAsync(21);
+    expect(await reconciling).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(onRelease).not.toHaveBeenCalled();
+    release({ outcome: "completed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(effectSettled).toBe(true);
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect((): void => {
+      accessSync(runRoot);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    release({ outcome: "completed" });
+    vi.useRealTimers();
+    await fixture.stop();
+  }
+});
+
+it.each(["cooperative", "rejecting"] as const)(
+  "joins a real %s delegate after close aborts it",
+  async (kind) => {
+    let settled = false;
+    const delegate = vi.fn(
+      (
+        _request: Parameters<
+          Parameters<typeof createCodingToolFacade>[0]["delegate"]["execute"]
+        >[0],
+        signal: AbortSignal | undefined,
+      ): Promise<unknown> =>
+        new Promise((resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            (): void => {
+              settled = true;
+              if (kind === "rejecting") reject(new Error("private-delegate-body"));
+              else resolve({ outcome: "completed" });
+            },
+            { once: true },
+          );
+        }),
+    );
+    const facade = createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: delegate },
+    });
+    const onRelease = vi.fn();
+    let runRoot = "";
+    const fixture = await startBridgeFixture(
+      facade,
+      { requestDeadlineMs: 1_000, maxInFlight: 1 },
+      {
+        onRelease,
+        afterStart: (_runtime, path): void => {
+          runRoot = path;
+        },
+      },
+    );
+    try {
+      const handled = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify({
+          action: "command",
+          commandId: "test",
+          actionId: "tool:call_cooperative",
+          idempotencyKey: "cooperative",
+        }),
+      });
+      await vi.waitFor(() => {
+        expect(delegate).toHaveBeenCalledOnce();
+      });
+      expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toEqual({
+        ok: true,
+        status: "stopped",
+      });
+      expect(settled).toBe(true);
+      expect(await handled).toMatchObject({ status: 502 });
+      expect((): void => {
+        accessSync(runRoot);
+      }).toThrow();
+      expect(onRelease).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.stop();
+    }
+  },
+);
+
+it("never removes private state after a timed-out adapter close eventually completes", async () => {
+  const module = await import("./opencodeRuntimeAdapter.js");
+  const createAdapter = module.createOpenCodeRuntimeAdapter;
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const closing = vi.fn();
+  const spy = vi.spyOn(module, "createOpenCodeRuntimeAdapter").mockImplementation((input) => {
+    const adapter = createAdapter(input);
+    return {
+      ...adapter,
+      close: async (): Promise<void> => {
+        closing();
+        await pending;
+        await adapter.close();
+      },
+    };
+  });
+  const onRelease = vi.fn();
+  let runRoot = "";
+  const fixture = await startBridgeFixture(
+    createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: (): Promise<unknown> => Promise.resolve({ outcome: "completed" }) },
+    }),
+    undefined,
+    {
+      onRelease,
+      afterStart: (_runtime, path): void => {
+        runRoot = path;
+      },
+    },
+  );
+  vi.useFakeTimers();
+  try {
+    const stopping = fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+    await vi.advanceTimersByTimeAsync(21);
+    expect(await stopping).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(closing).toHaveBeenCalledOnce();
+    expect(onRelease).not.toHaveBeenCalled();
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect((): void => {
+      accessSync(runRoot);
+    }).not.toThrow();
+    expect(onRelease).not.toHaveBeenCalled();
+    expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect((): void => {
+      accessSync(runRoot);
+    }).toThrow();
+    expect(onRelease).toHaveBeenCalledOnce();
+  } finally {
+    finish();
+    vi.useRealTimers();
+    spy.mockRestore();
+    await fixture.stop();
+  }
+});
+
+it("captures the configured tool profile getter once before asynchronous readiness", async () => {
+  const readToolProfile = vi.fn((): "direct" => {
+    if (readToolProfile.mock.calls.length > 1) throw new Error("profile-second-read");
+    return "direct";
+  });
+  const arm = vi.fn();
+  const fixture = await startBridgeFixture(
+    createCodingToolFacade({
+      authority: { admit: () => ({ ok: true, mutationGuard: { check: (): true => true } }) },
+      delegate: { execute: (): Promise<unknown> => Promise.resolve({ outcome: "completed" }) },
+    }),
+    undefined,
+    {
+      readToolProfile,
+      safeActivity: {
+        arm,
+        clear: vi.fn(),
+        ingest: (): true => true,
+        recordDrops: vi.fn(),
+        settleTool: vi.fn(),
+      },
+    },
+  );
+  try {
+    expect(readToolProfile).toHaveBeenCalledOnce();
+    expect(arm).toHaveBeenCalledWith("ses_tool", "direct");
+    expect(await fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "Read-only fixture task")).toBe(
+      true,
+    );
+    expect(readToolProfile).toHaveBeenCalledOnce();
+  } finally {
+    await fixture.stop();
   }
 });

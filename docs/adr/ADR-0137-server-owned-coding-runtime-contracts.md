@@ -452,7 +452,12 @@ owner closes idempotently on native success, typed failure, defect or interrupti
 no `execute.after` hook occurs. Original planning, output, progress, native instructions and SQLite
 ownership remain intact. Generated modules are fixed builder assets, not run-packet source paths.
 This factory still grants no production launch or native effect permission. Current authority,
-governed native IO, actual admitted-work drainage and a freshly attested host launch remain required.
+governed native IO and a freshly attested host launch remain required. The existing facade bridge
+closes admission and cancels approvals immediately, but proves drainage only after every admitted
+actual delegate promise settles. One bounded coalesced drain wait owns cancellation; a timed-out
+attempt retains recovery and authority. Disposal rechecks its cancellation signal and exact run
+generation after each await before removing private state. Future native IO must enter this same
+effect owner before its drainage can be claimed.
 
 The first macOS filesystem foundation composes read-only accepted-workspace access, writable
 private per-run native state and read-only immutable runtime/OS support with the existing exact
@@ -475,7 +480,13 @@ neither text nor metadata. Both protocol capability and effective byte cap are b
 approved helper identity. Existing `KSR1/KSS1` helpers retain their exact contract and report the
 new snapshot capability unavailable. Existing workspace-read evidence records only closed native
 IO/instruction purposes and refusal reasons. This bounded text prerequisite does not activate a
-native host or qualify original Read paging, directories, media or large-file semantics.
+native host or qualify original Read paging, directories, media or large-file semantics. Its
+optional facade port binds the private `keiko.native.workspace.text.snapshot@1` descriptor through
+the existing canonical registry, authority, budget and invocation owners. Only the actual completed
+current invocation receives transient text; catalog results contain compact body-free receipts,
+and receipt-only replay cannot recover text. Same-descriptor modification times retain every finite
+value, including dates before 1970. The private profile is never a model selector and leaves public
+direct/Code Mode projections and Chat read/search consumers unchanged.
 
 An original Node service host has its own supplemental immutable artifact identity: final npm
 payload and archive, fixed Node executable and bootstrap, dependency lock, license inventory,

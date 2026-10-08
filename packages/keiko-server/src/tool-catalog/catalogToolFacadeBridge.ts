@@ -14,7 +14,13 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { captureCatalogJson, lookupCatalogTool } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  compileToolProjection,
+  createKeikoToolCatalog,
+  nativeTextSnapshotRegistrationSet,
+  captureCatalogJson,
+  lookupCatalogTool,
+} from "@oscharko-dev/keiko-tool-catalog";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import type {
   CodingToolAuthorityPort,
@@ -62,6 +68,7 @@ const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.t
     return descriptor === undefined ? [] : [descriptor];
   },
 );
+
 const OPENCODE_DESCRIPTOR_BY_ID: ReadonlyMap<string, ToolDescriptor> = new Map(
   OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) => [descriptor.toolRef.canonicalId, descriptor]),
 );
@@ -116,6 +123,8 @@ export interface CanonicalCatalogContext {
 export interface CanonicalCatalogFacadeBridgeInput {
   /** Trusted constructor selection; never inferred from tool input. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
+  /** Trusted constructor capability; never inferred from an incoming request. */
+  readonly nativeTextSnapshotAvailable?: boolean | undefined;
   readonly authority: CodingToolAuthorityPort;
   readonly previewAuthority: CodingToolAuthorityPreview;
   readonly invocationRegistry: CodingToolInvocationRegistry;
@@ -130,9 +139,17 @@ export interface CanonicalCatalogFacadeBridgeInput {
 
 export interface CanonicalCatalogFacadeBridge {
   readonly covers: (request: CodingToolActionRequest) => boolean;
-  readonly recordUnbound: (request: CodingToolActionRequest, input: CodingToolFacadeInput) => void;
+  readonly recordUnbound: (
+    request: Pick<CodingToolActionRequest, "action">,
+    input: CodingToolFacadeInput,
+  ) => void;
   readonly execute: (
     request: CodingToolActionRequest,
+    input: CodingToolFacadeInput,
+    run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  ) => Promise<CodingToolResult>;
+  readonly executeTextSnapshot?: (
+    request: Extract<CodingToolActionRequest, { readonly action: "read" }>,
     input: CodingToolFacadeInput,
     run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
   ) => Promise<CodingToolResult>;
@@ -294,6 +311,8 @@ function workspaceRepresentative(
 ): CodingToolActionRequest | undefined {
   if (canonicalId === "keiko.workspace.discover")
     return { ...base, action: "discover", query: "*", maxResults: 1 };
+  if (canonicalId === "keiko.native.workspace.text.snapshot")
+    return { ...base, action: "read", relativePath: "README.md" };
   if (canonicalId === "keiko.workspace.read")
     return { ...base, action: "read", relativePath: "README.md", startLine: 1, maxLines: 1 };
   if (canonicalId !== "keiko.repo.search") return undefined;
@@ -636,8 +655,9 @@ function composedBindings(
 function preparedBindings(
   request: CodingToolActionRequest,
   unavailable: () => ReadonlySet<OpenCodeOptionalToolName>,
+  descriptors: readonly ToolDescriptor[] = OPENCODE_CATALOG_DESCRIPTORS,
 ): readonly CatalogToolHandlerBinding[] {
-  return OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) =>
+  return descriptors.map((descriptor) =>
     bindingFor(
       descriptor,
       request,
@@ -707,9 +727,9 @@ function unavailableKey(unavailable: ReadonlySet<OpenCodeOptionalToolName>): str
 
 function prepareDispatchBinder(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
+  advertisement = catalogAdvertisementForProfile(bridgeInput.toolProfile ?? "direct"),
 ): PreparedDispatchBinder {
-  const profile = bridgeInput.toolProfile ?? "direct";
-  const advertisement = catalogAdvertisementForProfile(profile);
+  const descriptors = projectedDescriptors(advertisement);
   const fallback = representative("keiko.workspace.discover", {
     actionId: "catalog-composition",
     idempotencyKey: "catalog-composition",
@@ -721,6 +741,7 @@ function prepareDispatchBinder(
         fallback,
         bridgeInput.unavailableOptionalTools ??
           ((): ReadonlySet<OpenCodeOptionalToolName> => new Set()),
+        descriptors,
       ),
       authorityPort: {
         preview: bridgeInput.previewAuthority,
@@ -793,8 +814,8 @@ async function executeCanonical(
   request: CodingToolActionRequest,
   facadeInput: CodingToolFacadeInput,
   run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  action: CatalogAction | undefined = catalogActionFor(request),
 ): Promise<CodingToolResult> {
-  const action = catalogActionFor(request);
   const current = bridgeInput.context();
   if (action === undefined || current === undefined) return { status: "denied", evidence: [] };
   if (trustedContext(current, facadeInput) === undefined) return { status: "denied", evidence: [] };
@@ -802,7 +823,9 @@ async function executeCanonical(
     emitExpiredBinding(preparation.advertisement, current, bridgeInput.logPort);
     return expiredResult(request);
   }
-  const descriptor = OPENCODE_DESCRIPTOR_BY_ID.get(action.toolId);
+  const descriptor = preparation.advertisement.projection.tools.find(
+    (tool) => tool.toolRef.canonicalId === action.toolId,
+  );
   if (descriptor === undefined) return { status: "denied", evidence: [] };
   let executed: CodingToolResult | undefined;
   const binder = createDispatchBinder(
@@ -832,7 +855,7 @@ async function executeCanonical(
 
 function recordUnbound(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
-  request: CodingToolActionRequest,
+  request: Pick<CodingToolActionRequest, "action">,
 ): void {
   const context = bridgeInput.context();
   bridgeInput.logPort.primary.write(
@@ -852,6 +875,10 @@ export function createCanonicalCatalogFacadeBridge(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
 ): CanonicalCatalogFacadeBridge {
   const preparation = prepareDispatchBinder(bridgeInput);
+  const snapshot =
+    bridgeInput.nativeTextSnapshotAvailable === true
+      ? prepareDispatchBinder(bridgeInput, nativeSnapshotAdvertisement())
+      : undefined;
   return {
     covers: (request): boolean => catalogActionFor(request) !== undefined,
     recordUnbound: (request, _facadeInput): void => {
@@ -859,6 +886,12 @@ export function createCanonicalCatalogFacadeBridge(
     },
     execute: (request, facadeInput, run): Promise<CodingToolResult> =>
       executeCanonical(bridgeInput, preparation, request, facadeInput, run),
+    ...(snapshot === undefined
+      ? {}
+      : {
+          executeTextSnapshot: (request, facadeInput, run): Promise<CodingToolResult> =>
+            executeNativeSnapshot(bridgeInput, snapshot, request, facadeInput, run),
+        }),
   };
 }
 
@@ -868,4 +901,42 @@ export function openCodeCatalogAliasFor(request: CodingToolActionRequest): strin
   return OPENCODE_CATALOG_ADVERTISEMENT.projection.tools.find(
     (tool) => tool.toolRef.canonicalId === canonicalId,
   )?.alias;
+}
+
+function nativeSnapshotAdvertisement(): ReturnType<typeof openCodeGatewayCatalogProjection> {
+  const set = nativeTextSnapshotRegistrationSet();
+  const catalog = createKeikoToolCatalog([set]);
+  return { catalog, projection: compileToolProjection(catalog, set.profile) };
+}
+
+async function executeNativeSnapshot(
+  bridge: CanonicalCatalogFacadeBridgeInput,
+  preparation: PreparedDispatchBinder,
+  request: Extract<CodingToolActionRequest, { readonly action: "read" }>,
+  input: CodingToolFacadeInput,
+  run: (signal: AbortSignal, guard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+): Promise<CodingToolResult> {
+  if (request.startLine !== undefined || request.maxLines !== undefined) {
+    recordUnbound(bridge, request);
+    return { status: "invalid", evidence: [] };
+  }
+  const result = await executeCanonical(bridge, preparation, request, input, run, {
+    toolId: "keiko.native.workspace.text.snapshot",
+    arguments: { relativePath: request.relativePath },
+  });
+  if (result.status !== "completed") return result;
+  if (input.signal?.aborted === true || !bridge.previewAuthority(input.capability, request).ok) {
+    recordUnbound(bridge, request);
+    return { status: "denied", evidence: [] };
+  }
+  return result;
+}
+
+function projectedDescriptors(
+  advertisement: ReturnType<typeof openCodeGatewayCatalogProjection>,
+): readonly ToolDescriptor[] {
+  return advertisement.projection.tools.flatMap((tool) => {
+    const descriptor = lookupCatalogTool(advertisement.catalog, tool.toolRef);
+    return descriptor === undefined ? [] : [descriptor];
+  });
 }

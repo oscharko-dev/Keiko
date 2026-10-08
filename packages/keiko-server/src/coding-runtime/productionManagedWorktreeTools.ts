@@ -763,6 +763,7 @@ export function createProductionManagedWorktreeToolFacade(
     governedPorts(input, readEdit),
     {
       toolProfile: input.toolProfile,
+      nativeTextRead: readEdit.nativeTextRead,
       invocationRegistry: input.invocationRegistry,
       ...(input.ciRepairBudget === undefined ? {} : { ciRepairBudget: input.ciRepairBudget }),
       reserveEditDelegation: true,

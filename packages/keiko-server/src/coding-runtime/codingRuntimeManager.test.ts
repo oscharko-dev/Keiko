@@ -5300,3 +5300,138 @@ describe("portable attestation post-await spawn controls", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private nested body");
   });
 });
+
+it("bounds OpenCode disposal and never releases authority when that attempt times out", async () => {
+  const fixture = createManagedFixture();
+  const child = fakeChild();
+  let finish!: (result: boolean) => void;
+  let settled = false;
+  const signals: (AbortSignal | undefined)[] = [];
+  const dispose = vi.fn((_runId: string, signal?: AbortSignal): Promise<boolean> => {
+    signals.push(signal);
+    return settled
+      ? Promise.resolve(true)
+      : new Promise((resolve) => {
+          finish = resolve;
+        });
+  });
+  const release = vi.fn(() => true);
+  const manager = createTestCodingRuntimeManager({
+    processEnv: {},
+    supervisor: testSupervisor(() => ({
+      ...child.handle,
+      kill: (): void => {
+        child.exit(0);
+      },
+    })),
+    openCodeLifecycleAdapter: { handshake: () => Promise.resolve({ ok: true }), dispose },
+    releaseRuntimeAfterReap: release,
+  });
+  await manager.start(
+    launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+  );
+  vi.useFakeTimers();
+  const stopping = manager.stop("run-1988");
+  let result: Awaited<typeof stopping> | undefined;
+  void stopping.then((value): void => {
+    result = value;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(6);
+    expect(result).toMatchObject({ ok: false, failureCode: "runtime-reap-unproven" });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(release).not.toHaveBeenCalled();
+    settled = true;
+    finish(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(release).not.toHaveBeenCalled();
+    expect(manager.health()).toMatchObject({ status: "recovery-required" });
+    expect(await manager.reconcile("run-1988")).toEqual({ ok: true, status: "stopped" });
+    expect(signals[1]?.aborted).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    settled = true;
+    finish(true);
+    await stopping;
+    vi.useRealTimers();
+  }
+});
+
+it("preserves an OpenCode disposal exception without releasing authority or exposing its body", async () => {
+  const fixture = createManagedFixture();
+  const child = fakeChild();
+  const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+  const release = vi.fn(() => true);
+  const manager = createTestCodingRuntimeManager({
+    processEnv: {},
+    diagnostics,
+    supervisor: testSupervisor(() => ({
+      ...child.handle,
+      kill: (): void => {
+        child.exit(0);
+      },
+    })),
+    openCodeLifecycleAdapter: {
+      handshake: () => Promise.resolve({ ok: true }),
+      dispose: (): never => {
+        throw new Error("private-disposal-body", {
+          cause: new TypeError("private-disposal-cause"),
+        });
+      },
+    },
+    releaseRuntimeAfterReap: release,
+  });
+  await manager.start(
+    launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+  );
+  expect(await manager.stop("run-1988")).toMatchObject({
+    ok: false,
+    failureCode: "runtime-reap-unproven",
+  });
+  expect(release).not.toHaveBeenCalled();
+  expect(diagnostics.record).toHaveBeenCalledWith(
+    expect.objectContaining({
+      operation: "coding-runtime.opencode-composition",
+      source: "coding-runtime-manager.opencode-dispose",
+      errorClass: "Error",
+      code: "runtime-disposal-failed",
+      causeChain: ["TypeError"],
+      frames: expect.any(Array) as readonly string[],
+    }),
+  );
+  expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private-disposal-body");
+  expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private-disposal-cause");
+});
+
+it("aborts the private cleanup signal when OpenCode disposal explicitly refuses completion", async () => {
+  const fixture = createManagedFixture();
+  const child = fakeChild();
+  let disposalSignal: AbortSignal | undefined;
+  const release = vi.fn(() => true);
+  const manager = createTestCodingRuntimeManager({
+    processEnv: {},
+    supervisor: testSupervisor(() => ({
+      ...child.handle,
+      kill: (): void => {
+        child.exit(0);
+      },
+    })),
+    openCodeLifecycleAdapter: {
+      handshake: () => Promise.resolve({ ok: true }),
+      dispose: (_runId, signal): false => {
+        disposalSignal = signal;
+        return false;
+      },
+    },
+    releaseRuntimeAfterReap: release,
+  });
+  await manager.start(
+    launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+  );
+  expect(await manager.stop("run-1988")).toMatchObject({
+    ok: false,
+    failureCode: "runtime-reap-unproven",
+  });
+  expect(disposalSignal?.aborted).toBe(true);
+  expect(release).not.toHaveBeenCalled();
+});
