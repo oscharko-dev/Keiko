@@ -958,9 +958,9 @@ host-installed macOS native dependencies into a Linux test container. Their conf
 and named-head results remain historical evidence. The native regression controls for that
 historical path covered outside-root reads/writes, symlink and descendant escapes, host-loopback
 denial and cleanup. They do not qualify the current assured `execution-root` path, which selects
-its enforcing backend and may execute in Linux Docker. The latest completed sandbox Gemma run, `run-248474103773312635839423705089814196639` on
-`fb18ca28d`, failed with `verification-not-evidenced` at revision 7; it is not a successful
-final-head repair/retest qualification.
+its enforcing backend and may execute in Linux Docker. The previous sandbox Gemma run, `run-248474103773312635839423705089814196639` on
+`fb18ca28d`, failed with `verification-not-evidenced` at revision 7; it remains a failed
+repair/retest qualification.
 
 The current diagnosis reproduces the platform mismatch in the original native loader: the
 host-selected Darwin binding loads on macOS but fails under the selected Linux container. The
@@ -971,9 +971,38 @@ installation receipt also binds the measured target/runtime identity (ADR-0043 D
 npm 11.16.0 install selected the Linux native binding and passed the same container's exact-file
 Vitest control: one test passed, none failed; Darwin-prepared dependencies in that same Linux container failed before test startup.
 No lifecycle scripts ran. This proves optional prebuilt binding selection for that fixture, not
-arbitrary native cross-builds or complete parity. The repaired live Gemma run and complete
-final-head task/mode matrix remain pending; no weaker backend fallback or install-script allowance
-is part of this repair.
+arbitrary native cross-builds or complete parity. No weaker backend fallback or install-script
+allowance is part of this repair.
+
+### Current assured browser-independent repair/retest qualification
+
+The normal CLI on published head `e0780b473d47b4a5b16a7958f53b68f0fdca9cf1` admitted
+`run-101441250923177388025660544092290757506` through the existing Workbench UI on
+2026-10-08 at 23:01:53 UTC. Fresh isolated state discovered the eligible Gemma model without
+opening Settings. Full access was accepted for one narrowly bounded task in an independent full
+Keiko clone with zero Git remotes. The browser closed immediately after admission; no active
+Editor bridge or later operator decision was needed.
+
+The exact-file verifier failed at 23:03:05 UTC with one failing verifier step and one failure
+location. OpenCode read the relevant test/component information, made one server-executed edit,
+and passed the same exact-file verifier at 23:05:12 UTC. Both observations bind target digest
+`913ac05598e7cbc3aa7651b82e48f3f0c05156d49ae4f6e4ba526d8f71b9438d`;
+these counts name verifier steps, not individual Vitest assertions. Only then did the run settle
+`succeeded`, at 23:05:18 UTC. The CLI was stopped and its owned process was proven reaped after
+terminal evidence was captured.
+
+ROOT independently reviewed the only changed sandbox file: the model added `await user.tab()`
+to the seeded keyboard test. All original focus, checked-state and repeated Space-key assertions
+remain, as do the five pre-existing tests. The changed test is sandbox-only and is never committed
+to this pull request. ROOT also checked all 6,437 frozen compiled/native inputs unchanged and
+confirmed the product checkout clean at the qualified head. The same enforcing execution backend,
+registry restriction, disabled lifecycle scripts and bounded authority remained active.
+
+The retained body-free receipts are `f4-no-browser-live-e0780b473d47.json` and
+`root-gemma-e078-parent-qualification-cleanup.json` in the authorized local audit directory.
+This qualifies the actual failed-test → read → edit → same-target pass loop in Full access on
+that published head. The complete task/mode/platform matrix and original service-host standalone
+parity remain open under the existing follow-up issues; this live proof does not close them.
 
 ## Resilience under gateway load (chaos)
 
