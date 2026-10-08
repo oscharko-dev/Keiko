@@ -23,8 +23,8 @@ import {
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 
 // #3873: replacement edits are materialized into the unified diff the governed editor path applies.
-// Every materialized patch below is applied by the real keiko-tools patch engine, so the expected
-// file text is asserted on the bytes the editor would write, not on a restated diff. Every
+// Materialized patches are applied by the real keiko-tools patch engine, except the read-ceiling
+// case, which isolates materialization from that engine's independent source-file budget. Every
 // expectedContentHash is produced by the digest function the governed read reports, never by a
 // local copy of its formula (#3873 review).
 
@@ -293,22 +293,27 @@ describe("materializeReplacementChangeset", () => {
   });
 
   it("refuses an edit that grows a file past the read ceiling, in bytes", async () => {
-    const files = { "a.ts": `${"x".repeat(60_000)}\nend\n` };
+    const prefix = "x\n".repeat((SECURE_WORKSPACE_TEXT_READ_MAX_BYTES - 1_000) / 2);
+    const files = { "a.ts": `${prefix}end\n` };
 
     const grown = await materialize(files, [
-      { file: "a.ts", oldString: "end", newString: "y".repeat(6_000) },
+      { file: "a.ts", oldString: "end", newString: "y".repeat(1_001) },
     ]);
-    // 4,000 two-byte characters stay under the ceiling in code units but not in bytes.
+    // The same replacement fits in code units but exceeds the physical UTF-8 byte ceiling.
     const wide = await materialize(files, [
-      { file: "a.ts", oldString: "end", newString: "é".repeat(4_000) },
+      { file: "a.ts", oldString: "end", newString: "é".repeat(501) },
     ]);
     const fitting = await materialize(files, [
-      { file: "a.ts", oldString: "end", newString: "y".repeat(5_000) },
+      { file: "a.ts", oldString: "end", newString: "y".repeat(992) },
     ]);
 
     expect(grown).toMatchObject({ status: "refused", refusal: "result-too-large" });
     expect(wide).toMatchObject({ status: "refused", refusal: "result-too-large" });
     expect(fitting.status).toBe("materialized");
+    if (fitting.status !== "materialized") throw new Error("expected bounded patch");
+    expect(Buffer.byteLength(fitting.changeset.patch, "utf8")).toBeLessThan(
+      EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+    );
   });
 
   it("keeps a missing final line break", async () => {

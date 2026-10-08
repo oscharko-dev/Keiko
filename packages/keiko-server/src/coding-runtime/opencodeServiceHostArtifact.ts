@@ -73,6 +73,8 @@ function closedHostEnvironment(env: Readonly<Record<string, string>> | undefined
   // Ambient Node options/loaders or injected native libraries can substitute the fixed program
   // before bootstrap validation. The existing runtime environment owner must omit these names.
   try {
+    // Node spawn also enumerates inherited environment fields; never admit unowned values.
+    for (const key in env) if (!Object.hasOwn(env, key)) return false;
     return Reflect.ownKeys(env).every((key) => {
       if (typeof key !== "string" || /^(?:NODE_|LD_|DYLD_)/iu.test(key)) return false;
       const descriptor = Object.getOwnPropertyDescriptor(env, key);

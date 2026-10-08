@@ -647,7 +647,8 @@ function decodeSnapshotHelperResponse(
     if (decoded.status === "access-denied") return { kind: "access-denied" };
     if (decoded.status !== "ok")
       return { kind: "settled", result: { ok: false, reason: helperFailure(decoded.status) } };
-    const text = decodeSecureWorkspaceText(decoded.bytes);
+    // Preserve physical UTF-8 bytes in rich snapshots; legacy text reads retain their BOM handling.
+    const text = decodeSecureWorkspaceText(decoded.bytes, true);
     return {
       kind: "settled",
       result: text.ok ? { ok: true, text: text.text, info: decoded.info } : text,

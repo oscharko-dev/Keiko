@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OPENCODE_TOOL_PROFILES,
   OPENCODE_SERVICE_HOST_START_PACKET_FIELDS,
@@ -132,6 +132,28 @@ describe("inactive fixed original OpenCode service-host launch shape", () => {
 });
 
 describe("closed fixed-host environment inputs", () => {
+  it.each(["NODE_OPTIONS", "NODE_PATH", "OPENCODE_DISABLE_PROJECT_CONFIG"])(
+    "refuses inherited enumerable %s without evaluating it",
+    (name) => {
+      const getter = vi.fn(() => "injected");
+      const prototype = Object.defineProperty({}, name, { enumerable: true, get: getter });
+      const env = Object.create(prototype) as Record<string, string>;
+      expect(
+        buildOpenCodeServiceHostLaunchShape({ payloadRoot: PAYLOAD, approval: fixture(), env }),
+      ).toEqual({ ok: false, reason: "host-environment-invalid" });
+      expect(getter).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a null-prototype environment with own ordinary data fields", () => {
+    const env = Object.assign(Object.create(null) as Record<string, string>, {
+      OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+    });
+    expect(
+      buildOpenCodeServiceHostLaunchShape({ payloadRoot: PAYLOAD, approval: fixture(), env }),
+    ).toMatchObject({ ok: true });
+  });
+
   it("refuses a revoked environment without substituting a validation exception", () => {
     const { proxy, revoke } = Proxy.revocable<Record<string, string>>({}, {});
     revoke();

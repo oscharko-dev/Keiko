@@ -1320,3 +1320,31 @@ final global gates, required CI and live sandbox qualification remain pending. T
 input qualification is `root-closeout-first-review-inputs.json`; genuine baseline and final results
 are retained separately as `root-closeout-first-review-{red,ui-red,green,ui-green}.log` in the private
 scratchpad. Full Standalone OpenCode parity and Epic #3871 remain open; auto-merge remains off.
+
+### Frozen-scope review closeout: exact file identities and cancellation
+
+ROOT reproduced **ten unchanged-producer boundary failures, two Request-signal failures and the
+old replacement-boundary fixture failure** before the repairs. The source-built C helper,
+production Node process factory and secure port now retain leading U+FEFF in directory identities,
+including collisions with plain names and BOM-only names; returned names can be read again. Rich
+snapshots preserve BOM text so physical descriptor size remains consistent through the governed
+read port. Ordinary text reads retain their prior BOM handling. Existing read lifecycle evidence
+continues to be body-free.
+
+The inactive fixed-host launch validator rejects inherited enumerable environment fields without
+reading getters, while its existing forbidden-name and own-descriptor checks remain intact.
+The inactive fixed POST seam validates and forwards a Request's effective abort signal and retains
+an explicit init override. The existing replacement test derives its read boundary from the
+production ceiling, uses short context lines, and keeps the independent rendered-patch cap proof.
+Its accepted result is seven bytes below the read ceiling; this case qualifies materialization,
+not the edit engine's separate source-file budget. ROOT retained intermediate fixture failures from
+additional engine assertions separately; no production size limit or assertion requirement was
+relaxed to make them pass.
+
+Final ROOT verification passes **426 tests across five owning suites (one existing platform case
+skipped), 20 native guard controls, owning strict types, the fresh server graph, scoped lint and
+nine-file formatting**. The first unconfigured native full-test invocation refused the missing
+qualified module root; the final run explicitly uses the previously qualified original dependency
+tree. These are inactive prerequisite controls, not original fixed-host production activation,
+new private-package qualification or customer/live-provider proof. Final combined dependency,
+quality, coverage, Sonar and live qualification remain pending.

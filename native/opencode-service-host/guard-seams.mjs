@@ -39,24 +39,30 @@ function validBindingURL(url, text) {
 
 function ownedRequest(input, init, binding) {
   const url = typeof input === "string" || input instanceof URL ? String(input) : input?.url;
-  if (url !== binding.url || !validRequestInit(input, init)) throw new Error("host-purpose-denied");
+  const signal = effectiveSignal(input, init);
+  if (url !== binding.url || !validRequestInit(input, init, signal))
+    throw new Error("host-purpose-denied");
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   for (const [name, value] of new Headers(init.headers)) headers.set(name, value);
   if (!validHeaders(headers, binding)) throw new Error("host-purpose-denied");
   return {
     method: "POST",
     redirect: "manual",
-    signal: init.signal,
+    signal,
     headers: Object.fromEntries(headers),
     ...ownedBody(init.body),
   };
 }
 
-function validRequestInit(input, init) {
+function effectiveSignal(input, init) {
+  return init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
+}
+
+function validRequestInit(input, init, signal) {
   return (
     init?.method === "POST" &&
     init.redirect === "manual" &&
-    !init.signal?.aborted &&
+    !signal?.aborted &&
     !(input instanceof Request && input.body !== null && init.body === undefined)
   );
 }

@@ -177,13 +177,14 @@ export function decodeSecureWorkspaceReadResponse(
 // eslint-disable-next-line complexity
 export function decodeSecureWorkspaceText(
   bytes: Uint8Array,
+  preserveBom = false,
 ):
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly reason: "not-text" } {
   if (bytes.byteLength > SECURE_WORKSPACE_TEXT_READ_MAX_BYTES)
     return { ok: false, reason: "not-text" };
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: preserveBom }).decode(bytes);
     for (const codePoint of text) {
       const code = codePoint.codePointAt(0);
       if (
@@ -218,7 +219,7 @@ function encodeBoundedUtf8(value: string, limit: number): Buffer {
 
 function decodeStrictUtf8(value: Uint8Array): string {
   try {
-    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(value);
+    const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(value);
     if (decoded.length === 0 || decoded.includes("\0")) throw new Error("invalid");
     return decoded;
   } catch {

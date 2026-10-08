@@ -80,6 +80,52 @@ test("malformed bindings and cancelled requests refuse before transport", async 
   );
 });
 
+test("an aborted Request refuses before transport without an explicit signal override", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  const send = fixedPostTransport(async () => {
+    calls++;
+    return new Response("{}");
+  }, binding);
+  const input = new Request(binding.url, request({ signal: controller.signal }));
+  await assert.rejects(send(input, request()), /host-purpose-denied/);
+  assert.equal(calls, 0);
+});
+
+test("a live Request forwards cancellation to the pending owned transport", async () => {
+  const controller = new AbortController();
+  let cancelled = false;
+  const send = fixedPostTransport(async (_url, init) => {
+    init.signal?.addEventListener(
+      "abort",
+      () => {
+        cancelled = true;
+      },
+      { once: true },
+    );
+    controller.abort();
+    assert.equal(init.signal?.aborted, true);
+    return new Response("{}");
+  }, binding);
+  await send(new Request(binding.url, request({ signal: controller.signal })), request());
+  assert.equal(cancelled, true);
+});
+
+test("an explicit live init signal overrides an aborted Request signal", async () => {
+  const old = new AbortController();
+  old.abort();
+  const current = new AbortController();
+  const send = fixedPostTransport(async (_url, init) => {
+    assert.equal(init.signal, current.signal);
+    return new Response("{}");
+  }, binding);
+  await send(
+    new Request(binding.url, request({ signal: old.signal })),
+    request({ signal: current.signal }),
+  );
+});
+
 test("it preserves only the actual pinned native paired trace-header shape", async () => {
   let calls = 0;
   const send = fixedPostTransport(async () => {

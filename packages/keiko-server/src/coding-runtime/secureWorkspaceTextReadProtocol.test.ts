@@ -425,6 +425,16 @@ it("encodes actual native metadata and binary bytes through the canonical KSS3 p
 });
 
 describe("native same-codec response encoding", () => {
+  it.each(["\uFEFFvisible.ts", "\uFEFF"])("preserves leading BOM in the identity %j", (name) => {
+    const entries = [
+      { name, type: "file" as const },
+      { name: "visible.ts", type: "file" as const },
+    ];
+    expect(
+      decodeSecureWorkspaceNativeDirectory(encodeSecureWorkspaceNativeDirectory(entries)),
+    ).toEqual(entries);
+  });
+
   it("preserves exact directory order, Unicode, newlines and entry types", () => {
     const entries = [
       { name: "é\n.ts", type: "file" as const },

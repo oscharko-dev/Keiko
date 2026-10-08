@@ -939,6 +939,69 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
       });
     });
 
+    it.each(["\uFEFFsafe\n", "\uFEFF", "safe\n"])(
+      "preserves physical BOM snapshot facts through the governed port for %j",
+      async (text) => {
+        writeFileSync(join(root, "bom-snapshot.ts"), text);
+        const binding = {
+          runId: "run-bom-snapshot",
+          envelopeDigest: "a".repeat(64),
+          workspaceId: "workspace-bom-snapshot",
+          workspaceRootDigest: "b".repeat(64),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+        const events: ServerLogEvent[] = [];
+        const secure = nativeFixturePort(root, executable, { snapshotProtocol: "KSR2/KSS2" });
+        const ports = createCodingToolReadEditPorts({
+          secureWorkspaceTextRead: secure,
+          editorAgentClient: { action: vi.fn() },
+          resolveEditorActionContext: vi.fn(),
+          resolveRepositoryReadContext: () => binding,
+          enforceProducerBinding: true,
+          activityLog: { write: (event): void => void events.push(event) },
+        });
+        await expect(
+          ports.nativeTextRead.readTextSnapshot(
+            { relativePath: "bom-snapshot.ts", purpose: "native-tool-io" },
+            undefined,
+            { binding, check: () => true },
+          ),
+        ).resolves.toMatchObject({ ok: true, text, info: { size: Buffer.byteLength(text) } });
+        expectActivityLogProof(
+          "coding-runtime.workspace-read.emitted-line",
+          formatActivityLogProofLine(events[0] ?? {}),
+        );
+        expect(events[0]?.extra).toMatchObject({ state: "completed" });
+        expect(JSON.stringify(events)).not.toContain("bom-snapshot.ts");
+        expect(JSON.stringify(events)).not.toContain(text);
+        await expect(secure.readText({ relativePath: "bom-snapshot.ts" })).resolves.toEqual({
+          ok: true,
+          text: text.replace(/^\uFEFF/u, ""),
+        });
+      },
+    );
+
+    it.each([
+      ["\uFEFFvisible.ts"],
+      ["\uFEFFvisible.ts", "visible.ts"],
+      ["\uFEFF"],
+      ["plain.ts", "\nline.ts"],
+    ])("lists exact BOM directory identities and reads the returned names %j", async (...names) => {
+      const directory = `bom-directory-${String(names.length)}-${String(names[0].length)}`;
+      mkdirSync(join(root, directory));
+      for (const name of names) writeFileSync(join(root, directory, name), "safe");
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      const result = await io.list({ relativePath: directory });
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error("directory-list-failed");
+      expect(result.entries.map((entry) => entry.name).sort()).toEqual([...names].sort());
+      for (const entry of result.entries) {
+        await expect(
+          io.readBytes({ relativePath: `${directory}/${entry.name}` }),
+        ).resolves.toMatchObject({ ok: true, bytes: Buffer.from("safe") });
+      }
+    });
+
     it("keeps original large-file byte ranges and EOF semantics outside the text ceiling", async () => {
       const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x61);
       bytes.set([0, 255, 128], 1_300_000);
