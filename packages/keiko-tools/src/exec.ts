@@ -1554,18 +1554,39 @@ function writeBoundedInput(ctx: ExecContext): void {
   }
 }
 
+function confinedDarwinTarget(target: SpawnTarget): boolean {
+  return (
+    target.attestation?.platform === "darwin" &&
+    target.attestation.backend === "seatbelt" &&
+    target.attestation.filesystemEnforced
+  );
+}
+
+function explicitOpenSslConfiguration(
+  input: RunCommandInput,
+  env: Readonly<Record<string, string>>,
+): boolean {
+  return (
+    ["OPENSSL_CONF", "OPENSSL_CONF_INCLUDE", "OPENSSL_MODULES"].some((name) =>
+      Object.hasOwn(env, name),
+    ) ||
+    input.args.some((arg) => /^--(?:openssl-|enable-fips|force-fips)/u.test(arg)) ||
+    /--(?:openssl-|enable-fips|force-fips)/u.test(env.NODE_OPTIONS ?? "")
+  );
+}
+
 function commandEnvironment(
   input: RunCommandInput,
   deps: RunCommandDeps,
   target: SpawnTarget,
 ): Record<string, string> {
   const env = buildChildEnv(deps.processEnv, deps.policy);
-  if (
-    target.attestation?.platform === "darwin" &&
-    target.attestation.backend === "seatbelt" &&
-    target.attestation.filesystemEnforced &&
-    (input.command === "npm" || input.command === "npx")
-  ) {
+  if (confinedDarwinTarget(target) && !explicitOpenSslConfiguration(input, env)) {
+    // Homebrew's ambient OpenSSL configuration lives outside the admitted execution root. A
+    // default child must not import it; explicitly admitted crypto configuration stays intact.
+    env.OPENSSL_CONF = "/dev/null";
+  }
+  if (confinedDarwinTarget(target) && (input.command === "npm" || input.command === "npx")) {
     // npm's bare shell lookup can hit an unreadable caller bin directory in PATH. The system
     // shell is already admitted by the execution-root profile; bind its exact executable.
     env.npm_config_script_shell = "/bin/sh";

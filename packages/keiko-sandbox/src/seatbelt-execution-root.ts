@@ -2,7 +2,8 @@ import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import type { IsolatedRunPlan, RuntimeGatewayFilesystem } from "./types.js";
 
 const MACOS_RUNTIME_READ_ROOTS = [
-  "/System",
+  "/System/Library",
+  "/System/Cryptexes",
   "/System/Volumes/Preboot/Cryptexes/OS",
   "/Library/Apple",
   "/private/var/db/dyld",
@@ -13,6 +14,7 @@ const READ_LITERALS = [
   "/dev/null",
   "/dev/random",
   "/dev/urandom",
+  "/private/var/select/sh",
   "/",
   "/System/Volumes",
   // dyld enumerates this directory before opening its OS cache; its other children stay denied.
@@ -40,6 +42,23 @@ function commandReadRoots(command: string): readonly string[] {
   return npmLauncher && basename(directory) === "bin" && basename(npmRoot) === "npm"
     ? [npmRoot]
     : [directory];
+}
+
+function installedLibraryReads(systemReadRoots: readonly string[]): string {
+  const prefixes = ["/opt/homebrew", "/usr/local"].filter((prefix) =>
+    systemReadRoots.some((root) => root.startsWith(`${prefix}/Cellar/`)),
+  );
+  return prefixes
+    .map((prefix) => {
+      const library = `^${prefix}/(Cellar/[^/]+/[^/]+|opt/[^/]+)/lib/[^/]+[.]dylib$`;
+      return (
+        `(allow file-read-metadata (subpath ${JSON.stringify(`${prefix}/Cellar`)}) ` +
+        `(subpath ${JSON.stringify(`${prefix}/opt`)}) ` +
+        `(subpath ${JSON.stringify(`${prefix}/bin`)}))` +
+        `(allow file-read-data (regex ${JSON.stringify(library)}))`
+      );
+    })
+    .join("");
 }
 
 const GATEWAY_FILESYSTEM_KEYS = new Set([
@@ -144,9 +163,12 @@ export function executionRootSeatbeltProfile(
   ];
   return (
     "(version 1)(allow default)" +
-    "(deny file-read* file-write* network* mach-lookup appleevent-send lsopen)" +
+    `(deny file-read* file-write* ${plan.network === "none" ? "network* " : ""}mach-lookup appleevent-send lsopen)` +
+    "(deny signal process-info*)" +
+    "(allow signal process-info* (target self) (target same-sandbox))" +
+    installedLibraryReads(systemReadRoots) +
     `(allow file-read* ${pathFilters("subpath", reads)} ${pathFilters("literal", READ_LITERALS)})` +
-    `(allow file-read-metadata ${pathFilters("literal", ancestors(plan.cwd))})` +
+    `(allow file-read-metadata ${pathFilters("literal", reads.flatMap(ancestors))})` +
     `(allow file-write* (subpath ${JSON.stringify(plan.cwd)}) (literal "/dev/null"))`
   );
 }

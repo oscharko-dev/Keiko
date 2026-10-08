@@ -85,8 +85,8 @@ const chatCatalogMock = vi.hoisted(() => ({
   // `clearSessionModelsForPendingRefresh`, useChatSession.ts) publishing an empty list mid-flight.
   models: [] as ModelCapability[],
   configuredModelIds: undefined as readonly string[] | undefined,
-  modelCatalogRead: undefined as
-    import("../../hooks/useChatSession").ChatModelCatalogRead | undefined,
+  modelCatalogRead:
+    undefined as import("../../hooks/useChatSession").UseChatSessionResult["modelCatalogRead"],
 }));
 // PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
 // published mid-refresh from one a successful refresh settled on.

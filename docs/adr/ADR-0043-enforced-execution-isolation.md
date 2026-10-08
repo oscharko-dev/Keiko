@@ -183,19 +183,38 @@ Both assured pre-filter execution and in-place repository verification request
 `filesystem:"execution-root"`. In-place runs still operate against the selected real workspace,
 including ordinary package scripts and targeted tests, but repository code may write only inside
 that root and sandbox temporary storage. The governed command runner uses the same existing policy.
-Strict bubblewrap or the Docker/Podman fallback must enforce the requested filesystem boundary;
-network-only `unshare` and Seatbelt wrappers do not qualify. The macOS execution-root Seatbelt
-profile now denies reads and writes outside the accepted root, except readonly system/toolchain
-paths and ancestor directory metadata. Writes and the ephemeral HOME/TMPDIR stay within that root;
-symlink escapes, descendant escapes, loopback connections and service-mediated escapes remain
-denied. Only dyld's boot directory itself is enumerable, not unrelated Preboot children. Native
-selection avoids feeding macOS-installed native dependencies to a Linux test container, preserves
-the user's installed tree, and removes container startup from ordinary targeted tests. The existing
-command attestation records both filesystem and network enforcement. Containers remain the fallback;
-network-dependent tests still require an isolated network backend rather than a host-loopback grant.
-If no compatible backend is available,
-execution fails closed before spawning. A network compatibility setting never removes a requested
-filesystem boundary. Sandbox attestations report network and filesystem enforcement separately.
+Strict bubblewrap, the filesystem-scoped macOS Seatbelt profile, or Docker/Podman must enforce the
+requested filesystem boundary. Network-only `unshare` and Seatbelt profiles do not qualify. The
+macOS execution-root profile denies reads and writes outside the canonical accepted root, except
+readonly OS/runtime paths, narrowly selected toolchain libraries, and ancestor directory metadata.
+It grants neither the entire `/opt` or `/usr` trees nor Homebrew `var` and `etc`. Homebrew-linked Node
+uses library-file reads and toolchain metadata; it does not receive a general Homebrew data grant.
+Only the dyld boot directories themselves and the selected OS runtime subtree are readable; unrelated
+Preboot children stay denied. Writes and the ephemeral HOME/TMPDIR stay within the accepted root,
+including writes from descendants. Symlink escapes and service-mediated filesystem escapes stay denied.
+Signals and process inspection are restricted to the same sandbox and the process itself.
+This boundary does not establish that detached descendants have stopped after a clean command close;
+that execution-lifetime qualification is separate from the filesystem/network attestation.
+
+`network:"none"` denies all network activity, including the host loopback. An explicitly selected
+`network:"inherit"` preserves the same filesystem/process boundary and truthfully reports
+`networkEnforced:false`; it never upgrades a `none` or gateway policy. Coding Workbench command and
+verification producers still select `none` behind the accepted Authority Envelope. A test requiring
+its own isolated loopback namespace needs a qualifying container/backend; Seatbelt does not silently
+grant host loopback or detect that requirement from the test body. Containers are selected when the
+native filesystem backend is unavailable, not as a retry after a native test fails. The command
+attestation reports filesystem and network enforcement separately. No compatible backend means
+execution is refused before spawn.
+
+Pure planners require the caller's already canonical workspace-contained cwd, and the spawner must
+actually enter that directory. `runCommand` owns both operations; the platform proof supplies both
+instead of passing a `/var` alias and inheriting the test runner's cwd. For a default Darwin Seatbelt
+execution-root child, the existing environment owner binds `OPENSSL_CONF=/dev/null` so Node does not
+import ambient Homebrew OpenSSL configuration outside its root. Explicit policy-admitted OpenSSL
+environment configuration, Node crypto flags, and admitted `NODE_OPTIONS` remain intact. Workspace
+configurations work; configurations outside the admitted root remain refused by the filesystem
+boundary. This does not claim FIPS certification or support for external provider modules.
+
 
 The Docker fallback resolves only the selected local engine endpoint before spawning: a canonical
 Unix socket outside the execution root, or a Windows named pipe under the local `npipe:////./pipe/` namespace (including Docker Desktop's Linux engine). Remote or

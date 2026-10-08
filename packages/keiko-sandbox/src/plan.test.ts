@@ -124,6 +124,23 @@ describe("planIsolatedRun", () => {
     expect(decision.args).not.toContain("--dev-bind");
   });
 
+  it("keeps macOS filesystem confinement when network inheritance is requested", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, network: "inherit", filesystem: "execution-root" },
+      { ...NONE, seatbelt: true, docker: true },
+      "darwin",
+    );
+    expect(decision.kind).toBe("wrapped");
+    expect(decision.attestation).toMatchObject({
+      backend: "seatbelt",
+      networkEnforced: false,
+      filesystemEnforced: true,
+    });
+    if (decision.kind !== "wrapped") throw new Error("expected filesystem wrapper");
+    expect(decision.args[1]).not.toContain("network*");
+    expect(decision.args[1]).toContain("(deny file-read* file-write*");
+  });
+
   it("fails closed when inherited network has no filesystem-capable backend", () => {
     const decision = planIsolatedRun(
       { ...basePlan, network: "inherit", filesystem: "execution-root" },

@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planIsolatedRun } from "./plan.js";
@@ -50,8 +50,13 @@ interface ChildRun {
   readonly stderr: string;
 }
 
-function run(command: string, args: readonly string[]): ChildRun {
-  const result = spawnSync(command, [...args], { timeout: 30_000 });
+function run(command: string, args: readonly string[], cwd?: string): ChildRun {
+  const result = spawnSync(command, [...args], {
+    timeout: 30_000,
+    cwd,
+    env:
+      process.platform === "darwin" ? { ...process.env, OPENSSL_CONF: "/dev/null" } : process.env,
+  });
   if (result.error !== undefined) {
     return { status: null, stdout: "", stderr: result.error.message };
   }
@@ -148,7 +153,7 @@ describe("enforced network egress (ADR-0043 / #1202)", () => {
 
 describe("enforced filesystem containment (ADR-0043 / #1202)", () => {
   it("blocks reads and writes outside the disposable execution root", () => {
-    const temp = mkdtempSync(join(tmpdir(), "keiko-fs-proof-"));
+    const temp = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fs-proof-")));
     const root = join(temp, "root");
     const outsideRead = join(temp, "outside-secret.txt");
     const outsideWrite = join(temp, "outside-write.txt");
@@ -185,7 +190,7 @@ describe("enforced filesystem containment (ADR-0043 / #1202)", () => {
       expect(control.stdout).toContain('"readOutside":true');
       expect(control.stdout).toContain('"wroteOutside":true');
 
-      const isolated = run(fsDecision.command, fsDecision.args);
+      const isolated = run(fsDecision.command, fsDecision.args, root);
       if (isolated.stdout.length === 0 && process.env.CI !== "true") {
         note(
           `[fs-proof] selected execution-root backend did not start locally (status=${String(

@@ -437,6 +437,7 @@ class FakeOpenCodeChild {
   private messageSequence = 0;
   private fixtureTimeMs = 1_700_000_000_000;
   private sessionCreated = false;
+  private sessionDirectory: string | undefined;
   private busy = false;
   private finished = 0;
   private turnTail: Promise<void> = Promise.resolve();
@@ -558,9 +559,9 @@ class FakeOpenCodeChild {
     } else if (method === "GET" && path === "/api/event") {
       this.openEvents(response);
     } else if (method === "POST" && path === "/api/session") {
-      this.createSession(response);
+      this.createSession(body, response);
     } else if (method === "GET" && path === "/api/session") {
-      json(response, { data: [{ id: FAKE_SESSION_ID }] });
+      json(response, { data: [this.sessionInfo()] });
     } else if (method === "GET" && path === "/api/session/active") {
       json(response, { data: this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {} });
     } else if (method === "GET" && path === "/api/permission/request") {
@@ -643,15 +644,29 @@ class FakeOpenCodeChild {
     json(response, { data: {} });
   }
 
-  private createSession(response: ServerResponse): void {
+  private sessionInfo(): Record<string, unknown> {
+    return { id: FAKE_SESSION_ID, location: { directory: this.sessionDirectory } };
+  }
+
+  private createSession(body: string, response: ServerResponse): void {
+    const request: unknown = JSON.parse(body);
+    if (
+      !isRecord(request) ||
+      !isRecord(request.location) ||
+      typeof request.location.directory !== "string"
+    ) {
+      response.writeHead(400).end();
+      return;
+    }
+    this.sessionDirectory = request.location.directory;
     if (!this.sessionCreated) {
       this.sessionCreated = true;
       this.appendHistory("session.created.1", {
         sessionID: FAKE_SESSION_ID,
-        info: { id: FAKE_SESSION_ID },
+        info: this.sessionInfo(),
       });
     }
-    json(response, { data: { id: FAKE_SESSION_ID } });
+    json(response, { data: this.sessionInfo() });
   }
 
   private openEvents(response: ServerResponse): void {

@@ -2,7 +2,7 @@
 // runs the target command under an OS/container egress boundary. No spawning, no filesystem — these
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
-import { basename, dirname, isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { linuxGatewayLauncherPath } from "./runtime.js";
 import {
@@ -174,8 +174,11 @@ function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
   const profile =
     plan.filesystem === "execution-root"
       ? executionRootSeatbeltProfile(plan, [
-          ...EXECUTION_ROOT_READONLY_BINDS,
+          "/bin",
+          "/usr/bin",
+          "/usr/lib",
           dirname(process.execPath),
+          resolve(dirname(process.execPath), "../lib"),
         ])
       : SEATBELT_DENY_EGRESS_PROFILE;
   return ["-p", profile, plan.command, ...plan.args];
@@ -225,6 +228,26 @@ export function buildGatewaySeatbeltCommand(
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
 
+function buildSeatbeltCommand(plan: IsolatedRunPlan): WrappedCommand {
+  const gateway = copyNetworkGatewayPolicy(plan.network);
+  if (gateway !== undefined) {
+    return buildGatewaySeatbeltCommand(
+      gateway,
+      plan.command,
+      plan.args,
+      plan.gatewayChildExecutable ?? "",
+      plan.gatewayFilesystem,
+    );
+  }
+  if (
+    plan.network !== "none" &&
+    !(plan.network === "inherit" && plan.filesystem === "execution-root")
+  ) {
+    throw new TypeError("sandbox-network-policy-invalid");
+  }
+  return { command: "sandbox-exec", args: seatbeltArgs(plan) };
+}
+
 function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] {
   // --network=none removes all networking. The execution root is bind-mounted read-write and used as
   // the working directory so the wrapped toolchain sees the same paths it would natively. Unlike the
@@ -271,20 +294,8 @@ export function buildWrappedCommand(
       return buildBubblewrapCommand(plan);
     case "unshare":
       return buildUnshareCommand(plan);
-    case "seatbelt": {
-      const gateway = copyNetworkGatewayPolicy(plan.network);
-      if (gateway !== undefined) {
-        return buildGatewaySeatbeltCommand(
-          gateway,
-          plan.command,
-          plan.args,
-          plan.gatewayChildExecutable ?? "",
-          plan.gatewayFilesystem,
-        );
-      }
-      if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
-      return { command: "sandbox-exec", args: seatbeltArgs(plan) };
-    }
+    case "seatbelt":
+      return buildSeatbeltCommand(plan);
     case "container-docker":
       return { command: "docker", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "container-podman":

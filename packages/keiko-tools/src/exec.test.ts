@@ -1,9 +1,13 @@
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
+  statSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -115,6 +119,257 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     };
   }
 
+  async function withOwnedVictim(run: (pid: number) => Promise<void>): Promise<void> {
+    const victim = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+    try {
+      await once(victim, "spawn");
+      if (victim.pid === undefined) throw new Error("Owned victim did not start");
+      await run(victim.pid);
+      expect(() => process.kill(victim.pid ?? 0, 0)).not.toThrow();
+    } finally {
+      const exited = once(victim, "exit");
+      victim.kill("SIGTERM");
+      await exited;
+    }
+  }
+
+  it("refuses signaling outside its own sandbox while retaining self access", async () => {
+    await withOwnedVictim(async (pid) => {
+      const code = `
+        const target=Number(process.argv[1]);
+        let signalDenied=false;try{process.kill(target,0)}catch(e){signalDenied=e.code==="EPERM"}
+        let selfAllowed=true;try{process.kill(process.pid,0)}catch{selfAllowed=false}
+        process.stdout.write(JSON.stringify({signalDenied,selfAllowed}));
+      `;
+      const control = spawnSync(process.execPath, ["-e", code, String(pid)], { encoding: "utf8" });
+      expect(control.status).toBe(0);
+      expect(JSON.parse(control.stdout) as unknown).toEqual({
+        signalDenied: false,
+        selfAllowed: true,
+      });
+      const result = await runCommand(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: ["-e", code, String(pid)],
+          signal: controller().signal,
+        },
+        confinedDeps(),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout) as unknown).toEqual({
+        signalDenied: true,
+        selfAllowed: true,
+      });
+    });
+  });
+
+  it("refuses actual process metadata outside its sandbox while preserving self inspection", async () => {
+    const tool = realpathSync(mkdtempSync(join(tmpdir(), "keiko-owned-process-probe-")));
+    const source = join(tool, "probe.c");
+    const executable = join(tool, "process-info-probe");
+    writeFileSync(
+      source,
+      String.raw`
+      #include <errno.h>
+      #include <libproc.h>
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <unistd.h>
+      int main(int argc,char **argv){
+        if(argc!=2)return 9;
+        struct proc_bsdinfo info;errno=0;
+        int n=proc_pidinfo(atoi(argv[1]),PROC_PIDTBSDINFO,0,&info,sizeof(info));
+        int denied=n==0&&errno==EPERM;
+        int self=proc_pidinfo(getpid(),PROC_PIDTBSDINFO,0,&info,sizeof(info))>0;
+        printf("{\"denied\":%s,\"self\":%s}",denied?"true":"false",self?"true":"false");return 0;
+      }
+    `,
+    );
+    try {
+      expect(spawnSync("/usr/bin/clang", [source, "-o", executable]).status).toBe(0);
+      await withOwnedVictim(async (pid) => {
+        const control = spawnSync(executable, [String(pid)], { encoding: "utf8" });
+        expect(control.status).toBe(0);
+        expect(JSON.parse(control.stdout) as unknown).toEqual({ denied: false, self: true });
+        const result = await runCommand(
+          {
+            cwd: undefined,
+            timeoutMs: undefined,
+            command: "process-info-probe",
+            args: [String(pid)],
+            signal: controller().signal,
+          },
+          {
+            ...confinedDeps(),
+            commandRules: [{ executable: "process-info-probe" }],
+            processEnv: { PATH: `${tool}:/usr/bin:/bin` },
+          },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(JSON.parse(result.stdout) as unknown).toEqual({ denied: true, self: true });
+      });
+    } finally {
+      rmSync(tool, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps its own sandbox descendant signal lifecycle available", async () => {
+    const code = `
+      const cp=require("node:child_process");
+      const child=cp.spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});
+      child.once("spawn",()=>{process.kill(child.pid,0);child.kill("SIGTERM")});
+      child.once("exit",(_,signal)=>process.stdout.write(signal==="SIGTERM"?"OWNED-REAPED":"UNPROVEN"));
+    `;
+    const result = await runCommand(
+      {
+        cwd: undefined,
+        timeoutMs: undefined,
+        command: "node",
+        args: ["-e", code],
+        signal: controller().signal,
+      },
+      confinedDeps(),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("OWNED-REAPED");
+  });
+
+  it.each(["env", "node-flag"] as const)(
+    "preserves an explicitly admitted workspace OpenSSL configuration through %s",
+    async (route) => {
+      const config = join(realpathSync(root), "openssl.cnf");
+      writeFileSync(config, "");
+      const code =
+        'process.stdout.write(require("node:crypto").getFips()===0?"CONFIGURED":"UNPROVEN")';
+      const result = await runCommand(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: [...(route === "node-flag" ? [`--openssl-config=${config}`] : []), "-e", code],
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          processEnv: { PATH: process.env.PATH ?? "", OPENSSL_CONF: config },
+          policy: {
+            ...confinedDeps().policy,
+            envAllowlist: [...DEFAULT_ENV_ALLOWLIST, ...(route === "env" ? ["OPENSSL_CONF"] : [])],
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("CONFIGURED");
+    },
+  );
+
+  it("preserves and refuses an explicit OpenSSL configuration outside the admitted root", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-openssl-config-"));
+    const config = join(outside, "openssl.cnf");
+    writeFileSync(config, "");
+    try {
+      const code = 'process.stdout.write("CONFIGURED")';
+      const control = spawnSync(process.execPath, ["-e", code], {
+        encoding: "utf8",
+        env: { ...process.env, OPENSSL_CONF: config },
+      });
+      expect(control.status).toBe(0);
+      expect(control.stdout).toBe("CONFIGURED");
+      const calls: Parameters<NonNullable<RunCommandDeps["spawn"]>>[] = [];
+      const result = await runCommand(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: ["-e", code],
+          signal: controller().signal,
+        },
+        {
+          ...confinedDeps(),
+          processEnv: { PATH: process.env.PATH ?? "", OPENSSL_CONF: config },
+          policy: {
+            ...confinedDeps().policy,
+            envAllowlist: [...DEFAULT_ENV_ALLOWLIST, "OPENSSL_CONF"],
+          },
+          spawn: (...args) => {
+            calls.push(args);
+            return nodeSpawnFn(...args);
+          },
+        },
+      );
+      expect(calls[0]?.[2].env.OPENSSL_CONF).toBe(config);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("OpenSSL configuration error");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  const homebrewPrefix = ["/opt/homebrew", "/usr/local"].find((prefix) =>
+    process.execPath.startsWith(`${prefix}/Cellar/`),
+  );
+
+  it.skipIf(homebrewPrefix === undefined).each(["var", "etc"] as const)(
+    "refuses an owned canary in mutable Homebrew %s while Node still executes",
+    async (directory) => {
+      if (homebrewPrefix === undefined) throw new TypeError("Homebrew fixture unavailable");
+      const outside = mkdtempSync(join(homebrewPrefix, directory, "keiko-review-canary-"));
+      const canary = join(outside, "owned-canary.txt");
+      writeFileSync(canary, "controlled-canary");
+      const code = `
+        const fs=require("node:fs");
+        try{fs.readFileSync(process.argv[1]);process.stdout.write("READABLE")}
+        catch(e){process.stdout.write(e.code==="EPERM"?"DENIED":"UNPROVEN")}
+      `;
+      try {
+        const control = spawnSync(process.execPath, ["-e", code, canary], { encoding: "utf8" });
+        expect(control.status).toBe(0);
+        expect(control.stdout).toBe("READABLE");
+        const result = await runCommand(
+          {
+            cwd: undefined,
+            timeoutMs: undefined,
+            command: "node",
+            args: ["-e", code, canary],
+            signal: controller().signal,
+          },
+          confinedDeps(),
+        );
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe("DENIED");
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("allows the dyld boot directory metadata while denying unrelated Preboot children", async () => {
+    const boot = "/System/Volumes/Preboot";
+    const child = readdirSync(boot).find(
+      (name) => name !== "Cryptexes" && statSync(join(boot, name)).isDirectory(),
+    );
+    if (child === undefined) throw new TypeError("Preboot directory fixture unavailable");
+    const outside = join(boot, child);
+    const code = `
+      const fs=require("node:fs");const top=Array.isArray(fs.readdirSync(process.argv[1]));
+      let denied=false;try{fs.readdirSync(process.argv[2])}catch(e){denied=e.code==="EPERM"}
+      process.stdout.write(JSON.stringify({top,denied}));
+    `;
+    const args = ["-e", code, boot, outside];
+    const control = spawnSync(process.execPath, args, { encoding: "utf8" });
+    expect(control.status).toBe(0);
+    expect(JSON.parse(control.stdout) as unknown).toEqual({ top: true, denied: false });
+    const result = await runCommand(
+      { cwd: undefined, timeoutMs: undefined, command: "node", args, signal: controller().signal },
+      confinedDeps(),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout) as unknown).toEqual({ top: true, denied: true });
+  });
+
   it("confines files, symlinks and descendants while keeping an owned temporary directory", async () => {
     const outside = mkdtempSync(join(tmpdir(), "keiko-confined-canary-"));
     const denied = join(outside, "canary.txt");
@@ -208,6 +463,44 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
     }
   });
 
+  it("retains the explicit inherited network choice without removing filesystem confinement", async () => {
+    const listener = createServer((socket) => socket.end());
+    await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+    const address = listener.address();
+    if (address === null || typeof address === "string")
+      throw new TypeError("Loopback fixture unavailable");
+    try {
+      const code = `
+        const s=require("node:net").connect(Number(process.argv[1]),"127.0.0.1");
+        s.once("connect",()=>{s.end();process.stdout.write("CONNECTED")});
+        s.once("error",()=>{process.stdout.write("UNPROVEN");s.destroy()});
+      `;
+      const result = await runCommand(
+        {
+          cwd: undefined,
+          timeoutMs: undefined,
+          command: "node",
+          args: ["-e", code, String(address.port)],
+          signal: controller().signal,
+        },
+        { ...confinedDeps(), policy: { ...confinedDeps().policy, network: "inherit" } },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("CONNECTED");
+      expect(result.attestation).toMatchObject({
+        backend: "seatbelt",
+        filesystemEnforced: true,
+        networkEnforced: false,
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
+          resolve();
+        });
+      });
+    }
+  });
+
   it("refuses a caller home pointing at the repository without deleting it", async () => {
     const cleanup = vi.fn();
     await expect(
@@ -265,6 +558,7 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
       );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("owned-task-passed");
+      expect(result.stderr).toBe("");
       expect(calls[0]?.[2]).toMatchObject({ shell: false, env: { PATH: path } });
       expect(result.attestation).toMatchObject({
         backend: "seatbelt",
@@ -279,14 +573,75 @@ describe.runIf(process.platform === "darwin")("native execution-root verificatio
 
 describe("runCommand — the confined npm script shell", () => {
   const cases = [
-    { command: "npm", platform: "darwin", backend: "seatbelt", scoped: true, pin: true },
-    { command: "npx", platform: "darwin", backend: "seatbelt", scoped: true, pin: true },
-    { command: "node", platform: "darwin", backend: "seatbelt", scoped: true, pin: false },
-    { command: "npm", platform: "darwin", backend: "seatbelt", scoped: false, pin: false },
-    { command: "npm", platform: "linux", backend: "bubblewrap", scoped: true, pin: false },
-    { command: "npm", platform: "darwin", backend: "none", scoped: false, pin: false },
-    { command: "npm", platform: "win32", backend: "none", scoped: false, pin: false },
+    {
+      command: "npm",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: true,
+      pin: true,
+      opensslPin: true,
+    },
+    {
+      command: "npx",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: true,
+      pin: true,
+      opensslPin: true,
+    },
+    {
+      command: "node",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: true,
+      pin: false,
+      opensslPin: true,
+    },
+    {
+      command: "npm",
+      platform: "darwin",
+      backend: "seatbelt",
+      scoped: false,
+      pin: false,
+      opensslPin: false,
+    },
+    {
+      command: "npm",
+      platform: "linux",
+      backend: "bubblewrap",
+      scoped: true,
+      pin: false,
+      opensslPin: false,
+    },
+    {
+      command: "npm",
+      platform: "darwin",
+      backend: "none",
+      scoped: false,
+      pin: false,
+      opensslPin: false,
+    },
+    {
+      command: "npm",
+      platform: "win32",
+      backend: "none",
+      scoped: false,
+      pin: false,
+      opensslPin: false,
+    },
   ] as const;
+
+  function expectRecordedEnvironment(
+    spawn: ReturnType<typeof recordingSpawn>,
+    path: string,
+    row: (typeof cases)[number],
+  ): void {
+    const call = spawn.calls()[0];
+    if (call === undefined) throw new Error("Expected the real spawn boundary");
+    expect(call.options).toMatchObject({ shell: false, env: { PATH: path } });
+    expect(call.options.env.npm_config_script_shell).toBe(row.pin ? "/bin/sh" : undefined);
+    expect(call.options.env.OPENSSL_CONF).toBe(row.opensslPin ? "/dev/null" : undefined);
+  }
 
   it.each(cases)(
     "uses the actual $platform/$backend/$command route (scoped=$scoped)",
@@ -324,12 +679,50 @@ describe("runCommand — the confined npm script shell", () => {
       spawn.child.emit("close", 0, null);
       const result = await pending;
       expect(result.attestation?.backend).toBe(row.backend === "none" ? undefined : row.backend);
-      expect(spawn.calls()[0]?.options).toMatchObject({ shell: false, env: { PATH: path } });
-      expect(spawn.calls()[0]?.options.env.npm_config_script_shell).toBe(
-        row.pin ? "/bin/sh" : undefined,
-      );
+      expectRecordedEnvironment(spawn, path, row);
     },
   );
+
+  it.each([
+    { args: ["--openssl-config=/admitted/config"], env: {} },
+    { args: ["--openssl-shared-config"], env: {} },
+    { args: ["--enable-fips"], env: {} },
+    { args: ["--force-fips"], env: {} },
+    { args: [], env: { OPENSSL_CONF: "/admitted/config" } },
+    { args: [], env: { OPENSSL_CONF: "" } },
+    { args: [], env: { OPENSSL_MODULES: "/admitted/modules" } },
+    { args: [], env: { NODE_OPTIONS: "--enable-fips" } },
+  ])("does not replace explicitly admitted crypto intent: %j", async ({ args, env }) => {
+    const spawn = recordingSpawn();
+    const pending = runCommand(
+      { cwd: undefined, timeoutMs: undefined, command: "node", args, signal: controller().signal },
+      {
+        ...fakeDeps(spawn.fn, { PATH: process.env.PATH ?? "", ...env }),
+        resolveExecutable: (command) => `/abs/${command}`,
+        platform: "darwin",
+        policy: {
+          ...DEFAULT_SANDBOX_POLICY,
+          network: "none",
+          filesystem: "execution-root",
+          envAllowlist: [...DEFAULT_ENV_ALLOWLIST, ...Object.keys(env)],
+        },
+        sandboxAvailability: {
+          seatbelt: true,
+          bubblewrap: false,
+          unshare: false,
+          docker: false,
+          podman: false,
+        },
+      },
+    );
+    spawn.child.emit("close", 0, null);
+    await pending;
+    const captured = spawn.calls()[0];
+    if (captured === undefined) throw new Error("Expected the real spawn boundary");
+    expect(captured.options.env.OPENSSL_CONF).toBe(env.OPENSSL_CONF);
+    expect(captured.options.env).toMatchObject(env);
+    expect(captured.args.slice(3)).toEqual(args);
+  });
 });
 
 interface HomeRecorder {

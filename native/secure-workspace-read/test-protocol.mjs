@@ -2664,6 +2664,7 @@ try {
   } else if (richOnly) {
     await assertRichSnapshot(binary, pausedBinary, fixture);
   } else {
+    await assertRichSnapshot(binary, pausedBinary, fixture);
     await assertProtocolCases(binary, fixture, outside);
     // Signed --binary runs protocol, live fixture consistency, and load checks against the exact
     // supplied bytes. Deterministically paused races require the compile-mode test companion.

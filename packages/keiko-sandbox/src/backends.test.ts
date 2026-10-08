@@ -8,6 +8,7 @@ import {
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
+import { executionRootSeatbeltProfile } from "./seatbelt-execution-root.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
 const plan: IsolatedRunPlan = {
@@ -200,7 +201,27 @@ describe("buildWrappedCommand", () => {
     );
     expect(profile).toContain('(subpath "/work/root\\"quoted")');
     expect(profile).not.toContain("localhost");
-    expect(profile).not.toContain("/Users");
+    expect(profile).not.toContain('(subpath "/Users")');
+    const home = "/Users/test-owner";
+    const nvm = `${home}/.nvm/versions/node/v24/bin`;
+    const bounded = executionRootSeatbeltProfile({ ...plan, filesystem: "execution-root" }, [nvm]);
+    expect(bounded).toContain(`(subpath ${JSON.stringify(nvm)})`);
+    expect(bounded).not.toContain(`(subpath ${JSON.stringify(home)})`);
+  });
+
+  it("does not import broad Linux install roots or mutable System volumes into macOS", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("seatbelt", {
+        ...plan,
+        command: "/trusted/node/bin/node",
+        filesystem: "execution-root",
+      }),
+    );
+    expect(wrapped.args[1]).not.toContain('(subpath "/opt")');
+    expect(wrapped.args[1]).not.toContain('(subpath "/usr")');
+    expect(wrapped.args[1]).not.toContain('(subpath "/System")');
+    expect(wrapped.args[1]).toContain('(subpath "/System/Library")');
+    expect(wrapped.args[1]).toContain('(literal "/private/var/select/sh")');
   });
 
   it("admits a resolved npm package without granting its installation parent's other files", () => {

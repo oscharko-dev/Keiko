@@ -1686,3 +1686,47 @@ formatting pass. ROOT regeneration resolves 539/539 proofs and 30/30 scenarios w
 the actual catalog/failure-surface suites pass 111/111 controls. Final global gates/Sonar, remaining
 review repair and final-head live/platform/package qualification remain pending. All delegated
 assignments have ended; no sub-agent test or optimization job remains running.
+
+### Resumed closeout: native controls and exact CI fixture failures
+
+ROOT resumes from `6a4cc621b2ed4148782243c00fce10f67fb2fdab`; that head remains
+unmerged. The immutable eight-owner sandbox handoff is independently checked, including all
+131 referenced artifacts. Test-only integration reproduces twelve failures against the unchanged
+producers. After integration and the affected tools build, the five owning suites pass 225/225
+in the real checkout. The separate canonical filesystem proof passes, with four unrelated cases
+unselected. Seven sandbox/tools roots pass strict types and zero-warning lint. These controls
+prove signal/metadata restrictions, bounded runtime reads, explicit network intent and admitted
+crypto configuration; they do not certify detached-process lifetime. The actual detached `setsid`
+survivor remains a blocking review finding, and its safe execution backend is being repaired
+separately before merge. No permission or isolation boundary is widened to obtain a passing test.
+
+The exact Knip failure is reproduced locally and repaired by removing unused codec aliases,
+using the shared process-wait name on both platform harnesses, keeping the catalog-read type
+private to its owner, and pruning two obsolete dependency-ignore entries. The actual Knip gate
+then passes; 403 owning UI tests and 27 native build/policy tests pass. The macOS supervisor
+source contract passes; this is not Endpoint Security behavioral qualification.
+
+Two unchanged scripted OpenCode integration failures are reproduced. The shared fixture now
+echoes the actual session-create request's `location.directory` in create/list/history responses;
+the production directory guard and original assertions remain unchanged. The functional and
+fixture suites pass eight tests, retaining two existing real-artifact environment skips. The
+normal native helper harness now executes rich snapshot assertions as well as its original
+protocol, race and load controls. An owned helper with only `KSS2` changed to `KSS9` passes the
+original default harness and fails the repaired default at the exact rich assertion. The actual
+unmodified helper passes the repaired compiled harness, including 1,000 sequential reads,
+100 concurrent reads and resource delta zero. This is Darwin developer evidence; supplied
+signed binaries and Windows remain subject to their native lanes.
+
+The three exact UI coverage failures are reproduced in an isolated unchanged-head candidate,
+then repaired only in their test fixtures. Managed model selection and deferred honest pairing
+remain mandatory, the timeout diagnostic collector starts after actual bootstrap, and the start
+failure fixture supplies the existing typed eligible catalog. ROOT independently passes the
+same 50 owning tests, scoped strict types and zero-warning lint without changing product guards.
+
+The staged customer qualifier's old failure-text locators are independently reproduced through
+the actual current EventHub and Timeline and the original `runTurn` helpers in Chromium: four
+active/recovered controls time out while two terminal controls already pass. The narrow locator
+repair passes all six with identical generated HTML digests, preserving current-cause versus
+terminal-advice distinctions. This controlled original-entry proof is not the full packaged
+npm/Yarn, gateway or live customer qualification. Final source-bound evidence, coverage, Sonar,
+live/platform/package checks, dependency approval and remaining reviews are still pending.

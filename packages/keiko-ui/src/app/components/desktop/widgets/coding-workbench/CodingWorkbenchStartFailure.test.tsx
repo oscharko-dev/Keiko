@@ -9,6 +9,9 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import type { ChatSessionCatalog } from "../../context/ChatSessionContext";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
@@ -37,6 +40,12 @@ const researchHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const activeWorkspaceHookMock = vi.hoisted(() => vi.fn());
+const catalogHookMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../context/ChatSessionContext")>();
+  return { ...actual, useOptionalChatSessionCatalog: catalogHookMock };
+});
 
 // The Workbench reads the Git repository catalog for its repository selector. This suite is about
 // the rejected start, so the catalog lists the bound repository as available, and the selector adds
@@ -94,6 +103,48 @@ vi.mock("../../context/ActiveWorkspaceContext", async (importOriginal) => {
 
 const AT = "2026-07-13T12:00:00.000Z";
 const CORRELATION_ID = "ui-f09a-correlation";
+
+function codingModel(): ModelCapability {
+  return {
+    id: "gpt-5.4",
+    kind: "chat",
+    conversationReady: true,
+    contextWindow: 100_000,
+    maxOutputTokens: 16_000,
+    toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "f09a-test-configuration",
+    },
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test fixture",
+    preferredUseCases: ["Coding"],
+    knownLimitations: [],
+  };
+}
+
+function readyCatalog(): ChatSessionCatalog {
+  return {
+    projects: [],
+    chats: [],
+    models: [codingModel()],
+    configuredModelIds: ["gpt-5.4"],
+    activeProject: undefined,
+    activeChat: undefined,
+    selectedModel: "gpt-5.4",
+    noEligibleModels: false,
+    loading: false,
+    error: undefined,
+  };
+}
 
 const EMPTY_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
@@ -249,6 +300,9 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
       change: vi.fn(),
     });
     activeWorkspaceHookMock.mockReturnValue(boundActiveWorkspace());
+    const catalog = readyCatalog();
+    expect(catalog.models.every(isCodingWorkbenchModel)).toBe(true);
+    catalogHookMock.mockReturnValue(catalog);
   });
 
   afterEach((): void => {

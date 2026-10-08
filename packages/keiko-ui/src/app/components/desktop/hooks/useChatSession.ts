@@ -1474,7 +1474,7 @@ async function reconcileCanonicalVoiceTargetRuntimes(
 }
 
 /** The actual BFF read, before conversation and Coding picker eligibility filters. */
-export interface ChatModelCatalogRead {
+interface ChatModelCatalogRead {
   readonly capabilities: readonly ModelCapability[];
   readonly source: ClientModelCatalogEvidence["source"];
   readonly correlationId: string;
