@@ -1427,3 +1427,43 @@ ROOT regenerated the combined canonical catalog after a fresh Contracts build: *
 30/30 scenarios and zero violations**; all **97 drift controls** pass after rebuilding the affected
 graph. No new operation, browser transport, model queue or authority bypass is added. Final global
 quality, coverage, Sonar, Linux owner evidence and live qualification remain pending.
+
+### Frozen-scope review closeout: targeted verification and runtime admission
+
+ROOT reproduced **12 functional failures** against the unchanged verifier and then passed
+**239 owning tests across four suites**, including actual Vitest CLI invocation with the root
+configuration and a nested project's own configuration. Nested test planning retains the admitted
+repository execution root; failure locations resolve from the selected working directory and
+remain contained in the original repository. Project `.npmrc` approval recognizes the same CR-only
+line boundaries as the actual npm parser. Real directory/symlink refusal controls assert zero
+spawns. Scoped strict types, fresh verification build, lint and formatting pass.
+
+ROOT separately reproduced **four missing evidence/original-cause failures** at the existing
+Workbench caller. With the repaired producer, **377 owning tests across seven suites plus 97
+catalog drift controls pass**. Existing `editor.verification.execute` evidence carries bounded
+project counts, selection digest and final refusal. The final project guard forwards its original
+fault into the existing server diagnostic owner before producing a failed report. No new operation,
+logger, public export or retired Editor agent surface is introduced. Existing ADR-0007 documents
+actual project-configuration selection and the body-free evidence. ROOT's fresh Contracts build,
+canonical generation and registry rebuild resolve **539/539 proofs and 30/30 scenarios with zero
+violations**. These receipts are `root-closeout-verifier-events-{red,cause-red,green,generate}.log`;
+source baselines and all 159 frozen references were checked independently.
+
+Two actual runtime admission regressions also fail before the fix: a checked regular file replaced
+by an unopened FIFO traps asynchronous attestation until a writer arrives, and write authority
+revoked during the asynchronous bootstrap is still admitted to the handshake. Both existing
+attestation owners now open descriptors nonblocking and retain descriptor-kind validation;
+the manager checks its current write authority again after bootstrap and before handshake.
+**198 owning tests across two suites pass**, with scoped strict types, lint and formatting.
+The FIFO test creates a real owned FIFO and releases the unchanged blocking baseline during
+cleanup; it is skipped on Windows and establishes no Windows FIFO behavior. Refusal uses the
+existing cancellation/bootstrap failure evidence and existing child cleanup, without an authority
+widening or premature physical-settlement claim.
+
+The localized retry/status and embedding-report identity correction has **five unchanged-producer
+failures followed by 76 owning UI tests**, full UI strict types, scoped lint and formatting.
+Retry times follow the user's locale and clear on settlement; existing report identity/missing
+identity labels use the existing English/German translations. This does not expand embedding or
+Coding scope. The initial wrong-directory UI test invocation is retained as a setup error, not
+product evidence. Final global gates, fresh Linux UI evidence and final-head live qualification
+remain pending.

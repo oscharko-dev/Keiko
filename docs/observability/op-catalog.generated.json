@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "92e15d35fe267ea2adfe7031da5a817b2243227817d1185b688e57baece6c60a",
+    "catalogDigest": "dd3464e321a57995f0a1b432207d16b9d0fe49bf78cf29c3f3c3f6671c68aa5c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12132,8 +12132,8 @@
         "failureClasses": ["verification-dependency-bootstrap"],
         "proofIds": ["editor.verification.dependencies.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:186",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:781"]
+        "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:195",
+        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:819"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -12171,6 +12171,27 @@
             "required": false
           },
           "metadataOnly": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "targetedProjectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "nestedProjectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "targetedProjectRootSha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "targetedProjectRefused": {
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": false
@@ -12441,9 +12462,9 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:88",
         "emitterSites": [
-          "packages/keiko-server/src/editor/verificationRunner.ts:759",
-          "packages/keiko-server/src/editor/verificationRunner.ts:823",
-          "packages/keiko-server/src/editor/verificationRunner.ts:852"
+          "packages/keiko-server/src/editor/verificationRunner.ts:796",
+          "packages/keiko-server/src/editor/verificationRunner.ts:861",
+          "packages/keiko-server/src/editor/verificationRunner.ts:891"
         ]
       },
       {
@@ -30053,8 +30074,8 @@
         "failureClasses": ["portable-tree-attestation"],
         "proofIds": ["security.portable-tree-attestation.failed.driver"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/portable-tree-attestation.ts:34",
-        "emitterSites": ["packages/keiko-security/src/portable-tree-attestation.ts:790"]
+        "registrationSite": "packages/keiko-security/src/portable-tree-attestation.ts:36",
+        "emitterSites": ["packages/keiko-security/src/portable-tree-attestation.ts:792"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45162,6 +45183,7 @@
           "closed-enum",
           "completeness-state",
           "count",
+          "digest",
           "duration",
           "error-kind",
           "loss-state",
@@ -84697,6 +84719,12 @@
                   "required": false
                 },
                 {
+                  "name": "nestedProjectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "networkEnforcement",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -84754,6 +84782,24 @@
                   "name": "stepCount",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "targetedProjectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "targetedProjectRefused",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "targetedProjectRootSha256",
+                  "type": "string",
+                  "dataClass": "digest",
                   "required": false
                 },
                 {
@@ -84821,6 +84867,7 @@
                 "closed-enum",
                 "completeness-state",
                 "count",
+                "digest",
                 "duration",
                 "error-kind",
                 "loss-state",
@@ -84989,6 +85036,12 @@
                   "required": false
                 },
                 {
+                  "name": "nestedProjectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "networkEnforcement",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -85046,6 +85099,24 @@
                   "name": "stepCount",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "targetedProjectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "targetedProjectRefused",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "targetedProjectRootSha256",
+                  "type": "string",
+                  "dataClass": "digest",
                   "required": false
                 },
                 {
@@ -85113,6 +85184,7 @@
                 "closed-enum",
                 "completeness-state",
                 "count",
+                "digest",
                 "duration",
                 "error-kind",
                 "loss-state",
@@ -88220,7 +88292,7 @@
     {
       "op": "security.portable-tree-attestation.failed",
       "category": "security",
-      "site": "packages/keiko-security/src/portable-tree-attestation.ts:37",
+      "site": "packages/keiko-security/src/portable-tree-attestation.ts:39",
       "package": "keiko-security"
     },
     {
@@ -89258,7 +89330,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2584",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2587",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -89405,14 +89477,14 @@
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3135",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3138",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3152",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3155",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -89939,7 +90011,7 @@
     {
       "op": "editor.verification.dependencies",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:189",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:198",
       "package": "keiko-server"
     },
     {
@@ -89965,14 +90037,14 @@
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:957",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:997",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1163",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1203",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91721,7 +91793,7 @@
     {
       "op": "verification.dependency-bootstrap",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:205",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:206",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91729,6 +91801,13 @@
       "op": "verification.isolation-probe",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/verificationExecution.ts:102",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "verification.targeted-project",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:223",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -92484,6 +92563,7 @@
     "update.session.portable-handoff-shutdown",
     "verification.dependency-bootstrap",
     "verification.isolation-probe",
+    "verification.targeted-project",
     "voice.dialogue.stage",
     "voice.live-dictation.capacity-rejected",
     "voice.live-dictation.initial-frame-timeout",

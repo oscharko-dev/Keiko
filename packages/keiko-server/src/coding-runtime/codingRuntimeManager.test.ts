@@ -5723,6 +5723,30 @@ describe("inactive fixed host prepared transport", () => {
     expect(harness.manager.health().status).toBe("stopped");
   });
 
+  it("rechecks current authority after the asynchronous bootstrap write settles", async () => {
+    const workspace = tempDir("keiko-host-workspace-");
+    const program = await preparedHostFixture(workspace);
+    let accepted = true;
+    const stdin = new Writable({
+      write(_chunk, _encoding, done): void {
+        accepted = false;
+        setImmediate(done);
+      },
+    });
+    const harness = hostTransportHarness({
+      program,
+      stdin,
+      lifetime: true,
+      canSpawn: () => accepted,
+    });
+    await expect(startHostTransport(harness.manager, workspace)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(harness.handshake).not.toHaveBeenCalled();
+    expect(harness.manager.health().status).toBe("stopped");
+    expect(harness.events.some((event) => event.kind === "runtime-started")).toBe(false);
+  });
+
   it("refuses a copied program or a different accepted workspace before spawn", async () => {
     const workspace = tempDir("keiko-host-workspace-");
     const program = await preparedHostFixture(workspace);

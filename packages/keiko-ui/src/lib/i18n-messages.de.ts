@@ -923,4 +923,8 @@ export const DE_MESSAGES = {
     "Aus „{name}“ konnte kein Text extrahiert werden — deine Nachricht wird ohne Dokumenttext gesendet, und das Modell erhält die Datei selbst nicht.",
   "attachment.notice.imageUndeliverable":
     "„{name}“ wird nicht gesendet — das Modell erhält in dieser Unterhaltung keine Bildanhänge. Beschreibe stattdessen in deiner Nachricht, worauf es ankommt.",
+  "settings.models.retrievalEmbeddingUnavailable":
+    "Retrieval-Embedding: bestanden (Modellidentität in diesem Bericht nicht verfügbar)",
+  "settings.models.retrievalEmbeddingIdentity": "Retrieval-Embedding-Modell: {modelId}{shape}",
+  "settings.models.retrievalEmbeddingDimensions": " ({dimensions} Dimensionen)",
 } satisfies MessageCatalog;

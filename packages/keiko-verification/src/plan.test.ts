@@ -1,4 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { workspaceFsWithOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
 import { VERIFICATION_COMMAND_RULES } from "./orchestrator.js";
 import { buildVerificationPlan, planDirectTargetedTests, resolveTargetedTests } from "./plan.js";
@@ -131,6 +138,7 @@ describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => 
       "packages/ui/package.json",
       JSON.stringify({ scripts: { test: "vitest run" }, devDependencies: { vitest: "4.1.11" } }),
     );
+    ws.writeFile("packages/ui/vitest.config.ts", "export default {}; ");
     ws.writeFile("packages/ui/src/deep/Toggle.test.tsx", "");
 
     const steps = planDirectTargetedTests(ws.info, ["packages/ui/src/deep/Toggle.test.tsx"]);
@@ -144,6 +152,119 @@ describe("planDirectTargetedTests (Issue #1204 post-apply verification)", () => 
       "src/deep/Toggle.test.tsx",
     ]);
     expect(steps[0]?.limits.network).toBe("none");
+  });
+
+  it("retains root configuration when a nested package merely declares Vitest", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile(
+      "vitest.config.mjs",
+      'export default {test:{include:["packages/*/src/*.test.mjs"],setupFiles:["./setup.mjs"]}};',
+    );
+    ws.writeFile("setup.mjs", "globalThis.fixtureReady = true;");
+    ws.writeFile(
+      "packages/ui/package.json",
+      JSON.stringify({ devDependencies: { vitest: "4.1.11" } }),
+    );
+    const api = import.meta.resolve("vitest");
+    ws.writeFile(
+      "packages/ui/src/real.test.mjs",
+      `import {it,expect} from ${JSON.stringify(api)}; it("setup",()=>expect(globalThis.fixtureReady).toBe(true));`,
+    );
+    try {
+      const steps = planDirectTargetedTests(ws.info, ["packages/ui/src/real.test.mjs"]);
+      const cli = join(
+        dirname(createRequire(import.meta.url).resolve("vitest/package.json")),
+        "vitest.mjs",
+      );
+      execFileSync(
+        process.execPath,
+        [cli, ...(steps[0]?.args.slice(1) ?? []), "--maxWorkers=1", "--no-file-parallelism"],
+        { cwd: ws.root, timeout: 15_000, maxBuffer: 32_768, stdio: "pipe" },
+      );
+      expect(steps[0]?.args).toEqual(["vitest", "run", "packages/ui/src/real.test.mjs"]);
+    } finally {
+      rmSync(ws.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["vitest.config.mjs", "vite.config.mjs"])(
+    "uses an existing nested %s and its setup through the real CLI",
+    (config) => {
+      const ws = makeWorkspace({ testFramework: "vitest" });
+      ws.writeFile("vitest.config.mjs", 'throw new Error("root config must not be selected");');
+      ws.writeFile(
+        "packages/ui/package.json",
+        JSON.stringify({ devDependencies: { vitest: "4.1.11" } }),
+      );
+      ws.writeFile(`packages/ui/${config}`, 'export default {test:{setupFiles:["./setup.mjs"]}};');
+      ws.writeFile("packages/ui/setup.mjs", "globalThis.fixtureReady = true;");
+      ws.writeFile(
+        "packages/ui/src/real.test.mjs",
+        `import {it,expect} from ${JSON.stringify(import.meta.resolve("vitest"))}; it("setup",()=>expect(globalThis.fixtureReady).toBe(true));`,
+      );
+      try {
+        const step = planDirectTargetedTests(ws.info, ["packages/ui/src/real.test.mjs"])[0];
+        const cli = join(
+          dirname(createRequire(import.meta.url).resolve("vitest/package.json")),
+          "vitest.mjs",
+        );
+        execFileSync(
+          process.execPath,
+          [cli, ...(step?.args.slice(1) ?? []), "--maxWorkers=1", "--no-file-parallelism"],
+          { cwd: ws.root, timeout: 15_000, maxBuffer: 32_768, stdio: "pipe" },
+        );
+        expect(step?.args).toEqual(["vitest", "run", "--root", "packages/ui", "src/real.test.mjs"]);
+      } finally {
+        rmSync(ws.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("refuses an outward configuration link rather than selecting or ignoring it", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    const outside = makeWorkspace();
+    ws.writeFile(
+      "packages/ui/package.json",
+      JSON.stringify({ devDependencies: { vitest: "4.1.11" } }),
+    );
+    ws.writeFile("packages/ui/src/a.test.ts", "");
+    outside.writeFile("vitest.config.mjs", "export default {};");
+    symlinkSync(
+      join(outside.root, "vitest.config.mjs"),
+      join(ws.root, "packages/ui/vitest.config.mjs"),
+      "file",
+    );
+    try {
+      expect(() => planDirectTargetedTests(ws.info, ["packages/ui/src/a.test.ts"])).toThrow();
+    } finally {
+      rmSync(ws.root, { recursive: true, force: true });
+      rmSync(outside.root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects nested configuration beneath the exact admitted managed root", () => {
+    const fixture = makeWorkspace({ testFramework: "vitest" });
+    const root = join(realpathSync(fixture.root), ".keiko", "task-workspaces", "accepted");
+    mkdirSync(join(root, "packages/ui/src"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "4.1.11" } }),
+    );
+    writeFileSync(
+      join(root, "packages/ui/package.json"),
+      JSON.stringify({ devDependencies: { vitest: "4.1.11" } }),
+    );
+    writeFileSync(join(root, "packages/ui/vitest.config.mjs"), "export default {};");
+    writeFileSync(join(root, "packages/ui/src/a.test.ts"), "");
+    const fs = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, root);
+    try {
+      const workspace = detectWorkspaceAt(root, fs, { scanSourceFilesForLanguages: false });
+      expect(
+        planDirectTargetedTests(workspace, ["packages/ui/src/a.test.ts"], fs)[0]?.args,
+      ).toEqual(["vitest", "run", "--root", "packages/ui", "src/a.test.ts"]);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("builds a bounded Node native test invocation for the exact existing target", () => {

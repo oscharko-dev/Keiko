@@ -89,6 +89,9 @@ export interface VerificationDeps {
   // Windows tree-kill disposition is reconstructable (PR #3354 review, comment 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
   readonly onDependencyBootstrapFailure?: DependencyBootstrapDeps["onFailure"];
+  // Original cause of a refused final targeted-project guard, before it becomes a failed report.
+  // The server owns redacted diagnostics; this port carries neither routine output nor a body.
+  readonly onTargetedProjectFailure?: ((error: unknown) => void) | undefined;
   // ADR-0043 D17: "auto" installs the manifest's declared dependencies before the first script step
   // when the installed tree is not current (dependencies.ts). Default "off" keeps every SDK caller's
   // behaviour unchanged; the server's verification runner turns it on.
@@ -402,16 +405,21 @@ async function runStep(
 
 function assertTargetedProjectRoot(step: VerificationStep, deps: VerificationDeps): void {
   if (step.kind !== "targeted-test" || step.command !== "npx" || step.args[2] !== "--root") return;
-  const directory = step.args[3];
-  if (directory === undefined) throw new TypeError("Targeted test project is unavailable.");
-  const path = assertContainedRealPath(
-    deps.fs ?? nodeWorkspaceFs,
-    deps.workspace.root,
-    resolveWithinWorkspace(deps.workspace.root, directory),
-    "targeted test project",
-  );
-  if (!(deps.fs ?? nodeWorkspaceFs).stat(path).isDirectory) {
-    throw new TypeError("Targeted test project is unavailable.");
+  try {
+    const directory = step.args[3];
+    if (directory === undefined) throw new TypeError("Targeted test project is unavailable.");
+    const path = assertContainedRealPath(
+      deps.fs ?? nodeWorkspaceFs,
+      deps.workspace.root,
+      resolveWithinWorkspace(deps.workspace.root, directory),
+      "targeted test project",
+    );
+    if (!(deps.fs ?? nodeWorkspaceFs).stat(path).isDirectory) {
+      throw new TypeError("Targeted test project is unavailable.");
+    }
+  } catch (error) {
+    deps.onTargetedProjectFailure?.(error);
+    throw error;
   }
 }
 
@@ -531,12 +539,11 @@ function stepFailureLocations(
     step.kind === "targeted-test" && step.command === "npx" && step.args[2] === "--root"
       ? step.args[3]
       : undefined;
-  if (project === undefined) return extractFailureLocations(step.kind, result, workspaceRoot);
-  return extractFailureLocations(step.kind, result, join(workspaceRoot, project)).map(
-    (location) => ({
-      ...location,
-      file: join(project, location.file).replaceAll("\\", "/"),
-    }),
+  return extractFailureLocations(
+    step.kind,
+    result,
+    workspaceRoot,
+    project === undefined ? undefined : join(workspaceRoot, project),
   );
 }
 

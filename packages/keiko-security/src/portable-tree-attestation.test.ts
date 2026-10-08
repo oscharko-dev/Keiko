@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import {
+  closeSync,
+  constants,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   renameSync,
   readdirSync,
   rmSync,
@@ -34,6 +38,7 @@ import {
 const observedIo = vi.hoisted(() => ({
   selectedPath: "",
   selectedOpens: 0,
+  beforeSelectedOpen: undefined as (() => void) | undefined,
   openHandles: 0,
   directoryOrderRoot: "",
   directoryOrderReads: 0,
@@ -63,6 +68,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     readdir: async (path: PathLike): Promise<string[]> =>
       observeDirectoryNames(path, await original.readdir(path, { encoding: "utf8" })),
     open: async (path: PathLike, flags: string | number, mode?: Mode): Promise<FileHandle> => {
+      if (path === observedIo.selectedPath) observedIo.beforeSelectedOpen?.();
       const handle = await original.open(path, flags, mode);
       observedIo.openHandles += 1;
       if (path === observedIo.selectedPath) observedIo.selectedOpens += 1;
@@ -85,6 +91,7 @@ afterEach(async () => {
   expect(observedIo.openHandles).toBe(0);
   observedIo.selectedPath = "";
   observedIo.selectedOpens = 0;
+  observedIo.beforeSelectedOpen = undefined;
   observedIo.directoryOrderRoot = "";
   observedIo.directoryOrderReads = 0;
   observedIo.onDirectoryOrder = undefined;
@@ -347,6 +354,54 @@ describe("portable KHT1 tree attestation", () => {
     roots[roots.indexOf(timedRoot)] = `${timedRoot}-renamed`;
     expect(events.map((event) => event.errorKind)).toEqual(["cancelled", "timeout"]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "cancels a file replaced by an unopened FIFO without waiting for a writer",
+    async () => {
+      const root = fixtureRoot();
+      const path = join(root, "payload.js");
+      writeFileSync(path, "controlled artifact");
+      observedIo.selectedPath = path;
+      const controller = new AbortController();
+      observedIo.beforeSelectedOpen = (): void => {
+        observedIo.beforeSelectedOpen = undefined;
+        rmSync(path);
+        execFileSync("/usr/bin/mkfifo", [path]);
+        controller.abort();
+      };
+      const events: SecurityLogEvent[] = [];
+      const hashing = hashPortableTreeKht1(
+        root,
+        operation({
+          signal: controller.signal,
+          securityLogSink: { write: (event): void => void events.push(event) },
+        }),
+      ).then(
+        () => "accepted",
+        () => "cancelled",
+      );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const blocked = new Promise<string>((resolve) => {
+        timer = setTimeout(() => {
+          resolve("blocked");
+        }, 1_000);
+      });
+      try {
+        expect(await Promise.race([hashing, blocked])).toBe("cancelled");
+      } finally {
+        clearTimeout(timer);
+        const writer = openSync(path, constants.O_RDWR | constants.O_NONBLOCK);
+        closeSync(writer);
+        await hashing;
+      }
+      expect(observedIo.selectedOpens).toBe(1);
+      expect(events.map((event) => event.errorKind)).toEqual(["cancelled"]);
+      expectActivityLogProof(
+        "security.portable-tree-attestation.failed.driver",
+        formatActivityLogProofLine(events[0] ?? {}),
+      );
+    },
+  );
 
   it("fails closed on an expired sync deadline and malformed or mismatched digests", () => {
     const root = fixtureRoot();

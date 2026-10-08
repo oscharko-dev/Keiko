@@ -11608,6 +11608,27 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      targetedProjectCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      nestedProjectCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      targetedProjectRootSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      targetedProjectRefused: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       trustBasis: {
         type: "string",
         dataClass: "closed-enum",

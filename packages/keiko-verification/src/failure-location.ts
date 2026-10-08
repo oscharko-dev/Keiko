@@ -291,7 +291,11 @@ function isEscapingRelative(path: string, absolute: boolean): boolean {
   return first === "..";
 }
 
-function normalizeWindowsPath(file: string, workspaceRoot: string): string | undefined {
+function normalizeWindowsPath(
+  file: string,
+  workspaceRoot: string,
+  workingDirectory = workspaceRoot,
+): string | undefined {
   if (!WINDOWS_ROOT.test(workspaceRoot) || (file.startsWith("/") && !file.startsWith("//"))) {
     return undefined;
   }
@@ -299,19 +303,23 @@ function normalizeWindowsPath(file: string, workspaceRoot: string): string | und
   const root = win32Path.resolve(workspaceRoot);
   const absolute = win32Path.isAbsolute(file)
     ? win32Path.resolve(file)
-    : win32Path.resolve(root, file);
+    : win32Path.resolve(workingDirectory, file);
   const relative = win32Path.relative(root, absolute);
   if (isEscapingRelative(relative, win32Path.isAbsolute(relative))) return undefined;
   return relative.replaceAll("\\", "/");
 }
 
-function normalizePosixPath(file: string, workspaceRoot: string): string | undefined {
+function normalizePosixPath(
+  file: string,
+  workspaceRoot: string,
+  workingDirectory = workspaceRoot,
+): string | undefined {
   if (!posixPath.isAbsolute(workspaceRoot) || WINDOWS_QUALIFIED.test(file)) return undefined;
   const normalizedFile = file.replaceAll("\\", "/");
   const root = posixPath.resolve(workspaceRoot);
   const absolute = posixPath.isAbsolute(normalizedFile)
     ? posixPath.resolve(normalizedFile)
-    : posixPath.resolve(root, normalizedFile);
+    : posixPath.resolve(workingDirectory, normalizedFile);
   const relative = posixPath.relative(root, absolute);
   return isEscapingRelative(relative, posixPath.isAbsolute(relative)) ? undefined : relative;
 }
@@ -328,6 +336,7 @@ function decodeFailurePath(file: string, workspaceRoot: string): string | undefi
 function validFailurePath(
   candidate: string | undefined,
   workspaceRoot: string,
+  allowContainedTraversal = false,
 ): candidate is string {
   return (
     candidate !== undefined &&
@@ -336,7 +345,7 @@ function validFailurePath(
     !candidate.includes("\u0000") &&
     !workspaceRoot.includes("\u0000") &&
     TEXT_ENCODER.encode(candidate).length <= MAX_PATH_BYTES &&
-    !hasTraversal(candidate)
+    (allowContainedTraversal || !hasTraversal(candidate))
   );
 }
 
@@ -372,14 +381,35 @@ function isSeparator(character: string | undefined): boolean {
   return character === "/" || character === "\\";
 }
 
-function normalizeFailurePath(file: string, workspaceRoot: string): string | undefined {
+function containedWorkingDirectory(
+  root: string,
+  directory: string | undefined,
+): string | undefined {
+  if (directory === undefined || directory === root) return root;
+  if (!validFailurePath(directory, root)) return undefined;
+  const windows = WINDOWS_ROOT.test(root);
+  if (!(windows ? win32Path.isAbsolute(directory) : posixPath.isAbsolute(directory))) {
+    return undefined;
+  }
+  const relative = windows
+    ? normalizeWindowsPath(directory, root)
+    : normalizePosixPath(directory, root);
+  if (relative === undefined) return undefined;
+  return windows ? win32Path.resolve(root, relative) : posixPath.resolve(root, relative);
+}
+
+function normalizeFailurePath(
+  file: string,
+  workspaceRoot: string,
+  workingDirectory?: string,
+): string | undefined {
   const decoded = decodeFailurePath(file, workspaceRoot);
   const candidate =
     decoded === undefined ? undefined : restoreScrubbedHostPath(decoded, workspaceRoot);
-  if (!validFailurePath(candidate, workspaceRoot)) return undefined;
+  if (!validFailurePath(candidate, workspaceRoot, workingDirectory !== undefined)) return undefined;
   const normalized = WINDOWS_ROOT.test(workspaceRoot)
-    ? normalizeWindowsPath(candidate, workspaceRoot)
-    : normalizePosixPath(candidate, workspaceRoot);
+    ? normalizeWindowsPath(candidate, workspaceRoot, workingDirectory)
+    : normalizePosixPath(candidate, workspaceRoot, workingDirectory);
   if (normalized === undefined || TEXT_ENCODER.encode(normalized).length > MAX_PATH_BYTES) {
     return undefined;
   }
@@ -393,8 +423,9 @@ function isValidCoordinate(value: number | undefined): boolean {
 function normalizeLocation(
   location: VerificationFailureLocation,
   workspaceRoot: string,
+  workingDirectory?: string,
 ): VerificationFailureLocation | undefined {
-  const file = normalizeFailurePath(location.file, workspaceRoot);
+  const file = normalizeFailurePath(location.file, workspaceRoot, workingDirectory);
   if (
     file === undefined ||
     !isValidCoordinate(location.line) ||
@@ -417,12 +448,13 @@ function normalizeLocation(
 function clamp(
   raw: readonly VerificationFailureLocation[],
   workspaceRoot: string,
+  workingDirectory?: string,
 ): readonly VerificationFailureLocation[] {
   const seen = new Set<string>();
   const out: VerificationFailureLocation[] = [];
   for (const candidate of raw) {
     if (out.length >= VERIFICATION_MAX_FAILURE_LOCATIONS) break;
-    const location = normalizeLocation(candidate, workspaceRoot);
+    const location = normalizeLocation(candidate, workspaceRoot, workingDirectory);
     if (location === undefined) continue;
     const key = `${location.file}:${String(location.line)}:${String(location.column)}`;
     if (seen.has(key)) continue;
@@ -438,8 +470,10 @@ export function extractFailureLocations(
   kind: VerificationKind,
   result: CommandResult | undefined,
   workspaceRoot: string,
+  workingDirectory?: string,
 ): readonly VerificationFailureLocation[] {
-  if (result === undefined) return [];
+  const directory = containedWorkingDirectory(workspaceRoot, workingDirectory);
+  if (result === undefined || directory === undefined) return [];
   const lines = `${result.stdout}\n${result.stderr}`
     .split(/\r?\n/u)
     // Vitest 4 inserts ANSI styling between a path's colon and its line/column digits on Linux.
@@ -448,5 +482,9 @@ export function extractFailureLocations(
     // bound also guarantees a bounded normalized line.
     .filter((line) => line.length <= MAX_LINE_LENGTH)
     .map((line) => stripVTControlCharacters(line));
-  return clamp(extractByKind(kind, lines), workspaceRoot);
+  return clamp(
+    extractByKind(kind, lines),
+    workspaceRoot,
+    workingDirectory === undefined ? undefined : directory,
+  );
 }

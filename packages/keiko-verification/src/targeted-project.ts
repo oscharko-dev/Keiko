@@ -1,7 +1,6 @@
 import { dirname, join, relative } from "node:path";
 import {
   assertContainedRealPath,
-  detectWorkspaceAt,
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
@@ -29,19 +28,32 @@ export function targetedVitestProjects(
   return [...projects.values()];
 }
 
+const VITEST_CONFIG_NAMES = ["vitest.config", "vite.config"] as const;
+const VITEST_CONFIG_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
+
+function hasOwnVitestConfig(workspace: WorkspaceInfo, directory: string, fs: WorkspaceFs): boolean {
+  return VITEST_CONFIG_NAMES.some((name) =>
+    VITEST_CONFIG_EXTENSIONS.some((extension) => {
+      const path = resolveWithinWorkspace(workspace.root, join(directory, name + extension));
+      if (!fs.exists(path)) return false;
+      const config = assertContainedRealPath(fs, workspace.root, path, "targeted test config");
+      return fs.stat(config).isFile;
+    }),
+  );
+}
+
 function nestedVitestRoot(workspace: WorkspaceInfo, file: string, fs: WorkspaceFs): string {
   let directory = dirname(file);
   while (directory !== ".") {
     const manifest = resolveWithinWorkspace(workspace.root, join(directory, "package.json"));
     if (fs.exists(manifest)) {
-      const root = assertContainedRealPath(
+      assertContainedRealPath(
         fs,
         workspace.root,
         resolveWithinWorkspace(workspace.root, directory),
         "targeted test project",
       );
-      const nested = detectWorkspaceAt(root, fs, { scanSourceFilesForLanguages: false });
-      return nested.testFramework === "vitest" ? directory : "";
+      return hasOwnVitestConfig(workspace, directory, fs) ? directory : "";
     }
     directory = dirname(directory);
   }

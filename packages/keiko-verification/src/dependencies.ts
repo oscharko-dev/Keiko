@@ -588,7 +588,7 @@ function projectNpmConfigApproved(
     if (!stat.isFile || stat.isSymbolicLink || stat.size > 16_384) return false;
     const read = fs.readFileUtf8SameDescriptor?.(path, 16_384, "reject", stat);
     if (read === undefined) return false;
-    return read.rawText.split(/\r?\n/u).every((raw) => {
+    return read.rawText.split(/[\r\n]+/u).every((raw) => {
       const line = raw.trim();
       return (
         line === "" ||

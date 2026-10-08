@@ -1208,6 +1208,52 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(outcome.summary.completionRecorded).toBe(false);
   });
 
+  it.each(["\n", "\r\n", "\r"])(
+    "accepts only approved npm settings with %j boundaries",
+    (boundary) => {
+      const root = tempRoot();
+      writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+      writeFileSync(
+        join(root, ".npmrc"),
+        ["# comment", "ignore-scripts=true", "; comment", "engine-strict=true", ""].join(boundary),
+      );
+      expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs).kind).toBe("install");
+    },
+  );
+
+  it("refuses CR-only hidden npm settings during planning", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeFileSync(
+      join(root, ".npmrc"),
+      "# ordinary comment\rcache=/outside-workspace\roffline=true\r",
+    );
+    expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toMatchObject({
+      kind: "refused",
+      reason: "project-npm-config",
+    });
+  });
+
+  it("refuses CR-only hidden npm settings at the final pre-spawn boundary", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => {
+        writeFileSync(
+          join(root, ".npmrc"),
+          "# ordinary comment\rcache=/outside-workspace\roffline=true\r",
+        );
+        return Promise.resolve(fakeEgressProxy());
+      },
+    });
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary.completionRecorded).toBe(false);
+    expect(outcome.summary.state).toBe("failed");
+  });
+
   it("reports the original npm config fault during the final pre-spawn inspection", async () => {
     const root = tempRoot();
     const plan = installPlan(root);

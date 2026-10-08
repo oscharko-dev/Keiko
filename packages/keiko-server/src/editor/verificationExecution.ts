@@ -158,6 +158,7 @@ export interface ExecuteVerificationArgs {
   // The orchestrator's redacted output tail of a step that did not pass (ADR-0126 D3), forwarded
   // as it happens; never part of the persisted report.
   readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
+  readonly onTargetedProjectFailure?: VerificationDeps["onTargetedProjectFailure"];
 }
 
 // The egress policy every verification run executes under: a step that needs an enforced
@@ -211,6 +212,24 @@ export function verificationDependencyFailureHandler(
   };
 }
 
+function targetedProjectFailureHandler(
+  args: ExecuteVerificationArgs,
+): NonNullable<VerificationDeps["onTargetedProjectFailure"]> {
+  return (error): void => {
+    emitServerDiagnostic(
+      args.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "verification.targeted-project",
+        source: "verification.targeted-project.guard",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+    args.onTargetedProjectFailure?.(error);
+  };
+}
+
 // Probe, then run the plan under enforced, fail-closed egress isolation. Behavior is identical to the
 // composition postApplyVerification.ts performed inline before this extraction.
 export async function executeVerificationEnforced(
@@ -247,6 +266,7 @@ async function executeExclusiveVerification(
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
     onTerminated: verificationTerminationHandler(activityLog, args.correlationId),
+    onTargetedProjectFailure: targetedProjectFailureHandler(args),
     onDependencyBootstrapFailure: verificationDependencyFailureHandler(
       args.diagnostics,
       args.correlationId,

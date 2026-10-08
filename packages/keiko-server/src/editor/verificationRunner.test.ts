@@ -17,7 +17,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { ExecuteVerificationResult } from "./verificationExecution.js";
+import {
+  executeVerificationEnforced,
+  type ExecuteVerificationResult,
+} from "./verificationExecution.js";
+import * as sandbox from "@oscharko-dev/keiko-sandbox";
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
@@ -1956,4 +1960,140 @@ describe("verification diagnostic retention", () => {
       expect(retained(events, "editor.verification.execute")).toBe(failed ? 1 : 0);
     },
   );
+});
+
+describe("VerificationRunnerManager — targeted project evidence", () => {
+  function nestedProject(): void {
+    mkdirSync(join(workspaceRoot, "packages/ui/src"), { recursive: true });
+    writeFileSync(join(workspaceRoot, "packages/ui/package.json"), "{}");
+    writeFileSync(join(workspaceRoot, "packages/ui/vitest.config.mjs"), "export default {};");
+    writeFileSync(join(workspaceRoot, "packages/ui/src/a.test.ts"), "");
+  }
+
+  it("records actual nested selection on the existing Workbench verification caller", async () => {
+    nestedProject();
+    const events: ServerLogEvent[] = [];
+    const port = fakePort(report(["targeted-test"]));
+    const manager = makeManager({
+      execute: port.port,
+      activityLog: {
+        write: (event) => {
+          events.push(event);
+        },
+      },
+    });
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "packages/ui/src/a.test.ts",
+        correlationId: "nested-selection-evidence",
+      }),
+      new AbortController().signal,
+    );
+    const event = events.find((item) => item.extra?.state === "selected");
+    if (event === undefined) throw new Error("targeted project evidence missing");
+    const line = expectActivityLogProof(
+      "editor.verification.execute.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(line).toMatchObject({
+      targetedProjectCount: 1,
+      nestedProjectCount: 1,
+    });
+    expect(line.targetedProjectRootSha256).toMatch(/^[a-f\d]{64}$/u);
+    expect(JSON.stringify(events)).not.toContain("packages/ui");
+    expect(JSON.stringify(events)).not.toContain(workspaceRoot);
+  });
+
+  it("distinguishes ordinary root tests from nested projects without inventing a root", async () => {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      execute: fakePort(report(["targeted-test"])).port,
+      activityLog: {
+        write: (event) => {
+          events.push(event);
+        },
+      },
+    });
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      new AbortController().signal,
+    );
+    const event = events.find((item) => item.extra?.state === "selected");
+    if (event === undefined) throw new Error("root project evidence missing");
+    const line = expectActivityLogProof(
+      "editor.verification.execute.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(line).toMatchObject({ targetedProjectCount: 1, nestedProjectCount: 0 });
+    expect(line.targetedProjectRootSha256).toMatch(/^[a-f\d]{64}$/u);
+  });
+
+  it("retains the actual final guard cause in the existing log when a report fails", async () => {
+    nestedProject();
+    const events: ServerLogEvent[] = [];
+    const records: ServerDiagnosticRecord[] = [];
+    const failure = new Error("PRIVATE_FINAL_GUARD", { cause: new TypeError("PRIVATE_CAUSE") });
+    const availability = vi.spyOn(sandbox, "probeBackends").mockReturnValue({
+      bubblewrap: true,
+      unshare: false,
+      seatbelt: false,
+      docker: false,
+      podman: false,
+    });
+    const platform = vi.spyOn(sandbox, "currentPlatform").mockReturnValue("linux");
+    const manager = makeManager({
+      diagnostics: {
+        record: (record) => {
+          records.push(record);
+        },
+      },
+      activityLog: {
+        write: (event) => {
+          events.push(event);
+        },
+      },
+      execute: (args) =>
+        executeVerificationEnforced({
+          ...args,
+          dependencyBootstrap: "off",
+          fs: {
+            ...nodeWorkspaceFs,
+            stat: (path) => {
+              if (path === join(realpathSync(workspaceRoot), "packages/ui")) throw failure;
+              return nodeWorkspaceFs.stat(path);
+            },
+          },
+        }),
+    });
+    try {
+      const outcome = await manager.runToReport(
+        input({
+          kinds: ["targeted-test"],
+          targetPath: "packages/ui/src/a.test.ts",
+          correlationId: "final-guard-evidence",
+        }),
+        new AbortController().signal,
+      );
+      expect(outcome.report.overallStatus).toBe("failed");
+      const event = events.find((item) => item.extra?.state === "refused");
+      if (event === undefined) throw new Error("targeted project evidence missing");
+      const line = expectActivityLogProof(
+        "editor.verification.execute.emitted-line",
+        formatActivityLogProofLine(event),
+      );
+      expect(line).toMatchObject({
+        targetedProjectRefused: true,
+        reason: "INTERNAL",
+      });
+      expect(Array.isArray(line.frames)).toBe(true);
+      expect(line.causeChain).toContain("TypeError");
+      expect(records).toHaveLength(1);
+      expect(JSON.stringify({ events, records })).not.toContain("PRIVATE_");
+      expect(JSON.stringify({ events, records })).not.toContain(workspaceRoot);
+    } finally {
+      availability.mockRestore();
+      platform.mockRestore();
+    }
+  });
 });

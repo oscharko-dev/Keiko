@@ -900,6 +900,10 @@ export const EN_MESSAGES = {
     "Couldn't extract text from \"{name}\" — your message will be sent without document text and the model won't receive the file itself.",
   "attachment.notice.imageUndeliverable":
     '"{name}" won\'t be sent — the model does not receive image attachments in this conversation. Describe what matters about it in your message instead.',
+  "settings.models.retrievalEmbeddingUnavailable":
+    "Retrieval embedding: passed (model identity unavailable in this report)",
+  "settings.models.retrievalEmbeddingIdentity": "Retrieval embedding model: {modelId}{shape}",
+  "settings.models.retrievalEmbeddingDimensions": " ({dimensions} dimensions)",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

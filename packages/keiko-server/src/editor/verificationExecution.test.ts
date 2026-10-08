@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   buildVerificationPlan,
   detectScripts,
@@ -356,4 +357,72 @@ it("records dependency bootstrap failure stages without leaking the error messag
   expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(
     "private registry credential",
   );
+});
+
+it("records the real final targeted-project cause and forwards the same original fault", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-project-guard-")));
+  const records: ServerDiagnosticRecord[] = [];
+  const failure = new Error(`PRIVATE_PROJECT ${root}`, { cause: new TypeError("PRIVATE_CAUSE") });
+  const observed: unknown[] = [];
+  const availability = vi.spyOn(sandbox, "probeBackends").mockReturnValue({
+    bubblewrap: true,
+    unshare: false,
+    seatbelt: false,
+    docker: false,
+    podman: false,
+  });
+  const platform = vi.spyOn(sandbox, "currentPlatform").mockReturnValue("linux");
+  try {
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "4.1.11" } }),
+    );
+    await mkdir(join(root, "packages/ui/src"), { recursive: true });
+    await writeFile(join(root, "packages/ui/package.json"), "{}");
+    await writeFile(join(root, "packages/ui/vitest.config.mjs"), "export default {};");
+    await writeFile(join(root, "packages/ui/src/a.test.ts"), "");
+    const workspace = detectWorkspaceAt(root);
+    const plan = {
+      workspaceRoot: root,
+      steps: planDirectTargetedTests(workspace, ["packages/ui/src/a.test.ts"]),
+    };
+    const { report } = await executeVerificationEnforced({
+      plan,
+      workspace,
+      signal: new AbortController().signal,
+      correlationId: "project-guard-correlation",
+      fs: {
+        ...nodeWorkspaceFs,
+        stat: (path) => {
+          if (path === join(root, "packages/ui")) throw failure;
+          return nodeWorkspaceFs.stat(path);
+        },
+      },
+      diagnostics: {
+        record: (record) => {
+          records.push(record);
+        },
+      },
+      onTargetedProjectFailure: (error) => {
+        observed.push(error);
+      },
+    });
+    expect(report.results[0]?.status).toBe("failed");
+    expect(report.results[0]?.exitCode).toBeNull();
+    expect(observed).toEqual([failure]);
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "verification.targeted-project",
+        source: "verification.targeted-project.guard",
+        correlationId: "project-guard-correlation",
+        errorClass: "Error",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_");
+    expect(JSON.stringify(records)).not.toContain(root);
+  } finally {
+    availability.mockRestore();
+    platform.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
 });

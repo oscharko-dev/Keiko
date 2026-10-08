@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useLocale } from "@/lib/i18n";
 import type {
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
@@ -121,13 +122,18 @@ function NativeRetry({
   readonly state: CodingWorkbenchRuntimeState;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const locale = useLocale();
   const retry = nativeRunRetry(state.run.value, state.events);
   if (retry === null) return null;
   return (
     <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-native-retry">
       {t("codingWorkbench.runStatus.nativeRetry", {
         attempt: String(retry.attempt),
-        scheduledAt: retry.scheduledAt,
+        scheduledAt: new Intl.DateTimeFormat(locale, {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).format(new Date(retry.scheduledAt)),
       })}
     </span>
   );

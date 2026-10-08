@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "92e15d35fe267ea2adfe7031da5a817b2243227817d1185b688e57baece6c60a" as const;
+  "dd3464e321a57995f0a1b432207d16b9d0fe49bf78cf29c3f3c3f6671c68aa5c" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -38603,6 +38603,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "nestedProjectCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "networkEnforcement",
               type: "string",
               dataClass: "closed-enum",
@@ -38660,6 +38666,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "stepCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "targetedProjectCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "targetedProjectRefused",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "targetedProjectRootSha256",
+              type: "string",
+              dataClass: "digest",
               required: false,
             },
             {
@@ -38727,6 +38751,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "duration",
             "error-kind",
             "loss-state",
@@ -38895,6 +38920,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "nestedProjectCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "networkEnforcement",
               type: "string",
               dataClass: "closed-enum",
@@ -38952,6 +38983,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "stepCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "targetedProjectCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "targetedProjectRefused",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "targetedProjectRootSha256",
+              type: "string",
+              dataClass: "digest",
               required: false,
             },
             {
@@ -39019,6 +39068,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "duration",
             "error-kind",
             "loss-state",

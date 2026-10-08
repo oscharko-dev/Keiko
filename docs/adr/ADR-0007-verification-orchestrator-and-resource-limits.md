@@ -49,13 +49,17 @@ the public export barrels.
 ## Decision
 
 **Targeted monorepo verification (2026-10-07, PR #3895).** A targeted Vitest test inside a
-nested package selects that package's configuration with the closed `--root <relative-project>`
-invocation. The execution and dependency-bootstrap root stays the accepted repository: hoisted
+nested package selects the closed `--root <relative-project>` invocation only when that package
+has its own contained regular Vitest or Vite configuration. A package declaration alone retains the
+repository configuration and root. The execution and dependency-bootstrap root stays the accepted repository: hoisted
 workspace dependencies remain available without broadening filesystem or network authority.
 Project selectors and test paths are validated; the project root is checked again at execution.
 Failure locations are rebased to the repository so an edit/read/retest cycle finds the actual file.
 Verifier discovery reads project metadata without recursively inventorying source languages; the
-existing runner-selection activity records that metadata-only selection.
+existing runner-selection activity records metadata-only selection, targeted/nested project counts,
+and a digest of the selected project roots. A final project-guard refusal preserves the original
+cause through the existing diagnostic and verification activity owners; paths and command output
+stay out of those lines.
 Ordinary root tests and other framework invocations retain their existing selection rules.
 
 ### D1 — A pure `classifyOutcome` with a fixed precedence maps every run path to a status

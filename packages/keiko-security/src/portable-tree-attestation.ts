@@ -29,6 +29,8 @@ const MAX_SELECTED_PATHS = 8;
 const BUFFER_BYTES = 64 * 1024;
 const ASYNC_READS_PER_YIELD = 64;
 const ASYNC_IO_STEPS_PER_YIELD = 256;
+// A replaced FIFO must not trap admission before its descriptor type is checked.
+const PORTABLE_TREE_READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const SHA256 = /^[a-f0-9]{64}$/u;
 
 const SECURITY_PORTABLE_TREE_ATTESTATION_FAILED_OPERATION = defineActivityLogOperation({
@@ -583,7 +585,7 @@ class SyncIo {
       case "open-file":
         this.#resources.set(request.id, {
           kind: "file",
-          descriptor: openSync(request.path, constants.O_RDONLY | constants.O_NOFOLLOW),
+          descriptor: openSync(request.path, PORTABLE_TREE_READ_FLAGS),
           buffer: Buffer.allocUnsafe(BUFFER_BYTES),
         });
         return undefined;
@@ -677,7 +679,7 @@ class AsyncIo {
       case "open-file":
         this.#resources.set(request.id, {
           kind: "file",
-          handle: await open(request.path, constants.O_RDONLY | constants.O_NOFOLLOW),
+          handle: await open(request.path, PORTABLE_TREE_READ_FLAGS),
           buffer: Buffer.allocUnsafe(BUFFER_BYTES),
         });
         return undefined;

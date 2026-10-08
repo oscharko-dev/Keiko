@@ -2485,6 +2485,9 @@ function settleOpenCodeHandshake(
       )
         return { kind: "failed" as const, reason: "bootstrap-packet" };
       if (controller.signal.aborted) return { kind: "aborted" as const };
+      if (bootstrap !== undefined && !bootstrap.canWrite()) {
+        return { kind: "failed" as const, reason: "bootstrap-packet" };
+      }
       return adapter
         .handshake({
           runId: request.runId,
