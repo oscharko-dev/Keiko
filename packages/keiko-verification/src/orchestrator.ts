@@ -96,6 +96,8 @@ export interface VerificationDeps {
   // when the installed tree is not current (dependencies.ts). Default "off" keeps every SDK caller's
   // behaviour unchanged; the server's verification runner turns it on.
   readonly dependencyBootstrap?: "off" | "auto" | undefined;
+  readonly dependencyInstallTarget?: DependencyBootstrapDeps["dependencyInstallTarget"];
+  readonly resolveDependencyInstallTarget?: DependencyBootstrapDeps["resolveDependencyInstallTarget"];
   // The bounded, redacted output of a step that did not pass (and of a failed dependency
   // bootstrap), handed over as it happens and never written into the report: the report is
   // persisted as body-free evidence, while the caller may forward the excerpt to the actor that
@@ -666,6 +668,8 @@ function bootstrapDeps(
     spawn: baseSpawn,
     processEnv: deps.processEnv ?? process.env,
     now: deps.now ?? Date.now,
+    dependencyInstallTarget: deps.dependencyInstallTarget,
+    resolveDependencyInstallTarget: deps.resolveDependencyInstallTarget,
     ...(deps.signal === undefined ? {} : { signal: deps.signal }),
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
     ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),

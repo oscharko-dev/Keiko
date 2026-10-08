@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaf308790d775100659f6bbaa2b0e03c4f0b913e3f20c2ad39e677132d1917b2",
+    "catalogDigest": "52125c6a8bee814bac81113c377da0ded031521711b0c43b4a41363afc970134",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12576,12 +12576,24 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["waiting", "acquired", "released"]
+            "values": ["waiting", "acquired", "released", "runtime-target"]
           },
           "workspaceDigest": {
             "type": "string",
             "dataClass": "digest",
             "required": true,
+            "maxLength": 64
+          },
+          "runtimeTargetOutcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["measured", "refused"]
+          },
+          "runtimeIdentityDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
             "maxLength": 64
           }
         },
@@ -12591,8 +12603,8 @@
         "failureClasses": ["verification-runner-failure"],
         "proofIds": ["editor.verification.workspace.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/verificationExecution.ts:47",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationExecution.ts:76"]
+        "registrationSite": "packages/keiko-server/src/editor/verificationExecution.ts:49",
+        "emitterSites": ["packages/keiko-server/src/editor/verificationExecution.ts:87"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -85150,6 +85162,18 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "runtimeIdentityDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "runtimeTargetOutcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "state",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -90311,7 +90335,7 @@
     {
       "op": "editor.verification.workspace",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:50",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:52",
       "package": "keiko-server"
     },
     {
@@ -92053,21 +92077,21 @@
     {
       "op": "verification.dependency-bootstrap",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:206",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:222",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "verification.isolation-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:102",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:118",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "verification.targeted-project",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:223",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:239",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

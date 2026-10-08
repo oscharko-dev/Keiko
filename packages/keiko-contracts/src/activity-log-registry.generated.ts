@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "aaf308790d775100659f6bbaa2b0e03c4f0b913e3f20c2ad39e677132d1917b2" as const;
+  "52125c6a8bee814bac81113c377da0ded031521711b0c43b4a41363afc970134" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -38887,6 +38887,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
+            {
+              name: "runtimeIdentityDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "runtimeTargetOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
             {
               name: "state",
               type: "string",

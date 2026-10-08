@@ -237,7 +237,6 @@ configurations work in that profile proof; configurations outside the admitted r
 by its filesystem boundary. These fixture facts do not certify Seatbelt command lifetime, a native
 assured execution route, FIPS certification or support for external provider modules.
 
-
 The Docker fallback resolves only the selected local engine endpoint before spawning: a canonical
 Unix socket outside the execution root, or a Windows named pipe under the local `npipe:////./pipe/` namespace (including Docker Desktop's Linux engine). Remote or
 unavailable contexts fail closed with a body-free reason. The CLI receives the local endpoint
@@ -437,7 +436,6 @@ represented only after #3451's exact staged payload, offline-attested qualificat
 verification, and reference-runner proof all pass; no source-only or declared Boolean can qualify
 it.
 
-
 ## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)
 
 ### D15 — A second ephemeral loopback listener was a defect, not a second attested destination
@@ -489,7 +487,6 @@ reason `deadline`) if the body has not finished arriving in time — without des
 since request and response share one connection and destroying it would prevent that very 408 from
 being sent.
 
-
 ## Addendum — the Git executable admitted into the process-exec allowlist is attested, not path-trusted (2026-09-05)
 
 ### D16 — Do not allowlist conventional Xcode/CommandLineTools paths unconditionally
@@ -502,7 +499,7 @@ conventional Apple Git path unconditionally — `/usr/bin/git`,
 local user (the same actor D11's whole boundary exists to contain once inside the sandbox) can
 replace the file at any of them, and the sidecar would then execute that substitute with its
 inherited process context and the D11 gateway egress carve-out still attached. Hardcoding the
-paths meant the allowlist trusted *location* instead of *identity*.
+paths meant the allowlist trusted _location_ instead of _identity_.
 
 The fix, `packages/keiko-sandbox/src/darwin-git.ts`, resolves and attests the ONE Git executable
 the profile admits, at every launch, instead of trusting any fixed path:
@@ -520,7 +517,7 @@ the profile admits, at every launch, instead of trusting any fixed path:
   to the filesystem root must be a non-symlink directory, owned by `uid 0`, and not group- or
   other-writable either. Any failure — including any thrown `fs` error, e.g. the path not existing
   — is caught and converted into the single closed outcome, `throw new Error(
-  "runtime-gateway-git-untrusted")`. If the selected candidate fails, the fixed Command Line Tools
+"runtime-gateway-git-untrusted")`. If the selected candidate fails, the fixed Command Line Tools
   candidate must pass every same check; otherwise launch still fails closed. A qualifying executable's
   SHA-256 digest is computed and returned alongside its path (`AttestedDarwinGitExecutable`).
 - `buildGatewaySeatbeltCommand` (`backends.ts`) and `buildRuntimeGatewaySeatbeltCommand`
@@ -565,9 +562,9 @@ layer that owns the plan. Before the first script step of a plan that has one, t
 reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
 (`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, or Keiko
 has not recorded a completed install for that tree, it runs
-exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
-the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
-install` and nothing else, no leading flags, `-c`/`--call` denied), under
+the fixed base command `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error`
+with the server-owned target flags described below, through the same keiko-tools command boundary
+as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm install` and nothing else, no leading flags, `-c`/`--call` denied), under
 `DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
 one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
 it elsewhere: those steps EXECUTE untrusted, model-written code. `--ignore-scripts` disables npm's
@@ -588,6 +585,26 @@ fixed `--ignore-scripts` invocation and registry-only egress remain in force; a 
 redirect the install to a registry nobody configured. An unreadable manifest
 refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
 runs.
+
+Dependency installation and script execution can run on different platforms. For a canonical
+bootstrap decision of `current` or `install`, the server resolves the selected verification target
+before reusing or recording an installation receipt. The fixed constant Node metadata probe runs
+through the existing `runCommand` boundary with `network: "none"` and
+`filesystem: "execution-root"`, under the same selected isolation policy as verification. Decisions
+that require no bootstrap do not probe. The closed result contains the effective OS, CPU, libc,
+Node version, module ABI and N-API version. Its runtime identity also binds the selected attested
+backend and, for a container, the existing default image identifier. That identifier is not an
+immutable OCI content digest. Invalid or unavailable target metadata fails closed through the
+existing bootstrap failure/refusal path and prevents script execution.
+
+npm still runs on the host through the existing registry proxy, with lifecycle scripts disabled.
+The fixed invocation adds only server-produced `--os`, `--cpu` and, where applicable, `--libc`
+values for the measured execution target. This selects optional prebuilt native dependencies for
+that target rather than assuming the host's platform. It does not cross-compile required native
+addons or enable their lifecycle builds; required-package platform and engine checks can still
+apply to the host. A package that needs a disabled install script remains unsupported. The real
+npm 11.16.0 control qualifies one Linux native binding and one exact-file Vitest test, not generic
+native-build or complete OpenCode parity.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
@@ -638,8 +655,10 @@ The hidden lockfile alone is not completion evidence: npm can write it before re
 and leave a partly unpacked package behind. A successful bootstrap records a process-owned receipt
 only after npm exits successfully, the installed tree passes the source check, and registry egress
 has no refusal or fault. The receipt is bound to the manifest, lockfiles and installed entries by
-filesystem identity, size and change time; restored modification times cannot preserve it. Keiko
-writes no completion file in the workspace. Repository-written marker files confer no authority.
+filesystem identity, size and change time, together with the measured dependency target and runtime
+identity; restored modification times or a receipt from another execution target cannot preserve
+it. Keiko writes no completion file in the workspace. Repository-written marker files confer no
+authority.
 The cache holds at most 32 workspaces, enumerates at most 100,000 installed entries, follows no
 directory symlinks and fails closed to reinstall when identity metadata is unavailable. Changed
 entries, eviction and process restart require another successful bootstrap. This receipt records

@@ -95,7 +95,10 @@ const LOCKFILES: readonly string[] = ["package-lock.json", "npm-shrinkwrap.json"
 const INSTALLED_TREE_MARKER = join("node_modules", ".package-lock.json");
 // Process-owned receipt: repository files cannot create or extend installation authority.
 // Restarts discard receipts and require a fresh successful bootstrap.
-const completedInstalls = new Map<string, string>();
+const completedInstalls = new Map<
+  string,
+  { readonly targetIdentity: string; readonly fingerprint: string }
+>();
 const MAX_INSTALL_RECEIPTS = 32;
 const MAX_INSTALL_ENTRIES = 100_000;
 // Every lockfile npm reads a source from: the root lockfiles and the tree it already installed.
@@ -133,7 +136,8 @@ export type DependencyBootstrapRefusal =
   | "lockfile-unreadable"
   | "unapproved-source"
   | "workspaces-unresolved"
-  | "install-inspection-unavailable";
+  | "install-inspection-unavailable"
+  | "install-target-invalid";
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
@@ -151,6 +155,20 @@ export interface DependencyBootstrapDeps {
   readonly spawn: SpawnFn;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly now: () => number;
+  // Server-measured execution metadata only; npm receives no model-supplied flags.
+  readonly dependencyInstallTarget?:
+    | {
+        readonly os: "linux" | "darwin" | "win32";
+        readonly cpu: "arm64" | "x64";
+        readonly libc: "glibc" | "musl" | "none";
+        readonly nodeVersion: string;
+        readonly nodeAbi: string;
+        readonly napiVersion: string;
+        readonly runtimeIdentitySha256: string;
+      }
+    | undefined;
+  readonly resolveDependencyInstallTarget?:
+    (() => Promise<NonNullable<DependencyBootstrapDeps["dependencyInstallTarget"]>>) | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly resolveExecutable?: RunCommandDeps["resolveExecutable"] | undefined;
   readonly onTerminated?: RunCommandDeps["onTerminated"] | undefined;
@@ -160,7 +178,7 @@ export interface DependencyBootstrapDeps {
   readonly startEgressProxy?: (() => Promise<RegistryEgressProxy>) | undefined;
   readonly onFailure?:
     | ((failure: {
-        readonly stage: "proxy-start" | "post-proxy" | "command" | "inspection";
+        readonly stage: "proxy-start" | "post-proxy" | "command" | "inspection" | "target-probe";
         readonly error: unknown;
       }) => void)
     | undefined;
@@ -168,7 +186,7 @@ export interface DependencyBootstrapDeps {
 
 function reportDependencyBootstrapFailure(
   deps: Pick<DependencyBootstrapDeps, "onFailure">,
-  stage: "proxy-start" | "post-proxy" | "command" | "inspection",
+  stage: "proxy-start" | "post-proxy" | "command" | "inspection" | "target-probe",
   error: unknown,
 ): void {
   deps.onFailure?.({ stage, error });
@@ -392,9 +410,116 @@ function lockfileState(root: string, fs: WorkspaceFs): VerificationLockfileState
     : "absent";
 }
 
-function completedInstallCurrent(root: string, fs: WorkspaceFs): boolean {
+type DependencyInstallTarget = NonNullable<DependencyBootstrapDeps["dependencyInstallTarget"]>;
+const TARGET_FIELDS = [
+  "os",
+  "cpu",
+  "libc",
+  "nodeVersion",
+  "nodeAbi",
+  "napiVersion",
+  "runtimeIdentitySha256",
+] as const;
+
+class DependencyTargetError extends TypeError {
+  public constructor() {
+    super("Dependency execution target metadata is invalid");
+  }
+}
+
+function targetData(target: unknown): Readonly<Record<string, unknown>> {
+  if (
+    typeof target !== "object" ||
+    target === null ||
+    Object.getPrototypeOf(target) !== Object.prototype
+  )
+    throw new DependencyTargetError();
+  const descriptors = Object.getOwnPropertyDescriptors(target);
+  if (Reflect.ownKeys(descriptors).length !== TARGET_FIELDS.length)
+    throw new DependencyTargetError();
+  const data: Record<string, unknown> = {};
+  for (const name of TARGET_FIELDS) {
+    const descriptor = descriptors[name];
+    if (descriptor === undefined || !("value" in descriptor)) throw new DependencyTargetError();
+    data[name] = descriptor.value;
+  }
+  return data;
+}
+
+function targetChoice<T extends string>(value: unknown, choices: readonly T[]): T {
+  for (const choice of choices) if (value === choice) return choice;
+  throw new DependencyTargetError();
+}
+
+function targetText(value: unknown, pattern: RegExp): string {
+  if (typeof value !== "string" || value.length > 64 || !pattern.test(value))
+    throw new DependencyTargetError();
+  return value;
+}
+
+function snapshotInstallTarget(
+  target: DependencyInstallTarget | undefined,
+): DependencyInstallTarget | undefined {
+  if (target === undefined) return undefined;
+  const data = targetData(target);
+  const os = targetChoice(data.os, ["linux", "darwin", "win32"] as const);
+  const libc = targetChoice(data.libc, ["glibc", "musl", "none"] as const);
+  if ((os === "linux") === (libc === "none")) throw new DependencyTargetError();
+  return Object.freeze({
+    os,
+    cpu: targetChoice(data.cpu, ["arm64", "x64"] as const),
+    libc,
+    nodeVersion: targetText(data.nodeVersion, /^v[1-9]\d{0,2}\.\d{1,3}\.\d{1,3}$/u),
+    nodeAbi: targetText(data.nodeAbi, /^[1-9]\d{0,4}$/u),
+    napiVersion: targetText(data.napiVersion, /^[1-9]\d{0,2}$/u),
+    runtimeIdentitySha256: targetText(data.runtimeIdentitySha256, /^[a-f0-9]{64}$/u),
+  });
+}
+
+function hostLibcIdentity(): string {
+  if (process.platform !== "linux") return "none";
+  const report: unknown = process.report.getReport();
+  if (typeof report !== "object" || report === null) return "unknown";
+  const header: unknown = Reflect.get(report, "header");
+  if (typeof header !== "object" || header === null) return "unknown";
+  const version: unknown = Reflect.get(header, "glibcVersionRuntime");
+  return typeof version === "string" && /^\d{1,3}\.\d{1,3}$/u.test(version)
+    ? `glibc:${version}`
+    : "unknown";
+}
+
+function effectiveTargetIdentity(target: DependencyInstallTarget | undefined): string {
+  return JSON.stringify(
+    target ?? {
+      os: process.platform,
+      cpu: process.arch,
+      libc: hostLibcIdentity(),
+      nodeVersion: process.version,
+      nodeAbi: process.versions.modules,
+      napiVersion: process.versions.napi,
+      runtimeIdentity: "host",
+    },
+  );
+}
+
+function dependencyInstallArgs(target: DependencyInstallTarget | undefined): readonly string[] {
+  if (target === undefined) return DEPENDENCY_INSTALL_ARGS;
+  return [
+    ...DEPENDENCY_INSTALL_ARGS,
+    `--os=${target.os}`,
+    `--cpu=${target.cpu}`,
+    ...(target.libc === "none" ? [] : [`--libc=${target.libc}`]),
+  ];
+}
+
+function completedInstallCurrent(
+  root: string,
+  fs: WorkspaceFs,
+  target: DependencyInstallTarget | undefined,
+): boolean {
   const receipt = completedInstalls.get(root);
-  return receipt !== undefined && receipt === installationFingerprint(root, fs);
+  if (receipt?.targetIdentity !== effectiveTargetIdentity(target)) return false;
+  return receipt.fingerprint === installationFingerprint(root, fs, target);
 }
 
 type InstallInspectionCode =
@@ -442,8 +567,13 @@ function inspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat {
 }
 
 // A receipt is usable only when every contained entry has current identity evidence.
-function installationFingerprint(root: string, fs: WorkspaceFs): string {
+function installationFingerprint(
+  root: string,
+  fs: WorkspaceFs,
+  target?: DependencyInstallTarget,
+): string {
   const hash = createHash("sha256");
+  hash.update(effectiveTargetIdentity(target));
   const canonicalRoot = fs.realPath(root);
   const pending = [join(canonicalRoot, "node_modules")];
   const visited = new Set<string>();
@@ -523,23 +653,31 @@ function fingerprintStat(
 
 // npm may write its hidden lockfile before an install fails, leaving packages only partly unpacked.
 // Trust its currency heuristic only after this bootstrap has observed a successful, confined install.
-function installedTreeCurrent(root: string, fs: WorkspaceFs): boolean {
+function installedTreeCurrent(
+  root: string,
+  fs: WorkspaceFs,
+  target: DependencyInstallTarget | undefined,
+): boolean {
   const installed = optionalInspectionStat(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
-  if (installed === undefined || !completedInstallCurrent(root, fs)) return false;
+  if (installed === undefined || !completedInstallCurrent(root, fs, target)) return false;
   const inputs = [MANIFEST, ...LOCKFILES]
     .map((name) => optionalInspectionStat(fs, join(root, name))?.mtimeMs)
     .filter((mtime): mtime is number => mtime !== undefined);
   return inputs.every((mtime) => mtime <= installed);
 }
 
-function recordCompletedInstall(root: string, fs: WorkspaceFs): void {
-  const fingerprint = installationFingerprint(root, fs);
+function recordCompletedInstall(
+  root: string,
+  fs: WorkspaceFs,
+  target: DependencyInstallTarget | undefined,
+): void {
+  const fingerprint = installationFingerprint(root, fs, target);
   completedInstalls.delete(root);
   if (completedInstalls.size >= MAX_INSTALL_RECEIPTS) {
     const oldest = completedInstalls.keys().next().value;
     if (oldest !== undefined) completedInstalls.delete(oldest);
   }
-  completedInstalls.set(root, fingerprint);
+  completedInstalls.set(root, { targetIdentity: effectiveTargetIdentity(target), fingerprint });
 }
 
 function assertInstallDirectory(root: string, fs: WorkspaceFs): void {
@@ -552,6 +690,7 @@ export function planDependencyBootstrap(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
   onFailure?: DependencyBootstrapDeps["onFailure"],
+  dependencyInstallTarget?: DependencyInstallTarget,
 ): DependencyBootstrapPlan {
   const root = workspace.root;
   const manifest = readManifest(root, fs);
@@ -567,12 +706,19 @@ export function planDependencyBootstrap(
   const refusal = sourceRefusal(root, manifest, fs);
   if (refusal !== undefined) return { kind: "refused", reason: refusal, lockfile };
   try {
-    return installedTreeCurrent(root, fs)
+    return installedTreeCurrent(root, fs, snapshotInstallTarget(dependencyInstallTarget))
       ? { kind: "current", lockfile }
       : { kind: "install", lockfile };
   } catch (error) {
     reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
-    return { kind: "refused", reason: "install-inspection-unavailable", lockfile };
+    return {
+      kind: "refused",
+      reason:
+        error instanceof DependencyTargetError
+          ? "install-target-invalid"
+          : "install-inspection-unavailable",
+      lockfile,
+    };
   }
 }
 
@@ -604,6 +750,7 @@ function projectNpmConfigApproved(
 }
 
 const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
+  "install-target-invalid": "dependency execution target unavailable; verification refused",
   "install-inspection-unavailable":
     "installed dependency identity unavailable; verification refused",
   "project-npm-config": "project npm config present; dependency installation refused",
@@ -687,7 +834,7 @@ function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): Run
         throw new InstallInspectionError("DEPENDENCY_PROJECT_NPM_CONFIG_UNSAFE");
       }
       if (optionalInspectionStat(deps.fs, join(deps.workspace.root, "node_modules")) !== undefined)
-        installationFingerprint(deps.workspace.root, deps.fs);
+        installationFingerprint(deps.workspace.root, deps.fs, deps.dependencyInstallTarget);
       return deps.spawn(command, args, options);
     },
     processEnv: deps.processEnv,
@@ -730,7 +877,9 @@ function installOutcome(
     durationMs: result.durationMs,
     ...(state === "installed"
       ? {}
-      : { detail: `npm install ${state} (exit ${String(result.exitCode ?? "none")})` }),
+      : {
+          detail: `npm install ${state} (exit ${String(result.exitCode ?? "none")})`,
+        }),
   };
   return state === "installed" ? { summary } : { summary, excerpt: outputExcerpt(result) };
 }
@@ -765,7 +914,8 @@ async function executeDependencyBootstrap(
     assertInstallDirectory(deps.workspace.root, deps.fs);
     const outcome = await installBehindProxy(plan.lockfile, deps, proxy.url, startedAt);
     const checked = withEgress(outcome, proxy.counts(), proxy.fault());
-    if (checked.summary.state === "installed") recordCompletedInstall(deps.workspace.root, deps.fs);
+    if (checked.summary.state === "installed")
+      recordCompletedInstall(deps.workspace.root, deps.fs, deps.dependencyInstallTarget);
     return checked;
   } catch (error) {
     reportDependencyBootstrapFailure(deps, "post-proxy", error);
@@ -799,7 +949,10 @@ function withEgress(
 ): DependencyBootstrapOutcome {
   const summary = { ...outcome.summary, egress };
   if (fault !== undefined) {
-    return { ...outcome, summary: { ...summary, state: "failed", detail: EGRESS_FAULT_DETAIL } };
+    return {
+      ...outcome,
+      summary: { ...summary, state: "failed", detail: EGRESS_FAULT_DETAIL },
+    };
   }
   const state = outcome.summary.state;
   const reachedOut = egress.refused > 0 && (state === "installed" || state === "failed");
@@ -819,7 +972,7 @@ async function installBehindProxy(
     const result = await runCommand(
       {
         command: "npm",
-        args: DEPENDENCY_INSTALL_ARGS,
+        args: dependencyInstallArgs(deps.dependencyInstallTarget),
         cwd: undefined,
         timeoutMs: DEPENDENCY_INSTALL_LIMITS.wallTimeMs,
         signal: deps.signal ?? new AbortController().signal,
@@ -859,17 +1012,68 @@ async function installBehindProxy(
   }
 }
 
+async function resolveBootstrapDeps(
+  deps: DependencyBootstrapDeps,
+): Promise<DependencyBootstrapDeps> {
+  const target =
+    deps.resolveDependencyInstallTarget === undefined
+      ? deps.dependencyInstallTarget
+      : await deps.resolveDependencyInstallTarget();
+  if (deps.resolveDependencyInstallTarget !== undefined && target === undefined)
+    throw new DependencyTargetError();
+  return { ...deps, dependencyInstallTarget: snapshotInstallTarget(target) };
+}
+
+function targetResolutionFailure(
+  plan: Extract<DependencyBootstrapPlan, { kind: "install" | "current" }>,
+  deps: DependencyBootstrapDeps,
+  error: unknown,
+): DependencyBootstrapOutcome {
+  completedInstalls.delete(deps.workspace.root);
+  return settled(
+    error instanceof DependencyTargetError ? "refused" : rejectedInstallState(error),
+    plan.lockfile,
+    "dependency execution target unavailable; verification refused",
+  );
+}
+
+function admittedBootstrapPlan(
+  plan: DependencyBootstrapPlan,
+  deps: DependencyBootstrapDeps,
+): DependencyBootstrapPlan {
+  if (
+    plan.kind !== "current" &&
+    deps.resolveDependencyInstallTarget === undefined &&
+    deps.dependencyInstallTarget === undefined
+  )
+    return plan;
+  return planDependencyBootstrap(
+    deps.workspace,
+    deps.fs,
+    deps.onFailure,
+    deps.dependencyInstallTarget,
+  );
+}
+
 export async function runDependencyBootstrap(
   plan: DependencyBootstrapPlan,
   deps: DependencyBootstrapDeps,
 ): Promise<DependencyBootstrapOutcome> {
-  const admitted =
-    plan.kind === "current"
-      ? planDependencyBootstrap(deps.workspace, deps.fs, deps.onFailure)
-      : plan;
+  if (plan.kind === "refused") completedInstalls.delete(deps.workspace.root);
+  if (plan.kind === "none" || plan.kind === "refused")
+    return executeDependencyBootstrap(plan, deps);
+  let effectiveDeps: DependencyBootstrapDeps;
+  try {
+    effectiveDeps = await resolveBootstrapDeps(deps);
+  } catch (error) {
+    reportDependencyBootstrapFailure(deps, "target-probe", error);
+    return targetResolutionFailure(plan, deps, error);
+  }
+  const admitted = admittedBootstrapPlan(plan, effectiveDeps);
   const priorReceipt = completedInstalls.has(deps.workspace.root) ? "changed" : "missing";
   const receipt = admitted.kind === "current" ? "current" : priorReceipt;
-  const outcome = await executeDependencyBootstrap(admitted, deps);
+  if (admitted.kind === "refused") completedInstalls.delete(deps.workspace.root);
+  const outcome = await executeDependencyBootstrap(admitted, effectiveDeps);
   if (admitted.kind === "none" || admitted.kind === "refused") return outcome;
   return {
     ...outcome,

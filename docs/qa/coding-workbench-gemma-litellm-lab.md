@@ -953,13 +953,27 @@ approval. The existing local LiteLLM and Gemma route above are used.
 | `run-235742527409731082934141654280488123669` | Full access; `wb-ui`, approvals `all`          | `f0446ec78`  | Succeeded in 115 seconds using the actual installed npm runtime 1.1.3 with its correctly selected legacy helper cap. Seven model turns, three governed reads, one callback edit; keyboard-focus and false → true → false assertions preserved.                                                                                                                                                  | Same-target verification failed at 16:13:34 UTC; mutation succeeded at 16:14:26; the same target passed at 16:14:34 with zero failures/skips; settlement succeeded at 16:14:42. The activation event identifies the approved legacy helper and 65,536-byte cap.                                                                                                |
 | `run-146041115310732789142352533186727803180` | Full access; `wb-ui`, approvals `all`          | `de7bd9a5a`  | Failed qualification: the runtime reported success, but no verification, read or edit occurred and the seeded callback remained defective. This is not an accepted repair/retest journey.                                                                                                                                                                                                       | The actual selected checkout helper is the approved 1-MiB artifact. Repository instructions attached as a bounded 15,939-byte / 235-line excerpt at 16:23:07 UTC. One model turn; false-success settlement at 16:24:07. Completion without required task actions remains an engineering gap.                                                                   |
 
-The initial verifier defect mounted host-installed macOS native dependencies into a Linux test
-container, which failed to initialize a native binding. The repaired runner uses the existing
-macOS Seatbelt backend with filesystem and network confinement, private repository-local temporary
-storage, and the user's installed dependency tree. Actual native regression tests qualify
-outside-root reads/writes, symlink and descendant escapes, host-loopback denial and cleanup. These
-rows establish one small monorepo repair/retest journey per mode on their named heads; the complete final-head
-task/mode matrix and Epic acceptance closeout are still pending.
+The historical runs above used the macOS Seatbelt workaround for a verifier that mounted
+host-installed macOS native dependencies into a Linux test container. Their confinement controls
+and named-head results remain historical evidence. The native regression controls for that
+historical path covered outside-root reads/writes, symlink and descendant escapes, host-loopback
+denial and cleanup. They do not qualify the current assured `execution-root` path, which selects
+its enforcing backend and may execute in Linux Docker. The latest completed sandbox Gemma run, `run-248474103773312635839423705089814196639` on
+`fb18ca28d`, failed with `verification-not-evidenced` at revision 7; it is not a successful
+final-head repair/retest qualification.
+
+The current diagnosis reproduces the platform mismatch in the original native loader: the
+host-selected Darwin binding loads on macOS but fails under the selected Linux container. The
+repair keeps that enforcing backend. A fixed constant Node probe measures the execution target
+through the existing command boundary with no network, and the existing registry-only host npm
+bootstrap uses its closed OS/CPU/libc target flags with `--ignore-scripts`. The process-owned
+installation receipt also binds the measured target/runtime identity (ADR-0043 D17). A controlled
+npm 11.16.0 install selected the Linux native binding and passed the same container's exact-file
+Vitest control: one test passed, none failed; Darwin-prepared dependencies in that same Linux container failed before test startup.
+No lifecycle scripts ran. This proves optional prebuilt binding selection for that fixture, not
+arbitrary native cross-builds or complete parity. The repaired live Gemma run and complete
+final-head task/mode matrix remain pending; no weaker backend fallback or install-script allowance
+is part of this repair.
 
 ## Resilience under gateway load (chaos)
 
