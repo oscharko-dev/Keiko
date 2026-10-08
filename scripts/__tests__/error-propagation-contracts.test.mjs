@@ -5,6 +5,34 @@ import { unregisteredFailurePathViolations } from "../check-error-observability.
 const workerSource = () =>
   readFileSync("packages/keiko-server/src/support-report-worker.ts", "utf8");
 
+describe("exact closed Coding Workbench validation boundaries", () => {
+  it.each([
+    ["packages/keiko-contracts/src/opencode-service-host.ts", "dataRecord"],
+    ["packages/keiko-sandbox/src/seatbelt-execution-root.ts", "copyRuntimeGatewayFilesystem"],
+    [
+      "packages/keiko-server/src/coding-runtime/opencodeServiceHostArtifact.ts",
+      "closedHostEnvironment",
+    ],
+    [
+      "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts",
+      "decodeSnapshotHelperResponse",
+    ],
+  ])("accepts only the exact reviewed file and owner: %s", (path, owner) => {
+    const source = readFileSync(path, "utf8");
+    expect(source).toContain(`function ${owner}(`);
+    expect(unregisteredFailurePathViolations(source, path)).not.toContainEqual(
+      expect.objectContaining({ owner }),
+    );
+    const lost = `function ${owner}() { try { prepare(); } catch { return undefined; } }`;
+    expect(unregisteredFailurePathViolations(lost, "packages/fixture/src/other.ts")).toHaveLength(
+      1,
+    );
+    expect(
+      unregisteredFailurePathViolations(lost.replace(owner, "unrelatedOwner"), path),
+    ).toHaveLength(1);
+  });
+});
+
 describe("typed asynchronous failure propagation", () => {
   it("recognizes the intrinsic Promise reject callback with the caught error", () => {
     const source = `function dispatch(reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) {

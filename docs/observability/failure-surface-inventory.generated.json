@@ -1466,7 +1466,8 @@
     ],
     "coding-runtime.workspace-read.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolFileCreation.test.ts",
-      "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts",
+      "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.test.ts"
     ],
     "coding-sidecar.gateway.outcome.line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"

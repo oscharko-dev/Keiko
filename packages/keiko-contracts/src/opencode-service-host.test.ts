@@ -92,4 +92,12 @@ describe("closed original OpenCode service-host metadata", () => {
     expect(copyOpenCodeServiceHostApprovals({})).toBeUndefined();
     expect(copyOpenCodeServiceHostApprovals(undefined)).toBeUndefined();
   });
+
+  it.each(["object", "array"])("rejects a revoked %s without escaping validation", (kind) => {
+    const revoked = Proxy.revocable(kind === "object" ? fixture() : [], {});
+    revoked.revoke();
+    expect(copyOpenCodeServiceHostApproval(revoked.proxy)).toBeUndefined();
+    expect(copyOpenCodeServiceHostApprovals(revoked.proxy)).toBeUndefined();
+    expect(copyOpenCodeServiceHostApprovals({ "macos-arm64": revoked.proxy })).toBeUndefined();
+  });
 });

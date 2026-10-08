@@ -89,6 +89,17 @@ or instruction authority, effect drainage, directory/media/large-file/mutation s
 complete native capability matrix. The earlier four failure-path and catalog-performance findings
 remain open; no global green claim follows from these focused runs.
 
+The next targeted validation repair reproduces revoked object/array proxies against the unchanged
+`f18eaae` producers, then closes both supplemental-host metadata and gateway-filesystem validation
+without leaking the intrinsic `IsArray` exception. The owning confinement producer still returns
+its exact closed policy error. Four exact pure decoder/predicate failure-path dispositions now
+identify their existing refusal owners; they do not exempt another file or function. An actual
+malformed rich helper frame traverses the secure decoder and governed read into one registered,
+body-free `protocol-invalid` line, and its transient bytes are wiped. The error-observability gate
+passes all twelve real call sites. Catalog performance evidence still requires qualification against
+the current producer, and the complete Activity Log aggregate has not been rerun. Final complete
+quality and Standalone OpenCode functional parity remain open.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

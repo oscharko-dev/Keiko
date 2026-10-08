@@ -62,8 +62,9 @@ function validRoot(value: unknown): value is string {
 
 /** Copy data only; an input accessor must never execute at the isolation boundary. */
 export function copyRuntimeGatewayFilesystem(value: unknown): RuntimeGatewayFilesystem | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  if (typeof value !== "object" || value === null) return undefined;
   try {
+    if (Array.isArray(value)) return undefined;
     const prototype: unknown = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
     const descriptors = Object.getOwnPropertyDescriptors(value);

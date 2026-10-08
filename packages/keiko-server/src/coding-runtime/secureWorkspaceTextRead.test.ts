@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 
 import {
   createSecureWorkspaceTextReadPort,
@@ -771,5 +778,48 @@ describe("pinned rich secure text read", () => {
       reason: "protocol-invalid",
     });
     expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+  });
+
+  it("persists an actual malformed snapshot refusal through the governed read owner", async () => {
+    const frame = encodeSecureWorkspaceReadResponse({
+      status: "ok",
+      bytes: Buffer.from("PRIVATE_HELPER_RESPONSE_SENTINEL"),
+    });
+    const binding = {
+      runId: "run-rich-decoder-refusal",
+      envelopeDigest: "a".repeat(64),
+      workspaceId: "workspace-rich-decoder-refusal",
+      workspaceRootDigest: "b".repeat(64),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: richPort(() => Promise.resolve(frame)),
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => binding,
+      enforceProducerBinding: true,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    await expect(
+      ports.nativeTextRead.readTextSnapshot(
+        { relativePath: "src/a.ts", purpose: "native-tool-io" },
+        undefined,
+        { binding, check: () => true },
+      ),
+    ).resolves.toEqual({ ok: false, reason: "protocol-invalid" });
+    expect(events).toHaveLength(1);
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "failed",
+      purpose: "native-tool-io",
+      reason: "protocol-invalid",
+    });
+    expect(frame).toEqual(Buffer.alloc(frame.byteLength));
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_HELPER_RESPONSE_SENTINEL");
+    expect(JSON.stringify(events)).not.toContain("src/a.ts");
   });
 });

@@ -13,6 +13,7 @@ import {
 } from "./runtime-gateway.js";
 import { resolveDarwinGitExecutable } from "./darwin-git.js";
 import { currentPlatform, probeBackends } from "./probe.js";
+import { copyRuntimeGatewayFilesystem } from "./seatbelt-execution-root.js";
 
 const input: RuntimeGatewayConfinementInput = {
   gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
@@ -34,6 +35,28 @@ function buildRuntimeGatewaySeatbeltCommand(
 }
 
 describe("long-lived gateway network confinement", () => {
+  it.each(["object", "array"])("refuses a revoked %s filesystem", (kind) => {
+    const revoked = Proxy.revocable(kind === "object" ? {} : [], {});
+    revoked.revoke();
+    expect(copyRuntimeGatewayFilesystem(revoked.proxy)).toBeUndefined();
+  });
+
+  it("rejects a revoked filesystem capability with the closed policy error", () => {
+    const revoked = Proxy.revocable(
+      {
+        workspaceRoot: "/accepted/workspace",
+        workspaceAccess: "read-only" as const,
+        privateStateRoot: "/private/state",
+        runtimeReadRoot: "/immutable/runtime",
+      },
+      {},
+    );
+    revoked.revoke();
+    expect(() => createRuntimeGatewayConfinement({ ...input, filesystem: revoked.proxy })).toThrow(
+      "runtime-gateway-policy-invalid",
+    );
+  });
+
   it("rejects writable private state containing the workspace or overlapping immutable runtime", () => {
     const filesystem = {
       workspaceRoot: "/accepted/workspace",

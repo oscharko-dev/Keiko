@@ -101,8 +101,9 @@ function boundedCount(value: unknown, maximum: number): boolean {
 }
 
 function dataRecord(value: unknown): Record<string, unknown> | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (value === null || typeof value !== "object") return undefined;
   try {
+    if (Array.isArray(value)) return undefined;
     const keys = Reflect.ownKeys(value);
     if (keys.length > FIELDS.size || keys.some((key) => typeof key !== "string")) return undefined;
     const result: Record<string, unknown> = {};
