@@ -611,6 +611,55 @@ describe("static serving", () => {
   });
 });
 
+async function modelRefreshServer(refreshGatewayCatalog: () => void): Promise<void> {
+  const handlerDeps: UiHandlerDeps = {
+    config: undefined,
+    configPresent: false,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    refreshGatewayCatalog,
+  };
+  await closeServer();
+  server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
+  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+}
+
+describe("model catalog refresh CSRF boundary", () => {
+  it.each([undefined, "0"])(
+    "rejects an image-shaped refresh with guard %s before provider work",
+    async (guard) => {
+      const refresh = vi.fn();
+      await modelRefreshServer(refresh);
+      const response = await rawRequest("/api/models?refresh=1", {
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Dest": "image",
+        ...(guard === undefined ? {} : { "X-Keiko-CSRF": guard }),
+      });
+      expect(response.status).toBe(403);
+      expect(JSON.parse(response.body.toString())).toMatchObject({
+        error: { code: "FORBIDDEN_CSRF" },
+      });
+      expect(refresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("admits a guarded refresh and keeps ordinary projection reads passive", async () => {
+    const refresh = vi.fn();
+    await modelRefreshServer(refresh);
+    const passive = await rawRequest("/api/models");
+    expect(passive.status).toBe(200);
+    expect(refresh).not.toHaveBeenCalled();
+    const active = await rawRequest("/api/models?refresh=1", { "X-Keiko-CSRF": "1" });
+    expect(active.status).toBe(200);
+    expect(JSON.parse(active.body.toString())).toEqual({ models: [] });
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+});
+
 describe("unknown API routes", () => {
   it("returns 404 for an unknown API path", async () => {
     const res = await fetchRaw("/api/nope");

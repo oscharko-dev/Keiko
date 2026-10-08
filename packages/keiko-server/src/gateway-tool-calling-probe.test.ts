@@ -96,6 +96,50 @@ describe("probeGatewayToolCalling", () => {
     expect(reportFailure).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["unterminated EOF", ""],
+    [
+      "failed generation",
+      'data: {"error":{"code":"503","message":"synthetic unavailable"}}\n\ndata: [DONE]\n\n',
+    ],
+  ])("does not verify a valid streamed call followed by %s", async (_label, suffix) => {
+    const body = (await streamedToolResponse().text())
+      .split("\n\n")
+      .filter((frame) => !frame.includes("finish_reason") && !frame.includes("[DONE]"))
+      .join("\n\n");
+    const reportFailure = vi.fn();
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(body + suffix, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      );
+    await expect(
+      probeGatewayToolCalling(STREAMING_CONFIG, PROVIDER, fetchImpl, reportFailure),
+    ).resolves.toBe("unverified");
+    expect(reportFailure).toHaveBeenCalledOnce();
+  });
+
+  it.each(["finish_reason", "[DONE]"])("accepts the actual %s terminal marker", async (marker) => {
+    const body = (await streamedToolResponse().text())
+      .split("\n\n")
+      .filter((frame) =>
+        marker === "[DONE]" ? !frame.includes("finish_reason") : !frame.includes("[DONE]"),
+      )
+      .join("\n\n");
+    const reportFailure = vi.fn();
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(body, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      );
+    await expect(
+      probeGatewayToolCalling(STREAMING_CONFIG, PROVIDER, fetchImpl, reportFailure),
+    ).resolves.toBe("verified");
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
   it.each(["{", '{"status":"wrong"}', '{"status":"ok","extra":true}'])(
     "rejects invalid streamed readiness arguments %s without blaming transport",
     async (argumentsText) => {

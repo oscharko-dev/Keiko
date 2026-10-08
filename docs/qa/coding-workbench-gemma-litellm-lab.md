@@ -1297,3 +1297,26 @@ quality, coverage, real Sonar analysis, fresh owner evidence, final-head live sa
 and formal review repair are the next phase. Feature scope is frozen after this increment; full
 Standalone OpenCode parity and Epic #3871 remain open. No merge, auto-merge, native production
 activation, public pin change or external publication is performed.
+
+### Frozen-scope review closeout: readiness terminal and catalog refresh
+
+ROOT independently matched all six source baselines and frozen handoff/evidence hashes, then
+installed only the regression tests against the unchanged producers. Four server failures and two
+UI failures reproduce the review findings: a valid tool call followed by unterminated EOF or an
+original failure frame was admitted as a feature proof; an image-shaped cross-site GET could start
+catalog refresh; the UI omitted the canonical refresh CSRF header and lost distinct caller
+correlations when sharing an in-flight request.
+
+The existing readiness reader now requires an original DONE/finish-reason terminal and rejects
+original failure frames. The existing server CSRF owner protects only the explicit refresh GET;
+ordinary projection reads remain passive. The existing UI request cache shares only the correlation
+actually sent, and refresh requests carry the existing CSRF header. No additional worker, queue,
+provider probe, logger or route is introduced. Existing failure/CSRF diagnostics remain the owners.
+
+After integrating the coordinated server/UI producers, ROOT passed **237 server/model-gateway
+tests across four suites and 222 API tests**, the fresh affected package graph, strict owning server
+test types, full UI types, scoped lint and six-file formatting. These checks qualify this increment;
+final global gates, required CI and live sandbox qualification remain pending. The immutable ROOT
+input qualification is `root-closeout-first-review-inputs.json`; genuine baseline and final results
+are retained separately as `root-closeout-first-review-{red,ui-red,green,ui-green}.log` in the private
+scratchpad. Full Standalone OpenCode parity and Epic #3871 remain open; auto-merge remains off.

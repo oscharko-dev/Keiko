@@ -1441,10 +1441,21 @@ export async function readGatewayReadinessChatCompletionResponse(
 ): Promise<unknown> {
   if (answeredWholeBody(response)) return readJsonCapped(response, maxResponseBytes);
   const acc = newStreamAccumulator();
-  for await (const chunk of readSseStream(response, maxResponseBytes)) {
+  const completion = { sawDone: false };
+  for await (const chunk of readSseStream(response, maxResponseBytes, undefined, undefined, () => {
+    completion.sawDone = true;
+  })) {
+    throwOnStreamedFailure(chunk, "readiness-probe", []);
     applyChunkMetadata(chunk, acc);
     acc.content += deltaFromChunk(chunk) ?? "";
     acc.reasoning += reasoningFromChunk(chunk) ?? "";
+  }
+  if (!completion.sawDone && !acc.sawFinishReason) {
+    throw new ProviderError(
+      "provider stream ended without a terminal frame",
+      PROVIDER_EMPTY_ASSISTANT_STATUS,
+      [],
+    );
   }
   return streamedPayload(acc);
 }

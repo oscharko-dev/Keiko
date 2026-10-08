@@ -543,37 +543,50 @@ export type { FetchConfigResponse };
 // Route 3 — models
 // ---------------------------------------------------------------------------
 
-let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
+interface InflightModelsRequest {
+  readonly promise: Promise<{ models: ModelCapability[] }>;
+  readonly correlationId: string | undefined;
+}
+
+let modelsRequest: InflightModelsRequest | undefined;
 
 export function resetModelRequestCache(): void {
   modelsRequest = undefined;
   modelsRefreshRequest = undefined;
 }
 
-let modelsRefreshRequest: Promise<{ models: ModelCapability[] }> | undefined;
+let modelsRefreshRequest: InflightModelsRequest | undefined;
 
 export async function fetchModels(
   correlationId?: string,
   refreshCatalog = false,
 ): Promise<{ models: ModelCapability[] }> {
-  const active = refreshCatalog ? modelsRefreshRequest : (modelsRefreshRequest ?? modelsRequest);
+  const candidates = refreshCatalog
+    ? [modelsRefreshRequest]
+    : [modelsRefreshRequest, modelsRequest];
+  // A shared request can name only the correlation actually sent to the BFF.
+  const active = candidates.find(
+    (request) => request !== undefined && request.correlationId === correlationId,
+  );
   if (active === undefined) {
     const pending = fetchJson<{ models: ModelCapability[] }>(
       refreshCatalog ? "/api/models?refresh=1" : "/api/models",
       {
         cache: "no-store",
+        ...(refreshCatalog ? { headers: { "X-Keiko-CSRF": "1" } } : {}),
       },
       undefined,
       correlationId,
     ).finally(() => {
-      if (modelsRequest === pending) modelsRequest = undefined;
-      if (modelsRefreshRequest === pending) modelsRefreshRequest = undefined;
+      if (modelsRequest?.promise === pending) modelsRequest = undefined;
+      if (modelsRefreshRequest?.promise === pending) modelsRefreshRequest = undefined;
     });
-    if (refreshCatalog) modelsRefreshRequest = pending;
-    else modelsRequest = pending;
+    const request = { promise: pending, correlationId };
+    if (refreshCatalog) modelsRefreshRequest = request;
+    else modelsRequest = request;
     return pending;
   }
-  return active;
+  return active.promise;
 }
 
 // ---------------------------------------------------------------------------

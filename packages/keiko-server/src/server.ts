@@ -252,6 +252,12 @@ function setFallbackRouteTemplate(context: RequestLogContext, pathname: string):
   if (template !== undefined) context.routeTemplate = template;
 }
 
+function isRequestedCatalogRefresh(method: string, url: URL): boolean {
+  return (
+    method === "GET" && url.pathname === "/api/models" && url.searchParams.get("refresh") === "1"
+  );
+}
+
 async function dispatchApi(
   handlerDeps: UiHandlerDeps,
   req: IncomingMessage,
@@ -273,6 +279,10 @@ async function dispatchApi(
     return;
   }
   context.routeTemplate = match.definition.pattern;
+  if (isRequestedCatalogRefresh(method, url) && !hasCsrfHeader(req)) {
+    rejectCsrf(req, res);
+    return;
+  }
   const invalidStateChange =
     isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res, method, url.pathname);
   if (invalidStateChange) {
