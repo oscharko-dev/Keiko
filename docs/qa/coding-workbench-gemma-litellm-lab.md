@@ -340,8 +340,8 @@ separate root-owned cleanup later terminated only that exact survivor, preservin
 qualification. The repair uses the pinned native OpenCode `serve --stdio` stdin-EOF lifetime lease
 through the existing V2 producer and shared Darwin application-sandbox process owner. A targeted real-binary
 control proves that the authenticated native HTTP service remains alive while the pipe is held
-and exits after EOF. The complete abrupt-interruption case still needs qualification on the
-published repaired head. No second watchdog or supervisor was added; the failed baseline remains
+and exits after EOF. The distinct repaired-head abrupt-interruption qualification is recorded
+below. No second watchdog or supervisor was added; the failed baseline remains
 failed, and other process backends are not qualified by inference.
 
 The independent targeted matrix also reproduced an actual npm-workspace verification failure:
@@ -433,6 +433,28 @@ types, scoped lint/format, 294 server tests, 46 gateway boundary tests, 111 cata
 pinned native system-context/startup test passed. Two existing optional server cases and four
 other native cases were not executed. These are producer-call/source-string measurements, not
 measured heap, token or latency improvements. Chat search controls remain unchanged.
+
+The retained failed-baseline recovery was acknowledged once on clean source `41769633a8f8`
+only after the original captured processes were absent and the new host had no current or
+previously observed surviving child. Both selection guards returned 409 before acknowledgement
+and 200 afterwards; the acknowledged recovery row remained revision 3. Canonical Activity Log
+evidence contains one acknowledgement and no new task or native spawn. Six bounded process
+observations retained transient children until their natural exit. No task, signal, restart or
+repository change was introduced by this recovery-only case. The earlier failed observation
+receipt remains unchanged.
+
+A distinct actual abrupt interruption on the same repaired source admitted
+`run-193855093896182939900013445182088801177` once. The canonical confinement event confirms
+an actual Seatbelt native launch with the `stdin-eof` lifetime lease. A STARTING snapshot five
+milliseconds old preceded one SIGKILL to the bound BFF; both tracked child identities disappeared
+before the single normal CLI restart. Both live selection guards returned 409. A fresh stopped
+recovery observation permitted exactly one supported acknowledgement, retained revision 3 and
+released both selections to 200. Canonical evidence confirms one task admission, one recovery
+acknowledgement, no model request or edit, and unchanged sandbox fingerprints. The original
+surviving-child baseline remains failed. This qualifies this named Darwin case; before-spawn,
+other platform and final-head matrix obligations remain open. The private observation drivers
+share one bounded owner, independently checked by 49 focused controls, 24 pure controls, ten
+critical-window assertions and an actual Fetch Response control.
 
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations
