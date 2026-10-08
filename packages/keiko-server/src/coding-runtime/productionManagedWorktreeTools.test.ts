@@ -2253,6 +2253,60 @@ describe("production managed worktree tools", () => {
     }
   });
 
+  it.each([
+    ["glob", "src/**/target.*", ["src/deep/target.ts", "src/target.ts"]],
+    ["directory", "*", ["src/deep", "src/target.ts"]],
+  ] as const)(
+    "preserves generated discovery %s scope through real catalog admission",
+    async (mode, query, paths) => {
+      const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-generated-discovery-")));
+      const log: ServerLogEvent[] = [];
+      try {
+        for (const path of ["src/target.ts", "src/deep/target.ts", "sibling/target.ts"]) {
+          mkdirSync(dirname(join(workspaceRoot, path)), { recursive: true });
+          writeFileSync(join(workspaceRoot, path), "export {};\n");
+        }
+        writeFileSync(join(workspaceRoot, ".env"), "PRIVATE_DENIED_CONTENT");
+        const facade = verificationFacade({
+          workspaceRoot,
+          log,
+          records: [],
+          runToReport: () => Promise.resolve(verificationReport("passed")),
+        });
+        const tool = await loadGeneratedGovernedTool((_url, init) => {
+          if (typeof init?.body !== "string")
+            throw new TypeError("Expected generated request body");
+          return facade
+            .execute({ capability: "runtime-capability", body: init.body })
+            .then((result) => new Response(JSON.stringify(result)));
+        }, "keiko_workspace_discover");
+        const result = await tool.execute(
+          { mode, directory: "src", query, maxResults: 10 },
+          generatedToolContext(`native-discovery-${mode}`),
+        );
+        expect(generatedGovernedContent(result)).toMatchObject({
+          status: "completed",
+          read: {
+            discovery: { entries: paths.map((relativePath) => ({ relativePath })) },
+            returnedPathCount: paths.length,
+          },
+        });
+        expect(
+          log.find((event) => event.op === "coding-runtime.workspace-discovery"),
+        ).toMatchObject({
+          op: "coding-runtime.workspace-discovery",
+          correlationId: "run-verification-3",
+          extra: { state: "completed", reason: "none", returnedPathCount: paths.length },
+        });
+        expect(JSON.stringify(log)).not.toContain(workspaceRoot);
+        expect(JSON.stringify(log)).not.toContain("src/target.ts");
+        expect(JSON.stringify(log)).not.toContain("PRIVATE_DENIED_CONTENT");
+      } finally {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("routes the generated native target through IPC, catalog admission, and the real verifier port", async () => {
     const report = verificationReport("passed");
     const runToReport = vi.fn(() =>
@@ -2262,7 +2316,7 @@ describe("production managed worktree tools", () => {
       }),
     );
     const facade = verificationFacade({ runToReport, records: [] });
-    const tool = await loadGeneratedVerificationTool((_url, init) => {
+    const tool = await loadGeneratedGovernedTool((_url, init) => {
       if (typeof init?.body !== "string") throw new TypeError("Expected generated request body");
       return facade
         .execute({ capability: "runtime-capability", body: init.body })
@@ -4342,9 +4396,20 @@ function verificationFacade(options: {
   });
 }
 
-interface GeneratedVerificationTool {
+function generatedGovernedContent(value: unknown): unknown {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("content" in value) ||
+    typeof value.content !== "string"
+  )
+    throw new TypeError("Expected native V2 tool content");
+  return JSON.parse(value.content.split("\n", 1)[0] ?? "") as unknown;
+}
+
+interface GeneratedGovernedTool {
   readonly execute: (
-    args: { readonly verifierId: string; readonly targetPath: string },
+    args: Readonly<Record<string, unknown>>,
     context: {
       readonly sessionID: string;
       readonly callID: string;
@@ -4354,7 +4419,7 @@ interface GeneratedVerificationTool {
   ) => Promise<unknown>;
 }
 
-function generatedToolContext(callID: string): Parameters<GeneratedVerificationTool["execute"]>[1] {
+function generatedToolContext(callID: string): Parameters<GeneratedGovernedTool["execute"]>[1] {
   return {
     sessionID: "session-native-target",
     callID,
@@ -4363,9 +4428,10 @@ function generatedToolContext(callID: string): Parameters<GeneratedVerificationT
   };
 }
 
-async function loadGeneratedVerificationTool(
+async function loadGeneratedGovernedTool(
   fetchImpl: typeof fetch,
-): Promise<GeneratedVerificationTool> {
+  name = "keiko_verification",
+): Promise<GeneratedGovernedTool> {
   const source = createGeneratedOpenCodeV2Plugins().keiko_governed_tools;
   if (source === undefined) throw new Error("keiko_verification tool source missing");
   const value: unknown = new Script(
@@ -4379,6 +4445,7 @@ async function loadGeneratedVerificationTool(
       },
     },
     fetch: fetchImpl,
+    crypto: globalThis.crypto,
     AbortController,
     TextEncoder,
     TextDecoder,
@@ -4386,10 +4453,13 @@ async function loadGeneratedVerificationTool(
     setTimeout,
     clearTimeout,
   });
-  return registeredVerificationTool(value);
+  return registeredGovernedTool(value, name);
 }
 
-async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVerificationTool> {
+async function registeredGovernedTool(
+  plugin: unknown,
+  name: string,
+): Promise<GeneratedGovernedTool> {
   if (
     typeof plugin !== "object" ||
     plugin === null ||
@@ -4405,12 +4475,7 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
       transform: (transform: (editor: unknown) => void): void => {
         transform({
           add: (tool: unknown): void => {
-            if (
-              typeof tool === "object" &&
-              tool !== null &&
-              "name" in tool &&
-              tool.name === "keiko_verification"
-            )
+            if (typeof tool === "object" && tool !== null && "name" in tool && tool.name === name)
               registered = tool;
           },
         });
@@ -4424,7 +4489,7 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
     typeof registered.execute !== "function"
   )
     throw new TypeError("generated verification tool invalid");
-  return registered as GeneratedVerificationTool;
+  return registered as GeneratedGovernedTool;
 }
 
 const GOVERNED_RUN_ID = "run-governed-3625";

@@ -510,6 +510,7 @@ function assertBuiltArtifactsFresh(vendorPackages) {
 
 if (process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY === "1") {
   globalThis.__keikoPackageSurfaceCoverageSeam?.({
+    assertRootPublicApiContract,
     assertLocalKnowledgeDistPath,
     assertTypeScriptRuntimeSurface,
     assertVendoredPayload,

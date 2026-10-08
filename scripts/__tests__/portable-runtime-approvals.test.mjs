@@ -1023,8 +1023,31 @@ describe("update portable runtime approvals", () => {
 });
 
 describe("separately typed original OpenCode service-host approvals", () => {
-  it("keeps ordinary CLI approval checks usable before workspace packages are built", () => {
-    const root = realpathSync(fixtureRepoRoot(approvedFixture()));
+  function inspectApprovalFailure(root) {
+    const script = `
+      import { checkPortableRuntimeApprovals } from "./scripts/check-portable-runtime-approvals.mjs";
+      try {
+        checkPortableRuntimeApprovals();
+        process.exitCode = 2;
+      } catch (error) {
+        process.stdout.write(JSON.stringify({
+          errorClass: error.constructor.name,
+          message: error.message,
+          causeCode: error.cause?.code,
+          causeName: error.cause?.name,
+        }));
+      }
+    `;
+    return JSON.parse(
+      execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+  }
+
+  function unbuiltApprovalsRepo(input = approvedFixture()) {
+    const root = realpathSync(fixtureRepoRoot(input));
     for (const path of [
       "scripts/check-portable-runtime-approvals.mjs",
       "scripts/portable-runtime-approvals.mjs",
@@ -1041,6 +1064,12 @@ describe("separately typed original OpenCode service-host approvals", () => {
       join(repoRoot, "packages/keiko-contracts/package.json"),
       join(packageRoot, "package.json"),
     );
+    return root;
+  }
+
+  it("keeps ordinary CLI approval checks usable before workspace packages are built", () => {
+    const root = unbuiltApprovalsRepo();
+    const packageRoot = join(root, "node_modules/@oscharko-dev/keiko-contracts");
     expect(existsSync(join(packageRoot, "dist"))).toBe(false);
     const output = execFileSync(
       process.execPath,
@@ -1058,7 +1087,41 @@ describe("separately typed original OpenCode service-host approvals", () => {
     );
     expect(unavailable.status).toBe(1);
     expect(unavailable.stdout).not.toContain("portable-approvals: PASS");
-    expect(unavailable.stderr).toContain("opencode-service-host.js");
+    expect(unavailable.stderr).toContain("serviceHost requires the built keiko-contracts package");
+    expect(unavailable.stderr).not.toContain(root);
+    expect(inspectApprovalFailure(root)).toMatchObject({
+      errorClass: "ApprovalsError",
+      causeCode: "MODULE_NOT_FOUND",
+    });
+  });
+
+  it("preserves unexpected compiled-validator faults instead of rejecting host metadata", () => {
+    const input = approvedFixture();
+    input.sidecarRuntimes[0].serviceHost = { "macos-arm64": hostFixture() };
+    const root = unbuiltApprovalsRepo(input);
+    const module = join(root, "packages/keiko-contracts/dist/opencode-service-host.js");
+    mkdirSync(dirname(module), { recursive: true });
+    writeFileSync(
+      module,
+      'export function copyOpenCodeServiceHostApprovals() { throw new TypeError("fixture validator fault"); }',
+    );
+    expect(inspectApprovalFailure(root)).toEqual({
+      errorClass: "TypeError",
+      message: "fixture validator fault",
+    });
+  });
+
+  it("retains the original cause when the compiled fixed module fails to initialize", () => {
+    const input = approvedFixture();
+    input.sidecarRuntimes[0].serviceHost = { "macos-arm64": hostFixture() };
+    const root = unbuiltApprovalsRepo(input);
+    const module = join(root, "packages/keiko-contracts/dist/opencode-service-host.js");
+    mkdirSync(dirname(module), { recursive: true });
+    writeFileSync(module, 'throw new TypeError("fixture module fault");');
+    expect(inspectApprovalFailure(root)).toMatchObject({
+      errorClass: "ApprovalsError",
+      causeName: "TypeError",
+    });
   });
 
   function hostFixture() {

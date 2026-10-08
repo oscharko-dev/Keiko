@@ -138,6 +138,33 @@ describe("opencode registration set", () => {
     for (const alias of GIT_DELIVERY_ALIASES) expect(aliases).toContain(alias);
   });
 
+  it("admits bounded scoped discovery in the canonical managed schema", () => {
+    const tool = compileToolProjection(
+      createKeikoToolCatalog([opencodeRegistrationSet()]),
+      OPENCODE_PROFILE,
+    ).tools.find((entry) => entry.alias === "keiko_workspace_discover");
+    if (tool === undefined) throw new Error("Missing discovery descriptor");
+    expect(
+      matchesCatalogSchema(tool.inputSchema, {
+        mode: "glob",
+        directory: "src",
+        query: "src/**/target.*",
+        maxResults: 10,
+      }),
+    ).toBe(true);
+    for (const invalid of [{ mode: "unknown" }, { directory: "../escape" }, { maxResults: 101 }]) {
+      expect(
+        matchesCatalogSchema(tool.inputSchema, {
+          mode: "directory",
+          directory: "src",
+          query: "*",
+          maxResults: 10,
+          ...invalid,
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("requires the verification target sentinel on the managed provider wire", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const verification = compileToolProjection(catalog, OPENCODE_PROFILE).tools.find(

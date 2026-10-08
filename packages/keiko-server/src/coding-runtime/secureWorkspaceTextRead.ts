@@ -19,6 +19,7 @@ import {
   decodeSecureWorkspaceNativeResponse,
   decodeSecureWorkspaceNativeDirectory,
   SECURE_WORKSPACE_NATIVE_MAX_BYTES,
+  SECURE_WORKSPACE_NATIVE_MAX_PATH_COMPONENTS,
   type SecureWorkspaceNativeFileInfo,
   type SecureWorkspaceNativeDirEntry,
   type SecureWorkspaceNativeRequest,
@@ -692,7 +693,7 @@ export function isSecureWorkspaceNativeRelativePath(value: string): boolean {
   if (value === "") return true;
   const parts = value.split("/");
   return (
-    parts.length <= SECURE_WORKSPACE_NATIVE_MAX_WAITERS &&
+    parts.length <= SECURE_WORKSPACE_NATIVE_MAX_PATH_COMPONENTS &&
     parts.every((part) => part !== "" && part !== "." && part !== "..")
   );
 }

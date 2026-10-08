@@ -1,3 +1,5 @@
+import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Canonical managed OpenCode descriptors, their profile and pinned native extension schemas.
 // The default profile exposes seventeen governed tools plus `question`. The explicit Code Mode
 // profile retains those same governed capabilities and describes original native question/execute
@@ -218,14 +220,22 @@ function discoverSpec(): OpenCodeToolSpec {
     alias: "keiko_workspace_discover",
     description:
       "Find exact workspace-relative file paths through bounded repository discovery. Search by " +
-      "short filename or path keywords; * returns a bounded overview. Denied and ignored paths " +
-      "never appear.",
+      "keywords, root-relative globs, or immediate directory entries. Set directory to a " +
+      "workspace-relative folder or empty for the root; directory mode uses query *. Denied " +
+      "and ignored paths never appear.",
     inputSchema: managedObjectSchema(
       {
+        mode: { type: "string", enum: WORKSPACE_PATH_DISCOVERY_MODES },
+        directory: {
+          type: "string",
+          minLength: 0,
+          maxLength: WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+          pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).*$`,
+        },
         query: { type: "string", minLength: 1, maxLength: 256 },
         maxResults: { type: "integer", minimum: 1, maximum: OPENCODE_DISCOVER_MAX_RESULTS },
       },
-      ["query", "maxResults"],
+      ["mode", "directory", "query", "maxResults"],
     ),
     effects: ["workspace-read"],
     idempotency: "read-only",

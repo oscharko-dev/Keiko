@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 import { describe, expect, it, vi } from "vitest";
@@ -162,6 +165,54 @@ const UNCOVERED: readonly CodingToolActionRequest[] = [
 ];
 
 describe("canonical catalog facade bridge", () => {
+  it("keeps changed discovery scope in the canonical replay identity", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-catalog-discovery-")));
+    for (const directory of ["src", "sibling"]) mkdirSync(join(root, directory));
+    try {
+      const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+      const stage = vi.spyOn(registry, "stage");
+      const { bridge, log } = createBridge({
+        invocationRegistry: registry,
+        context: () => ({ ...context, workspaceRoot: root }),
+      });
+      const run = vi.fn((_signal: AbortSignal, guard: CodingToolMutationGuard) => {
+        expect(guard.check()).toBe(true);
+        return Promise.resolve({
+          status: "completed" as const,
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+        });
+      });
+      const first = {
+        ...discoverRequest,
+        mode: "directory" as const,
+        directory: "src",
+        query: "*",
+      };
+      const second = { ...first, directory: "sibling" };
+      const firstResult = await bridge.execute(
+        first,
+        { ...facadeInput(), body: JSON.stringify(first) },
+        run,
+      );
+      expect(firstResult).toMatchObject({ status: "completed" });
+      await expect(
+        bridge.execute(second, { ...facadeInput(), body: JSON.stringify(second) }, run),
+      ).resolves.toMatchObject({ status: "invalid" });
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(stage.mock.calls[0]?.[0].digest).not.toBe(stage.mock.calls[1]?.[0].digest);
+      expect(log.events.at(-1)).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        extra: {
+          reason: "replay-conflict",
+          effectStarted: false,
+        },
+      });
+      expect(JSON.stringify(log.events)).not.toContain("sibling");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("#3417: reports skill discovery unavailable together with the skill it lists", () => {
     const ready = createCanonicalOpenCodeHandlerCoverage(new Set());
     const hidden = createCanonicalOpenCodeHandlerCoverage(

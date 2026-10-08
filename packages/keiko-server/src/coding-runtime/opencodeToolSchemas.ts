@@ -1,3 +1,5 @@
+import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
   OPENCODE_TOOL_PROFILES,
   type OpenCodeToolProfile,
@@ -122,12 +124,25 @@ const REPOSITORY_SEARCH_SCHEMA = {
 const WORKSPACE_DISCOVER_SCHEMA = {
   type: "object",
   properties: {
+    mode: {
+      type: "string",
+      enum: WORKSPACE_PATH_DISCOVERY_MODES,
+      description:
+        "keywords matches path terms; glob matches root-relative patterns; directory lists immediate entries.",
+    },
+    directory: {
+      type: "string",
+      minLength: 0,
+      maxLength: WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+      pattern: String.raw`^(?![\\/])(?!.*(?:^|/)\.\.?(/|$))(?!.*\\).*$`,
+      description: "Workspace-relative directory; empty selects the original workspace root.",
+    },
     query: {
       type: "string",
       minLength: 1,
       maxLength: 256,
       description:
-        "Case-insensitive filename/path keywords. Use a short distinctive term such as safeActivity, timeline, or composer. Use * only when a bounded repository overview is necessary.",
+        "Keywords for keywords mode, a root-relative filename pattern for glob mode, or * for directory mode.",
     },
     maxResults: {
       type: "integer",
@@ -136,7 +151,7 @@ const WORKSPACE_DISCOVER_SCHEMA = {
       description: "Maximum number of matching workspace-relative file paths to return.",
     },
   },
-  required: ["query", "maxResults"],
+  required: ["mode", "directory", "query", "maxResults"],
 } as const;
 
 const CHANGESET_PATH_SCHEMA = {
@@ -471,6 +486,8 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     name: "keiko_workspace_discover",
     action: "discover",
     arguments: {
+      mode: WORKSPACE_DISCOVER_SCHEMA.properties.mode,
+      directory: WORKSPACE_DISCOVER_SCHEMA.properties.directory,
       query: WORKSPACE_DISCOVER_SCHEMA.properties.query,
       maxResults: WORKSPACE_DISCOVER_SCHEMA.properties.maxResults,
     },

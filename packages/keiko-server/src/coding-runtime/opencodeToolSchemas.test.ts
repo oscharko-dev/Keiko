@@ -696,6 +696,22 @@ describe("OpenCode 2.0.10 real advertisement fidelity", () => {
     expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });
 
+  it.each(["mode", "directory"])("denies a discovery schema missing its %s scope", (field) => {
+    const tools = realAdvertisementFixture().map((tool) => {
+      if (tool.name !== "keiko_workspace_discover") return tool;
+      const properties = Object.fromEntries(
+        Object.entries(tool.parameters.properties as Record<string, unknown>).filter(
+          ([key]) => key !== field,
+        ),
+      );
+      const required = (tool.parameters.required as readonly string[]).filter(
+        (key) => key !== field,
+      );
+      return { ...tool, parameters: { ...tool.parameters, properties, required } };
+    });
+    expect(hasExactOpenCodeVisibleToolContract(tools)).toBe(false);
+  });
+
   it("denies a historical verification projection without targetPath", () => {
     const historicalAdvertisement = realAdvertisementFixture().map((tool) =>
       tool.name === "keiko_verification"

@@ -189,7 +189,12 @@ function workspaceCatalogAction(request: CodingToolActionRequest): CatalogAction
   if (request.action === "discover")
     return {
       toolId: "keiko.workspace.discover",
-      arguments: { query: request.query, maxResults: request.maxResults },
+      arguments: {
+        mode: request.mode ?? "keywords",
+        directory: request.directory ?? "",
+        query: request.query,
+        maxResults: request.maxResults,
+      },
     };
   if (request.action !== "search" || request.repositoryRequest.kind !== "search") return undefined;
   const value = request.repositoryRequest;

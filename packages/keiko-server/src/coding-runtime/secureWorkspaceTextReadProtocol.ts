@@ -327,6 +327,9 @@ function snapshotFileType(type: unknown): boolean {
   return type === "file";
 }
 
+/** Path scope of the descriptor helper's KSR_MAX_COMPONENTS, independent of process capacity. */
+export const SECURE_WORKSPACE_NATIVE_MAX_PATH_COMPONENTS = 64;
+
 /** Inactive native file lane: the original process-backed Files contract collects at most 64 MiB. */
 export const SECURE_WORKSPACE_NATIVE_MAX_BYTES = 64 * 1_024 * 1_024;
 export const SECURE_WORKSPACE_NATIVE_MAX_RESPONSE_BYTES = SECURE_WORKSPACE_NATIVE_MAX_BYTES + 32;

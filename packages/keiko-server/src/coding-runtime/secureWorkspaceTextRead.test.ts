@@ -28,6 +28,7 @@ import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
 import {
   createSecureWorkspaceTextReadPort,
   exactWorkspaceRead,
+  isSecureWorkspaceNativeRelativePath,
   SECURE_WORKSPACE_NATIVE_MAX_WAITERS,
   type SecureWorkspaceTextReadResult,
   type SecureWorkspaceNativeFileIO,
@@ -44,6 +45,7 @@ import {
   SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
   SECURE_WORKSPACE_NATIVE_MAX_BYTES,
   encodeSecureWorkspaceNativeRequest,
+  decodeSecureWorkspaceNativeResponse,
   encodeSecureWorkspaceSnapshotResponse,
   decodeSecureWorkspaceReadRequest,
   encodeSecureWorkspaceReadResponse,
@@ -924,6 +926,34 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     });
     afterAll(() => {
       rmSync(base, { recursive: true, force: true });
+    });
+
+    it("keeps path depth independent of native waiter capacity and matches the actual helper", async () => {
+      const valid = `${Array.from({ length: 63 }, () => "deep").join("/")}/scope.ts`;
+      const invalid = `deep/${valid}`;
+      mkdirSync(dirname(join(root, valid)), { recursive: true });
+      writeFileSync(join(root, valid), "scope");
+      expect(isSecureWorkspaceNativeRelativePath(valid)).toBe(true);
+      expect(isSecureWorkspaceNativeRelativePath(invalid)).toBe(false);
+      const io = requireNativeFacet(nativeFixturePort(root, executable));
+      await expect(io.readBytes({ relativePath: valid })).resolves.toMatchObject({
+        ok: true,
+        bytes: Buffer.from("scope"),
+      });
+      const nativeFrame = execFileSync(executable, {
+        input: encodeSecureWorkspaceNativeRequest({
+          root,
+          relativePath: invalid,
+          operation: "read",
+        }),
+      });
+      expect(decodeSecureWorkspaceNativeResponse(nativeFrame)).toEqual({
+        status: "invalid-path",
+      });
+      await expect(io.readBytes({ relativePath: invalid })).resolves.toMatchObject({
+        ok: false,
+        reason: "denied",
+      });
     });
 
     it("preserves raw binary and finite pre-epoch metadata without text decoding", async () => {

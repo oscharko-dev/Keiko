@@ -39,8 +39,11 @@ const OPENCODE_PIN = Object.freeze({
 
 class ApprovalsError extends Error {}
 
-function fail(message) {
-  throw new ApprovalsError(`portable-runtime-approvals: ${message}`);
+function fail(message, cause) {
+  throw new ApprovalsError(
+    `portable-runtime-approvals: ${message}`,
+    cause === undefined ? undefined : { cause },
+  );
 }
 
 function isRecord(value) {
@@ -288,13 +291,22 @@ function validateSidecarArchives(rawArchives, context) {
   return archives;
 }
 
-function supplementalServiceHost(runtime, context) {
-  if (!Object.hasOwn(runtime, "serviceHost")) return undefined;
+function compiledServiceHostContract(context) {
   // Existing CLI staging runs before package builds. Only the new supplemental host facet needs
   // the compiled canonical contract; Node's synchronous ESM loader preserves the existing API.
-  const {
-    copyOpenCodeServiceHostApprovals,
-  } = require("../packages/keiko-contracts/dist/opencode-service-host.js");
+  try {
+    return require("../packages/keiko-contracts/dist/opencode-service-host.js");
+  } catch (error) {
+    fail(
+      `${context}.serviceHost requires the built keiko-contracts package; run npm run build:packages`,
+      error,
+    );
+  }
+}
+
+function supplementalServiceHost(runtime, context) {
+  if (!Object.hasOwn(runtime, "serviceHost")) return undefined;
+  const { copyOpenCodeServiceHostApprovals } = compiledServiceHostContract(context);
   const result = copyOpenCodeServiceHostApprovals(runtime.serviceHost);
   if (result === undefined) fail(`${context}.serviceHost has invalid fixed host metadata`);
   return result;

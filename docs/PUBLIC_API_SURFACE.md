@@ -68,6 +68,25 @@ root product barrel may compose SDK-facing exports, but the approved external co
 root `@oscharko-dev/keiko` import surface. The compatibility alias `SDK_VERSION` is defined by
 `@oscharko-dev/keiko-sdk` and consumed internally by the CLI and server from that package directly.
 
+### Reviewed workspace and readiness helpers
+
+The root barrel retains the existing Workbench integration helpers below. They reuse their
+original workspace and gateway implementations; exporting them does not create a runtime
+authority grant or activate the original OpenCode host.
+
+| Root exports                                                                                                                                 | Existing boundary and owning proof                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discoverWorkspacePaths`, `WORKSPACE_PATH_DISCOVERY_MODES`, `WORKSPACE_PATH_DISCOVERY_LIMITS`, `WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS` | Workspace-contained, denied-path-aware metadata discovery with closed requests, bounded output and explicit incomplete coverage. `workspacePathDiscovery.test.ts` and the root-surface tests cover invalid scopes before IO, excluded paths and output limits.                                                                                                                                     |
+| `executionControlledWorkspaceFs`, `StructuralExecutionStoppedError`                                                                          | Cancellation/deadline decoration of a caller's existing filesystem port, preserving its exact owned-root authority. This wrapper grants no new filesystem access and performs no redaction itself; callers must retain the owning contained read lane. `structuralExecution.test.ts` covers authority preservation and stopped IO; the root-surface tests invoke the same exported implementation. |
+| `readGatewayReadinessChatCompletionResponse`                                                                                                 | Bounded decoding of a supplied JSON/SSE response through the original gateway stream assembler. It does not send a provider request or claim model availability. The gateway readiness tests retain stream, compatibility and cancellation controls; the root-surface tests cover JSON decoding and the response-size refusal.                                                                     |
+
+The associated declaration-only additions are `StructuralExecutionControl` and the
+`WorkspacePathDiscoveryEntry`, `WorkspacePathDiscoveryMode`, `WorkspacePathDiscoveryRequest`,
+`WorkspacePathDiscoveryResult`, `WorkspacePathDiscoveryStats` and
+`WorkspacePathDiscoveryTruncationReason` types. The runtime and declaration allowlists are
+derived from the actual fresh root build by the existing package-surface producer. No root
+export is removed, no package entry point is added, and no raw filesystem adapter is exported.
+
 ## Version ownership
 
 The single authoritative product version constant is `KEIKO_PRODUCT_VERSION` in
