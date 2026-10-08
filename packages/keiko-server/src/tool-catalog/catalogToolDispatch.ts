@@ -88,6 +88,7 @@ function revalidateReplay(invocation: CatalogInvocation, request: BoundToolInvoc
     request.arguments,
     invocation.identity,
     invocation.state.executionOverride,
+    invocation.state.profile,
   );
   const preview = invocation.state.input.authorityPort.preview(context.authority, action);
   // Receipt-only replay performs no new action; it neither consumes an old approval nor requests another.
@@ -147,6 +148,7 @@ async function executeInvocation(
       input.arguments,
       invocation.identity,
       invocation.state.executionOverride,
+      invocation.state.profile,
     );
     const approved = await approveCatalogAction(invocation.state, action, initial);
     if (invocation.checkStopped()) return;

@@ -80,6 +80,9 @@ export interface CatalogToolHandlerBinding {
 /** Invocation-local behavior for a statically verified production handler identity. */
 export interface CatalogToolExecutionOverride {
   readonly toolRef: ToolRef;
+  /** Server-only codec for the exact private original-Read descriptor and actual bound profile. */
+  readonly captureNativeReadAction?:
+    ((value: CatalogJsonValue) => CodingToolActionRequest | undefined) | undefined;
   readonly actionFor: CatalogToolHandlerBinding["actionFor"];
   readonly execute: CatalogToolHandlerBinding["execute"];
 }

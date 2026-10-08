@@ -801,7 +801,7 @@ function nativeReadInvocationEntry(): CatalogRegistrationSet["entries"][number] 
 function nativeReadInvocationInputSchema(): CatalogJsonObject {
   return managedObjectSchema(
     {
-      relativePath: workspaceTextPathSchema(),
+      relativePath: nativeReadInvocationPathSchema(),
       context: managedObjectSchema(
         Object.fromEntries(
           ["sessionID", "messageID", "id", "agent"].map((name) => [
@@ -819,11 +819,21 @@ function nativeReadInvocationInputSchema(): CatalogJsonObject {
       limit: {
         type: "array",
         maxItems: 1,
-        items: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        items: { type: "integer", minimum: 0, maximum: 2_000 },
       },
     },
     ["relativePath", "context", "offset", "limit"],
   );
+}
+
+function nativeReadInvocationPathSchema(): CatalogJsonObject {
+  // The private server owner additionally enforces the native helper's exact UTF-8 byte cap
+  // (secureWorkspaceTextReadProtocol.ts). This schema never replaces the original Read schema.
+  return {
+    type: "string",
+    maxLength: 4_096,
+    pattern: String.raw`^(?!/)(?![\s\S]*(?:^|/)\.\.?(/|$))(?![\s\S]*//)(?![\s\S]*/$)[^\u0000]*$`,
+  };
 }
 
 function nativeTextSnapshotReceiptSchema(): CatalogJsonObject {

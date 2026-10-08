@@ -240,6 +240,46 @@ export interface CodingToolNativeReadIdentity {
   readonly invocationId: string;
 }
 
+export interface CodingToolNativeReadFilePacket extends GovernedNativeFileRequest {
+  readonly ordinal: number;
+}
+
+export interface CodingToolNativeInvocationRefusal {
+  readonly ok: false;
+  readonly reason: "invalid-request" | "dispatch-refused" | "cancelled" | "busy";
+}
+
+export type CodingToolNativeReadBytesResult =
+  Awaited<ReturnType<GovernedNativeFileIO["readBytes"]>> | CodingToolNativeInvocationRefusal;
+export type CodingToolNativeReadStatResult =
+  Awaited<ReturnType<GovernedNativeFileIO["stat"]>> | CodingToolNativeInvocationRefusal;
+export type CodingToolNativeReadListResult =
+  Awaited<ReturnType<GovernedNativeFileIO["list"]>> | CodingToolNativeInvocationRefusal;
+
+/** Private primitive transport under an already admitted original Read, never a model call. */
+export interface CodingToolNativeReadFileIO {
+  readonly readBytes: (
+    identity: CodingToolNativeReadIdentity,
+    input: CodingToolNativeReadFilePacket,
+  ) => Promise<CodingToolNativeReadBytesResult>;
+  readonly stat: (
+    identity: CodingToolNativeReadIdentity,
+    input: CodingToolNativeReadFilePacket,
+  ) => Promise<CodingToolNativeReadStatResult>;
+  readonly list: (
+    identity: CodingToolNativeReadIdentity,
+    input: CodingToolNativeReadFilePacket,
+  ) => Promise<CodingToolNativeReadListResult>;
+}
+
+export interface CodingToolNativeReadFileIOOwner {
+  readonly readBytes: (
+    request: GovernedNativeFileRequest,
+  ) => Promise<CodingToolNativeReadBytesResult>;
+  readonly stat: (request: GovernedNativeFileRequest) => Promise<CodingToolNativeReadStatResult>;
+  readonly list: (request: GovernedNativeFileRequest) => Promise<CodingToolNativeReadListResult>;
+}
+
 export type CodingToolNativeReadBeginResult =
   | {
       readonly ok: true;
@@ -252,6 +292,7 @@ export type CodingToolNativeReadBeginResult =
     };
 
 export interface CodingToolNativeReadInvocations {
+  readonly fileIO?: CodingToolNativeReadFileIO | undefined;
   readonly signalFor: (identity: CodingToolNativeReadIdentity) => AbortSignal | undefined;
   readonly begin: (
     input: CodingToolNativeReadBeginInput,
@@ -268,6 +309,7 @@ export interface CodingToolNativeReadInvocations {
 
 /** Attached only by the actual authorized catalog handler, on its existing claimed record. */
 export interface CodingToolNativeReadOwner {
+  readonly fileIO?: CodingToolNativeReadFileIOOwner | undefined;
   readonly signal: AbortSignal;
   readonly invocationId: string;
   readonly readTextSnapshot: (relativePath: string) => Promise<CodingToolNativeTextSnapshotResult>;

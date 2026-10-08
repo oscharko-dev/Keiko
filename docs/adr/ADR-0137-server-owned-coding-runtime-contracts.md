@@ -494,12 +494,18 @@ direct/Code Mode projections and Chat read/search consumers unchanged.
 The inactive original-Read invocation facet attaches one lifetime to the existing claimed catalog
 record. The original session/message/call context, path and pagination facts are captured before
 admission awaits. One actual catalog invocation ID, authority admission, CI lease and effect-gate
-reservation cover the logical Read and its hidden text/instruction IO. Each immutable child ordinal
+reservation cover the logical Read and its hidden byte/stat/list/instruction IO. Each immutable child ordinal
 and digest is claimed on that same record; duplicate or conflicting packets execute nothing. Closing
 cuts off new child IO immediately, while held raw promises retain the original reservation until
 actual settlement. Canonical terminal confirmation remains separate from physical drainage. This
-facet still uses the bounded private text snapshot and public read-path parser; native bytes/media,
-long paths, the full original Files surface and real service transport require further integration.
+facet now forwards the existing logged native IO primitives through that same lifetime. Its exact
+private descriptor and profile bind a server-owned capture codec; the public read-path parser is
+unchanged. Native paths accept up to 4,096 UTF-8 bytes and 64 components, including the accepted root
+for directory/stat operations. Original zero-based pagination facts and zero limits remain intact.
+The physical gate stays reserved until actual helper settlement even after client cancellation.
+Actual original Read output, permission and instruction comparisons cover native bytes, paging,
+directory/root, long paths and Read-level PNG/PDF results; media normalization/provider acceptance,
+the full original Files surface and real service transport require further integration.
 It creates no replay cache of file contents and does not activate a native model-visible tool.
 
 The inactive accepted-initialization callback projects one genuinely accepted STARTING lease
@@ -525,7 +531,7 @@ It also supplies a private additional currentness veto for physical IO admission
 wipes returned bytes before refusal. This facet does not grant a model-visible tool or a native
 host ingress. Actual original Read controls retain paging, directory, image/PDF and binary handling;
 the original instruction service retains its own loading and deduplication. Initial/global
-instruction discovery, parent invocation accounting and complete native service
+instruction discovery and complete native service
 qualification remain separate requirements. Symlink content, hardlinks and cross-device content
 are still refused; Windows native IO and Linux/Intel execution are not qualified by the macOS
 controls. Those limits remain open native-parity work rather than permanent capability exclusions.

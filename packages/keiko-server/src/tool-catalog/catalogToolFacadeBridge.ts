@@ -122,6 +122,10 @@ export interface CanonicalCatalogContext {
 }
 
 export interface CanonicalCatalogFacadeBridgeInput {
+  /** Fixed server producer, never a model/body selector; used only by the private Read profile. */
+  readonly captureNativeReadAction?:
+    | ((body: string) => Extract<CodingToolActionRequest, { readonly action: "read" }> | undefined)
+    | undefined;
   /** Trusted constructor selection; never inferred from tool input. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   /** Trusted constructor capability; never inferred from an incoming request. */
@@ -504,9 +508,16 @@ function executionOverride(
     invocationId: string,
   ) => Promise<CodingToolResult>,
   recordResult: (result: CodingToolResult) => void,
+  captureNativeReadAction?: CanonicalCatalogFacadeBridgeInput["captureNativeReadAction"],
 ): CatalogToolExecutionOverride {
   return {
     toolRef: descriptor.toolRef,
+    ...(captureNativeReadAction === undefined
+      ? {}
+      : {
+          captureNativeReadAction: (value: CatalogJsonValue) =>
+            captureNativeReadAction(JSON.stringify(value)),
+        }),
     actionFor: (_argumentsValue, identity) => ({
       ...request,
       actionId: identity.actionId,
@@ -822,7 +833,15 @@ function createDispatchBinder(
       mintId: randomUUID,
       invocationRegistry: bridgeInput.invocationRegistry,
     },
-    executionOverride(descriptor, request, run, recordResult),
+    executionOverride(
+      descriptor,
+      request,
+      run,
+      recordResult,
+      prepared.advertisement.projection.profile.id === "opencode-native-read-invocation"
+        ? bridgeInput.captureNativeReadAction
+        : undefined,
+    ),
   );
 }
 

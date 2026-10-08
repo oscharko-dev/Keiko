@@ -936,3 +936,46 @@ it("passes the actual opaque catalog invocation to the private original-read del
   expect(JSON.stringify(log.events)).not.toContain("README.md");
   expect(JSON.stringify(log.events)).not.toContain("capability");
 });
+
+it.each(["", "long-segment/".repeat(50) + "é.ts"])(
+  "keeps exact original Read targets at private handler capture without public parser substitution (%#)",
+  async (relativePath) => {
+    const request = { ...identity, action: "read" as const, relativePath };
+    const capture = vi.fn(() => request);
+    const run = vi.fn(
+      (_signal: AbortSignal, guard: CodingToolMutationGuard): Promise<CodingToolResult> => {
+        expect(guard.check()).toBe(true);
+        return Promise.resolve({
+          status: "completed",
+          evidence: [{ kind: "native-read-invocation", code: "completed" }],
+        });
+      },
+    );
+    const { bridge, log } = createBridge({
+      nativeTextSnapshotAvailable: true,
+      captureNativeReadAction: capture,
+    });
+    const result = await bridge.executeNativeReadInvocation?.(
+      request,
+      {
+        body: JSON.stringify(request),
+        capability: "capability",
+        offset: 0,
+        limit: 0,
+        context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+      },
+      run,
+    );
+    expect(result?.status).toBe("completed");
+    expect(run).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledOnce();
+    expect(JSON.stringify(log.events)).not.toContain("long-segment/");
+    const ordinary = await bridge.executeTextSnapshot?.(
+      { ...request, actionId: "snapshot-next", idempotencyKey: "snapshot-next" },
+      facadeInput(),
+      run,
+    );
+    expect(ordinary?.status).not.toBe("completed");
+    expect(run).toHaveBeenCalledOnce();
+  },
+);

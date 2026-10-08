@@ -20,6 +20,7 @@ import {
   createRuntimeCodingToolFacade,
 } from "./codingToolAuthorityPort.js";
 import { createCodingToolReadEditPorts } from "./codingToolReadEditPorts.js";
+import type { GovernedNativeFileIO } from "./codingToolReadEditPorts.js";
 import { secureWorkspaceTextDigest } from "./secureWorkspaceTextRead.js";
 import {
   codingToolApprovalBindingDigest,
@@ -2218,7 +2219,7 @@ it.each(["late-bytes", "technical-rejection"] as const)(
   },
 );
 
-function nativeInvocationAuthorityFixture(): {
+function nativeInvocationAuthorityFixture(nativeFileIO?: GovernedNativeFileIO): {
   readonly facet: NonNullable<
     NonNullable<ReturnType<typeof createRuntimeCodingToolFacade>["nativeTextRead"]>["invocations"]
   >;
@@ -2249,6 +2250,7 @@ function nativeInvocationAuthorityFixture(): {
     revalidateCapabilityForMutation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
   };
   const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+    nativeFileIO,
     nativeTextRead: {
       get readTextSnapshot(): typeof producer {
         readGetter();
@@ -2357,7 +2359,7 @@ it.each(["accessor", "inherited", "symbol", "authority-claim", "header", "invali
     else if (kind === "symbol") Object.assign(context, { [Symbol("PRIVATE_SYMBOL")]: true });
     else if (kind === "authority-claim") input = { ...input, authority: "forged" } as typeof input;
     else if (kind === "header") input = { ...input, headers: new Headers() };
-    else input = { ...input, limit: 0 };
+    else input = { ...input, limit: -1 };
     try {
       expect(await f.facet.begin(input)).toEqual({ ok: false, reason: "invalid-request" });
       expect(accessor).not.toHaveBeenCalled();
@@ -2448,6 +2450,372 @@ it("owns original native context and body before admission awaits, while refusin
     expect(f.readGetter).toHaveBeenCalledOnce();
     expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_MUTATED_NATIVE_CONTEXT");
     expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_SECOND_PRODUCER_GETTER");
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it.each([
+  { relativePath: "long-segment/".repeat(50) + "é.ts", offset: 1, limit: 2000 },
+  { relativePath: "", offset: 0, limit: 0 },
+  { relativePath: "fixture.ts", offset: 0, limit: 0 },
+])("admits the original native path/page facts without the public text cap: %j", async (facts) => {
+  const f = nativeInvocationAuthorityFixture();
+  const original = originalReadBeginInput();
+  const input = {
+    ...original,
+    body: JSON.stringify({
+      action: "read",
+      relativePath: facts.relativePath,
+      actionId: "original-native-path",
+      idempotencyKey: "original-native-path",
+    }),
+    offset: facts.offset,
+    limit: facts.limit,
+  };
+  try {
+    const begun = await f.facet.begin(input);
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) throw new TypeError("Expected original native path admission");
+    expect(f.charges).toHaveBeenCalledOnce();
+    expect(f.producer).not.toHaveBeenCalled();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+function nativeFileAuthorityFixture(): ReturnType<typeof nativeInvocationAuthorityFixture> & {
+  readonly io: GovernedNativeFileIO;
+  readonly read: ReturnType<typeof vi.fn<GovernedNativeFileIO["readBytes"]>>;
+  readonly stat: ReturnType<typeof vi.fn<GovernedNativeFileIO["stat"]>>;
+  readonly list: ReturnType<typeof vi.fn<GovernedNativeFileIO["list"]>>;
+} {
+  const info = { type: "file" as const, size: 5, mtimeMs: 0 };
+  const read = vi.fn<GovernedNativeFileIO["readBytes"]>(() =>
+    Promise.resolve({ ok: true, bytes: Buffer.from([137, 80, 78, 71, 255]), info }),
+  );
+  const stat = vi.fn<GovernedNativeFileIO["stat"]>(() => Promise.resolve({ ok: true, info }));
+  const list = vi.fn<GovernedNativeFileIO["list"]>(() =>
+    Promise.resolve({
+      ok: true,
+      info: { ...info, type: "directory" },
+      entries: [{ name: "fixture.ts", type: "file" }],
+    }),
+  );
+  const io = { readBytes: read, stat, list };
+  return { ...nativeInvocationAuthorityFixture(io), io, read, stat, list };
+}
+
+async function beginFileAuthorityRead(
+  f: ReturnType<typeof nativeFileAuthorityFixture>,
+): Promise<
+  Extract<
+    import("./codingToolFacadePorts.js").CodingToolNativeReadBeginResult,
+    { readonly ok: true }
+  >
+> {
+  const begun = await f.facet.begin(originalReadBeginInput());
+  if (!begun.ok) throw new TypeError("Expected original Read parent");
+  return begun;
+}
+
+it("owns bytes, metadata, directory and instruction IO under one actual canonical CI lease", async () => {
+  const f = nativeFileAuthorityFixture();
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected private native file primitives");
+    const target = { ordinal: 1, relativePath: "fixture.png", purpose: "native-tool-io" as const };
+    expect(await io.readBytes(begun.identity, target)).toMatchObject({
+      ok: true,
+      bytes: Buffer.from([137, 80, 78, 71, 255]),
+    });
+    expect(await io.stat(begun.identity, { ...target, ordinal: 2 })).toMatchObject({ ok: true });
+    expect(
+      await io.list(begun.identity, { ...target, ordinal: 3, relativePath: "" }),
+    ).toMatchObject({
+      ok: true,
+      entries: [{ name: "fixture.ts", type: "file" }],
+    });
+    expect(
+      await io.readBytes(begun.identity, {
+        ...target,
+        ordinal: 4,
+        relativePath: "deep/AGENTS.md",
+        purpose: "native-instructions",
+        range: { offset: 0, length: 0 },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(f.charges).toHaveBeenCalledOnce();
+    expect(f.settles).not.toHaveBeenCalled();
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(f.stat).toHaveBeenCalledOnce();
+    expect(f.list).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(f.facet.signalFor(begun.identity)).toBeUndefined();
+    expect(JSON.stringify(f.log.events)).not.toMatch(/fixture\.png|AGENTS\.md/u);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it.each(["duplicate", "operation", "range", "purpose", "path"] as const)(
+  "refuses %s packet reuse without a second physical effect",
+  async (fault) => {
+    const f = nativeFileAuthorityFixture();
+    try {
+      const begun = await beginFileAuthorityRead(f);
+      const io = f.facet.fileIO;
+      if (io === undefined) throw new TypeError("Expected native file primitives");
+      const packet = {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+        purpose: "native-tool-io" as const,
+        range: { offset: 1, length: 2 },
+      };
+      expect((await io.readBytes(begun.identity, packet)).ok).toBe(true);
+      let result;
+      if (fault === "operation") {
+        const { range: _range, ...metadata } = packet;
+        result = await io.stat(begun.identity, metadata);
+      } else {
+        result = await io.readBytes(begun.identity, {
+          ...packet,
+          ...(fault === "range" ? { range: { offset: 2, length: 2 } } : {}),
+          ...(fault === "path" ? { relativePath: "other.ts" } : {}),
+          ...(fault === "purpose" ? { purpose: "native-instructions" } : {}),
+        });
+      }
+      expect(result).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(f.read).toHaveBeenCalledOnce();
+      expect(f.stat).not.toHaveBeenCalled();
+      expect(f.charges).toHaveBeenCalledOnce();
+      expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    } finally {
+      f.registry.dispose();
+    }
+  },
+);
+
+it("owns each primitive packet before awaiting and refuses accessor range/authority data", async () => {
+  const f = nativeFileAuthorityFixture();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const original = f.read.getMockImplementation();
+  f.read.mockImplementationOnce(async (request, signal, guard) => {
+    await held;
+    if (original === undefined) throw new TypeError("Expected primitive fixture");
+    return original(request, signal, guard);
+  });
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    const packet = {
+      ordinal: 1,
+      relativePath: "fixture.ts",
+      purpose: "native-tool-io" as const,
+      range: { offset: 0, length: 1 },
+    };
+    const reading = io.readBytes(begun.identity, packet);
+    packet.relativePath = "PRIVATE_MUTATED_PATH";
+    packet.range.offset = 3;
+    release();
+    expect((await reading).ok).toBe(true);
+    expect(f.read.mock.calls[0]?.[0]).toEqual({
+      ordinal: 1,
+      relativePath: "fixture.ts",
+      purpose: "native-tool-io",
+      range: { offset: 0, length: 1 },
+    });
+    const getter = vi.fn(() => 0);
+    const range = Object.defineProperty({ offset: 0, length: 1 }, "offset", { get: getter });
+    expect(await io.readBytes(begun.identity, { ...packet, ordinal: 2, range })).toEqual({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(f.read).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    release();
+    f.registry.dispose();
+  }
+});
+
+it("keeps actual private byte work pending after parent cancellation and withholds late bytes", async () => {
+  const f = nativeFileAuthorityFixture();
+  let release!: (result: Awaited<ReturnType<GovernedNativeFileIO["readBytes"]>>) => void;
+  const physical = new Promise<Awaited<ReturnType<GovernedNativeFileIO["readBytes"]>>>(
+    (resolve) => {
+      release = resolve;
+    },
+  );
+  f.read.mockImplementationOnce(() => physical);
+  const abort = new AbortController();
+  try {
+    const begun = await f.facet.begin({ ...originalReadBeginInput(), signal: abort.signal });
+    if (!begun.ok || f.facet.fileIO === undefined) throw new TypeError("Expected private Read");
+    const reading = f.facet.fileIO.readBytes(begun.identity, {
+      ordinal: 1,
+      relativePath: "fixture.png",
+      purpose: "native-tool-io",
+    });
+    await vi.waitFor(() => {
+      expect(f.read).toHaveBeenCalledOnce();
+    });
+    abort.abort();
+    expect(f.facet.signalFor(begun.identity)).toBeUndefined();
+    expect(f.settles).not.toHaveBeenCalled();
+    const bytes = Buffer.from("PRIVATE_LATE_NATIVE_BYTES");
+    release({ ok: true, bytes, info: { type: "file", size: bytes.length, mtimeMs: 0 } });
+    expect(await reading).toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(bytes).toEqual(Buffer.alloc(bytes.length));
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(f.settles).toHaveBeenLastCalledWith({ status: "failed" });
+  } finally {
+    release({ ok: false, reason: "cancelled" });
+    f.registry.dispose();
+  }
+});
+
+it("captures every supplied private native producer getter only once", async () => {
+  const f = nativeFileAuthorityFixture();
+  const getters = [vi.fn(), vi.fn(), vi.fn()];
+  const io = Object.defineProperties(
+    {},
+    Object.fromEntries(
+      (["readBytes", "stat", "list"] as const).map((method, index) => [
+        method,
+        {
+          get: (): GovernedNativeFileIO[typeof method] => {
+            const getter = getters[index];
+            getter?.();
+            if (getter?.mock.calls.length !== 1)
+              throw new TypeError("Repeated private producer getter");
+            return f.io[method].bind(f.io);
+          },
+        },
+      ]),
+    ),
+  ) as GovernedNativeFileIO;
+  const captured = nativeInvocationAuthorityFixture(io);
+  try {
+    const begun = await captured.facet.begin(originalReadBeginInput());
+    if (!begun.ok || captured.facet.fileIO === undefined) throw new TypeError("Expected Read");
+    expect(
+      (
+        await captured.facet.fileIO.stat(begun.identity, {
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io",
+        })
+      ).ok,
+    ).toBe(true);
+    for (const getter of getters) expect(getter).toHaveBeenCalledOnce();
+    expect(await captured.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    captured.registry.dispose();
+    f.registry.dispose();
+  }
+});
+
+it.each([
+  { relativePath: "../outside.ts" },
+  { relativePath: "/outside.ts" },
+  { relativePath: ".env" },
+  { relativePath: ".git/config" },
+  { relativePath: "a".repeat(4097) },
+  { relativePath: "é".repeat(2049) },
+  { relativePath: "nul\u0000file" },
+  { relativePath: "d/".repeat(64) + "file" },
+  { purpose: "arbitrary" },
+  { authority: "forged" },
+  { range: { offset: -1, length: 1 } },
+  { range: { offset: 0, length: 64 * 1024 * 1024 + 1 } },
+  { range: { offset: Number.MAX_SAFE_INTEGER, length: 1 } },
+  { range: { offset: 0.5, length: 1 } },
+] as const)("refuses malformed private primitive before physical IO (%#)", async (change) => {
+  const f = nativeFileAuthorityFixture();
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    const packet = { ordinal: 1, relativePath: "fixture.ts", purpose: "native-tool-io", ...change };
+    expect(
+      await io.readBytes(begun.identity, packet as Parameters<typeof io.readBytes>[1]),
+    ).toEqual({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(f.read).not.toHaveBeenCalled();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("refuses private metadata ranges and forged or terminal parents before any physical IO", async () => {
+  const f = nativeFileAuthorityFixture();
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    const packet = { ordinal: 1, relativePath: "fixture.ts", purpose: "native-tool-io" as const };
+    for (const method of [io.stat.bind(io), io.list.bind(io)])
+      expect(await method(begun.identity, { ...packet, range: { offset: 0, length: 0 } })).toEqual({
+        ok: false,
+        reason: "invalid-request",
+      });
+    expect(await io.readBytes({ ...begun.identity, invocationId: "forged" }, packet)).toMatchObject(
+      { ok: false },
+    );
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(await io.readBytes(begun.identity, packet)).toMatchObject({ ok: false });
+    expect(f.read).not.toHaveBeenCalled();
+    expect(f.stat).not.toHaveBeenCalled();
+    expect(f.list).not.toHaveBeenCalled();
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("emits the existing body-free failure proof for rejected real private byte work", async () => {
+  const f = nativeFileAuthorityFixture();
+  f.read.mockRejectedValueOnce(new Error("PRIVATE_NATIVE_BYTE_REJECTION_SENTINEL"));
+  try {
+    const begun = await beginFileAuthorityRead(f);
+    const io = f.facet.fileIO;
+    if (io === undefined) throw new TypeError("Expected native file primitives");
+    expect(
+      await io.readBytes(begun.identity, {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+        purpose: "native-tool-io",
+      }),
+    ).toEqual({ ok: false, reason: "dispatch-refused" });
+    const failure = f.log.events.find((event) => event.op === "coding-runtime.tool-result");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.tool-result.emitted-line",
+        formatActivityLogProofLine(failure ?? {}),
+      ),
+    ).toMatchObject({
+      actionKind: "read",
+      state: "discarded",
+      reason: "authority-resolution-failed",
+    });
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_BYTE_REJECTION_SENTINEL");
+    expect(await f.facet.close(begun.identity, "failed")).toBe(false);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
   } finally {
     f.registry.dispose();
   }

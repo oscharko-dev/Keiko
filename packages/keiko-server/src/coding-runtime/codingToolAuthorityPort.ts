@@ -1,5 +1,6 @@
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
@@ -33,6 +34,13 @@ import type {
   CodingToolNativeReadInvocations,
   CodingToolNativeReadIdentity,
   CodingToolNativeReadOwner,
+  CodingToolNativeReadFilePacket,
+  CodingToolNativeInvocationRefusal,
+  CodingToolNativeReadFileIO,
+  CodingToolNativeReadFileIOOwner,
+  CodingToolNativeReadBytesResult,
+  CodingToolNativeReadStatResult,
+  CodingToolNativeReadListResult,
   CodingToolMutationGuard,
   CodingToolProducerBinding,
   MaterializedPatchCharge,
@@ -66,7 +74,13 @@ import {
   WORKSPACE_READ_REFUSAL_CODES,
   type CodingToolReadEditPorts,
   type GovernedTextSnapshotResult,
+  type GovernedNativeFileIO,
+  type GovernedNativeFileRequest,
 } from "./codingToolReadEditPorts.js";
+import {
+  isSecureWorkspaceNativeRelativePath,
+  isSecureWorkspaceNativeRange,
+} from "./secureWorkspaceTextRead.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolRuntimeAuthority.js";
 import type { CatalogToolBudgetPort } from "../tool-catalog/catalogToolPorts.js";
@@ -150,6 +164,7 @@ interface CodingToolAuthorityPortOptions {
 interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly nativeTextRead?: CodingToolReadEditPorts["nativeTextRead"] | undefined;
+  readonly nativeFileIO?: GovernedNativeFileIO | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: CodingToolApprovalProofVerifier | undefined;
   readonly reserveEditDelegation?: boolean | undefined;
@@ -635,6 +650,7 @@ function catalogFacadeBridgeFor(
     options.invocationRegistry ??
     createCodingToolInvocationRegistry({ now: lazyContextClock(context) });
   return createCanonicalCatalogFacadeBridge({
+    captureNativeReadAction: nativeReadInvocationRequest,
     toolProfile: options.toolProfile,
     nativeTextSnapshotAvailable: options.nativeTextRead !== undefined,
     authority: authorityPort,
@@ -1293,8 +1309,9 @@ interface NativeReadBeginDeps {
   readonly ports: CodingToolGovernedPorts;
   readonly options: NativeReadFacadeOptions;
   readonly producer: NonNullable<CodingToolReadEditPorts["nativeTextRead"]>;
+  readonly fileIO: GovernedNativeFileIO | undefined;
   readonly log: ServerLogSink;
-  readonly failure: (error: unknown) => void;
+  readonly reportFailure: (error: unknown) => void;
 }
 
 function nativeReadInvocations(
@@ -1307,11 +1324,13 @@ function nativeReadInvocations(
   const execute = bridge.executeNativeReadInvocation;
   const registry = options.invocationRegistry;
   if (execute === undefined || registry === undefined) return undefined;
-  const failure = (error: unknown): void => {
+  const reportFailure = (error: unknown): void => {
     reportNativeSnapshotFailure(log, options.catalogDiagnostics, error);
   };
-  const deps = { bridge, execute, registry, ports, options, producer, log, failure };
+  const fileIO = captureNativeFileProducer(options.nativeFileIO);
+  const deps = { bridge, execute, registry, ports, options, producer, fileIO, log, reportFailure };
   return Object.freeze({
+    ...(fileIO === undefined ? {} : { fileIO: nativeInvocationFileIO(deps) }),
     signalFor: (identity: CodingToolNativeReadIdentity): AbortSignal | undefined =>
       nativeReadOwnerFor(deps, identity)?.signal,
     begin: (input: CodingToolNativeReadBeginInput): Promise<CodingToolNativeReadBeginResult> =>
@@ -1323,6 +1342,116 @@ function nativeReadInvocations(
       return nativeReadOwnerFor(deps, identity)?.close(outcome) ?? Promise.resolve(false);
     },
   } satisfies CodingToolNativeReadInvocations);
+}
+
+function captureNativeFileProducer(
+  selected: GovernedNativeFileIO | undefined,
+): GovernedNativeFileIO | undefined {
+  return selected === undefined
+    ? undefined
+    : Object.freeze({
+        readBytes: selected.readBytes.bind(selected),
+        stat: selected.stat.bind(selected),
+        list: selected.list.bind(selected),
+      });
+}
+
+function nativeInvocationFileIO(deps: NativeReadBeginDeps): CodingToolNativeReadFileIO {
+  return Object.freeze({
+    readBytes: (identity, input) =>
+      executeNativeInvocationFile(deps, identity, input, "readBytes", (owner, request) =>
+        owner.fileIO?.readBytes(request),
+      ),
+    stat: (identity, input) =>
+      executeNativeInvocationFile(deps, identity, input, "stat", (owner, request) =>
+        owner.fileIO?.stat(request),
+      ),
+    list: (identity, input) =>
+      executeNativeInvocationFile(deps, identity, input, "list", (owner, request) =>
+        owner.fileIO?.list(request),
+      ),
+  } satisfies CodingToolNativeReadFileIO);
+}
+
+async function executeNativeInvocationFile<Result>(
+  deps: NativeReadBeginDeps,
+  identity: CodingToolNativeReadIdentity,
+  input: CodingToolNativeReadFilePacket,
+  operation: keyof GovernedNativeFileIO,
+  invoke: (
+    owner: CodingToolNativeReadOwner,
+    request: GovernedNativeFileRequest,
+  ) => Promise<Result> | undefined,
+): Promise<Result | CodingToolNativeInvocationRefusal> {
+  try {
+    const packet = captureNativeFilePacket(input, operation);
+    const bound = nativeReadRegistryIdentity(deps.options, identity);
+    if (packet === undefined || bound === undefined)
+      return { ok: false, reason: "invalid-request" };
+    const digest = createHash("sha256")
+      .update(
+        JSON.stringify([operation, packet.relativePath, packet.purpose, packet.range ?? null]),
+      )
+      .digest("hex");
+    const claim = deps.registry.claimNativeReadOperation(
+      bound,
+      bound.invocationId,
+      packet.ordinal,
+      digest,
+    );
+    if (claim !== "ready") return refuseNativeReadPacket(deps, bound.runId, claim);
+    const owner = deps.registry.nativeReadOwner(bound, bound.invocationId);
+    return (
+      (owner === undefined ? undefined : await invoke(owner, packet)) ?? {
+        ok: false,
+        reason: "dispatch-refused",
+      }
+    );
+  } catch (error) {
+    reportNativeSnapshotFailure(deps.log, deps.options.catalogDiagnostics, error);
+    return { ok: false, reason: "dispatch-refused" };
+  }
+}
+
+function captureNativeFilePacket(
+  input: CodingToolNativeReadFilePacket,
+  operation: keyof GovernedNativeFileIO,
+): CodingToolNativeReadFilePacket | undefined {
+  const record = nativeDataRecord(input, ["ordinal", "relativePath", "purpose", "range"]);
+  if (!nativeFilePacketHead(record)) return undefined;
+  const range = captureNativeRange(record.range);
+  if (range === false || (operation !== "readBytes" && range !== undefined)) return undefined;
+  return Object.freeze({
+    ordinal: record.ordinal,
+    relativePath: record.relativePath,
+    purpose: record.purpose,
+    ...(range === undefined ? {} : { range }),
+  });
+}
+
+function nativeFilePacketHead(
+  record: Readonly<Record<string, unknown>> | undefined,
+): record is Readonly<{
+  ordinal: number;
+  relativePath: string;
+  purpose: "native-tool-io" | "native-instructions";
+  range?: unknown;
+}> {
+  if (record === undefined || typeof record.ordinal !== "number") return false;
+  if (typeof record.relativePath !== "string") return false;
+  return (
+    isSecureWorkspaceNativeRelativePath(record.relativePath) &&
+    !isDenied(record.relativePath) &&
+    (record.purpose === "native-tool-io" || record.purpose === "native-instructions")
+  );
+}
+
+function captureNativeRange(input: unknown): GovernedNativeFileRequest["range"] | false {
+  if (input === undefined) return undefined;
+  const record = nativeDataRecord(input, ["offset", "length"]);
+  if (typeof record?.offset !== "number" || typeof record.length !== "number") return false;
+  const range = Object.freeze({ offset: record.offset, length: record.length });
+  return isSecureWorkspaceNativeRange(range) ? range : false;
 }
 
 function nativeReadOwnerFor(
@@ -1395,7 +1524,7 @@ function refuseNativeReadPacket(
   deps: NativeReadBeginDeps,
   runId: string,
   claim: "duplicate" | "conflict" | "refused" | "busy",
-): CodingToolNativeTextSnapshotResult {
+): CodingToolNativeInvocationRefusal {
   deps.log.write(
     activityLogEvent(
       CODING_RUNTIME_TOOL_RESULT_OPERATION,
@@ -1442,16 +1571,15 @@ function admitNativeReadInvocation(
   input: CodingToolNativeReadBeginInput,
 ): Promise<CodingToolNativeReadBeginResult> {
   const owned = captureNativeReadBegin(input);
+  const maxBytes = Math.min(
+    deps.options.maxBodyBytes ?? CODING_TOOL_MAX_BODY_BYTES,
+    CODING_TOOL_MAX_BODY_BYTES,
+  );
   const request =
-    owned === undefined
+    owned === undefined || Buffer.byteLength(owned.body) > maxBytes
       ? undefined
-      : parseCodingToolRequest(owned.body, deps.options.maxBodyBytes ?? CODING_TOOL_MAX_BODY_BYTES);
-  if (
-    owned === undefined ||
-    request?.action !== "read" ||
-    request.startLine !== undefined ||
-    request.maxLines !== undefined
-  ) {
+      : nativeReadInvocationRequest(owned.body);
+  if (owned === undefined || request === undefined) {
     deps.bridge.recordUnbound({ action: "read" }, input);
     return Promise.resolve({ ok: false, reason: "invalid-request" });
   }
@@ -1475,12 +1603,44 @@ function admitNativeReadInvocation(
       ready({ ok: false, reason: "dispatch-refused" });
     },
     (error: unknown): void => {
-      deps.failure(error);
+      deps.reportFailure(error);
       complete(false);
       ready({ ok: false, reason: "dispatch-refused" });
     },
   );
   return started;
+}
+
+function nativeReadInvocationRequest(
+  body: string,
+): Extract<CodingToolActionRequest, { readonly action: "read" }> | undefined {
+  const record = nativeDataRecord(JSON.parse(body) as unknown, [
+    "action",
+    "actionId",
+    "idempotencyKey",
+    "relativePath",
+  ]);
+  if (
+    record === undefined ||
+    Object.keys(record).length !== 4 ||
+    record.action !== "read" ||
+    !nativeReadIdentityString(record.actionId) ||
+    !nativeReadIdentityString(record.idempotencyKey) ||
+    typeof record.relativePath !== "string" ||
+    !isSecureWorkspaceNativeRelativePath(record.relativePath) ||
+    isDenied(record.relativePath)
+  )
+    return undefined;
+  return {
+    action: "read",
+    actionId: record.actionId,
+    idempotencyKey: record.idempotencyKey,
+    relativePath: record.relativePath,
+  };
+}
+
+function nativeReadIdentityString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 512;
 }
 
 function dispatchNativeReadInvocation(
@@ -1540,8 +1700,8 @@ function attachNativeReadLifetime(
     invocationId,
     signal,
     guard,
-    deps.producer,
-    deps.failure,
+    deps,
+    deps.reportFailure,
     terminal,
   );
   const identity = Object.freeze({
@@ -1631,8 +1791,12 @@ function nativeReadBeginValues(
     (capability === undefined || typeof capability === "string") &&
     (signal === undefined || signal instanceof AbortSignal) &&
     optionalNativeInteger(offset, 0) &&
-    optionalNativeInteger(limit, 1)
+    validNativeReadLimit(limit)
   );
+}
+
+function validNativeReadLimit(value: unknown): boolean {
+  return optionalNativeInteger(value, 0) && (value === undefined || Number(value) <= 2_000);
 }
 
 function optionalNativeInteger(value: unknown, minimum: number): boolean {
@@ -1656,15 +1820,12 @@ function nativeReadLifetime(
   invocationId: string,
   signal: AbortSignal,
   guard: CodingToolMutationGuard,
-  producer: NonNullable<CodingToolReadEditPorts["nativeTextRead"]>,
+  producers: Pick<NativeReadBeginDeps, "producer" | "fileIO">,
   failure: (error: unknown) => void,
   terminal: Promise<boolean>,
 ): NativeReadLifetime {
   const state: NativeReadLifetimeState = { closed: false, pending: 0, outcome: "cancelled" };
-  let resolve!: (result: GovernedCodingToolResult) => void;
-  const work = new Promise<GovernedCodingToolResult>((done) => {
-    resolve = done;
-  });
+  const { work, resolve } = nativeReadCompletion();
   const finish = (): void => {
     if (!state.closed || state.pending !== 0) return;
     signal.removeEventListener("abort", abort);
@@ -1690,15 +1851,63 @@ function nativeReadLifetime(
   if (signal.aborted) abort();
   return {
     work,
-    owner: Object.freeze({
+    owner: nativeReadLifetimeOwner(
       invocationId,
       signal,
-      revoke: abort,
+      guard,
+      producers,
+      failure,
+      state,
       close,
-      readTextSnapshot: (relativePath: string): Promise<CodingToolNativeTextSnapshotResult> =>
-        nativeLifetimeSnapshot(state, signal, guard, producer, relativePath, finish, failure),
-    }),
+      abort,
+      finish,
+    ),
   };
+}
+
+function nativeReadCompletion(): {
+  readonly work: Promise<GovernedCodingToolResult>;
+  readonly resolve: (result: GovernedCodingToolResult) => void;
+} {
+  let resolve!: (result: GovernedCodingToolResult) => void;
+  const work = new Promise<GovernedCodingToolResult>((done) => {
+    resolve = done;
+  });
+  return { work, resolve };
+}
+
+function nativeReadLifetimeOwner(
+  invocationId: string,
+  signal: AbortSignal,
+  guard: CodingToolMutationGuard,
+  producers: Pick<NativeReadBeginDeps, "producer" | "fileIO">,
+  failure: (error: unknown) => void,
+  state: NativeReadLifetimeState,
+  close: CodingToolNativeReadOwner["close"],
+  abort: () => void,
+  finish: () => void,
+): CodingToolNativeReadOwner {
+  return Object.freeze({
+    invocationId,
+    signal,
+    revoke: abort,
+    close,
+    ...(producers.fileIO === undefined
+      ? {}
+      : {
+          fileIO: nativeLifetimeFileIO(state, signal, guard, producers.fileIO, finish, failure),
+        }),
+    readTextSnapshot: (relativePath: string): Promise<CodingToolNativeTextSnapshotResult> =>
+      nativeLifetimeSnapshot(
+        state,
+        signal,
+        guard,
+        producers.producer,
+        relativePath,
+        finish,
+        failure,
+      ),
+  });
 }
 
 function nativeReadLive(
@@ -1721,6 +1930,75 @@ function nativeReadOpen(
   failure: (error: unknown) => void,
 ): boolean {
   return !state.closed && nativeReadLive(signal, guard, failure);
+}
+
+function nativeLifetimeFileIO(
+  state: NativeReadLifetimeState,
+  signal: AbortSignal,
+  guard: CodingToolMutationGuard,
+  producer: GovernedNativeFileIO,
+  finish: () => void,
+  failure: (error: unknown) => void,
+): CodingToolNativeReadFileIOOwner {
+  return Object.freeze({
+    readBytes: (request) =>
+      nativeLifetimeFile(
+        state,
+        signal,
+        guard,
+        () => producer.readBytes(request, signal, guard),
+        finish,
+        failure,
+      ),
+    stat: (request) =>
+      nativeLifetimeFile(
+        state,
+        signal,
+        guard,
+        () => producer.stat(request, signal, guard),
+        finish,
+        failure,
+      ),
+    list: (request) =>
+      nativeLifetimeFile(
+        state,
+        signal,
+        guard,
+        () => producer.list(request, signal, guard),
+        finish,
+        failure,
+      ),
+  } satisfies CodingToolNativeReadFileIOOwner);
+}
+
+async function nativeLifetimeFile<
+  Result extends
+    | CodingToolNativeReadBytesResult
+    | CodingToolNativeReadStatResult
+    | CodingToolNativeReadListResult,
+>(
+  state: NativeReadLifetimeState,
+  signal: AbortSignal,
+  guard: CodingToolMutationGuard,
+  invoke: () => Promise<Result>,
+  finish: () => void,
+  reportFailure: (error: unknown) => void,
+): Promise<Result | CodingToolNativeInvocationRefusal> {
+  if (!nativeReadOpen(state, signal, guard, reportFailure))
+    return { ok: false, reason: "dispatch-refused" };
+  state.pending++;
+  try {
+    const result = await invoke();
+    if (nativeReadOpen(state, signal, guard, reportFailure)) return result;
+    if (result.ok && "bytes" in result) result.bytes.fill(0);
+    return { ok: false, reason: "dispatch-refused" };
+  } catch (error) {
+    reportFailure(error);
+    return { ok: false, reason: "dispatch-refused" };
+  } finally {
+    state.pending--;
+    finish();
+  }
 }
 
 async function nativeLifetimeSnapshot(

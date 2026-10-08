@@ -2,6 +2,8 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 
 import { type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   accessSync,
   existsSync,
@@ -76,6 +78,8 @@ import {
   encodeSecureWorkspaceReadResponse,
   encodeSecureWorkspaceSnapshotResponse,
 } from "./secureWorkspaceTextReadProtocol.js";
+import { createNodeSecureWorkspaceReadProcessFactory } from "./secureWorkspaceTextReadNodeProcess.js";
+import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceTextReadProcess } from "./secureWorkspaceTextReadProcess.js";
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
@@ -4254,23 +4258,29 @@ function nativeBridgeSnapshot(path: string, rich = true): Buffer {
 function nativeBridgeSecureRead(
   authority: ReturnType<typeof catalogRuntimeFixture>,
   process: SecureWorkspaceTextReadProcess["run"],
+  native = false,
 ): ReturnType<typeof createSecureWorkspaceTextReadPort> {
   return createSecureWorkspaceTextReadPort({
     resolveWorkspaceRoot: () => authority.root,
-    artifact: {
-      target: "darwin-arm64",
-      installRelativePath: "runtime/native/keiko-secure-workspace-read",
-      sha256: "a".repeat(64),
-      protocol: "KSR1/KSS1",
-      snapshotProtocol: "KSR2/KSS2",
-      sourceCommit: "b".repeat(40),
-      sourceTreeSha256: "a".repeat(64),
-      signed: true,
-    },
+    artifact: nativeBridgeArtifact(native),
     artifactVerifier: { verify: () => true },
     platform: { os: "darwin", arch: "arm64" },
     processFactory: { create: () => ({ run: process }) },
   });
+}
+
+function nativeBridgeArtifact(native: boolean): SecureWorkspaceTextReadArtifact {
+  return {
+    target: "darwin-arm64",
+    installRelativePath: "runtime/native/keiko-secure-workspace-read",
+    sha256: "a".repeat(64),
+    protocol: "KSR1/KSS1",
+    snapshotProtocol: "KSR2/KSS2",
+    sourceCommit: "b".repeat(40),
+    sourceTreeSha256: "a".repeat(64),
+    signed: true,
+    ...(native ? { nativeProtocol: "KSR3/KSS3" as const } : {}),
+  };
 }
 
 function nativeReadAuthority(maxToolCalls?: number): ReturnType<typeof catalogRuntimeFixture> {
@@ -4310,6 +4320,7 @@ function nativeBridgeFixture(
   text: string,
   effect?: SecureWorkspaceTextReadProcess["run"],
   maxToolCalls?: number,
+  native = false,
 ): NativeBridgeFixture {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(RUNTIME_NOW));
@@ -4344,7 +4355,7 @@ function nativeBridgeFixture(
       repositoryRoot: authority.root,
       fs: nodeWorkspaceFs,
     }),
-    secureWorkspaceTextRead: nativeBridgeSecureRead(authority, process),
+    secureWorkspaceTextRead: nativeBridgeSecureRead(authority, process, native),
     editorAgentClient: { action: vi.fn() },
     onRuntimeEvent: vi.fn(),
     verificationRunner: { runToReport: vi.fn() },
@@ -5830,3 +5841,216 @@ it("returns initial deadline refusal promptly while the actual raw producer rema
     f.registry.dispose();
   }
 });
+
+// Fixture verifier accepts this exact compiled helper, without claiming release qualification.
+describe.skipIf(process.platform !== "darwin")(
+  "original Read parent with actual native IO process",
+  () => {
+    let executable = "";
+    beforeAll(() => {
+      const base = mkdtempSync(join(tmpdir(), "native-parent-file-"));
+      executable = join(base, "secure-read");
+      execFileSync("cc", [
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        fileURLToPath(
+          new URL(
+            "../../../../native/secure-workspace-read/secure_workspace_read.c",
+            import.meta.url,
+          ),
+        ),
+        "-o",
+        executable,
+      ]);
+    });
+    afterAll(() => {
+      if (executable !== "") rmSync(dirname(executable), { recursive: true, force: true });
+    });
+    function physicalFixture(
+      afterFrame?: (frame: Uint8Array) => Promise<Uint8Array>,
+    ): NativeBridgeFixture {
+      const factory = createNodeSecureWorkspaceReadProcessFactory({
+        binding: {
+          executable,
+          artifact: nativeBridgeArtifact(true),
+          resourceRoot: dirname(executable),
+          helperSizeBytes: statSync(executable).size,
+        },
+        safeCwd: dirname(executable),
+      });
+      return nativeBridgeFixture(
+        "PRIVATE_PARENT_NATIVE_BYTES",
+        (request) =>
+          factory
+            .create(nativeBridgeArtifact(true))
+            .run(request)
+            .then((frame) => afterFrame?.(frame) ?? frame),
+        1,
+        true,
+      );
+    }
+    it("runs bytes, stat, root list and zero range under one authority charge and admission slot", async () => {
+      const f = physicalFixture();
+      const admission = vi.spyOn(f.authority.authority, "resolveCapabilityForDelegation");
+      const fixture = await startBridgeFixture(
+        f.facade,
+        { maxInFlight: 1, requestDeadlineMs: 1000 },
+        f.control,
+      );
+      try {
+        const parent = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+        const begun = await parent?.begin(nativeInvocationInput());
+        if (begun?.ok !== true || parent?.fileIO === undefined)
+          throw new TypeError("Missing native parent IO");
+        const packet = {
+          ordinal: 1,
+          relativePath: "fixture.ts",
+          purpose: "native-tool-io" as const,
+        };
+        const bytes = await parent.fileIO.readBytes(begun.identity, packet);
+        expect(bytes).toMatchObject({
+          ok: true,
+          bytes: Buffer.from("PRIVATE_PARENT_NATIVE_BYTES"),
+        });
+        expect(await parent.fileIO.stat(begun.identity, { ...packet, ordinal: 2 })).toMatchObject({
+          ok: true,
+          info: { type: "file", size: statSync(join(f.authority.root, "fixture.ts")).size },
+        });
+        expect(
+          await parent.fileIO.list(begun.identity, { ...packet, ordinal: 3, relativePath: "" }),
+        ).toMatchObject({
+          ok: true,
+          entries: [{ name: "fixture.ts", type: "file" }],
+        });
+        expect(
+          await parent.fileIO.readBytes(begun.identity, {
+            ...packet,
+            ordinal: 4,
+            range: { offset: 0, length: 0 },
+          }),
+        ).toMatchObject({ ok: true, bytes: Buffer.alloc(0) });
+        expect(f.process).toHaveBeenCalledTimes(4);
+        expect(
+          admission.mock.calls.reduce((count, [input]) => count + input.usage.toolCalls, 0),
+        ).toBe(1);
+        expect(await parent.begin(nativeInvocationInput("other-parent"))).toEqual({
+          ok: false,
+          reason: "busy",
+        });
+        expect(await parent.close(begun.identity, "completed")).toBe(true);
+        await begun.settled;
+        expect(JSON.stringify(f.activity.events)).not.toMatch(
+          /PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
+        );
+      } finally {
+        await stopNativeBridge(f, fixture);
+      }
+    });
+    it("retains the real native process promise through stop and withholds its held completed response", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const reached = vi.fn();
+      const f = physicalFixture(async (frame) => {
+        reached();
+        await held;
+        return frame;
+      });
+      const onRelease = vi.fn();
+      let runRoot = "";
+      const fixture = await startBridgeFixture(
+        f.facade,
+        { maxInFlight: 1, requestDeadlineMs: 1000 },
+        {
+          ...f.control,
+          onRelease,
+          afterStart: (_runtime, root): void => {
+            runRoot = root;
+          },
+        },
+      );
+      const parent = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+      const begun = await parent?.begin(nativeInvocationInput());
+      if (begun?.ok !== true || parent?.fileIO === undefined)
+        throw new TypeError("Missing native parent IO");
+      const reading = parent.fileIO.readBytes(begun.identity, {
+        ordinal: 1,
+        relativePath: "fixture.ts",
+        purpose: "native-tool-io",
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(reached).toHaveBeenCalledOnce();
+        });
+        expect(await fixture.runtime.manager.stop(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+          failureCode: "runtime-reap-unproven",
+        });
+        expect(await reading).toEqual({ ok: false, reason: "cancelled" });
+        expect(existsSync(runRoot)).toBe(true);
+        expect(onRelease).not.toHaveBeenCalled();
+        expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toMatchObject({
+          ok: false,
+        });
+        release();
+        await begun.settled;
+        expect(existsSync(runRoot)).toBe(true);
+        expect(onRelease).not.toHaveBeenCalled();
+        expect(await fixture.runtime.manager.reconcile(FIXTURE_RUN_ID)).toEqual({
+          ok: true,
+          status: "stopped",
+        });
+        expect(existsSync(runRoot)).toBe(false);
+        expect(onRelease).toHaveBeenCalledOnce();
+        const workspaceReads = f.activity.events.filter(
+          (event) => event.op === "coding-runtime.workspace-read",
+        );
+        expect(workspaceReads.at(-1)?.extra?.state).toBe("failed");
+        expect(JSON.stringify(f.activity.events)).not.toContain("PRIVATE_PARENT_NATIVE_BYTES");
+      } finally {
+        release();
+        await reading;
+        await stopNativeBridge(f, fixture);
+      }
+    });
+
+    it.each(["head", "expired", "withdrawn"] as const)(
+      "refuses private original IO with stale %s authority before the actual child starts",
+      async (change) => {
+        const f = physicalFixture();
+        const fixture = await startBridgeFixture(
+          f.facade,
+          { maxInFlight: 1, requestDeadlineMs: 1000 },
+          f.control,
+        );
+        try {
+          const parent = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+          const begun = await parent?.begin(nativeInvocationInput());
+          if (begun?.ok !== true || parent?.fileIO === undefined)
+            throw new TypeError("Missing native IO");
+          if (change === "head") f.readHead.mockReturnValue("2".repeat(40));
+          else if (change === "expired")
+            vi.setSystemTime(new Date(Date.parse(f.authority.trusted.expiresAt) + 1));
+          else f.authority.registry.revoke(f.authority.minted.authorityRef);
+          expect(
+            (
+              await parent.fileIO.readBytes(begun.identity, {
+                ordinal: 1,
+                relativePath: "fixture.ts",
+                purpose: "native-tool-io",
+              })
+            ).ok,
+          ).toBe(false);
+          expect(f.process).not.toHaveBeenCalled();
+          expect(await parent.close(begun.identity, "failed")).toBe(false);
+        } finally {
+          await stopNativeBridge(f, fixture);
+        }
+      },
+    );
+  },
+);

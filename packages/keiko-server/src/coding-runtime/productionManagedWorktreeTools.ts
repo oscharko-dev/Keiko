@@ -771,6 +771,7 @@ export function createProductionManagedWorktreeToolFacade(
     {
       toolProfile: input.toolProfile,
       nativeTextRead: readEdit.nativeTextRead,
+      nativeFileIO: readEdit.nativeFileIO,
       invocationRegistry: input.invocationRegistry,
       ...(input.ciRepairBudget === undefined ? {} : { ciRepairBudget: input.ciRepairBudget }),
       reserveEditDelegation: true,

@@ -59,6 +59,8 @@ import type {
   CodingToolNativeReadBeginInput,
   CodingToolNativeReadBeginResult,
   CodingToolNativeReadIdentity,
+  CodingToolNativeReadFileIO,
+  CodingToolNativeInvocationRefusal,
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
@@ -1868,6 +1870,7 @@ function nativeInvocationBridgeFacet(
   supplied: CodingToolNativeReadInvocations | undefined,
 ): CodingToolNativeReadInvocations | undefined {
   if (supplied === undefined) return undefined;
+  const fileIO = captureBridgeNativeFileIO(supplied.fileIO);
   const producer = Object.freeze({
     begin: supplied.begin.bind(supplied),
     readTextSnapshot: supplied.readTextSnapshot.bind(supplied),
@@ -1875,6 +1878,7 @@ function nativeInvocationBridgeFacet(
     close: supplied.close.bind(supplied),
   });
   return Object.freeze({
+    ...(fileIO === undefined ? {} : { fileIO: bridgeNativeFileIO(deps, active, producer, fileIO) }),
     begin: (input): Promise<CodingToolNativeReadBeginResult> =>
       beginNativeBridgeInvocation(deps, gate, active, producer, input),
     signalFor: producer.signalFor,
@@ -1885,6 +1889,36 @@ function nativeInvocationBridgeFacet(
     close: (identity, outcome): Promise<boolean> =>
       closeNativeBridgeInvocation(deps, active, producer, identity, outcome),
   } satisfies CodingToolNativeReadInvocations);
+}
+
+function captureBridgeNativeFileIO(
+  selected: CodingToolNativeReadFileIO | undefined,
+): CodingToolNativeReadFileIO | undefined {
+  return selected === undefined
+    ? undefined
+    : Object.freeze({
+        readBytes: selected.readBytes.bind(selected),
+        stat: selected.stat.bind(selected),
+        list: selected.list.bind(selected),
+      });
+}
+
+function bridgeNativeFileIO(
+  deps: ToolBridgeExecutionDeps,
+  active: () => boolean,
+  producer: CodingToolNativeReadInvocations,
+  io: CodingToolNativeReadFileIO,
+): CodingToolNativeReadFileIO {
+  return Object.freeze({
+    readBytes: (identity, input) =>
+      boundedNativeInvocationCall(deps, active, producer, identity, () =>
+        io.readBytes(identity, input),
+      ),
+    stat: (identity, input) =>
+      boundedNativeInvocationCall(deps, active, producer, identity, () => io.stat(identity, input)),
+    list: (identity, input) =>
+      boundedNativeInvocationCall(deps, active, producer, identity, () => io.list(identity, input)),
+  } satisfies CodingToolNativeReadFileIO);
 }
 
 async function closeNativeBridgeInvocation(
@@ -1905,13 +1939,13 @@ async function closeNativeBridgeInvocation(
   }
 }
 
-async function boundedNativeInvocationCall(
+async function boundedNativeInvocationCall<Result>(
   deps: ToolBridgeExecutionDeps,
   active: () => boolean,
   producer: CodingToolNativeReadInvocations,
   identity: CodingToolNativeReadIdentity,
-  execute: () => Promise<CodingToolNativeTextSnapshotResult>,
-): Promise<CodingToolNativeTextSnapshotResult> {
+  execute: () => Promise<Result>,
+): Promise<Result | CodingToolNativeInvocationRefusal> {
   const refused = { ok: false as const, reason: "dispatch-refused" as const };
   let signal: AbortSignal | undefined;
   try {
@@ -1974,7 +2008,7 @@ function prepareNativeBridgeBeginInput(
   try {
     const owned = ownNativeBridgeBeginInput(input);
     if (owned === undefined) return undefined;
-    const body = nativeToolRequestBody(
+    const body = privateNativeToolBody(
       owned.body,
       owned.capability,
       owned.headers,
@@ -2033,19 +2067,29 @@ function nativeToolRequestBody(
   headers: CodingToolFacadeInput["headers"],
   ownedCapability: string,
 ): string | undefined {
-  if (
-    headers !== undefined ||
-    (capability !== undefined && !safeEqual(capability, ownedCapability))
-  )
-    return undefined;
-  if (Buffer.byteLength(body) > CODING_TOOL_MAX_BODY_BYTES) return undefined;
-  const ownedBody = typeof body === "string" ? body : body.toString("utf8");
+  const ownedBody = privateNativeToolBody(body, capability, headers, ownedCapability);
+  if (ownedBody === undefined) return undefined;
   const request = parseCodingToolRequest(ownedBody, CODING_TOOL_MAX_BODY_BYTES);
   return request?.action === "read" &&
     request.startLine === undefined &&
     request.maxLines === undefined
     ? ownedBody
     : undefined;
+}
+
+function privateNativeToolBody(
+  body: CodingToolFacadeInput["body"],
+  capability: string | undefined,
+  headers: CodingToolFacadeInput["headers"],
+  ownedCapability: string,
+): string | undefined {
+  if (
+    headers !== undefined ||
+    (capability !== undefined && !safeEqual(capability, ownedCapability))
+  )
+    return undefined;
+  if (Buffer.byteLength(body) > CODING_TOOL_MAX_BODY_BYTES) return undefined;
+  return typeof body === "string" ? body : body.toString("utf8");
 }
 
 async function executeNativeToolRequest(

@@ -680,7 +680,7 @@ async function resolveVerifiedReadMaterial(deps: SecureWorkspaceTextReadDeps): P
     : { ok: true, workspaceRoot, verifiedArtifact };
 }
 
-function validNativePath(value: string): boolean {
+export function isSecureWorkspaceNativeRelativePath(value: string): boolean {
   if (
     Buffer.from(value, "utf8").toString("utf8") !== value ||
     value.includes("\0") ||
@@ -696,7 +696,9 @@ function validNativePath(value: string): boolean {
   );
 }
 
-function validNativeRange(range: SecureWorkspaceNativeBytesRequest["range"]): boolean {
+export function isSecureWorkspaceNativeRange(
+  range: SecureWorkspaceNativeBytesRequest["range"],
+): boolean {
   return (
     range === undefined ||
     (Number.isSafeInteger(range.offset) &&
@@ -798,9 +800,9 @@ function validNativeRequest(
   operation: "read" | "stat" | "list",
 ): boolean {
   return (
-    validNativePath(request.relativePath) &&
+    isSecureWorkspaceNativeRelativePath(request.relativePath) &&
     !isDenied(request.relativePath) &&
-    validNativeRange(request.range) &&
+    isSecureWorkspaceNativeRange(request.range) &&
     (operation === "read" || request.range === undefined)
   );
 }

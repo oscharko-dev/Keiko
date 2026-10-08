@@ -516,9 +516,14 @@ it("compiles an inactive original-read lifetime without advertising another mode
   };
   expect(matchesCatalogSchema(tool.inputSchema, input)).toBe(true);
   expect(matchesCatalogSchema(tool.inputSchema, { ...input, offset: [0], limit: [20] })).toBe(true);
+  for (const relativePath of ["", "long-segment/".repeat(50) + "é.ts", "colon:back\\slash\n.ts"])
+    expect(
+      matchesCatalogSchema(tool.inputSchema, { ...input, relativePath, offset: [0], limit: [0] }),
+    ).toBe(true);
   for (const invalid of [
     { ...input, context: { ...input.context, tool: "shell" } },
-    { ...input, limit: [0] },
+    { ...input, limit: [-1] },
+    { ...input, limit: [2_001] },
     { ...input, offset: [0, 1] },
     { ...input, relativePath: "../escape" },
     { ...input, capability: "forged" },
