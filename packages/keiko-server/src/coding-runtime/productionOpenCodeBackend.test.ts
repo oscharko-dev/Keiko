@@ -4,7 +4,7 @@ import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { openCodeCatalogAliasFor } from "../tool-catalog/catalogToolFacadeBridge.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import * as composition from "./opencodeRuntimeComposition.js";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,43 +95,50 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  it("binds native filesystem roots from trusted macOS production inputs", async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
-    const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
-    try {
-      const portable = {
-        ...releaseQualifiedNativeRuntime(root),
-        target: "macos-arm64" as const,
-        qualification: {
-          platform: "darwin" as const,
-          arch: "arm64" as const,
-          backend: "macos-app-sandbox" as const,
-          releaseReceipt: `sha256:${"a".repeat(64)}`,
-        },
-      };
-      const stateRoot = join(root, ".keiko");
-      mkdirSync(stateRoot, { mode: 0o700 });
-      const input = runInput(root);
-      const run = createProductionOpenCodeBackend({
-        ...backendInput(root, portable),
-        runtimeStateRoot: stateRoot,
-      }).createRun(input);
-      expect(factory.mock.calls[0]?.[0].gatewayConfinement?.filesystem).toEqual({
-        workspaceRoot: input.context.workspaceRoot,
-        workspaceAccess: "read-only",
-        privateStateRoot: join(
-          stateRoot,
-          "coding-runtime",
-          "opencode",
-          input.minted.authorityRef.runId,
-        ),
-        runtimeReadRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      });
-      await run.dispose?.();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+  it.each(["canonical", "alias", "missing"] as const)(
+    "binds native filesystem and launch state to the same %s root",
+    async (kind) => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
+      const factory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      try {
+        const portable = {
+          ...releaseQualifiedNativeRuntime(root),
+          target: "macos-arm64" as const,
+          qualification: {
+            platform: "darwin" as const,
+            arch: "arm64" as const,
+            backend: "macos-app-sandbox" as const,
+            releaseReceipt: `sha256:${"a".repeat(64)}`,
+          },
+        };
+        const stateRoot = join(root, ".keiko");
+        const selectedStateRoot = createNativeStateRoot(root, kind);
+        const input = runInput(root);
+        const run = createProductionOpenCodeBackend({
+          ...backendInput(root, portable),
+          runtimeStateRoot: selectedStateRoot,
+        }).createRun(input);
+        expect(factory.mock.calls[0]?.[0].gatewayConfinement?.filesystem).toEqual({
+          workspaceRoot: input.context.workspaceRoot,
+          workspaceAccess: "read-only",
+          privateStateRoot: join(
+            stateRoot,
+            "coding-runtime",
+            "opencode",
+            input.minted.authorityRef.runId,
+          ),
+          runtimeReadRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+        });
+        expect(
+          join(compose.mock.calls[0]?.[0].stateBaseRoot ?? "", input.minted.authorityRef.runId),
+        ).toBe(factory.mock.calls[0]?.[0].gatewayConfinement?.filesystem?.privateStateRoot);
+        await run.dispose?.();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("owns presented facts when bridge completion arrives before the native call identity", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-tool-presentation-race-"));
@@ -616,6 +623,15 @@ function windowsDevLaneRuntime(root: string): DevLanePortableOpenCodeRuntime {
   });
   if (discovery.outcome !== "activated") throw new Error("expected-windows-dev-lane-runtime");
   return discovery.runtime;
+}
+
+function createNativeStateRoot(root: string, kind: "canonical" | "alias" | "missing"): string {
+  const stateRoot = join(root, ".keiko");
+  if (kind !== "missing") mkdirSync(stateRoot, { mode: 0o700 });
+  if (kind !== "alias") return stateRoot;
+  const alias = join(root, "state-alias");
+  symlinkSync(stateRoot, alias, "dir");
+  return alias;
 }
 
 function backendInput(

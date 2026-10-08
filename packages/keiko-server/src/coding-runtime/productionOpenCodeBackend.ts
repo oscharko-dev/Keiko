@@ -1,6 +1,6 @@
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
@@ -234,7 +234,7 @@ function composeOpenCodeRun(
       target: input.portable.target,
       admission: admissionPolicy(input.portable),
     },
-    stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
+    stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
     capabilities: {
       modelGatewayCapability: run.minted.modelGatewayCapability,
@@ -270,6 +270,11 @@ function composeOpenCodeRun(
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
   });
+}
+
+function openCodeStateBaseRoot(runtimeStateRoot: string): string {
+  mkdirSync(runtimeStateRoot, { recursive: true, mode: 0o700 });
+  return join(realpathSync(runtimeStateRoot), "coding-runtime", "opencode");
 }
 
 function runtimeLaunchSafety(
