@@ -36,6 +36,7 @@ import {
   eventStream,
   FIXTURE_RUN_ID,
   fulfillJson,
+  modelCatalog,
   snapshot,
   sourceProfile,
   type FixtureAuthStatus,
@@ -157,6 +158,10 @@ async function handleFoundationRoute(
     return true;
   }
   if (route.request().method() !== "GET") return false;
+  if (pathname === "/api/models") {
+    await fulfillJson(route, modelCatalog());
+    return true;
+  }
   // The pairing dimension of readiness (release-audit F-08/RG-12) reads the workspaces endpoint,
   // and an unanswered read is fail-closed to `unknown` — which correctly blocks a run start. This
   // live-runtime fixture models a launcher-paired window, so it must answer like the real paired

@@ -1,4 +1,5 @@
 import { expect, type Route } from "@playwright/test";
+import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import type {
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchCodexAuthSetupPlan,
@@ -8,6 +9,7 @@ import type {
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
   CodingWorkbenchSidecarGatewayResult,
+  ModelCapability,
   WorkspaceBinding,
   WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
@@ -21,6 +23,7 @@ import {
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
 
 /** Binds `snapshot()`'s hardcoded `awaiting-approval` permission to its authenticated review. */
@@ -63,6 +66,24 @@ export function fulfillJson(route: Route, body: unknown): Promise<void> {
     contentType: "application/json",
     body: JSON.stringify(body),
   });
+}
+
+export function modelCatalog(): { models: ModelCapability[] } {
+  // This ready-runtime fixture simulates the current catalog probe as well as the source profile.
+  // Stamp each response now: the fixed workspace/event date is not a fresh tool-calling proof.
+  const model: ModelCapability = {
+    ...createDefaultChatCapability("e2e-chat-model"),
+    conversationReady: true,
+    toolCalling: true,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: FIXTURE_DIGEST,
+    },
+  };
+  expect(isCodingWorkbenchModel(model)).toBe(true);
+  return { models: [model] };
 }
 
 function workspace(): ActiveWorkspaceFixture {
