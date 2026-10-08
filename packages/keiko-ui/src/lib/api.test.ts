@@ -2167,6 +2167,11 @@ describe("files API helpers", () => {
 });
 
 describe("fetchModels", () => {
+  afterEach(() => {
+    resetModelRequestCache();
+    vi.unstubAllGlobals();
+  });
+
   it("marks only the active catalog refresh with the existing CSRF header", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ models: [] })));
     vi.stubGlobal("fetch", fetchMock);
@@ -2225,11 +2230,6 @@ describe("fetchModels", () => {
         headers: expect.objectContaining({ "X-Keiko-Correlation-Id": "corr-reload" }),
       }),
     );
-  });
-
-  afterEach(() => {
-    resetModelRequestCache();
-    vi.unstubAllGlobals();
   });
 
   it("reuses the in-flight model registry request", async () => {

@@ -41,7 +41,7 @@ describe("streaming discovery failure ownership", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      () => Promise.resolve(),
+      { onFile: () => Promise.resolve() },
     );
     await expect(result).rejects.toBeInstanceOf(WorkspaceReadError);
     await expect(result).rejects.toMatchObject({ requestedPath: "" });
@@ -59,9 +59,11 @@ describe("streaming discovery failure ownership", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      (file) => {
-        visited.push(file.relativePath);
-        return Promise.resolve();
+      {
+        onFile: (file) => {
+          visited.push(file.relativePath);
+          return Promise.resolve();
+        },
       },
     );
     expect(result.filesDiscovered).toBe(1);
@@ -90,9 +92,11 @@ describe("streaming discovery failure ownership", () => {
           false,
           streamingFs(),
           createStructuralExecutionControl(null),
-          (file) => {
-            visited.push(file.relativePath);
-            return Promise.reject(failure);
+          {
+            onFile: (file) => {
+              visited.push(file.relativePath);
+              return Promise.reject(failure);
+            },
           },
         ),
       ).rejects.toBe(failure);
@@ -115,7 +119,7 @@ describe("streaming discovery failure ownership", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      () => Promise.resolve(),
+      { onFile: () => Promise.resolve() },
     );
     await expect(result).rejects.toBeInstanceOf(WorkspaceReadError);
     await expect(result).rejects.toMatchObject({ requestedPath: "", cause: failure });

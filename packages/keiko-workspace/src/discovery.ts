@@ -693,6 +693,11 @@ export interface StreamingDiscoveryOptions {
   readonly boundPendingDirectories?: boolean;
 }
 
+interface StreamingDiscoveryCallbacks {
+  readonly onFile: (file: DiscoveredFile) => Promise<void>;
+  readonly onStats?: (stats: StreamingDiscoveryStats) => void;
+}
+
 interface StreamingWalk {
   entriesSinceYield: number;
   readonly walk: Walk;
@@ -914,14 +919,13 @@ export async function visitWorkspaceFiles(
   applyGitignore: boolean,
   fs: WorkspaceFs,
   control: StructuralExecutionControl,
-  onFile: (file: DiscoveredFile) => Promise<void>,
-  onStats?: (stats: StreamingDiscoveryStats) => void,
+  callbacks: StreamingDiscoveryCallbacks,
   options?: StreamingDiscoveryOptions,
 ): Promise<StreamingDiscoveryStats> {
   const walk = streamingScopeWalk(workspace, relativePaths, applyGitignore, fs, control);
   const state: StreamingWalk = {
     walk,
-    onFile,
+    onFile: callbacks.onFile,
     options,
     filesDiscovered: 0,
     directoriesDiscovered: 0,
@@ -937,7 +941,7 @@ export async function visitWorkspaceFiles(
     }
     return streamingDiscoveryStats(state);
   } finally {
-    onStats?.(streamingDiscoveryStats(state));
+    callbacks.onStats?.(streamingDiscoveryStats(state));
   }
 }
 

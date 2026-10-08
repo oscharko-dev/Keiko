@@ -283,23 +283,38 @@ function providerOverride(fetch) {
   );
 }
 
+function guardedToolService(original, currentOwner) {
+  return {
+    ...original,
+    snapshot: (...args) =>
+      original
+        .snapshot(...args)
+        .pipe(Effect.map((snapshot) => decorateSnapshot(snapshot, currentOwner(), Effect))),
+  };
+}
+
 function toolOverride(currentOwner) {
   return Tool.node.replace(
     Tool.node.mapLayer((layer) =>
       layer.pipe(
         Layer.flatMap((context) => {
           const original = Context.get(context, Tool.Service);
-          return Layer.succeed(Tool.Service, {
-            ...original,
-            snapshot: (...args) =>
-              original
-                .snapshot(...args)
-                .pipe(Effect.map((snapshot) => decorateSnapshot(snapshot, currentOwner(), Effect))),
-          });
+          return Layer.succeed(Tool.Service, guardedToolService(original, currentOwner));
         }),
       ),
     ),
   );
+}
+
+function guardedPluginService(original, plugins, initial) {
+  return {
+    ...original,
+    activate: (native, failures) =>
+      original.activate(
+        [...native.map((generation) => initialGeneration(generation, initial)), ...plugins],
+        failures,
+      ),
+  };
 }
 
 function pluginOverride(plugins, initial) {
@@ -308,14 +323,7 @@ function pluginOverride(plugins, initial) {
       layer.pipe(
         Layer.flatMap((context) => {
           const original = Context.get(context, Plugin.Service);
-          return Layer.succeed(Plugin.Service, {
-            ...original,
-            activate: (native, failures) =>
-              original.activate(
-                [...native.map((generation) => initialGeneration(generation, initial)), ...plugins],
-                failures,
-              ),
-          });
+          return Layer.succeed(Plugin.Service, guardedPluginService(original, plugins, initial));
         }),
       ),
     ),

@@ -211,7 +211,7 @@ function closeInitialState(state, { Effect, binding, fetch, codec, startupMetada
   });
 }
 
-async function initializationRequest(binding, fetch, codec, phase, fields = {}, callerSignal) {
+async function initializationRequest(binding, fetch, codec, phase, fields, callerSignal) {
   const timeout = AbortSignal.timeout(INITIAL_REQUEST_TIMEOUT_MS);
   const signal = callerSignal === undefined ? timeout : AbortSignal.any([timeout, callerSignal]);
   const response = await fetch(binding.facadeURL, {

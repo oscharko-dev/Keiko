@@ -54,7 +54,7 @@ function boundedPacketString(value: unknown): value is string {
     typeof value === "string" &&
     value.length > 0 &&
     value.length <= 4096 &&
-    !Array.from(value).some((character) => character.charCodeAt(0) < 32)
+    !Array.from(value).some((character) => (character.codePointAt(0) ?? 0) < 32)
   );
 }
 

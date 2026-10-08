@@ -6222,7 +6222,7 @@ describe.skipIf(process.platform !== "darwin")(
               (await route.call("close", { identity, outcome: "completed" })).body,
             ),
           ).toEqual({ ok: false });
-          expect(diagnostics.length).toBe(change === "technical" ? 1 : 0);
+          expect(diagnostics).toHaveLength(change === "technical" ? 1 : 0);
           expect(JSON.stringify({ events: f.activity.events, diagnostics })).not.toMatch(
             /PRIVATE_ROOT_POSTFLIGHT_FAILURE|PRIVATE_PARENT_NATIVE_BYTES|fixture\.ts/u,
           );

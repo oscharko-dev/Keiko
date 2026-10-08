@@ -857,12 +857,10 @@ function providerCatalogOrigin(
   const existing = (options.stored ?? options.current)?.providers.find(
     (provider) => provider.modelId === modelId,
   );
-  const origin =
-    options.explicitDeploymentNames?.includes(modelId) === true
-      ? "explicit"
-      : existing === undefined
-        ? options.catalogOrigin
-        : existing.catalogOrigin;
+  let origin: ModelProviderConfig["catalogOrigin"];
+  if (options.explicitDeploymentNames?.includes(modelId) === true) origin = "explicit";
+  else if (existing === undefined) origin = options.catalogOrigin;
+  else origin = existing.catalogOrigin;
   return origin === undefined ? {} : { catalogOrigin: origin };
 }
 
@@ -2172,6 +2170,12 @@ function discoveryManagementSignal(
   ]);
 }
 
+interface DefaultGatewayDiscoveryOptions {
+  readonly callerSignal?: AbortSignal | undefined;
+  readonly metadataOnly: boolean;
+  readonly allowEmpty: boolean;
+}
+
 async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
@@ -2179,10 +2183,9 @@ async function defaultGatewayModelDiscovery(
   egress: GatewayEgressConfig | undefined,
   correlationId: string | undefined,
   trace: SetupDiscoveryTrace,
-  callerSignal?: AbortSignal,
-  metadataOnly = false,
-  allowEmpty = false,
+  options: DefaultGatewayDiscoveryOptions,
 ): Promise<GatewayDiscoveredModels> {
+  const { callerSignal, metadataOnly, allowEmpty } = options;
   const apiKeyHeaderName = requestedApiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
   // One existing discovery budget covers the management fallbacks and model list together.
   const deadlineAt = Date.now() + DISCOVERY_TIMEOUT_MS;
@@ -2252,14 +2255,7 @@ function assertRuntimeListingComplete(payload: unknown): void {
 /** Management records enrich exact listed IDs; listing alone is not a live health proof. */
 function listedCatalogWithMetadata(serving: unknown, metadata: unknown): { data: unknown[] } {
   const servingEntries = discoveryData(serving);
-  const byId = new Map<string, unknown[]>();
-  for (const entry of discoveryData(metadata)) {
-    const id = isRecord(entry) ? modelIdFromKnownFields(entry) : undefined;
-    if (id === undefined) continue;
-    const group = byId.get(id);
-    if (group === undefined) byId.set(id, [entry]);
-    else group.push(entry);
-  }
+  const byId = discoveryMetadataById(metadata);
   const seen = new Set<string>();
   const data: unknown[] = [];
   for (const entry of servingEntries) {
@@ -2271,6 +2267,18 @@ function listedCatalogWithMetadata(serving: unknown, metadata: unknown): { data:
     seen.add(id);
   }
   return { data };
+}
+
+function discoveryMetadataById(metadata: unknown): ReadonlyMap<string, readonly unknown[]> {
+  const byId = new Map<string, unknown[]>();
+  for (const entry of discoveryData(metadata)) {
+    const id = isRecord(entry) ? modelIdFromKnownFields(entry) : undefined;
+    if (id === undefined) continue;
+    const group = byId.get(id);
+    if (group === undefined) byId.set(id, [entry]);
+    else group.push(entry);
+  }
+  return byId;
 }
 
 function discoveryData(payload: unknown): readonly unknown[] {
@@ -2468,9 +2476,11 @@ function discoverConfiguredGatewayCatalog(
       config.egress,
       correlationId,
       trace,
-      signal,
-      !usesAutomaticCatalog(config, provider),
-      true,
+      {
+        callerSignal: signal,
+        metadataOnly: !usesAutomaticCatalog(config, provider),
+        allowEmpty: true,
+      },
     );
   return awaitSetupOperation(
     deps.gatewayModelDiscovery(
@@ -2625,12 +2635,7 @@ function catalogDeclaredCapability(
   metadata: GatewayDiscoveredModelMetadata,
 ): ModelCapability {
   const window = declaresContextWindow(metadata) ? metadata.contextWindow : undefined;
-  const contextWindow =
-    window === undefined
-      ? model.contextWindow
-      : model.contextWindowAssumed === true
-        ? window
-        : Math.min(model.contextWindow, window);
+  const contextWindow = catalogDeclaredContextWindow(model, window);
   const maxInputTokens = catalogDeclaredLimit(model.maxInputTokens, metadata.maxInputTokens);
   // A catalog declaration establishes a ceiling; retain smaller accepted or live learned limits.
   return {
@@ -2640,6 +2645,12 @@ function catalogDeclaredCapability(
       catalogDeclaredLimit(model.maxOutputTokens, metadata.maxOutputTokens) ??
       model.maxOutputTokens,
   };
+}
+
+function catalogDeclaredContextWindow(model: ModelCapability, window: number | undefined): number {
+  if (window === undefined) return model.contextWindow;
+  if (model.contextWindowAssumed === true) return window;
+  return Math.min(model.contextWindow, window);
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
@@ -8120,7 +8131,11 @@ async function verifyAndSaveGatewaySetup(
     discovery:
       deps.gatewayModelDiscovery ??
       ((...args): Promise<GatewayModelDiscoveryOutput> =>
-        defaultGatewayModelDiscovery(...args, request.signal, request.deploymentNames.length > 0)),
+        defaultGatewayModelDiscovery(...args, {
+          callerSignal: request.signal,
+          metadataOnly: request.deploymentNames.length > 0,
+          allowEmpty: false,
+        })),
   };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
   if (figmaFailure !== undefined) {

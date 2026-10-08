@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -24,7 +24,6 @@ import {
   encodeSecureWorkspaceNativeResponse,
   encodeSecureWorkspaceNativeDirectory,
 } from "./secureWorkspaceTextReadProtocol.js";
-import { randomUUID } from "node:crypto";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 import {
@@ -3542,12 +3541,7 @@ function nativeFileIOResponse(result: NativeFileIOResult): OpenCodeToolBridgeRes
       };
     return nativeInitializationRefusal(result.reason);
   }
-  const bytes =
-    "bytes" in result
-      ? result.bytes
-      : "entries" in result
-        ? encodeSecureWorkspaceNativeDirectory(result.entries)
-        : new Uint8Array();
+  const bytes = nativeFileIOResultBytes(result);
   try {
     return {
       status: 200,
@@ -3557,6 +3551,14 @@ function nativeFileIOResponse(result: NativeFileIOResult): OpenCodeToolBridgeRes
   } finally {
     bytes.fill(0);
   }
+}
+
+function nativeFileIOResultBytes(
+  result: Extract<NativeFileIOResult, { readonly ok: true }>,
+): Uint8Array {
+  if ("bytes" in result) return result.bytes;
+  if ("entries" in result) return encodeSecureWorkspaceNativeDirectory(result.entries);
+  return new Uint8Array();
 }
 
 function createInitializationAttachment(

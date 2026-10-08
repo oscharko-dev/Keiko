@@ -544,7 +544,7 @@ function bindCalls(
 // Reserved model transport markers outside Markdown code are a failed tool invocation, never
 // executable prose. Only aliases from this captured, validated offer can request a correction.
 const TEXT_TOOL_CALL =
-  /(?:<channel>\s*<tool_call>|<\|tool_call>)\s*(?:call:)?([A-Za-z][A-Za-z0-9_]{0,127})\s*\{/gu;
+  /(?:<channel>\s*<tool_call>|<\|tool_call>)\s*(?:call:)?([A-Za-z]\w{0,127})\s*\{/gu;
 
 function textInvocationAlias(
   content: string,

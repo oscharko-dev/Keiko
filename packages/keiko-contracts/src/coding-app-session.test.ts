@@ -1,18 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
   CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES,
-  CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
   codingAppSessionAcknowledgement,
   contentFreeCodingAppSessionChannelSnapshot,
+  validateCodingAppSessionChannelContent,
+  validateCodingAppSessionChannelSnapshot,
+} from "./coding-app-session.js";
+
+import {
+  CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
   decodeCodingAppSessionPairingFragment,
   encodeCodingAppSessionPairingFragment,
   isWellFormedCodingAppSessionPairingAttestation,
-  validateCodingAppSessionChannelContent,
-  validateCodingAppSessionChannelSnapshot,
   type CodingAppSessionPairingAttestation,
-} from "./coding-app-session.js";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
+import * as channelCompatibility from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 
 const attestation: CodingAppSessionPairingAttestation = {
   requestId: "req_launcher.pair-1",
@@ -109,6 +113,34 @@ describe("coding app-session channel contract", () => {
 });
 
 describe("coding app-session pairing attestation", () => {
+  it("propagates unexpected decoder faults instead of treating them as malformed input", () => {
+    const fragment = encodeCodingAppSessionPairingFragment(attestation);
+    const failure = new TypeError("private decoder failure");
+    const parse = vi.spyOn(JSON, "parse").mockImplementationOnce(() => {
+      throw failure;
+    });
+    try {
+      expect(() => decodeCodingAppSessionPairingFragment(fragment)).toThrow(failure);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it("keeps the existing channel exports bound to the same public pairing codec", () => {
+    expect(channelCompatibility.CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX).toBe(
+      CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
+    );
+    expect(channelCompatibility.decodeCodingAppSessionPairingFragment).toBe(
+      decodeCodingAppSessionPairingFragment,
+    );
+    expect(channelCompatibility.encodeCodingAppSessionPairingFragment).toBe(
+      encodeCodingAppSessionPairingFragment,
+    );
+    expect(channelCompatibility.isWellFormedCodingAppSessionPairingAttestation).toBe(
+      isWellFormedCodingAppSessionPairingAttestation,
+    );
+  });
+
   it("accepts the launcher wire shape and rejects malformed structures", () => {
     expect(isWellFormedCodingAppSessionPairingAttestation(attestation)).toBe(true);
     expect(isWellFormedCodingAppSessionPairingAttestation(null)).toBe(false);
@@ -175,6 +207,11 @@ describe("coding app-session pairing attestation", () => {
     expect(decodeCodingAppSessionPairingFragment("#other=1")).toBeUndefined();
     expect(
       decodeCodingAppSessionPairingFragment(`${CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX}%zz`),
+    ).toBeUndefined();
+    expect(
+      decodeCodingAppSessionPairingFragment(
+        `${CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX}${encodeURIComponent("{")}`,
+      ),
     ).toBeUndefined();
     expect(
       decodeCodingAppSessionPairingFragment(`${CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX}%7B%7D`),

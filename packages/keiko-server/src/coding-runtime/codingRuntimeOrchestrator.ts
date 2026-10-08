@@ -43,6 +43,7 @@ import {
 import type {
   CodingVerificationBlockedReason,
   CodingVerificationExecutedObserver,
+  CodingToolEditOutcome,
 } from "./codingToolFacadePorts.js";
 import {
   CodingRuntimeRunEffortLedger,
@@ -118,7 +119,6 @@ import {
   type CodingRuntimeRefusalEscalation,
   type EditRefusalFailureCode,
 } from "./codingRuntimeRefusalEscalation.js";
-import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
 import type {
   CodingRuntimeDescriptionJobStore,
   WorkbenchDescriptionScope,
@@ -1545,6 +1545,11 @@ function recordRuntimeRunSettled(
   );
 }
 
+interface VerificationFailureSettlement {
+  readonly state: "failed";
+  readonly failureCode: "verification-not-evidenced";
+}
+
 // The fact that named a failed run's cause: its own bounds or its last failed model call (F9), or
 // the escalation of its refused edits (F5), which wins over those facts (`settleTask`).
 type RunSettlementCause = CodingRuntimeTerminalFailure | CodingRuntimeRefusalEscalation;
@@ -2963,31 +2968,37 @@ export class CodingRuntimeOrchestrator {
     const escalation = this.editRefusals.escalation(runId);
     const outcome = escalation === undefined ? reported : "failed";
     const verificationMissing = this.verificationMissing(runId, outcome);
-    if (await this.continueTask(current, outcome, verificationMissing)) return;
+    const continued = verificationMissing
+      ? await this.continueForVerification(current)
+      : await this.continueForDelivery(current, outcome);
+    if (continued) return;
     // Read before the stop: the facts describe the model call that ended this turn (F9). An
     // escalation of the run's refused edits wins over them: it names the run's cause (F5).
     const cause = escalation ?? this.terminalFailure(runId, outcome);
+    const verificationFailure: VerificationFailureSettlement | undefined = verificationMissing
+      ? { state: "failed", failureCode: "verification-not-evidenced" }
+      : undefined;
+    await this.stopAndSettleTask(runId, outcome, cause, verificationFailure);
+  }
+
+  private async stopAndSettleTask(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+    cause: RunSettlementCause | undefined,
+    verificationFailure: VerificationFailureSettlement | undefined,
+  ): Promise<void> {
     this.captureHistory(runId);
-    const truthfulOutcome = verificationMissing ? "failed" : outcome;
-    if (verificationMissing) this.recordVerificationContinuation(runId, "not-evidenced");
+    const truthfulOutcome = verificationFailure?.state ?? outcome;
+    if (verificationFailure !== undefined)
+      this.recordVerificationContinuation(runId, "not-evidenced");
     const stopped = await this.stopForSettlement(runId, truthfulOutcome);
     const live = this.current();
     if (live?.runId !== runId) return;
-    this.settleStoppedTask(live, truthfulOutcome, stopped, cause, verificationMissing);
+    this.settleStoppedTask(live, truthfulOutcome, stopped, cause, verificationFailure);
   }
 
   private verificationMissing(runId: string, outcome: CodingRuntimeTaskOutcome): boolean {
     return outcome === "succeeded" && this.effort.needsVerification(runId);
-  }
-
-  private async continueTask(
-    live: CodingRuntimeSnapshot,
-    outcome: CodingRuntimeTaskOutcome,
-    verificationMissing: boolean,
-  ): Promise<boolean> {
-    return verificationMissing
-      ? await this.continueForVerification(live)
-      : await this.continueForDelivery(live, outcome);
   }
 
   private async continueForVerification(live: CodingRuntimeSnapshot): Promise<boolean> {
@@ -3058,7 +3069,7 @@ export class CodingRuntimeOrchestrator {
     outcome: CodingRuntimeTaskOutcome,
     stopped: boolean,
     cause: RunSettlementCause | undefined,
-    verificationMissing = false,
+    verificationFailure?: VerificationFailureSettlement,
   ): void {
     const terminalResult = this.deps.manager.result(live.runId);
     const runtimeAgrees =
@@ -3067,29 +3078,14 @@ export class CodingRuntimeOrchestrator {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    const target = this.settlementTarget(live, outcome, cause, verificationMissing);
+    const target =
+      verificationFailure ?? this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome, cause));
     if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     const settledCause = target.failureCode === cause?.failureCode ? cause : undefined;
     this.transition(live, target.state, target.failureCode, undefined, settledCause);
-  }
-
-  private settlementTarget(
-    live: CodingRuntimeSnapshot,
-    outcome: CodingRuntimeTaskOutcome,
-    cause: RunSettlementCause | undefined,
-    verificationMissing: boolean,
-  ):
-    | {
-        readonly state: "failed" | "succeeded";
-        readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
-      }
-    | undefined {
-    return verificationMissing
-      ? { state: "failed", failureCode: "verification-not-evidenced" }
-      : this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome, cause));
   }
 
   /**

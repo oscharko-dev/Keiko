@@ -275,9 +275,12 @@ export class ScriptedGovernedTools {
   ): Promise<string> {
     this.invoking.set(`${this.input.sessionId}:${call.id}`, call.name);
     const fetch: typeof globalThis.fetch = (...args) => this.fetchObserved(...args);
+    if (this.input.pluginVersion === "v2" && this.v2Tools === undefined) {
+      this.v2Tools = generatedV2Tools({ ...this.input, fetch });
+    }
     const tool =
       this.input.pluginVersion === "v2"
-        ? (await (this.v2Tools ??= generatedV2Tools({ ...this.input, fetch }))).get(call.name)
+        ? (await this.v2Tools)?.get(call.name)
         : await generatedTool(call.name, { ...this.input, fetch });
     if (tool === undefined) throw new Error("functional-generated-tool-unavailable");
     const result = await tool.execute(call.args, {

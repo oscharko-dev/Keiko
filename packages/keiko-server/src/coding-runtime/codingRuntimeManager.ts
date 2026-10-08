@@ -647,6 +647,11 @@ interface ResolvedPortableRuntime {
   readonly executablePath: string;
 }
 
+interface AttestedRuntimeOptions {
+  readonly deadline?: number;
+  readonly serviceHost?: PreparedOpenCodeServiceHostLaunch;
+}
+
 interface OpenCodeStartupMailbox extends OpenCodeStartupOutput {
   offer(line: string): void;
   close(): void;
@@ -1116,6 +1121,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         args,
         lifecycleAdapter,
         parentLifetime,
+        {},
       );
     }
     return this.attestAndSpawnRuntime(
@@ -1155,7 +1161,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       args,
       lifecycleAdapter,
       parentLifetime,
-      deadline,
+      { deadline },
     );
   }
 
@@ -1164,11 +1170,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     executablePath: string,
     env: Record<string, string>,
     args: readonly string[],
-    lifecycleAdapter?: OpenCodeLifecycleAdapter,
-    parentLifetime?: "stdin-eof",
-    deadline?: number,
-    serviceHost?: PreparedOpenCodeServiceHostLaunch,
+    lifecycleAdapter: OpenCodeLifecycleAdapter | undefined,
+    parentLifetime: "stdin-eof" | undefined,
+    options: AttestedRuntimeOptions,
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
+    const { serviceHost, deadline } = options;
     if (this.active !== undefined && this.active.status !== "stopped")
       return this.recordLaunchFailure(request, failure("runtime-already-running", true));
     const proof = proveSpawnWorkspaceRoot(
@@ -1275,8 +1281,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       program.args,
       adapter,
       "stdin-eof",
-      deadline,
-      program,
+      { deadline, serviceHost: program },
     );
   }
 

@@ -23,6 +23,7 @@ import type {
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -389,7 +390,7 @@ function targetedProjectSelectionFields(plan: VerificationPlan): {
       ? {}
       : {
           targetedProjectRootSha256: createHash("sha256")
-            .update(JSON.stringify([...roots].sort()))
+            .update(JSON.stringify([...roots].sort(compareStrings)))
             .digest("hex"),
         }),
   };

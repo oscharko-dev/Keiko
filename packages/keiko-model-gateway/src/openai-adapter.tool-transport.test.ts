@@ -39,7 +39,8 @@ function response(content: string, nativeCall = false): Response {
                       type: "function",
                       function: {
                         name: "keiko_workspace_discover",
-                        arguments: '{"query":"fixture","maxResults":10}',
+                        arguments:
+                          '{"mode":"keywords","directory":"","query":"fixture","maxResults":10}',
                       },
                     },
                   ],

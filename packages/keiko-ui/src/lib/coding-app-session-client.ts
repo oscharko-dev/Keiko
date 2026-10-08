@@ -20,7 +20,7 @@ import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-con
 import {
   CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
   decodeCodingAppSessionPairingFragment,
-} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { newClientCorrelationId } from "./bff-correlation";
 import type { ClientSessionRepairStream } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -94,10 +94,10 @@ export async function redeemCodingAppSessionPairingFragment(
   const fragment = seams.readFragment();
   if (!fragment.startsWith(CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX)) return false;
   seams.stripFragment();
-  const attestation = decodeCodingAppSessionPairingFragment(fragment);
-  if (attestation === undefined) return false;
   const correlationId = newClientCorrelationId();
   try {
+    const attestation = decodeCodingAppSessionPairingFragment(fragment);
+    if (attestation === undefined) return false;
     await seams.postPairing(attestation, correlationId);
     return true;
   } catch (error) {

@@ -633,12 +633,6 @@
     },
     {
       "path": "packages/keiko-contracts/src/coding-app-session.ts",
-      "owner": "decodeCodingAppSessionPairingFragment",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/coding-app-session.ts",
       "owner": "serializedUtf8Bytes",
       "kind": "unregistered-catch",
       "count": 1

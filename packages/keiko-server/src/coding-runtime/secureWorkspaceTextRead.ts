@@ -46,6 +46,8 @@ import {
 /** Same bound as the native path component scope, sufficient for one complete ancestor load. */
 export const SECURE_WORKSPACE_NATIVE_MAX_WAITERS = 64;
 
+type SecureWorkspaceNativeOperation = SecureWorkspaceNativeRequest["operation"];
+
 export type SecureWorkspaceTextReadFailure =
   | "unsupported-platform"
   | "workspace-unavailable"
@@ -240,7 +242,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
 
   private async nativeRead(
     request: SecureWorkspaceNativeBytesRequest,
-    operation: "read" | "stat" | "list",
+    operation: SecureWorkspaceNativeOperation,
   ): Promise<SecureWorkspaceNativeBytesResult> {
     if (!validNativeRequest(request, operation)) return { ok: false, reason: "denied" };
     if (request.signal?.aborted === true) return { ok: false, reason: "cancelled" };
@@ -252,7 +254,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
 
   private async nativeGuarded(
     request: SecureWorkspaceNativeBytesRequest,
-    operation: "read" | "stat" | "list",
+    operation: SecureWorkspaceNativeOperation,
     signal: AbortSignal,
   ): Promise<SecureWorkspaceNativeBytesResult> {
     const material = await resolveVerifiedReadMaterial(this.deps);
@@ -282,7 +284,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
 
   private async nativeAcquired(
     request: SecureWorkspaceNativeBytesRequest,
-    operation: "read" | "stat" | "list",
+    operation: SecureWorkspaceNativeOperation,
     signal: AbortSignal,
     root: string,
     artifact: SecureWorkspaceTextReadArtifact,
@@ -799,7 +801,7 @@ function exactNativeFileIO(
 
 function validNativeRequest(
   request: SecureWorkspaceNativeBytesRequest,
-  operation: "read" | "stat" | "list",
+  operation: SecureWorkspaceNativeOperation,
 ): boolean {
   return (
     isSecureWorkspaceNativeRelativePath(request.relativePath) &&

@@ -693,8 +693,10 @@ function allCandidates(
   let parentMessageId: string | undefined;
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
-    result.push(...messageCandidates(message, parentMessageId, live, toolProfile));
-    result.push(...changedNativeRetryCandidates(message, parentMessageId, known));
+    result.push(
+      ...messageCandidates(message, parentMessageId, live, toolProfile),
+      ...changedNativeRetryCandidates(message, parentMessageId, known),
+    );
   }
   return result;
 }

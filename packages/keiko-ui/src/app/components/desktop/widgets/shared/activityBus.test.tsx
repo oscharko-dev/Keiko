@@ -9,6 +9,17 @@ import {
 } from "./activityBus";
 
 describe("activityBus", () => {
+  beforeEach(() => {
+    delete window.__keikoActivity;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-15T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    delete window.__keikoActivity;
+    vi.useRealTimers();
+  });
+
   it("records native retry schedule and clear as observations without gateway counts", () => {
     const event: CodingWorkbenchRuntimeSseEvent = {
       schemaVersion: "1",
@@ -35,17 +46,6 @@ describe("activityBus", () => {
     ).toBe(true);
     expect(JSON.stringify(getActivity())).not.toContain("nativeRetry");
     expect(JSON.stringify(getActivity())).not.toContain("modelGateway");
-  });
-
-  beforeEach(() => {
-    delete window.__keikoActivity;
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-15T10:00:00Z"));
-  });
-
-  afterEach(() => {
-    delete window.__keikoActivity;
-    vi.useRealTimers();
   });
 
   it("prepends timestamped activity and caps the in-memory store", () => {

@@ -125,10 +125,11 @@ export function checkMacNativeContainment({
   }
 }
 
-if (
-  process.argv[1] !== undefined &&
-  fileURLToPath(import.meta.url) === realpathSync(process.argv[1])
-) {
+export function isMacNativeContainmentEntryPoint(entryPath, moduleURL) {
+  return entryPath !== undefined && fileURLToPath(moduleURL) === realpathSync(entryPath);
+}
+
+if (isMacNativeContainmentEntryPoint(process.argv[1], import.meta.url)) {
   try {
     const result = checkMacNativeContainment();
     process.stdout.write(

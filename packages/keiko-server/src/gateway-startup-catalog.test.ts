@@ -482,7 +482,7 @@ it("records the startup catalog disposition and counts under a child correlation
   );
   deps.gatewayConfig?.set(startupConfig(), true, "corr-catalog-owner");
   await vi.waitFor(() => {
-    expect(catalogCompletions(events).length > 0).toBe(true);
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
   });
   const completion = catalogCompletions(events)[0];
   if (completion === undefined) throw new TypeError("Expected catalog completion.");
@@ -948,7 +948,7 @@ it("does not delete active inventory on an incomplete actual models response", a
   const deps = startupDeps(undefined, events);
   deps.gatewayConfig?.set(managedStartupConfig("discovered"), true);
   await vi.waitFor(() => {
-    expect(catalogCompletions(events).length > 0).toBe(true);
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
   });
   expect(startupProviderIds(deps)).toEqual(["chat-model"]);
   const completion = catalogCompletions(events)[0];
@@ -1050,7 +1050,7 @@ it("reuses the actual metadata and models transport after a producer-derived bou
   const initial = managedStartupConfig("discovered");
   deps.gatewayConfig?.set(initial, true);
   await vi.waitFor(() => {
-    expect(catalogCompletions(events).length > 0).toBe(true);
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   const countModels = (): number =>

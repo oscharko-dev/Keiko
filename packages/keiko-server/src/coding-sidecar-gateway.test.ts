@@ -989,6 +989,8 @@ describe("coding-sidecar gateway", () => {
     ).toEqual([
       // #3873 follow-up: deletions and renames joined the replacement changeset (regenerated from
       // the producer with projectedGatewaySchema; a schema change here is deliberate, never typed).
+      // Discovery now requires explicit mode/directory; its pin comes from the actual captured
+      // OpenCode request fixture, with the canonical trust check below still exercised.
       ["keiko_changeset_edit", "a88e907c1c4f7f955dccfa4d960e10f315a59a1f94b16cedc223f2a47bf4abf6"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
@@ -1009,7 +1011,7 @@ describe("coding-sidecar gateway", () => {
       ["keiko_verification", "8cbb4582b87ff37f13040c8f064d1080b848bcfe7b6ff2159adf682acd41c35f"],
       [
         "keiko_workspace_discover",
-        "fdc3bd7f51fd0a7c913909fee514aa0c0f31127b9b4e10324c569fbfcdf4df6c",
+        "908a32e65f39462dc43df60ccccbf6e0dee4740b9421a84e7e145c485a4e2da4",
       ],
       ["keiko_workspace_read", "29233b25ff1788400500ee0ec33c7ef915a016ea8646c5d9884bac699a618503"],
       ["question", "c5e745bc20ee80f7cbad35122b5e3b58db1c6b863821ec26ef203d1e94c451a3"],

@@ -424,7 +424,7 @@ const MAPPED_ACTIVITY_TOOLS: ReadonlySet<string> = new Set(
 function capturedChildHash(tools: ActivityToolCorrelations, actionId: string): string | undefined {
   const binding = tools.binding;
   if (binding === undefined || !actionId.startsWith(`${binding.sessionId}:`)) return undefined;
-  const match = /^cm_([a-f0-9]{64})_([1-9][0-9]{0,3})$/u.exec(callIdFromAction(actionId) ?? "");
+  const match = /^cm_([a-f0-9]{64})_([1-9]\d{0,3})$/u.exec(callIdFromAction(actionId) ?? "");
   return match !== null && Number(match[2]) <= MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS
     ? match[1]
     : undefined;

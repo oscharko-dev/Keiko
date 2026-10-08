@@ -1001,11 +1001,7 @@ function selectedConversationReadiness(
 }
 
 function isFreshSelectedCodingModel(selected: ModelCapability | undefined): boolean {
-  return (
-    selected !== undefined &&
-    selected.conversationReady === true &&
-    isCodingWorkbenchModel(selected)
-  );
+  return selected?.conversationReady === true && isCodingWorkbenchModel(selected);
 }
 
 function pendingSelectedSource(

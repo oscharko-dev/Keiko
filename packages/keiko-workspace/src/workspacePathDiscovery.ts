@@ -46,7 +46,8 @@ function validRequestQuery(mode: unknown, query: unknown): query is string {
 }
 
 function validRequestMode(mode: unknown): mode is WorkspacePathDiscoveryMode {
-  return WORKSPACE_PATH_DISCOVERY_MODES.some((value) => value === mode);
+  const modes: readonly string[] = WORKSPACE_PATH_DISCOVERY_MODES;
+  return typeof mode === "string" && modes.includes(mode);
 }
 
 function validRequestDirectory(directory: unknown): directory is string {
@@ -189,8 +190,7 @@ async function streamDiscovery(
       true,
       admitted,
       control,
-      collector.onFile,
-      collector.onStats,
+      { onFile: collector.onFile, onStats: collector.onStats },
       {
         recursive: request.mode !== "directory",
         boundPendingDirectories: true,

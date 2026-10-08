@@ -25,11 +25,9 @@ export function retainedDirtyTargets(
   for (const snapshot of editorAgentRegistry.listSessions()) {
     if (snapshot.dirtyFiles.length === 0) continue;
     const recorded = editorAgentSnapshotLocation(snapshot, store);
-    if (!isWithinWorkspace(workspaceRoot, recorded) && !isWithinWorkspace(recorded, workspaceRoot))
-      continue;
+    if (!rootsOverlap(workspaceRoot, recorded)) continue;
     const root = dirtySnapshotRoot(snapshot, store, resolveAccess);
-    if (!isWithinWorkspace(workspaceRoot, root) && !isWithinWorkspace(root, workspaceRoot))
-      continue;
+    if (!rootsOverlap(workspaceRoot, root)) continue;
     for (const file of snapshot.dirtyFiles) {
       if (!isContainedAgentPath(file)) throw new Error("Buffer safety path is invalid");
       const mapped = relative(workspaceRoot, resolve(root, file)).replaceAll("\\", "/");
@@ -37,6 +35,10 @@ export function retainedDirtyTargets(
     }
   }
   return [...dirty];
+}
+
+function rootsOverlap(left: string, right: string): boolean {
+  return isWithinWorkspace(left, right) || isWithinWorkspace(right, left);
 }
 
 function dirtySnapshotRoot(

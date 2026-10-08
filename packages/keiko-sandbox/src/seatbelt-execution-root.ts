@@ -52,9 +52,9 @@ function installedLibraryReads(systemReadRoots: readonly string[]): string {
     .map((prefix) => {
       const library = `^${prefix}/(Cellar/[^/]+/[^/]+|opt/[^/]+)/lib/[^/]+[.]dylib$`;
       return (
-        `(allow file-read-metadata (subpath ${JSON.stringify(`${prefix}/Cellar`)}) ` +
-        `(subpath ${JSON.stringify(`${prefix}/opt`)}) ` +
-        `(subpath ${JSON.stringify(`${prefix}/bin`)}))` +
+        `(allow file-read-metadata (subpath ${JSON.stringify(prefix + "/Cellar")}) ` +
+        `(subpath ${JSON.stringify(prefix + "/opt")}) ` +
+        `(subpath ${JSON.stringify(prefix + "/bin")}))` +
         `(allow file-read-data (regex ${JSON.stringify(library)}))`
       );
     })

@@ -2,7 +2,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionChannelSnapshot } from "@oscharko-dev/keiko-contracts";
 
-import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  encodeCodingAppSessionPairingFragment,
+  validateCodingAppSessionChannelSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import type { CodingAppSessionStreamInput } from "./coding-app-session-channel-api";
 import {
   redeemCodingAppSessionPairingNavigation,
   type CodingAppSessionPairingSeams,
@@ -56,6 +60,44 @@ function snapshot(droppedEventCount = 0, runId = "run-1"): CodingAppSessionChann
       },
     },
   };
+}
+
+function repliedSnapshot(): CodingAppSessionChannelSnapshot {
+  const current = snapshot(3);
+  const content = current.content;
+  if (
+    content?.kind !== "safe-activity" ||
+    !("feed" in content) ||
+    content.feed.availability !== "available"
+  )
+    throw new TypeError("Expected available fixture");
+  const result: CodingAppSessionChannelSnapshot = {
+    ...current,
+    content: {
+      ...content,
+      feed: {
+        ...content.feed,
+        turns: [
+          {
+            turnId: "turn-current-reply",
+            messages: [
+              {
+                messageId: "message-current-reply",
+                role: "assistant",
+                occurredAt: AT,
+                segments: [{ kind: "text", text: "Current connection reply.", truncated: false }],
+                truncated: false,
+              },
+            ],
+            tools: [],
+            truncated: false,
+          },
+        ],
+      },
+    },
+  };
+  expect(validateCodingAppSessionChannelSnapshot(result).ok).toBe(true);
+  return result;
 }
 
 function unavailableSnapshot(runId = "run-1"): CodingAppSessionChannelSnapshot {
@@ -343,6 +385,128 @@ describe("useCodingWorkbenchSafeActivity", () => {
     // caller that trusts the returned feed to belong to the current run.
     expect(view.result.current.feed?.runId).not.toBe("run-1");
     await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+  });
+
+  it("ignores a superseded initial read after a newer connection confirmed its feed", async () => {
+    vi.useFakeTimers();
+    let release!: (value: CodingAppSessionChannelSnapshot) => void;
+    getSnapshotMock
+      .mockImplementationOnce(
+        () =>
+          new Promise<CodingAppSessionChannelSnapshot>((resolve) => {
+            release = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(repliedSnapshot());
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    try {
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      expect(getSnapshotMock).toHaveBeenCalledOnce();
+      const oldSignal = getSnapshotMock.mock.calls[0]?.[0] as AbortSignal;
+      act(() => view.result.current.retry());
+      expect(oldSignal.aborted).toBe(true);
+      await act(async () => vi.advanceTimersByTimeAsync(64));
+      const confirmed = view.result.current.feed;
+      expect(confirmed?.turns[0]?.messages[0]?.segments[0]).toHaveProperty(
+        "text",
+        "Current connection reply.",
+      );
+      await act(async () => release(snapshot()));
+      expect(view.result.current.feed).toBe(confirmed);
+      expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+    } finally {
+      release(snapshot());
+      view.unmount();
+    }
+  });
+
+  it.each(["closed", "failed"] as const)(
+    "does not let an aborted stream %s finalizer flush another connection's pending batch",
+    async (outcome) => {
+      vi.useFakeTimers();
+      let resolveOld!: () => void;
+      let rejectOld!: (error: Error) => void;
+      let publishNew!: (value: CodingAppSessionChannelSnapshot) => void;
+      streamSnapshotsMock
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              resolveOld = resolve;
+              rejectOld = reject;
+            }),
+        )
+        .mockImplementationOnce(
+          ({ signal, onSnapshot }: CodingAppSessionStreamInput): Promise<void> => {
+            publishNew = onSnapshot;
+            return new Promise((resolve) =>
+              signal.addEventListener("abort", () => resolve(), { once: true }),
+            );
+          },
+        );
+      const view = renderHook(() =>
+        useCodingWorkbenchSafeActivity({
+          runId: "run-1",
+          runState: "running",
+          runtimeEventSignal: 0,
+        }),
+      );
+      try {
+        await act(async () => vi.advanceTimersByTimeAsync(64));
+        expect(view.result.current.feed?.droppedEventCount).toBe(0);
+        act(() => view.result.current.retry());
+        await act(async () => vi.advanceTimersByTimeAsync(64));
+        act(() => publishNew(snapshot(3)));
+        await act(async () => {
+          if (outcome === "closed") resolveOld();
+          else rejectOld(new Error("superseded stream"));
+        });
+        expect(view.result.current.feed?.droppedEventCount).toBe(0);
+        expect(view.result.current.status).toBe("live");
+        await act(async () => vi.advanceTimersByTimeAsync(64));
+        expect(view.result.current.feed?.droppedEventCount).toBe(3);
+      } finally {
+        resolveOld();
+        view.unmount();
+      }
+    },
+  );
+
+  it("refuses a late valid frame from the stream replaced by a successful reconnect", async () => {
+    vi.useFakeTimers();
+    let publishOld!: (value: CodingAppSessionChannelSnapshot) => void;
+    streamSnapshotsMock.mockImplementationOnce(
+      ({ signal, onSnapshot }: CodingAppSessionStreamInput): Promise<void> => {
+        publishOld = onSnapshot;
+        return new Promise((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+      },
+    );
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    try {
+      await act(async () => vi.advanceTimersByTimeAsync(64));
+      getSnapshotMock.mockResolvedValueOnce(snapshot(3));
+      act(() => view.result.current.retry());
+      await act(async () => vi.advanceTimersByTimeAsync(64));
+      expect(view.result.current.feed?.droppedEventCount).toBe(3);
+      act(() => publishOld(snapshot()));
+      await act(async () => vi.advanceTimersByTimeAsync(64));
+      expect(view.result.current.feed?.droppedEventCount).toBe(3);
+    } finally {
+      view.unmount();
+    }
   });
 
   it("fails closed when the channel returns an unavailable feed", async () => {

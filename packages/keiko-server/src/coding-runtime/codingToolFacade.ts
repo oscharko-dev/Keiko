@@ -91,9 +91,9 @@ const VERIFICATION_FAILURE_SUMMARY =
 // The contract-owned vocabulary combines the existing editor conflict/failure codes with the
 // governed port's refusal and transport markers. Unknown delegate strings are withheld.
 // Exported so the run's refusal escalation pins complete classification without a second list.
-export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
-  ...CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
-]);
+export const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>(
+  CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
+);
 // The verification PORT's own closed markers (productionManagedWorktreeTools.ts), as opposed to the
 // runner vocabulary sourced below. The first two are raised BEFORE the runner is called: the run's
 // authority or managed-workspace liveness was already gone when the tool call arrived, or the
@@ -489,9 +489,12 @@ function projectCompletedPayload(
   value: unknown,
 ): CodingToolResult {
   const read = projectPayload(request, value);
-  return read === undefined
-    ? projected(request.action === "discover" ? "failed" : "completed")
-    : { status: "completed", evidence: [{ kind: "governed-delegate", code: "completed" }], read };
+  if (read === undefined) return projected(request.action === "discover" ? "failed" : "completed");
+  return {
+    status: "completed",
+    evidence: [{ kind: "governed-delegate", code: "completed" }],
+    read,
+  };
 }
 
 function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
@@ -1123,7 +1126,8 @@ function plainDiscoveryRecord(
 }
 
 function isDiscoveryReason(value: unknown): value is WorkspacePathDiscoveryTruncationReason {
-  return WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS.some((reason) => reason === value);
+  const reasons: readonly unknown[] = WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS;
+  return reasons.includes(value);
 }
 
 function isDiscoveryEntries(

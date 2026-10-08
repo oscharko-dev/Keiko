@@ -2315,12 +2315,7 @@ function createWorkbenchProbeEntry(
       entry.settled = true;
       entry.outcome = outcome;
       entry.at = Date.now();
-      entry.cooldownMs =
-        outcome === "stale"
-          ? 0
-          : outcome === "inconclusive"
-            ? WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS
-            : WORKBENCH_REPROBE_COOLDOWN_MS;
+      entry.cooldownMs = workbenchProbeCooldownMs(outcome);
       finish();
     },
     prioritized,
@@ -2330,6 +2325,12 @@ function createWorkbenchProbeEntry(
     settled: false,
   };
   return entry;
+}
+
+function workbenchProbeCooldownMs(outcome: WorkbenchProbeOutcome): number {
+  if (outcome === "stale") return 0;
+  if (outcome === "inconclusive") return WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS;
+  return WORKBENCH_REPROBE_COOLDOWN_MS;
 }
 
 function nextWorkbenchProbe(): WorkbenchProbeEntry | undefined {

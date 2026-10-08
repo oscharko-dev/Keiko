@@ -1789,11 +1789,10 @@ function observeVerificationExecution(
   executed: CodingVerificationExecutedObserver | undefined,
 ): void {
   const target = codingVerificationTargetDigest(request.verifierId, request.targetPath);
+  const executedRedStatuses: readonly string[] = EXECUTED_RED_STATUSES;
   if (
     report.results.some(
-      (result) =>
-        result.status === "passed" ||
-        EXECUTED_RED_STATUSES.some((status) => status === result.status),
+      (result) => result.status === "passed" || executedRedStatuses.includes(result.status),
     )
   ) {
     executed?.(target);

@@ -543,7 +543,7 @@ export function isCodingSafeActivityPresentationPath(value: unknown): value is s
 
 function displayPathHasNoControls(value: string): boolean {
   for (const character of value) {
-    const code = character.charCodeAt(0);
+    const code = character.codePointAt(0) ?? 0;
     if (code < 32 || code === 127) return false;
   }
   return true;

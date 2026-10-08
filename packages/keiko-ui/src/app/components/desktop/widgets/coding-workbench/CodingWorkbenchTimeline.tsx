@@ -1131,7 +1131,8 @@ function timelineEventDetail(
   if (key === undefined) return eventDetail(event, t);
   const cause = t(key);
   if (item.turnFailureProgress === "finished") return cause;
-  return `${cause} ${t(`codingWorkbench.event.turnProgress.${item.turnFailureProgress}`)}`;
+  const progress = t(`codingWorkbench.event.turnProgress.${item.turnFailureProgress}`);
+  return `${cause} ${progress}`;
 }
 
 function VerificationDetail({

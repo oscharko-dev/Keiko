@@ -3,6 +3,8 @@ import { performance } from "node:perf_hooks";
 import * as timers from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
+import { OpenAiAdapter } from "../../packages/keiko-model-gateway/dist/openai-adapter.js";
+import { openCodeGatewayCatalogAdvertisement } from "../../packages/keiko-model-gateway/src/__fixtures__/toolCatalog.js";
 import {
   CUSTOMER_SHAPE_API_KEY,
   failTransportResponse,
@@ -90,6 +92,54 @@ describe("customer-shape LiteLLM twin", () => {
       expect(await second.text()).toContain("Synthetic Workbench reply.");
       expect(twin.requests[0]).toMatchObject({ deliveredToolCall: true });
       expect(twin.requests[1]).toMatchObject({ completedDiscoveryResult: true });
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("binds the streamed discovery call through the actual OpenAI adapter and canonical catalog", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin();
+    const events = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "customer-shape-tool-contract",
+      costClass: "low",
+      log: { write: (event) => events.push(event) },
+    });
+    try {
+      twin.planSingleWorkspaceDiscovery();
+      const chunks = [];
+      for await (const chunk of adapter.callStream(
+        {
+          modelId: "gemma-4-31b-it",
+          messages: [{ role: "user", content: "Discover README.md" }],
+          toolCatalog: openCodeGatewayCatalogAdvertisement(Date.now()),
+        },
+        {
+          modelId: "gemma-4-31b-it",
+          baseUrl: twin.baseUrl,
+          apiKey: CUSTOMER_SHAPE_API_KEY,
+          apiKeyHeaderName: "x-litellm-key",
+          timeoutMs: 5000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ))
+        chunks.push(chunk);
+      const done = chunks.find((chunk) => chunk.type === "done");
+      expect(done?.response.toolCalls).toHaveLength(1);
+      expect(done?.response.toolCalls[0]).toMatchObject({
+        id: "call-twin",
+        name: "keiko_workspace_discover",
+        arguments: { mode: "keywords", directory: "", query: "README.md", maxResults: 5 },
+        invocation: { toolRef: { canonicalId: "keiko.workspace.discover", contractVersion: 1 } },
+      });
+      expect(events.filter((event) => event.op === "gateway.tool-catalog.call-bound")).toHaveLength(
+        1,
+      );
+      expect(events.filter((event) => event.op === "gateway.tool-catalog.rejected")).toHaveLength(
+        0,
+      );
+      expect(twin.requests.filter((request) => request.deliveredToolCall)).toHaveLength(1);
     } finally {
       await twin.close();
     }

@@ -79,7 +79,7 @@ function plannedWorkspaceDiscovery(body, behavior) {
   behavior.workspaceDiscoveryPending = false;
   return {
     name: "keiko_workspace_discover",
-    arguments: '{"query":"README.md","maxResults":5}',
+    arguments: '{"mode":"keywords","directory":"","query":"README.md","maxResults":5}',
   };
 }
 

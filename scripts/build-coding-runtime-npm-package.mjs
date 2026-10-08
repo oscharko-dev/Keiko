@@ -47,6 +47,7 @@ import {
 } from "./package-surface-pack.mjs";
 import { offendersForComponent } from "./check-workspace-supply-chain.mjs";
 import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
+import { compareStrings } from "./lib/compare-strings.mjs";
 import {
   platformRuntimePackageName,
   platformRuntimePackages,
@@ -65,7 +66,7 @@ const CANDIDATE_FILES = [
   EXECUTABLE_PATH,
   LICENSE_PATH,
   SBOM_PATH,
-].sort();
+].sort(compareStrings);
 
 /** The platform list and its naming are owned by the release workspace policy. */
 export const NPM_RUNTIME_PACKAGE_TARGETS = platformRuntimePackages;
@@ -720,7 +721,7 @@ function assertPackedCandidate(packed, candidate) {
   }));
   const files = packed.files
     ?.map(({ path, size, mode }) => ({ path, size, mode }))
-    .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    .sort((left, right) => compareStrings(left.path, right.path));
   if (!isDeepStrictEqual(files, expected)) {
     throw new Error("npm pack did not retain the approved file inventory and permissions");
   }
@@ -730,7 +731,7 @@ function verifyPackedContents(tarballPath, candidate) {
   const extracted = mkdtempSync(join(tmpdir(), "keiko-runtime-packed-inspection-"));
   try {
     extractPackedRuntimePackage(tarballPath, extracted);
-    const actual = fileFactsForPaths(extracted, candidateFilePaths(extracted).sort());
+    const actual = fileFactsForPaths(extracted, candidateFilePaths(extracted).sort(compareStrings));
     if (!isDeepStrictEqual(actual, candidate.files)) {
       throw new Error("packed contents digest, inventory or permissions mismatch");
     }

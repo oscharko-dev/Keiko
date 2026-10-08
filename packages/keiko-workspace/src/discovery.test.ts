@@ -107,9 +107,11 @@ describe("streamed discovery failure propagation", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      (entry) => {
-        visited.push(entry.relativePath);
-        return Promise.resolve();
+      {
+        onFile: (entry) => {
+          visited.push(entry.relativePath);
+          return Promise.resolve();
+        },
       },
     );
     expect(visited).toEqual([relative]);
@@ -141,7 +143,7 @@ describe("streamed discovery failure propagation", () => {
         false,
         fs,
         createStructuralExecutionControl(null, Date.now, abort.signal),
-        () => Promise.resolve(),
+        { onFile: () => Promise.resolve() },
       ),
     ).rejects.toMatchObject({ reason: "aborted" });
     expect(opened).toEqual(["/ws"]);
@@ -176,9 +178,11 @@ describe("streamed discovery failure propagation", () => {
       false,
       fs,
       createStructuralExecutionControl(null),
-      (entry) => {
-        visited.push(entry.relativePath);
-        return Promise.resolve();
+      {
+        onFile: (entry) => {
+          visited.push(entry.relativePath);
+          return Promise.resolve();
+        },
       },
     );
     expect(visited).toEqual(["package.json", relative]);
@@ -215,9 +219,11 @@ describe("streamed discovery failure propagation", () => {
         false,
         fs,
         createStructuralExecutionControl(null),
-        (entry): Promise<void> => {
-          visited.push(entry.relativePath);
-          return Promise.resolve();
+        {
+          onFile: (entry): Promise<void> => {
+            visited.push(entry.relativePath);
+            return Promise.resolve();
+          },
         },
       ),
     ).rejects.toBeInstanceOf(WorkspaceReadError);
@@ -245,7 +251,7 @@ describe("streamed discovery failure propagation", () => {
         false,
         fs,
         createStructuralExecutionControl(null),
-        (): Promise<void> => Promise.resolve(),
+        { onFile: (): Promise<void> => Promise.resolve() },
       ),
     ).rejects.toBe(failure);
   });

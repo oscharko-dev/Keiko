@@ -1,3 +1,5 @@
+import { exactKeys, isRecord } from "./contract-validation-primitives.js";
+export { exactKeys, isRecord } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
@@ -19,24 +21,8 @@ import { stripUnsafeFormatChars } from "./text-safety.js";
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const STRICT_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-export function exactKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-): string[] {
-  const errors: string[] = [];
-  for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) errors.push(`${path}.${key} is not allowed`);
-  }
-  return errors;
 }
 
 export function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {

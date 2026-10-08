@@ -139,6 +139,10 @@
       "types": "./dist/coding-app-session.d.ts",
       "import": "./dist/coding-app-session.js"
     },
+    "./runtime/coding-app-session-pairing": {
+      "types": "./dist/coding-app-session-pairing.d.ts",
+      "import": "./dist/coding-app-session-pairing.js"
+    },
     "./runtime/coding-context": {
       "types": "./dist/coding-context.d.ts",
       "import": "./dist/coding-context.js"

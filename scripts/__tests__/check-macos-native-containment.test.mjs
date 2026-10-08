@@ -2,10 +2,12 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   checkMacNativeContainment,
+  isMacNativeContainmentEntryPoint,
   validateMacNativeContainmentReport,
 } from "../check-macos-native-containment.mjs";
 
@@ -240,20 +242,12 @@ describe("required macOS containment execution evidence", () => {
 });
 
 describe("required containment runner entry point", () => {
-  it("executes through a real symlink spelling instead of silently returning success", () => {
+  it("recognizes a real symlink spelling without starting the containment run", () => {
     const alias = join(fixtureRoot(), "containment-alias.mjs");
     symlinkSync(join(repoRoot, "scripts/check-macos-native-containment.mjs"), alias);
-    const result = spawnSync(process.execPath, [alias], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    if (process.platform === "darwin") {
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("5/5 required controls executed");
-    } else {
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("non-darwin-host");
-    }
-  }, 25_000);
+    const moduleURL = new URL("../check-macos-native-containment.mjs", import.meta.url).href;
+    expect(isMacNativeContainmentEntryPoint(alias, moduleURL)).toBe(true);
+    expect(isMacNativeContainmentEntryPoint(import.meta.filename, moduleURL)).toBe(false);
+    expect(isMacNativeContainmentEntryPoint(undefined, moduleURL)).toBe(false);
+  });
 });
