@@ -204,6 +204,33 @@ describe("useCodingWorkbenchRuntimeResources profile refresh", () => {
 });
 
 describe("useCodingWorkbenchRuntimeResources source refresh", () => {
+  it("does not rediscover the catalog on repeated pending verification timer reads", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const catalogRefresh = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
+        .mockResolvedValueOnce({ status: "unavailable", reason: "model-verification-pending" })
+        .mockResolvedValueOnce({ status: "unavailable", reason: "model-verification-pending" })
+        .mockResolvedValueOnce({ status: "available" } as CodingWorkbenchSidecarGatewayResult);
+      const { resources, dispatch, unmount } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 2);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(3);
+      expect(catalogRefresh).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({ available: true }),
+      });
+      unmount();
+    } finally {
+      window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+      vi.useRealTimers();
+    }
+  });
+
   it("projects the managed gateway source truth", async () => {
     vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
       status: "available",

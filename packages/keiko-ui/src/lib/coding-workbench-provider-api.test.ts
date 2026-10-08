@@ -16,7 +16,7 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["no-tool-calling", "tool-calling-unverified"])(
+  it.each(["no-tool-calling", "tool-calling-unverified", "conversation-not-ready"])(
     "reads an unavailable %s profile without starting provider traffic",
     async (reason) => {
       const unavailable = { status: "unavailable", reason };

@@ -10194,6 +10194,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "no-tool-calling",
           "tool-calling-unverified",
           "model-verification-pending",
+          "conversation-not-ready",
         ],
       },
       inputTokenLimit: {

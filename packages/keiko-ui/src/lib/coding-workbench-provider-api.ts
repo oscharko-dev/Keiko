@@ -70,6 +70,7 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   "tool-calling-unverified",
   // #3591 (1.1.7): the automatic verification is still running against a slow gateway.
   "model-verification-pending",
+  "conversation-not-ready",
 ]);
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

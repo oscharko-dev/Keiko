@@ -79,6 +79,12 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
 }
 
 describe("isCodingWorkbenchModel", () => {
+  it("excludes an actually refuted chat model while retaining unknown candidates", () => {
+    expect(isCodingWorkbenchModel(cap({ conversationReady: false }))).toBe(false);
+    expect(isCodingWorkbenchModel(cap({ conversationReady: true }))).toBe(true);
+    expect(isCodingWorkbenchModel(cap())).toBe(true);
+  });
+
   // Customer report on 1.1.0: a LiteLLM gateway declares no coding label and no workflow flag, so
   // every discovered model carried `workflowEligible: false` and `preferredUseCases: ["Chat"]`.
   // The Coding Workbench offered none although each had passed the live forced tool-call probe.

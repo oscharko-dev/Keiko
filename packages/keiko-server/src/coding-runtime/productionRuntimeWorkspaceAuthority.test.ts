@@ -4,7 +4,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { probeVerifiedGatewayConfig } from "../_support.js";
+import { admitCodingRunModel } from "../coding-sidecar-gateway.js";
+import { CONVERSATION_READINESS_MAX_AGE_MS } from "../deps.js";
 
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
@@ -37,6 +41,7 @@ import {
 const roots: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -59,6 +64,73 @@ describe("production runtime workspace authority", () => {
   // defaults the live Gemma qualification re-sized (ADR-0137 D2). Every expectation below derives
   // from the exported bounds or the parser that owns them, never from a restated literal
   // (AGENTS.md §7), so a future re-sizing cannot leave a stale number green here.
+  it("checks chat serving only at a new run mint and preserves already admitted authority after expiry", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const nowMs = Date.now();
+    const checkedAt = new Date(nowMs).toISOString();
+    const config: GatewayConfig = {
+      providers: [
+        {
+          modelId: "served-model",
+          baseUrl: "https://provider.example.invalid/v1",
+          apiKey: "test-key",
+          timeoutMs: 1_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          ...createDefaultChatCapability("served-model"),
+          contextWindow: 128_000,
+          maxOutputTokens: 16_384,
+          toolCalling: true,
+          toolCallingVerification: {
+            status: "verified",
+            checkedAt,
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: "test-fingerprint",
+          },
+        },
+      ],
+    };
+    const holder = probeVerifiedGatewayConfig(config);
+    holder.recordVerifiedCapability(
+      "served-model",
+      { conversationReady: true },
+      checkedAt,
+      holder.generation(),
+    );
+    const resolveModel = vi.fn<
+      NonNullable<ProductionWorkspaceAuthorityInput["resolveManagedModelProfile"]>
+    >((modelId, effort) => admitCodingRunModel(holder.current(), modelId, effort, holder));
+    const fixture = liveFixture();
+    const input: ProductionWorkspaceAuthorityInput = {
+      ...fixture.input,
+      resolveManagedModelProfile: resolveModel,
+    };
+    const request = {
+      ...fixture.request,
+      runtimePreference: "managed-gateway" as const,
+      modelId: "served-model",
+    };
+    const context = resolveProductionRuntimeContext(input, request);
+    expect(resolveModel).toHaveBeenCalledOnce();
+    const admittedFacts = productionRuntimeAuthorityFacts(input, context);
+    vi.setSystemTime(nowMs + CONVERSATION_READINESS_MAX_AGE_MS);
+    expect(productionRuntimeAuthorityFacts(input, context)).toEqual(admittedFacts);
+    expect(resolveModel).toHaveBeenCalledOnce();
+    expect(() =>
+      resolveProductionRuntimeContext(input, {
+        ...request,
+        runId: "run-next",
+        requestId: "request-next",
+      }),
+    ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
+    expect(resolveModel).toHaveBeenCalledTimes(2);
+  });
+
   it("binds an explicit deployment prompt budget only into newly resolved authority", () => {
     const fixture = liveFixture();
     const prior = resolveProductionRuntimeContext(fixture.input, fixture.request);

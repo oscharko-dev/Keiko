@@ -860,7 +860,10 @@ export function CodingWorkbenchWindow({
     onSelectionHandled: onHistorySelectionHandled,
     onDraftReset: (): void => setTaskIntent(""),
   });
-  const state = historyRuntimeState(runtimeState, history);
+  const state = selectedConversationReadiness(
+    historyRuntimeState(runtimeState, history),
+    chatCatalog,
+  );
 
   const codingModels = useMemo(
     () => chatCatalog?.models.filter(isCodingWorkbenchModel) ?? [],
@@ -874,7 +877,7 @@ export function CodingWorkbenchWindow({
     actions,
     codingModels,
     catalogInconclusive(chatCatalog, catalogSettled),
-    configuredCodingModelIds(chatCatalog),
+    pendingCodingModelIds(chatCatalog),
   );
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
@@ -978,10 +981,49 @@ function catalogInconclusive(catalog: ChatSessionCatalog | null, settled: boolea
   return (catalog?.models.length ?? 0) === 0 && !settled;
 }
 
-function configuredCodingModelIds(
+function selectedConversationReadiness(
+  state: CodingWorkbenchRuntimeState,
   catalog: ChatSessionCatalog | null,
-): readonly string[] | undefined {
-  return catalog?.configuredModelIds;
+): CodingWorkbenchRuntimeState {
+  if (state.runtimePreference !== "managed-gateway" || state.selectedModelId === null) return state;
+  const selected = catalog?.models.find((model) => model.id === state.selectedModelId);
+  if (isFreshSelectedCodingModel(selected)) return state;
+  return {
+    ...state,
+    canStart: false,
+    source: pendingSelectedSource(state.source, selected?.conversationReady),
+  };
+}
+
+function isFreshSelectedCodingModel(selected: ModelCapability | undefined): boolean {
+  return (
+    selected !== undefined &&
+    selected.conversationReady === true &&
+    isCodingWorkbenchModel(selected)
+  );
+}
+
+function pendingSelectedSource(
+  source: CodingWorkbenchRuntimeState["source"],
+  conversationReady: boolean | undefined,
+): CodingWorkbenchRuntimeState["source"] {
+  if (source.value?.available !== true) return source;
+  return {
+    ...source,
+    value: {
+      ...source.value,
+      available: false,
+      unavailableReason:
+        conversationReady === false ? "conversation-not-ready" : "model-verification-pending",
+    },
+  };
+}
+
+function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly string[] | undefined {
+  const refuted = new Set(
+    catalog?.models.filter((model) => model.conversationReady === false).map((model) => model.id),
+  );
+  return catalog?.configuredModelIds?.filter((id) => !refuted.has(id));
 }
 
 function useCodingModelSelection(
@@ -989,18 +1031,22 @@ function useCodingModelSelection(
   actions: CodingWorkbenchRuntimeActions,
   models: readonly ModelCapability[],
   catalogEmpty: boolean,
-  configuredModelIds: readonly string[] | undefined,
+  pendingModelIds: readonly string[] | undefined,
 ): void {
   const selectionPending =
     state.selectedModelId !== null &&
-    configuredModelIds?.includes(state.selectedModelId) === true &&
+    pendingModelIds?.includes(state.selectedModelId) === true &&
     !models.some((model) => model.id === state.selectedModelId);
   const catalogUnavailable = catalogEmpty || selectionPending;
   const selected = models.find((model) => model.id === state.selectedModelId);
   useEffect(() => {
     if (state.runtimePreference !== "managed-gateway" || catalogUnavailable) return;
     // #3873: the operator's saved choice while the gateway still offers it, else the default.
-    const next = selected?.id ?? offeredSavedCodingModel(models)?.id ?? models[0]?.id ?? null;
+    const next =
+      selected?.id ??
+      offeredSavedCodingModel(models)?.id ??
+      models.find((model) => model.conversationReady === true)?.id ??
+      null;
     if (next !== state.selectedModelId) actions.setSelectedModel(next);
   }, [
     actions,

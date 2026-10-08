@@ -41,6 +41,7 @@ import {
 } from "./coding-workbench-live-state";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
+type SourceRefresh = (catalogAlreadyCurrent?: boolean) => Promise<void>;
 
 interface RefreshSequences {
   readonly profile: RefObject<number>;
@@ -152,7 +153,7 @@ async function refreshManagedGatewaySource(
 // hook nor schedules a re-read when it lands.
 function useVerificationReread(
   sequenceRef: RefObject<number>,
-  refreshRef: RefObject<() => Promise<void>>,
+  refreshRef: RefObject<SourceRefresh>,
 ): (sequence: number) => void {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(
@@ -167,7 +168,7 @@ function useVerificationReread(
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => {
         timerRef.current = undefined;
-        if (sequenceRef.current === sequence) void refreshRef.current();
+        if (sequenceRef.current === sequence) void refreshRef.current(true);
       }, CODING_WORKBENCH_VERIFYING_REFRESH_MS);
     },
     [refreshRef, sequenceRef],
@@ -178,8 +179,8 @@ function useSourceRefresh(
   sequenceRef: RefObject<number>,
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
-): (catalogAlreadyCurrent?: boolean) => Promise<void> {
-  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+): SourceRefresh {
+  const refreshRef = useRef<SourceRefresh>(async () => undefined);
   const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
   refreshRef.current = useCallback(
     async (catalogAlreadyCurrent = false): Promise<void> => {

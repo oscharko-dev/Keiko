@@ -26,6 +26,7 @@ import {
   type GatewayRetryNotice,
   type GatewayRetryObserver,
   type GatewayStreamChunk,
+  type ResolveCodingSafeSidecarGatewayProfileOptions,
   type NormalizedToolCall,
   type NormalizedResponse,
   type ToolDefinition,
@@ -62,6 +63,8 @@ import {
   currentGateway,
   currentGatewayConfig,
   currentGatewayVerification,
+  currentConversationReadinessObservation,
+  type RuntimeGatewayConfig,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -318,6 +321,7 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
         "no-tool-calling",
         "tool-calling-unverified",
         "model-verification-pending",
+        "conversation-not-ready",
       ],
     },
     inputTokenLimit: { type: "integer", dataClass: "count", required: false },
@@ -4075,6 +4079,72 @@ function openAiStreamChunk(
   };
 }
 
+function configuredConversationSubset(
+  config: GatewayConfig,
+  holder: RuntimeGatewayConfig | undefined,
+  freshOnly: boolean,
+): GatewayConfig {
+  const providers = config.providers.filter((provider) => {
+    const readiness =
+      holder?.current() === config
+        ? currentConversationReadinessObservation({ gatewayConfig: holder }, provider.modelId)
+        : undefined;
+    return freshOnly ? readiness === true : readiness !== false;
+  });
+  const ids = new Set(providers.map((provider) => provider.modelId));
+  return {
+    ...config,
+    providers,
+    ...(config.capabilities === undefined
+      ? {}
+      : { capabilities: config.capabilities.filter((model) => ids.has(model.id)) }),
+  };
+}
+
+/** New admissions and passive readiness share the original selector over fresh serving evidence. */
+function resolveFreshCodingProfile(
+  config: GatewayConfig | undefined,
+  holder: RuntimeGatewayConfig | undefined,
+  options: ResolveCodingSafeSidecarGatewayProfileOptions,
+): CodingWorkbenchSidecarGatewayResult {
+  const configured = resolveCodingSafeSidecarGatewayProfile(config, options);
+  if (configured.status !== "available" || config === undefined) return configured;
+  const fresh = resolveCodingSafeSidecarGatewayProfile(
+    configuredConversationSubset(config, holder, true),
+    options,
+  );
+  if (fresh.status === "available") return fresh;
+  // Preserve a structural window refusal; an untested connection cannot repair that shortfall.
+  if (!codingContextFits(configured)) return configured;
+  const unknown = resolveCodingSafeSidecarGatewayProfile(
+    configuredConversationSubset(config, holder, false),
+    options,
+  );
+  return {
+    status: "unavailable",
+    reason:
+      unknown.status === "available" ? "model-verification-pending" : "conversation-not-ready",
+  };
+}
+
+function passiveCodingProfile(deps: UiHandlerDeps): CodingWorkbenchSidecarGatewayResult {
+  return resolveFreshCodingProfile(currentGatewayConfig(deps), deps.gatewayConfig, {
+    deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
+    modelSource: currentModelSource(deps),
+    gatewayVerification: currentGatewayVerification(deps),
+  });
+}
+
+function conversationShortfall(
+  result: CodingWorkbenchSidecarGatewayResult,
+): CodingWorkbenchReadinessShortfall | undefined {
+  if (result.status === "available") return undefined;
+  return result.reason === "model-verification-pending" ||
+    result.reason === "conversation-not-ready"
+    ? result.reason
+    : undefined;
+}
+
 /**
  * Readiness dimension (#3390 closeout): a profile can be "available" per the stored config and
  * probe yet still be unusable — its `runMetadata.maxPromptTokens` (derived from the capability via
@@ -4088,8 +4158,13 @@ function gatewayReadinessProjection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): CodingWorkbenchSidecarGatewayResult {
-  const result = resolveGatewayProfile(deps).result;
+  const result = passiveCodingProfile(deps);
   if (codingContextFits(result)) return result;
+  const conversation = conversationShortfall(result);
+  if (conversation !== undefined) {
+    logReadinessShortfall(ctx, result, conversation, conversation === "model-verification-pending");
+    return result;
+  }
   const shortfall =
     result.status === "available" ? "model-context-window-insufficient" : result.reason;
   if (
@@ -4144,13 +4219,16 @@ export function codingContextShortfall(
  * model the gateway does not admit right now is a typed refusal that names the sidecar's reason
  * (#3565 Observation 17), never a bare Error the orchestrator can only report as
  * `authority-resolution-failed`; so is a model whose window cannot hold the run's prompt (#3603).
+ * Only a fresh basic-chat success in the same current runtime holder admits a new run; already
+ * admitted F73 requests keep their captured profile and never use this new-run guard.
  */
 export function admitCodingRunModel(
   config: GatewayConfig | undefined,
   modelId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
+  holder: RuntimeGatewayConfig | undefined,
 ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } {
-  const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
+  const resolved = resolveFreshCodingProfile(config, holder, {
     ...(modelId === undefined ? {} : { modelId }),
   });
   if (resolved.status !== "available" || config === undefined) {
@@ -4191,7 +4269,8 @@ type CodingWorkbenchReadinessShortfall =
   | "model-context-window-insufficient"
   | "no-tool-calling"
   | "tool-calling-unverified"
-  | "model-verification-pending";
+  | "model-verification-pending"
+  | "conversation-not-ready";
 
 function readinessProbePending(
   deps: UiHandlerDeps,

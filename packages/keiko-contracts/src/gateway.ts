@@ -408,10 +408,14 @@ export function codingWorkbenchModelEligibility(
 /**
  * The single browser/server rule for models eligible to power the Coding Workbench, as of now. It
  * takes the capability alone, so it is safe to hand to `Array.filter` (F76); a caller that must
- * judge another instant uses `codingWorkbenchModelEligibility` with `{ nowMs }`.
+ * judge another instant uses `codingWorkbenchModelEligibility` with `{ nowMs }`. An actual failed
+ * chat check excludes the model; unknown candidates remain visible while background checks run.
  */
 export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
-  return codingWorkbenchModelEligibility(capability) === "eligible";
+  return (
+    capability.conversationReady !== false &&
+    codingWorkbenchModelEligibility(capability) === "eligible"
+  );
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────

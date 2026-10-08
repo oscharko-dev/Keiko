@@ -5954,7 +5954,12 @@ function runtimeWorkspaceAuthority(
       modelId,
       reasoningEffort,
     ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } =>
-      admitCodingRunModel(args.runtimeConfig.current(), modelId, reasoningEffort),
+      admitCodingRunModel(
+        args.runtimeConfig.current(),
+        modelId,
+        reasoningEffort,
+        args.runtimeConfig,
+      ),
   };
 }
 

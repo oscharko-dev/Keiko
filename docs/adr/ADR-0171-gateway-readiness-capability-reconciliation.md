@@ -115,6 +115,16 @@ inventory and uses management metadata only to enrich exact matching IDs; a succ
 response cannot invent a selectable deployment or replace a forbidden or empty model list.
 This listing does not prove a live deployment: LiteLLM may retain names from key/team grants after
 a router deployment is removed. Live reachability remains a separate readiness observation.
+New Coding run admission and the passive Coding profile use the original selector over the same
+current holder's freshly serving candidates. An explicit failed chat observation yields
+`conversation-not-ready`; unknown, malformed, future or expired successful observations yield
+`model-verification-pending`. This check occurs when the new run's context is minted. An already
+admitted gateway request retains its captured profile and admission-time feature proof (F73), so
+chat freshness expiry does not strand its task. The Coding picker excludes only explicit negative
+serving observations, preserves selected or saved unknown choices as pending, and uses its existing
+first-offered ordering over fresh candidates only when no human choice remains. Recovery restores
+the offered model and start availability. Repeated pending-profile timer reads reuse the catalog
+already held; the existing catalog projection poller and window bus deliver subsequent changes.
 Explicit human deployment selections preserve their metadata-only setup path for gateways without
 a models route. Disabled Coding and subscription sources never initiate these tool checks.
 Disposal aborts active requests, clears retries, and unsubscribes

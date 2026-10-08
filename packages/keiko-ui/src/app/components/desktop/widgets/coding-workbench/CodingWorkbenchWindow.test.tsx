@@ -4362,6 +4362,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
   const MODEL_A: ModelCapability = {
     id: "model-a",
     kind: "chat",
+    conversationReady: true,
     contextWindow: 128_000,
     maxOutputTokens: 16_384,
     toolCalling: true,
@@ -4388,6 +4389,122 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     id: "model-b",
     reasoningEfforts: ["medium", "high"],
   };
+
+  it("elects the first freshly ready default while retaining unknown models as pending options", () => {
+    chatCatalogMock.models = [
+      { ...MODEL_A, conversationReady: undefined },
+      { ...MODEL_B, conversationReady: true },
+    ];
+    const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+  });
+
+  it("preserves a saved unknown choice ahead of a freshly healthy fallback", () => {
+    window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
+    chatCatalogMock.models = [MODEL_A, { ...MODEL_B, conversationReady: undefined }];
+    try {
+      const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith("model-a");
+    } finally {
+      window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+    }
+  });
+
+  it("removes a refuted configured model from the picker and restores it after recovery", async () => {
+    chatCatalogMock.models = [
+      { ...MODEL_A, conversationReady: true },
+      { ...MODEL_B, conversationReady: false },
+    ];
+    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    const liveActions = actions();
+    const state = liveState({ selectedModelId: "model-b", reasoningEffort: "high" });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-a");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
+    expect(screen.queryByRole("option", { name: "model-b" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    vi.mocked(liveActions.setSelectedModel).mockClear();
+    chatCatalogMock.models = [
+      { ...MODEL_A, conversationReady: true },
+      { ...MODEL_B, conversationReady: true },
+    ];
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    await user.click(screen.getByRole("combobox", { name: /Coding model/u }));
+    expect(screen.getByRole("option", { name: "model-b" })).toBeInTheDocument();
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+  });
+
+  it("restores the saved choice after all refuted coding models recover", () => {
+    window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, "model-b");
+    chatCatalogMock.models = [{ ...MODEL_B, conversationReady: false }];
+    chatCatalogMock.configuredModelIds = [MODEL_B.id];
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({
+      state: liveState({ selectedModelId: "model-b" }),
+      actions: liveActions,
+    });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    try {
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(null);
+      vi.mocked(liveActions.setSelectedModel).mockClear();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: null }),
+        actions: liveActions,
+      });
+      chatCatalogMock.models = [{ ...MODEL_B, conversationReady: true }];
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith("model-b");
+    } finally {
+      window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+    }
+  });
+
+  it("keeps a remembered unknown selection pending despite a healthy default and restores start after recovery", async () => {
+    chatCatalogMock.models = [
+      { ...MODEL_A, conversationReady: true },
+      { ...MODEL_B, conversationReady: undefined },
+    ];
+    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), visibleRun: false });
+    const liveActions = actions();
+    const state = liveState({
+      selectedModelId: "model-b",
+      run: { status: "ready", value: null, error: null },
+    });
+    runtimeHookMock.mockReturnValue({ state, actions: liveActions });
+    const workspace = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1");
+    const tree = (
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>
+    );
+    const view = render(tree);
+    await userEvent
+      .setup()
+      .type(screen.getByLabelText("Task instructions"), "Add a focused unit test");
+    expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(liveActions.start).not.toHaveBeenCalled();
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    chatCatalogMock.models = [
+      { ...MODEL_A, conversationReady: true },
+      { ...MODEL_B, conversationReady: true },
+    ];
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+  });
 
   it("preserves the selected model and effort across a transient empty-catalog refresh", () => {
     chatCatalogMock.models = [MODEL_A, MODEL_B];

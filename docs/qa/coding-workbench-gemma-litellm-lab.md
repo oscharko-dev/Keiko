@@ -1260,3 +1260,40 @@ Genuine authority/Manager ready/session admission uses hermetic endpoint/supervi
 an actually ready fixed original service host. The production host lifecycle refusal remains in
 place; no native profile/tool advertisement or production activation is introduced. Further
 service/configuration/native Files parity remains follow-up work in the open epic.
+
+### New-run serving admission and truthful picker (ROOT qualification on 1ca5ecf)
+
+ROOT independently qualified all seventeen current source baselines and 104 frozen references from
+`frozen-gateway-serving17-9c2f/freeze.json` (SHA-256
+`42326588e102536a9a90a010971997fcdf39d02863cfaf253130633928ac854d`). Test-only
+integration against unchanged production reproduced fourteen failures: eight server admission/source
+controls, four UI decoder/timer/selection controls, one shared eligibility control and one fresh
+no-choice fallback control. The earlier input-manifest setup error is retained separately and is
+not a product regression. The exact seventeen-owner source delta then passes **456 server/contracts
+tests in three suites and 388 UI tests in four suites**, scoped strict server/contracts types, full
+UI package strict types, and zero-warning owner lint.
+
+New-run context mint and passive Coding readiness reuse the original selector over fresh positive
+chat observations from the same current holder. Explicit negative results are unavailable; unknown,
+expired, malformed or future successes are pending. The existing authenticated F73 route is exercised
+successfully before and after crossing only the chat freshness boundary: the same captured request
+continues through two delegate calls, while a new admission refuses as pending. Feature timestamp,
+configuration and generation remain unchanged. This is a controlled route/delegate proof, not a
+customer or model acceptance run. No new guard is inserted into already admitted requests.
+
+The shared Coding eligibility helper excludes only explicit negatives. The existing picker retains
+selected/saved unknown choices and disables Start honestly until recovery. Without a human choice,
+it uses its existing first-offered ordering over fresh candidates. Failed models disappear and
+recovered models return. Repeated verification-timer profile reads do not rediscover the catalog;
+the existing projection poller and bus continue to deliver changes. No queue, poller, ranking formula
+or logging subsystem is added. `conversation-not-ready` extends the owning readiness operation's
+closed vocabulary and the EN/DE decoder/labels.
+
+The first ROOT generator attempt retained two stale compiled-contract type diagnostics. Building
+Contracts before generation, then rebuilding the affected server/editor graph, resolves them without
+changing the frozen sources. Final canonical generation resolves **539 proofs/30 scenarios with zero
+violations**. Final **97 catalog controls and 12 observability sites** pass against the fresh generated graph. Full local
+quality, coverage, real Sonar analysis, fresh owner evidence, final-head live sandbox qualification
+and formal review repair are the next phase. Feature scope is frozen after this increment; full
+Standalone OpenCode parity and Epic #3871 remain open. No merge, auto-merge, native production
+activation, public pin change or external publication is performed.
