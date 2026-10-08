@@ -590,6 +590,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "files-project-selection",
   "editor-project-selection",
   "gateway-catalog-adoption",
+  "gateway-profile-refresh",
   "model-selection-availability",
 ] as const;
 
@@ -608,6 +609,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "files project selection": "files-project-selection",
   "editor project selection": "editor-project-selection",
   "gateway catalog adoption": "gateway-catalog-adoption",
+  "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
@@ -654,6 +656,18 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.logClientStageSettled",
   fields: {
     ...CLIENT_STAGE_FIELDS,
+    profileOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["adopted", "unavailable", "failed", "superseded"],
+    },
+    catalogReread: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["requested", "skipped", "none"],
+    },
     modelSurface: {
       type: "string",
       dataClass: "closed-enum",
@@ -2279,6 +2293,12 @@ function logClientStageSettled(
         ...request.deletion,
         ...sourcePreviewActivityFields(request.preview),
         ...modelCatalogActivityFields(request.modelCatalog),
+        ...(request.gatewayProfile === undefined
+          ? {}
+          : {
+              profileOutcome: request.gatewayProfile.outcome,
+              catalogReread: request.gatewayProfile.catalogReread,
+            }),
         ...(request.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: request.navigationOutcome }),

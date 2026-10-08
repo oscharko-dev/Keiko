@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d8fbbfdffe2d47ce868d207455052e45dd6f1103c25cf350b355dc4f8533eacc" as const;
+  "ae37555580b02122e1f0eb6b49eea7de6223299db72a8f8ee419e02c23c8c138" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -4774,6 +4774,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "catalogReread",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "catalogSource",
               type: "string",
               dataClass: "closed-enum",
@@ -4817,6 +4823,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "previewKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "profileOutcome",
               type: "string",
               dataClass: "closed-enum",
               required: false,
@@ -10450,6 +10462,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "storedReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -20193,6 +20211,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "backgroundAttempt",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "configurationGeneration",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "configuredModelCount",
               type: "integer",
               dataClass: "count",
@@ -20209,6 +20239,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "retryDeadlineMs",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "retryDelayMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "retryDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "retryable",

@@ -175,11 +175,14 @@ function readDeadlineSignal(): AbortSignal {
   return AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
 }
 
-async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+async function readSidecarGatewayProfile(
+  correlationId?: string,
+): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
     "/api/coding-sidecar/gateway/profile",
     { cache: "no-store", signal: readDeadlineSignal() },
     {
+      ...(correlationId === undefined ? {} : { correlationId }),
       validator: contractValidator<CodingWorkbenchSidecarGatewayResult>(
         validateSidecarGatewayProfileResponse,
       ),
@@ -187,10 +190,12 @@ async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewa
   );
 }
 
-export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+export async function fetchCodingWorkbenchSidecarGatewayProfile(
+  correlationId?: string,
+): Promise<CodingWorkbenchSidecarGatewayResult> {
   // The client starts no probe. The server verifies what the Workbench needs on this read itself
   // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173).
-  return readSidecarGatewayProfile();
+  return readSidecarGatewayProfile(correlationId);
 }
 
 export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {

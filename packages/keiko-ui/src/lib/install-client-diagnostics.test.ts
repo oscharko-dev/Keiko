@@ -1585,3 +1585,24 @@ it("transports model selection facts through the existing routine stage owner", 
   });
   expect(isClientStageIngestRequest(body)).toBe(true);
 });
+
+it("transports the closed profile outcome without inventing catalog counts", async () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  fanOutClientDiagnostic("Profile read settled.", {
+    correlationId: "profile-read-123",
+    parentCorrelationId: "catalog-read-123",
+    stageReport: {
+      stage: "gateway profile refresh",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+      gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+    },
+  });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("modelCatalog");
+});

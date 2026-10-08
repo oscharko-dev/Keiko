@@ -152,6 +152,7 @@ function clientStagePostBody(
         durationMs: report.durationMs,
         preview: report.preview,
         ...(report.modelCatalog === undefined ? {} : { modelCatalog: report.modelCatalog }),
+        ...(report.gatewayProfile === undefined ? {} : { gatewayProfile: report.gatewayProfile }),
         ...(report.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: report.navigationOutcome }),

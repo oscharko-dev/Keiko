@@ -20,12 +20,19 @@ import {
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
+  withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import type { ServerLogEvent } from "./observability/index.js";
+import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import {
+  executeLocalSupportQuery,
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { RouteContext } from "./routes.js";
 
 import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
@@ -88,6 +95,13 @@ function startupDeps(
   });
   compositions.push(deps);
   return deps;
+}
+
+function catalogCompletions(events: readonly ServerLogEvent[]): readonly ServerLogEvent[] {
+  return events.filter(
+    (event) =>
+      event.op === "gateway.catalog.automatic.completed" && event.extra?.phase !== "retry-decision",
+  );
 }
 
 function startupModels(
@@ -164,9 +178,7 @@ it.each(["explicit", undefined] as const)(
         new URL(input instanceof Request ? input.url : String(input)).pathname.endsWith("/models"),
       ),
     ).toBe(false);
-    expect(
-      events.find((event) => event.op === "gateway.catalog.automatic.completed"),
-    ).toMatchObject({ extra: { outcome: "applied" } });
+    expect(catalogCompletions(events)[0]).toMatchObject({ extra: { outcome: "applied" } });
   },
 );
 
@@ -189,13 +201,11 @@ it("retries a real discovery response-body transport rejection instead of pinnin
   const deps = startupDeps(undefined, events);
   deps.gatewayConfig?.set(startupConfig(), true);
   await vi.waitFor(() => {
-    expect(
-      events.find((event) => event.op === "gateway.catalog.automatic.completed"),
-    ).toMatchObject({ extra: { outcome: "failed", retryable: true } });
+    expect(catalogCompletions(events)[0]).toMatchObject({
+      extra: { outcome: "failed", retryable: true },
+    });
   });
-  expect(
-    events.find((event) => event.op === "gateway.catalog.automatic.completed")?.errorKind,
-  ).toBe("unavailable");
+  expect(catalogCompletions(events)[0]?.errorKind).toBe("unavailable");
   expect(JSON.stringify(events)).not.toContain("terminated synthetic private diagnostic");
 });
 
@@ -472,9 +482,9 @@ it("records the startup catalog disposition and counts under a child correlation
   );
   deps.gatewayConfig?.set(startupConfig(), true, "corr-catalog-owner");
   await vi.waitFor(() => {
-    expect(events.some((event) => event.op === "gateway.catalog.automatic.completed")).toBe(true);
+    expect(catalogCompletions(events).length > 0).toBe(true);
   });
-  const completion = events.find((event) => event.op === "gateway.catalog.automatic.completed");
+  const completion = catalogCompletions(events)[0];
   if (completion === undefined) throw new TypeError("Expected catalog completion.");
   expectActivityLogProof(
     "gateway.catalog.automatic.completed.line",
@@ -905,9 +915,7 @@ it("reconciles the actual models route including complete empty and later new ca
     apiKey: requiredStartupProvider(configured).apiKey,
     timeoutMs: requiredStartupProvider(configured).timeoutMs,
   });
-  const completion = [...events]
-    .reverse()
-    .find((event) => event.op === "gateway.catalog.automatic.completed");
+  const completion = catalogCompletions(events).at(-1);
   if (completion === undefined) throw new TypeError("Expected catalog completion.");
   expectActivityLogProof(
     "gateway.catalog.automatic.completed.line",
@@ -940,10 +948,10 @@ it("does not delete active inventory on an incomplete actual models response", a
   const deps = startupDeps(undefined, events);
   deps.gatewayConfig?.set(managedStartupConfig("discovered"), true);
   await vi.waitFor(() => {
-    expect(events.some((event) => event.op === "gateway.catalog.automatic.completed")).toBe(true);
+    expect(catalogCompletions(events).length > 0).toBe(true);
   });
   expect(startupProviderIds(deps)).toEqual(["chat-model"]);
-  const completion = events.find((event) => event.op === "gateway.catalog.automatic.completed");
+  const completion = catalogCompletions(events)[0];
   if (completion === undefined) throw new TypeError("Expected catalog completion.");
   expect(JSON.parse(formatActivityLogProofLine(completion)) as unknown).toMatchObject({
     outcome: "failed",
@@ -1042,7 +1050,7 @@ it("reuses the actual metadata and models transport after a producer-derived bou
   const initial = managedStartupConfig("discovered");
   deps.gatewayConfig?.set(initial, true);
   await vi.waitFor(() => {
-    expect(events.some((event) => event.op === "gateway.catalog.automatic.completed")).toBe(true);
+    expect(catalogCompletions(events).length > 0).toBe(true);
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   const countModels = (): number =>
@@ -1304,4 +1312,386 @@ it("aborts a request-owned Workbench probe joined by startup and waits for its p
         event.op === "gateway.readiness.automatic.completed",
     ),
   ).toBe(true);
+});
+
+function sharedConnectionConfig(): ReturnType<typeof parseGatewayConfig> {
+  const initial = startupConfig();
+  const provider = requiredStartupProvider(initial);
+  return parseGatewayConfig({
+    ...initial,
+    providers: [provider, { ...provider, modelId: "second-chat" }],
+    capabilities: [
+      ...(initial.capabilities ?? []),
+      {
+        ...createDefaultChatCapability("second-chat"),
+        contextWindow: 64_000,
+        maxOutputTokens: 2000,
+      },
+    ],
+  });
+}
+
+it("keeps completed discovery when the representative model is reordered or removed", async () => {
+  stubReadyChat();
+  const discovery = vi.fn().mockResolvedValue({
+    modelIds: ["chat-model", "second-chat"],
+    chatModelIds: ["chat-model", "second-chat"],
+    embeddingModelIds: [],
+  });
+  const deps = startupDeps(discovery, undefined, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  const initial = sharedConnectionConfig();
+  deps.gatewayConfig?.set(initial, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(discovery).toHaveBeenCalledOnce();
+  deps.gatewayConfig?.set({ ...initial, providers: [...initial.providers].reverse() }, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(discovery).toHaveBeenCalledOnce();
+  deps.gatewayConfig?.set({ ...initial, providers: initial.providers.slice(1) }, true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(discovery).toHaveBeenCalledOnce();
+});
+
+it("does not let an older conclusive discovery clear the current generation retry", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const old = deferredValue<ReturnType<typeof discoveredCatalog>>();
+  const discovery = vi
+    .fn()
+    .mockImplementationOnce(() => old.promise)
+    .mockRejectedValue(new Error("Synthetic retryable transport fault."));
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(discovery, events, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  const initial = startupConfig();
+  deps.gatewayConfig?.set(initial, true, "corr-old-config");
+  await vi.advanceTimersByTimeAsync(0);
+  deps.gatewayConfig?.set(
+    {
+      ...initial,
+      providers: initial.providers.map((provider) => ({
+        ...provider,
+        apiKey: "rotated-throwaway-key",
+      })),
+    },
+    true,
+    "corr-current-config",
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(discovery).toHaveBeenCalledTimes(2);
+  old.resolve(discoveredCatalog());
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1);
+  expect(discovery).toHaveBeenCalledTimes(3);
+  const completions = catalogCompletions(events);
+  expect(JSON.parse(formatActivityLogProofLine(completions.at(-1) ?? {})) as unknown).toMatchObject(
+    { parentCorrelationId: "corr-current-config" },
+  );
+});
+
+it("starts a changed connection with its own first retry delay and parent", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const discovery = vi.fn().mockRejectedValue(new Error("Synthetic retryable transport fault."));
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(discovery, events, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  const initial = startupConfig();
+  deps.gatewayConfig?.set(initial, true, "corr-old-config");
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1);
+  expect(discovery).toHaveBeenCalledTimes(2);
+  deps.gatewayConfig?.set(
+    {
+      ...initial,
+      providers: initial.providers.map((provider) => ({
+        ...provider,
+        apiKey: "rotated-throwaway-key",
+      })),
+    },
+    true,
+    "corr-current-config",
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(discovery).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1);
+  expect(discovery).toHaveBeenCalledTimes(4);
+  const completion = events
+    .filter((event) => event.op === "gateway.catalog.automatic.completed")
+    .at(-1);
+  expect(JSON.parse(formatActivityLogProofLine(completion ?? {})) as unknown).toMatchObject({
+    parentCorrelationId: "corr-current-config",
+  });
+});
+
+it("bounds an inconclusive tool-only startup burst and allows explicit reload recovery", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  let toolCalls = 0;
+  let recovered = false;
+  vi.stubGlobal("fetch", (_input: unknown, init?: RequestInit) => {
+    const tools = typeof init?.body === "string" && init.body.includes("report_readiness");
+    if (tools) toolCalls++;
+    if (tools && !recovered) return Promise.resolve(new Response("", { status: 503 }));
+    return Promise.resolve(
+      Response.json({
+        choices: [
+          {
+            message: {
+              content: "OK",
+              ...(tools
+                ? {
+                    tool_calls: [
+                      { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                    ],
+                  }
+                : {}),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+    );
+  });
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), events);
+  deps.gatewayConfig?.set(startupConfig(), true, "corr-startup-burst");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(toolCalls).toBe(1);
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  expect(toolCalls).toBe(3);
+  recovered = true;
+  deps.refreshGatewayCatalog?.("corr-explicit-reload");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(toolCalls).toBe(4);
+  expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
+});
+
+it("records factual retry decisions and attempt identity without inventing catalog IO", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const events: ServerLogEvent[] = [];
+  const discovery = vi.fn().mockRejectedValue(new Error("Synthetic transport outage."));
+  const deps = startupDeps(discovery, events, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  deps.gatewayConfig?.set(startupConfig(), true, "corr-retry-owner");
+  await vi.advanceTimersByTimeAsync(0);
+  const failed = catalogCompletions(events)[0];
+  expect(failed?.extra).toMatchObject({
+    outcome: "failed",
+    backgroundAttempt: 1,
+    configurationGeneration: deps.gatewayConfig?.generation(),
+  });
+  const scheduled = events.find((event) => event.extra?.retryDisposition === "scheduled");
+  expect(scheduled?.extra).toMatchObject({
+    phase: "retry-decision",
+    backgroundAttempt: 1,
+    retryDelayMs: WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1,
+  });
+  expect(scheduled?.extra?.retryDeadlineMs).toBe(
+    Date.now() + WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1,
+  );
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  expect(discovery).toHaveBeenCalledTimes(3);
+  const exhausted = events.find((event) => event.extra?.retryDisposition === "exhausted");
+  expect(exhausted?.extra).toMatchObject({
+    phase: "retry-decision",
+    backgroundAttempt: 3,
+    updatedModelCount: 0,
+    retryable: false,
+  });
+  expectStartupRetryProofs(events, [scheduled, exhausted]);
+  expect(JSON.stringify(events)).not.toContain("throwaway-key");
+  expect(JSON.stringify(events)).not.toContain("provider.example.invalid");
+});
+
+type CatalogCompletionCase = "unchanged" | "stale" | "cancelled" | "failed";
+
+async function actualCatalogCompletion(
+  outcome: CatalogCompletionCase,
+  parentCorrelationId?: string,
+): Promise<ServerLogEvent> {
+  stubReadyChat();
+  const held = deferredValue<ReturnType<typeof discoveredCatalog>>();
+  const discovery =
+    outcome === "failed"
+      ? (): Promise<ReturnType<typeof discoveredCatalog>> =>
+          Promise.reject(
+            Object.assign(new Error("Synthetic private failure."), { httpStatus: 503 }),
+          )
+      : (): Promise<ReturnType<typeof discoveredCatalog>> => held.promise;
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(discovery, events, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  const config = manualCatalogConfig();
+  deps.gatewayConfig?.set(config, true, parentCorrelationId);
+  const controller = new AbortController();
+  const completion = refreshLiteLlmGatewayCatalog(
+    withReadinessParentCorrelation(deps, parentCorrelationId),
+    requiredStartupProvider(config),
+    controller.signal,
+    `corr-catalog-${outcome}`,
+  );
+  if (outcome === "stale")
+    deps.gatewayConfig?.set(
+      {
+        ...config,
+        providers: config.providers.map((provider) => ({
+          ...provider,
+          apiKey: "rotated-throwaway-key",
+        })),
+      },
+      true,
+    );
+  if (outcome === "cancelled") controller.abort();
+  held.resolve(discoveredCatalog());
+  await completion;
+  const event = catalogCompletions(events)[0];
+  if (event === undefined) throw new TypeError("Expected actual catalog completion.");
+  return event;
+}
+
+it.each(["unchanged", "stale", "cancelled", "failed"] as const)(
+  "qualifies the actual %s catalog completion with original classification and causal envelope",
+  async (outcome) => {
+    const event = await actualCatalogCompletion(outcome, "corr-state-parent");
+    const record = expectActivityLogProof(
+      "gateway.catalog.automatic.completed.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      outcome,
+      configuredModelCount: 1,
+      updatedModelCount: 0,
+      retryable: outcome === "stale" || outcome === "failed",
+      parentCorrelationId: "corr-state-parent",
+      correlationId: `corr-catalog-${outcome}`,
+    });
+    if (outcome === "failed") expect(record.errorKind).toBe("unavailable");
+    if (outcome === "cancelled") expect(record.errorKind).toBe("cancelled");
+    expect(JSON.stringify(record)).not.toContain("Synthetic private failure");
+    expect(JSON.stringify(record)).not.toContain("throwaway-key");
+  },
+);
+
+it("retains an actual failed catalog completion in the original incident query", async () => {
+  const stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-catalog-incident-"));
+  directories.push(stateDir);
+  const fromMs = Date.now() - 1;
+  const event = await actualCatalogCompletion("failed");
+  const sink = createFileServerLogSink(stateDir);
+  sink.write(event);
+  sink.close?.();
+  const schema = activityLogOperationSchema("gateway.catalog.automatic.completed");
+  expect(schema?.diagnosticWhen).toContainEqual({ field: "outcome", values: ["failed"] });
+  const { result } = executeLocalSupportQuery(
+    stateDir,
+    {
+      kind: "closure",
+      queryClass: "incident",
+      roots: [],
+      windows: [{ fromMs, toMs: Date.now() + 1 }],
+      requiredClasses: { kind: "observed-failures" },
+      unresolved: false,
+    },
+    { ...DEFAULT_SUPPORT_QUERY_LIMITS, maxContextEvents: 0 },
+    { trigger: "query" },
+  );
+  const catalog = result.events.filter(
+    (selected) => selected.parsed.view.op === "gateway.catalog.automatic.completed",
+  );
+  expect(catalog).toHaveLength(1);
+  expect(catalog[0]?.role).toBe("closure");
+});
+
+it.each(["backoff", "in-flight", "conclusive"] as const)(
+  "records the actual %s catalog skip without a second discovery",
+  async (disposition) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    stubReadyChat();
+    const held = deferredValue<ReturnType<typeof discoveredCatalog>>();
+    const events: ServerLogEvent[] = [];
+    const discovery = vi.fn(() =>
+      disposition === "in-flight"
+        ? held.promise
+        : Promise.reject(
+            disposition === "conclusive"
+              ? Object.assign(new Error("Synthetic credential refusal."), { httpStatus: 401 })
+              : new Error("Synthetic transport fault."),
+          ),
+    );
+    const deps = startupDeps(discovery, events, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+    const config = startupConfig();
+    deps.gatewayConfig?.set(config, true, "corr-skip-owner");
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      if (disposition === "conclusive") deps.gatewayConfig?.set(config, true, "corr-skip-current");
+      else deps.refreshGatewayCatalog?.("corr-skip-current");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(discovery).toHaveBeenCalledOnce();
+      const event = events.find((candidate) => candidate.extra?.retryDisposition === disposition);
+      const record = expectActivityLogProof(
+        "gateway.catalog.automatic.completed.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        phase: "retry-decision",
+        retryDisposition: disposition,
+        configuredModelCount: 1,
+        updatedModelCount: 0,
+        parentCorrelationId: "corr-skip-current",
+        backgroundAttempt: disposition === "backoff" ? 2 : 1,
+      });
+      if (disposition === "backoff")
+        expect(record.retryDeadlineMs).toBe(
+          Date.now() + WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1,
+        );
+    } finally {
+      held.resolve(discoveredCatalog());
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  },
+);
+
+function expectStartupRetryProofs(
+  events: readonly ServerLogEvent[],
+  decisions: readonly (ServerLogEvent | undefined)[],
+): void {
+  for (const event of catalogCompletions(events)) {
+    const record = expectActivityLogProof(
+      "gateway.catalog.automatic.completed.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      phase: "catalog",
+      outcome: "failed",
+      errorKind: "unavailable",
+      parentCorrelationId: "corr-retry-owner",
+    });
+  }
+  expect(catalogCompletions(events).map((event) => event.extra?.backgroundAttempt)).toEqual([
+    1, 2, 3,
+  ]);
+  expect(new Set(catalogCompletions(events).map((event) => event.correlationId)).size).toBe(3);
+  for (const decision of decisions) {
+    expectActivityLogProof(
+      "gateway.catalog.automatic.completed.line",
+      formatActivityLogProofLine(decision ?? {}),
+    );
+  }
+}
+
+it("lets an explicit reload recover at the existing connection backoff after a bounded burst", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  stubReadyChat();
+  const discovery = vi.fn().mockRejectedValue(new Error("Synthetic transport fault."));
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(discovery, events, { KEIKO_CODING_SIDECAR_DISABLED: "1" });
+  deps.gatewayConfig?.set(startupConfig(), true, "corr-before-exhaustion");
+  await vi.advanceTimersByTimeAsync(3 * (WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1));
+  expect(discovery).toHaveBeenCalledTimes(3);
+  discovery.mockResolvedValue(discoveredCatalog());
+  deps.refreshGatewayCatalog?.("corr-early-explicit-reload");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(discovery).toHaveBeenCalledTimes(3);
+  const backoff = events.find((event) => event.extra?.retryDisposition === "backoff");
+  const remainingDelay = backoff?.extra?.retryDelayMs;
+  if (typeof remainingDelay !== "number") throw new TypeError("Expected existing backoff delay.");
+  await vi.advanceTimersByTimeAsync(remainingDelay + 1);
+  expect(discovery).toHaveBeenCalledTimes(4);
+  expect(catalogCompletions(events).at(-1)?.extra?.outcome).toBe("unchanged");
 });

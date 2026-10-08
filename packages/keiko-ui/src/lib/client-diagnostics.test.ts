@@ -10,6 +10,7 @@ import {
   reportClientDiagnostic,
   reportFilesScopeDecision,
   reportModelCatalogStage,
+  reportGatewayProfileRefresh,
   currentGlobalClientFailure,
   resetClientDiagnosticWriter,
   restoreClientDiagnosticLoss,
@@ -331,6 +332,26 @@ it("emits one paired instant model decision without publishing a global failure"
     ordinal: 1,
     durationMs: 0,
     modelCatalog: { outcome: "held", selectionProvenance: "human" },
+  });
+  expect(currentGlobalClientFailure()).toBeNull();
+});
+
+it("keeps an actual profile read and its settlement on one supplied request identity", () => {
+  const received: (ClientDiagnosticMeta | undefined)[] = [];
+  setClientDiagnosticWriter((_message, meta) => received.push(meta));
+  reportGatewayProfileRefresh("profile-read-123", "catalog-read-123");
+  reportGatewayProfileRefresh("profile-read-123", "catalog-read-123", {
+    durationMs: 47,
+    evidence: { outcome: "adopted", catalogReread: "skipped" },
+  });
+  expect(received.map((meta) => meta?.correlationId)).toEqual([
+    "profile-read-123",
+    "profile-read-123",
+  ]);
+  expect(received[1]?.stageReport).toMatchObject({
+    phase: "settled",
+    durationMs: 47,
+    gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
   });
   expect(currentGlobalClientFailure()).toBeNull();
 });

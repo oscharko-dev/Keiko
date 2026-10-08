@@ -3299,3 +3299,32 @@ it("persists closed model selection stage evidence through the existing formatte
   }
   expect(clientStageEvents(sink, "client.stage.settled")).toHaveLength(1);
 });
+
+it("persists a real profile read outcome and skipped catalog reread without invented counts", async () => {
+  const sink = captureServerLog();
+  const body = {
+    kind: "stage",
+    stage: "gateway profile refresh",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 5,
+    correlationId: "profile-read-123",
+    parentCorrelationId: "catalog-read-123",
+    gatewayProfile: { outcome: "unavailable", catalogReread: "skipped" },
+  };
+  expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+  const event = clientStageEvents(sink, "client.stage.settled")[0];
+  const line = formatActivityLogProofLine(event ?? {});
+  expectActivityLogProof("client.stage.settled.line", line);
+  expect(JSON.parse(line)).toMatchObject({
+    level: "info",
+    stage: "gateway-profile-refresh",
+    durationMs: 5,
+    correlationId: body.correlationId,
+    parentCorrelationId: body.parentCorrelationId,
+    profileOutcome: "unavailable",
+    catalogReread: "skipped",
+  });
+  expect(JSON.parse(line)).not.toHaveProperty("configuredModelCount");
+  expect(clientDiagnosticEvents(sink)).toEqual([]);
+});

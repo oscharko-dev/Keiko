@@ -666,3 +666,38 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
   });
 });
+
+it("records the actual current profile read, elapsed outcome and original catalog parent", async () => {
+  const received: (import("./client-diagnostics").ClientDiagnosticMeta | undefined)[] = [];
+  const { setClientDiagnosticWriter, resetClientDiagnosticWriter } =
+    await import("./client-diagnostics");
+  setClientDiagnosticWriter((_message, meta) => received.push(meta));
+  vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+    status: "unavailable",
+    reason: "model-verification-pending",
+  });
+  const { resources, unmount } = renderResources(runtimeState());
+  try {
+    await act(() => resources.refreshSource(true, "actual-catalog-123"));
+    const sent = vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls.at(-1)?.[0];
+    expect(sent).toEqual(expect.any(String));
+    const stages = received.filter(
+      (meta) => meta?.stageReport?.stage === "gateway profile refresh",
+    );
+    expect(stages).toHaveLength(2);
+    expect(stages[0]?.correlationId).toBe(sent);
+    expect(stages[1]?.correlationId).toBe(sent);
+    expect(stages[1]).toMatchObject({
+      parentCorrelationId: "actual-catalog-123",
+      stageReport: {
+        phase: "settled",
+        durationMs: expect.any(Number),
+        gatewayProfile: { outcome: "unavailable", catalogReread: "skipped" },
+      },
+    });
+    expect(JSON.stringify(stages)).not.toContain("modelAlias");
+  } finally {
+    unmount();
+    resetClientDiagnosticWriter();
+  }
+});

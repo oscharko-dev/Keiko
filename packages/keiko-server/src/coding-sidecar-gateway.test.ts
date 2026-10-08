@@ -3,7 +3,10 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
-import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
+import {
+  initializeLiteLlmCodingReadiness,
+  resetCodingWorkbenchContextWindowProbesForTests,
+} from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -9404,4 +9407,68 @@ describe("fresh chat serving for new coding tasks", () => {
       deps.store.close();
     }
   });
+});
+
+describe("pending readiness original cause evidence", () => {
+  afterEach(() => {
+    resetServerLogger();
+    resetCodingWorkbenchContextWindowProbesForTests();
+    vi.useRealTimers();
+  });
+
+  it.each([false, true])(
+    "retains the actual stored tool shortfall while pending: %s",
+    async (declared) => {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      const sink = captureServerLog("warn");
+      const { toolCallingVerification: _verification, ...unverified } = capability();
+      const config = configValue(provider({ tokenCounter: "litellm" }), {
+        ...unverified,
+        toolCalling: declared,
+      });
+      let release: () => void = (): void => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const deps: UiHandlerDeps = {
+        ...freshProfileDeps(depsValue(config)),
+        gatewayReadinessFetch: async (): Promise<Response> => {
+          await held;
+          return Response.json({
+            choices: [{ message: { content: "OK" }, finish_reason: "stop" }],
+          });
+        },
+      };
+      const probe = initializeLiteLlmCodingReadiness(deps, "corr-stored-shortfall");
+      try {
+        const read = handleCodingSidecarGatewayProfile(
+          { correlationId: "corr-shortfall-read" } as RouteContext,
+          deps,
+        );
+        await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+        expect((await read).body).toEqual({
+          status: "unavailable",
+          reason: "model-verification-pending",
+        });
+        const event = sink.events.find(
+          (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
+        );
+        expect(event?.extra).toMatchObject({
+          reason: "model-verification-pending",
+          storedReason: declared ? "tool-calling-unverified" : "no-tool-calling",
+          probeMode: "pending",
+        });
+        const line = expectActivityLogProof(
+          "coding-sidecar.gateway.readiness-insufficient.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(line.storedReason).toBe(declared ? "tool-calling-unverified" : "no-tool-calling");
+        expect(JSON.stringify(line)).not.toContain("provider-secret");
+        expect(JSON.stringify(line)).not.toContain("provider.example");
+      } finally {
+        release();
+        await probe;
+      }
+    },
+  );
 });

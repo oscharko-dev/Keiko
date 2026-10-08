@@ -324,6 +324,12 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
         "conversation-not-ready",
       ],
     },
+    storedReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
+    },
     inputTokenLimit: { type: "integer", dataClass: "count", required: false },
     availablePromptTokens: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
@@ -4179,7 +4185,7 @@ function gatewayReadinessProjection(
   const reason: CodingWorkbenchReadinessShortfall = pending
     ? "model-verification-pending"
     : shortfall;
-  logReadinessShortfall(ctx, result, reason, pending);
+  logReadinessShortfall(ctx, result, reason, pending, shortfall);
   // An open verification replaces the stored shortfall for an unavailable projection too (an
   // unverified tool-calling proof whose probe is still running), or the Workbench would stop
   // reading and keep the refusal until an unrelated refresh.
@@ -4290,6 +4296,8 @@ function logReadinessShortfall(
   result: CodingWorkbenchSidecarGatewayResult,
   reason: CodingWorkbenchReadinessShortfall,
   pending: boolean,
+  storedReason?:
+    "model-context-window-insufficient" | "no-tool-calling" | "tool-calling-unverified",
 ): void {
   getServerLogger().warn(
     activityLogEvent(
@@ -4300,6 +4308,7 @@ function logReadinessShortfall(
       },
       {
         reason,
+        ...(pending && storedReason !== undefined ? { storedReason } : {}),
         probeMode: pending ? "pending" : "passive",
         ...(result.status === "available"
           ? {

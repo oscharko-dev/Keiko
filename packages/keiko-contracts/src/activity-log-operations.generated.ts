@@ -4049,6 +4049,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "files-project-selection",
           "editor-project-selection",
           "gateway-catalog-adoption",
+          "gateway-profile-refresh",
           "model-selection-availability",
         ],
       },
@@ -4071,6 +4072,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      profileOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["adopted", "unavailable", "failed", "superseded"],
+      },
+      catalogReread: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["requested", "skipped", "none"],
       },
       modelSurface: {
         type: "string",
@@ -4185,6 +4198,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "files-project-selection",
           "editor-project-selection",
           "gateway-catalog-adoption",
+          "gateway-profile-refresh",
           "model-selection-availability",
         ],
       },
@@ -10260,6 +10274,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "conversation-not-ready",
         ],
       },
+      storedReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
+      },
       inputTokenLimit: {
         type: "integer",
         dataClass: "count",
@@ -14407,7 +14427,47 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["applied", "unchanged", "stale", "cancelled", "failed"],
+        values: ["applied", "unchanged", "stale", "cancelled", "failed", "retry-decision"],
+      },
+      phase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["catalog", "retry-decision"],
+      },
+      backgroundAttempt: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      configurationGeneration: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      retryDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "scheduled",
+          "exhausted",
+          "coalesced",
+          "in-flight",
+          "backoff",
+          "conclusive",
+          "complete",
+        ],
+      },
+      retryDelayMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      retryDeadlineMs: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       configuredModelCount: {
         type: "integer",
@@ -14440,6 +14500,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "outcome",
         values: ["failed"],
+      },
+      {
+        field: "retryDisposition",
+        values: ["exhausted"],
       },
     ],
   },

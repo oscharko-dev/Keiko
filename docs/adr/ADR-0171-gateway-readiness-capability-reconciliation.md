@@ -71,8 +71,10 @@ through the initial two-minute window, including when cached models already look
 minute for an unchanged catalog. Hidden tabs pause and catch up immediately on visibility or focus.
 Failed reads back off from five seconds to one minute and report one correlated transport failure
 per outage streak.
-A configured human selection remains remembered and unsendable while unready, then restores on
-recovery; an actual removal still permits the existing fallback. Background reads do not clear a
+A deliberate conversation-eligible human selection remains remembered and unsendable while
+unready, then restores on recovery; ready alternatives remain selectable. Automatically elected
+choices may fall back to ready alternatives. Actual removal or structural ineligibility permits
+the existing fallback, including when a persisted chat is opened or its metadata is upserted. Background reads do not clear a
 usable selection. Only
 in-flight requests are cached; settled model responses cannot conceal subsequent readiness results.
 Changed background catalogs notify the existing window bus, so an already open Coding Workbench
@@ -102,12 +104,21 @@ original feature and conversation measurement times, so an unrelated tool-only p
 conversation readiness. Missing refinement support fails as retryable rather than reporting an
 applied catalog update. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
-existing context proof. Inconclusive discovery and tool checks retry after their one-minute
-cooldown, with exponential startup backoff capped at five minutes. Rejected credentials and
+existing context proof. Inconclusive discovery and tool checks share a finite three-step
+initialization burst with exponential startup backoff capped at five minutes. The existing timer
+and ordinal belong to the captured configuration generation: a replacement resets that burst,
+and an older completion cannot clear or attribute its retry. An explicit reload after exhaustion
+starts a new burst while respecting the current connection's existing backoff deadline. It does not
+reset a retry already in flight. Conversation renewal and interactive readiness retain their
+existing recovery paths. Rejected credentials and
 conclusive invalid catalog responses stop scheduled discovery until the connection changes or a
 browser reload requests a new check. Startup catalog
 completion records the applied, unchanged, stale, cancelled or failed disposition and configured
-and changed-model counts under a fresh correlation linked to the triggering request. Catalog retries retain a connection-bound deadline across readiness refinements, so a
+and changed-model counts under a fresh correlation linked to the triggering request. Real
+completions include the current initialization ordinal and generation. An explicitly tagged
+retry-decision phase on the same operation records scheduling, delay/deadline, exhaustion,
+coalescing and cache-skip dispositions without claiming another catalog request. Failed completion
+and exhausted-burst evidence remain diagnostic through the original incident reader. Catalog retries retain a connection-bound deadline across readiness refinements, so a
 successful probe cannot trigger immediate repeated discovery during a catalog outage. Successful
 discovery is reused until the connection changes or a browser reload requests a fresh background
 check. The initial workspace model request carries `refresh=1`; the BFF immediately returns its
@@ -115,7 +126,8 @@ current projection and does not await gateway discovery or model probes. Concurr
 in-flight discovery, retry deadlines remain effective, and ordinary background projection reads
 never trigger another gateway discovery. Completion uses the existing correlated, body-free
 catalog operation. Completed discovery is reused across nonconnection bounds refinements through
-the existing connection comparator; endpoint, credentials, effective protocol, credential header
+the existing connection comparator, independent of representative model identity or ordering;
+endpoint, credentials, effective protocol, credential header
 and API-version changes invalidate it. Automatic onboarding treats the key-scoped `/models` listed IDs as the model
 inventory and uses management metadata only to enrich exact matching IDs; a successful management
 response cannot invent a selectable deployment or replace a forbidden or empty model list.
@@ -131,6 +143,14 @@ serving observations, preserves selected or saved unknown choices as pending, an
 first-offered ordering over fresh candidates only when no human choice remains. Recovery restores
 the offered model and start availability. Repeated pending-profile timer reads reuse the catalog
 already held; the existing catalog projection poller and window bus deliver subsequent changes.
+Catalog adoption, held/restored/fallback/refused selections and profile refresh use the existing
+routine client-stage transport. Decisions carry closed outcomes and actual bounded catalog counts;
+selection identity uses an optional digest. Profile reads carry their actual HTTP correlation,
+validated original catalog parent, measured elapsed time and whether a catalog reread was requested,
+skipped or absent; they cannot invent model counts. The first bootstrap requests discovery once
+per document lifetime, and an unchanged background catalog does not rebroadcast an update. A
+managed new Start requires an actual selected model. Pending readiness evidence retains the closed
+stored shortfall as well as its pending projection.
 Explicit human deployment selections preserve their metadata-only setup path for gateways without
 a models route. Disabled Coding and subscription sources never initiate these tool checks.
 Disposal aborts active requests, clears retries, and unsubscribes

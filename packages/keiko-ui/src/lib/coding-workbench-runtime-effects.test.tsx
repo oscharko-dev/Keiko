@@ -383,3 +383,26 @@ describe("post-run description refresh (#3390)", () => {
     }
   });
 });
+
+it("forwards only the actual validated catalog parent into the profile refresh", () => {
+  const refreshSource = vi.fn().mockResolvedValue(undefined);
+  const refreshRuntime = vi.fn().mockResolvedValue(undefined);
+  const { unmount } = renderHook(() =>
+    useCodingWorkbenchRuntimeRefreshEffects({
+      state: createInitialCodingWorkbenchRuntimeState(),
+      refreshSource,
+      refreshRuntime,
+      refreshRun: vi.fn().mockResolvedValue(undefined),
+    }),
+  );
+  refreshSource.mockClear();
+  act(() =>
+    window.dispatchEvent(
+      new CustomEvent("keiko:gateway-model-catalog-updated", {
+        detail: { correlationId: "actual-catalog-123" },
+      }),
+    ),
+  );
+  expect(refreshSource).toHaveBeenCalledWith(true, "actual-catalog-123");
+  unmount();
+});

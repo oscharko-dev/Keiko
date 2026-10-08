@@ -904,6 +904,7 @@ export const CLIENT_STAGE_IDS = [
   "files project selection",
   "editor project selection",
   "gateway catalog adoption",
+  "gateway profile refresh",
   "model selection availability",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
@@ -957,6 +958,11 @@ export interface ClientModelCatalogEvidence {
   readonly selectionDigest?: string | undefined;
 }
 
+export interface ClientGatewayProfileRefreshEvidence {
+  readonly outcome: "adopted" | "unavailable" | "failed" | "superseded";
+  readonly catalogReread: "requested" | "skipped" | "none";
+}
+
 export interface ClientStageSettledIngestRequest {
   readonly kind: "stage";
   readonly stage: ClientStageId;
@@ -969,6 +975,7 @@ export interface ClientStageSettledIngestRequest {
   readonly navigationOutcome?: ClientNavigationOutcome | undefined;
   readonly preview?: ClientSourcePreviewCounts | undefined;
   readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
+  readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -988,6 +995,7 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "navigationOutcome",
   "preview",
   "modelCatalog",
+  "gatewayProfile",
 ]);
 
 export const CLIENT_NAVIGATION_OUTCOMES = [
@@ -1132,12 +1140,26 @@ function hasValidModelCatalogEvidence(stage: unknown, evidence: Record<string, u
   );
 }
 
+function hasValidGatewayProfileStage(value: Record<string, unknown>): boolean {
+  const applies = value.stage === "gateway profile refresh" && value.phase === "settled";
+  if (value.gatewayProfile === undefined) return !applies;
+  if (!applies || !isRecord(value.gatewayProfile)) return false;
+  const evidence = value.gatewayProfile;
+  if (Object.keys(evidence).some((key) => key !== "outcome" && key !== "catalogReread"))
+    return false;
+  if (!isOneOf(evidence.outcome, ["adopted", "unavailable", "failed", "superseded"])) return false;
+  return evidence.outcome === "failed" || evidence.outcome === "superseded"
+    ? evidence.catalogReread === "none"
+    : isOneOf(evidence.catalogReread, ["requested", "skipped"]);
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
   return (
     hasValidStageDeletion(value) &&
     hasValidNavigationOutcome(value) &&
     hasValidSourcePreview(value) &&
     hasValidModelCatalogStage(value) &&
+    hasValidGatewayProfileStage(value) &&
     isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
   );
 }

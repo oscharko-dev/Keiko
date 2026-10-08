@@ -1,4 +1,4 @@
-import { toolCallingConfigurationFingerprint } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayConfig, ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 import { codingSidecarDisabledByPolicy } from "./coding-sidecar-gateway.js";
 import { newCorrelationId } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -17,6 +17,14 @@ import {
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
 
+import {
+  logStartupRetryDecision,
+  type CatalogBackgroundAttempt,
+} from "./gateway-startup-activity.js";
+
+// A finite initialization burst; an explicit reload or a new configuration starts another burst.
+const MAX_STARTUP_ATTEMPTS = 3;
+const MAX_STARTUP_RETRY_DELAY_MS = 300_001;
 const STARTUP_RETRY_DELAY_MS = WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1;
 
 export function createGatewayStartupChecks(deps: UiHandlerDeps): {
@@ -38,12 +46,13 @@ export function createGatewayStartupChecks(deps: UiHandlerDeps): {
 
 class GatewayStartupChecks {
   private readonly controller = new AbortController();
-  private readonly discovered = new Map<string, CatalogDiscoveryState>();
+  private readonly discovered = new Set<CatalogDiscoveryState>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly refreshingGenerations = new Set<number>();
   private retry: ReturnType<typeof setTimeout> | undefined;
   private startedGeneration = -1;
   private retryAttempt = 0;
+  private retryGeneration = -1;
 
   public constructor(private readonly deps: UiHandlerDeps) {}
 
@@ -61,9 +70,14 @@ class GatewayStartupChecks {
     const holder = this.deps.gatewayConfig;
     if (this.controller.signal.aborted || holder?.current() === undefined) return;
     if (this.startedGeneration === holder.generation()) return;
-    this.startedGeneration = holder.generation();
+    const generation = holder.generation();
+    this.initializeGeneration(generation);
+    this.startedGeneration = generation;
     this.initializeConversationReadiness(observedDeps, correlationId, parentCorrelationId);
-    this.track(this.run(observedDeps, correlationId, parentCorrelationId), correlationId);
+    this.track(
+      this.run(observedDeps, correlationId, parentCorrelationId, generation),
+      correlationId,
+    );
   }
 
   public refresh(parentCorrelationId?: string): void {
@@ -71,10 +85,12 @@ class GatewayStartupChecks {
     if (this.controller.signal.aborted || holder?.current() === undefined) return;
     const generation = holder.generation();
     if (this.refreshingGenerations.has(generation)) return;
+    this.initializeGeneration(generation);
+    if (this.retry === undefined) this.retryAttempt = 0;
     this.refreshingGenerations.add(generation);
     // A browser reload renews completed discovery; an in-flight query or retry backoff is shared.
-    for (const [key, discovery] of this.discovered) {
-      if (discovery.retryAt === Infinity) this.discovered.delete(key);
+    for (const discovery of this.discovered) {
+      if (discovery.retryAt === Infinity) this.discovered.delete(discovery);
     }
     const correlationId = newCorrelationId();
     const deps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
@@ -84,9 +100,27 @@ class GatewayStartupChecks {
         this.refreshingGenerations.delete(generation);
       })
       .then((retryCatalog) =>
-        this.finishInitialization(deps, correlationId, parentCorrelationId, retryCatalog),
+        this.finishInitialization(
+          deps,
+          correlationId,
+          parentCorrelationId,
+          retryCatalog,
+          generation,
+        ),
       );
     this.track(task, correlationId);
+  }
+
+  private initializeGeneration(generation: number): void {
+    if (this.retryGeneration === generation) return;
+    clearTimeout(this.retry);
+    this.retry = undefined;
+    this.retryAttempt = 0;
+    this.retryGeneration = generation;
+  }
+
+  private currentGeneration(generation: number): boolean {
+    return !this.controller.signal.aborted && this.deps.gatewayConfig?.generation() === generation;
   }
 
   private track(pending: Promise<void>, correlationId: string): void {
@@ -119,9 +153,16 @@ class GatewayStartupChecks {
     deps: UiHandlerDeps,
     correlationId: string,
     parentCorrelationId: string | undefined,
+    generation: number,
   ): Promise<void> {
     const retryCatalog = await this.catalog(deps, correlationId);
-    await this.finishInitialization(deps, correlationId, parentCorrelationId, retryCatalog);
+    await this.finishInitialization(
+      deps,
+      correlationId,
+      parentCorrelationId,
+      retryCatalog,
+      generation,
+    );
   }
 
   private catalog(deps: UiHandlerDeps, correlationId: string): Promise<boolean> {
@@ -131,6 +172,7 @@ class GatewayStartupChecks {
       this.discovered,
       correlationId,
       this.retryDelay(),
+      { backgroundAttempt: this.retryAttempt + 1, configurationGeneration: this.retryGeneration },
     );
   }
 
@@ -139,21 +181,19 @@ class GatewayStartupChecks {
     correlationId: string,
     parentCorrelationId: string | undefined,
     retryCatalog: boolean,
+    generation: number,
   ): Promise<void> {
-    if (this.controller.signal.aborted) return;
+    if (!this.currentGeneration(generation)) return;
     this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
-    const source =
-      deps.codingSidecarGatewayModelSourceResolver?.() ??
-      deps.codingSidecarGatewayModelSource ??
-      "keiko-model-gateway";
-    const coding = source === "keiko-model-gateway" && !codingSidecarDisabledByPolicy(deps.env);
+    const coding = codingStartupEnabled(deps);
     if (coding)
       await initializeLiteLlmCodingReadiness(
         cancellableConversationProbeDeps(deps, this.controller.signal),
         correlationId,
       );
+    if (!this.currentGeneration(generation)) return;
     if (retryCatalog || (coding && isLiteLlmCodingReadinessPending(deps))) {
-      this.scheduleRetry(parentCorrelationId);
+      this.scheduleRetry(deps, correlationId, parentCorrelationId, generation);
     } else {
       this.retryAttempt = 0;
       clearTimeout(this.retry);
@@ -161,38 +201,80 @@ class GatewayStartupChecks {
     }
   }
 
-  private scheduleRetry(parentCorrelationId: string | undefined): void {
-    if (this.controller.signal.aborted) return;
-    if (this.retry !== undefined) return;
-    const delay = this.retryDelay();
+  private scheduleRetry(
+    deps: UiHandlerDeps,
+    correlationId: string,
+    parentCorrelationId: string | undefined,
+    generation: number,
+  ): void {
+    if (!this.currentGeneration(generation)) return;
+    const decision = {
+      correlationId,
+      backgroundAttempt: this.retryAttempt + 1,
+      configurationGeneration: generation,
+      configuredModelCount:
+        (deps.gatewayConfig?.configured?.() ?? deps.gatewayConfig?.current())?.providers.length ??
+        0,
+    };
+    if (this.retry !== undefined) {
+      logStartupRetryDecision(deps, { ...decision, retryDisposition: "coalesced" });
+      return;
+    }
+    if (this.retryAttempt + 1 >= MAX_STARTUP_ATTEMPTS) {
+      logStartupRetryDecision(deps, { ...decision, retryDisposition: "exhausted" });
+      return;
+    }
+    const delay = this.scheduledRetryDelay();
+    logStartupRetryDecision(deps, {
+      ...decision,
+      retryDisposition: "scheduled",
+      retryDelayMs: delay,
+      retryDeadlineMs: Date.now() + delay,
+    });
     this.retryAttempt += 1;
     this.retry = setTimeout(() => {
+      if (!this.currentGeneration(generation)) return;
       this.retry = undefined;
       this.startedGeneration = -1;
       this.start(parentCorrelationId);
     }, delay);
     this.retry.unref();
   }
+  private scheduledRetryDelay(): number {
+    const now = Date.now();
+    const nextRetryAt = Math.min(
+      ...[...this.discovered]
+        .map((state) => state.retryAt)
+        .filter((at) => Number.isFinite(at) && at > now),
+    );
+    const remaining = Number.isFinite(nextRetryAt) ? nextRetryAt - now : 0;
+    return Math.min(Math.max(this.retryDelay(), remaining), MAX_STARTUP_RETRY_DELAY_MS);
+  }
+
   private retryDelay(): number {
-    return Math.min(STARTUP_RETRY_DELAY_MS * 2 ** Math.min(this.retryAttempt, 3), 300_001);
+    return Math.min(
+      STARTUP_RETRY_DELAY_MS * 2 ** Math.min(this.retryAttempt, 3),
+      MAX_STARTUP_RETRY_DELAY_MS,
+    );
   }
 }
 
 async function refreshCatalogs(
   deps: UiHandlerDeps,
   signal: AbortSignal,
-  discovered: Map<string, CatalogDiscoveryState>,
+  discovered: Set<CatalogDiscoveryState>,
   correlationId: string,
   retryDelayMs: number,
+  background: CatalogBackgroundAttempt,
 ): Promise<boolean> {
   const holder = deps.gatewayConfig;
-  const config = holder?.configured?.() ?? holder?.current();
+  const config = configuredStartupGateway(deps);
   if (config === undefined) return false;
   let retry = false;
   const connections = liteLlmDiscoveryConnections(config);
   pruneCatalogConnections(discovered, connections);
   for (const provider of connections) {
-    if (signal.aborted) break;
+    if (signal.aborted || holder?.generation() !== background.configurationGeneration) break;
     retry =
       (await refreshCatalogConnection(
         deps,
@@ -201,6 +283,7 @@ async function refreshCatalogs(
         provider,
         correlationId,
         retryDelayMs,
+        background,
       )) || retry;
   }
   return retry;
@@ -209,37 +292,92 @@ async function refreshCatalogs(
 async function refreshCatalogConnection(
   deps: UiHandlerDeps,
   signal: AbortSignal,
-  discovered: Map<string, CatalogDiscoveryState>,
-  provider: Parameters<typeof toolCallingConfigurationFingerprint>[0],
+  discovered: Set<CatalogDiscoveryState>,
+  provider: ModelProviderConfig,
   correlationId: string,
   retryDelayMs: number,
+  background: CatalogBackgroundAttempt,
 ): Promise<boolean> {
-  const key = toolCallingConfigurationFingerprint(provider);
-  const retryAt = discovered.get(key)?.retryAt;
-  if (retryAt !== undefined && (retryAt === 0 || retryAt > Date.now()))
+  const previous = [...discovered].find((state) =>
+    catalogConnectionMatches(provider, state.provider),
+  );
+  const retryAt = previous?.retryAt;
+  if (retryAt !== undefined && (retryAt === 0 || retryAt > Date.now())) {
+    logCatalogCacheDecision(deps, provider, previous, correlationId, background);
     return Number.isFinite(retryAt);
-  const pending = { provider, retryAt: 0 };
-  discovered.set(key, pending);
-  const result = await refreshLiteLlmGatewayCatalog(deps, provider, signal, correlationId);
-  if (discovered.get(key) !== pending) return false;
+  }
+  const pending: CatalogDiscoveryState = { provider, retryAt: 0 };
+  if (previous !== undefined) discovered.delete(previous);
+  discovered.add(pending);
+  const result = await refreshLiteLlmGatewayCatalog(
+    deps,
+    provider,
+    signal,
+    correlationId,
+    background,
+  );
+  if (!discovered.has(pending)) return false;
+  pending.conclusive = !result.succeeded && !result.retryable;
   pending.retryAt = result.retryable ? Date.now() + retryDelayMs : Infinity;
   return result.retryable;
 }
 
 interface CatalogDiscoveryState {
-  readonly provider: Parameters<typeof toolCallingConfigurationFingerprint>[0];
+  readonly provider: ModelProviderConfig;
   retryAt: number;
+  conclusive?: boolean;
 }
 
 function pruneCatalogConnections(
-  discovered: Map<string, CatalogDiscoveryState>,
-  connections: readonly Parameters<typeof toolCallingConfigurationFingerprint>[0][],
+  discovered: Set<CatalogDiscoveryState>,
+  connections: readonly ModelProviderConfig[],
 ): void {
-  for (const [key, state] of discovered) {
-    const current = connections.find(
-      (provider) => toolCallingConfigurationFingerprint(provider) === key,
-    );
-    if (current === undefined || !catalogConnectionMatches(current, state.provider))
-      discovered.delete(key);
+  for (const state of discovered) {
+    if (!connections.some((provider) => catalogConnectionMatches(provider, state.provider)))
+      discovered.delete(state);
   }
+}
+
+function logCatalogCacheDecision(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  state: CatalogDiscoveryState | undefined,
+  correlationId: string,
+  background: CatalogBackgroundAttempt,
+): void {
+  if (state === undefined) return;
+  const config = configuredStartupGateway(deps);
+  const retryAt = state.retryAt;
+  logStartupRetryDecision(deps, {
+    correlationId,
+    ...background,
+    configuredModelCount:
+      config?.providers.filter((candidate) => catalogConnectionMatches(candidate, provider))
+        .length ?? 0,
+    retryDisposition: catalogCacheDisposition(state),
+    ...(retryAt > 0 && Number.isFinite(retryAt)
+      ? { retryDelayMs: Math.max(0, retryAt - Date.now()), retryDeadlineMs: retryAt }
+      : {}),
+  });
+}
+
+function configuredStartupGateway(deps: UiHandlerDeps): GatewayConfig | undefined {
+  const holder = deps.gatewayConfig;
+  return holder?.configured?.() ?? holder?.current();
+}
+
+function codingStartupEnabled(deps: UiHandlerDeps): boolean {
+  const source =
+    deps.codingSidecarGatewayModelSourceResolver?.() ??
+    deps.codingSidecarGatewayModelSource ??
+    "keiko-model-gateway";
+  return source === "keiko-model-gateway" && !codingSidecarDisabledByPolicy(deps.env);
+}
+
+function catalogCacheDisposition(
+  state: CatalogDiscoveryState,
+): "in-flight" | "backoff" | "conclusive" | "complete" {
+  if (state.retryAt === 0) return "in-flight";
+  if (Number.isFinite(state.retryAt)) return "backoff";
+  return state.conclusive === true ? "conclusive" : "complete";
 }

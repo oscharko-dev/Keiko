@@ -114,7 +114,7 @@ import {
 } from "./diagnostics-log.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import type { ServerLogSink } from "./observability/index.js";
-import { logAutomaticCatalog } from "./gateway-startup-activity.js";
+import { logAutomaticCatalog, type CatalogBackgroundAttempt } from "./gateway-startup-activity.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
   classifyFigmaTransportError,
@@ -2311,6 +2311,7 @@ function startupCatalogLogger(
   config: GatewayConfig,
   correlationId: string,
   startedAt: number,
+  background: CatalogBackgroundAttempt | undefined,
 ): StartupCatalogRecorder {
   const configuredModelCount = config.providers.filter((candidate) =>
     catalogConnectionMatches(candidate, provider),
@@ -2319,6 +2320,7 @@ function startupCatalogLogger(
     logAutomaticCatalog(deps, {
       correlationId,
       outcome,
+      ...(background === undefined ? {} : { phase: "catalog", ...background }),
       configuredModelCount,
       updatedModelCount,
       elapsedMs: Math.max(0, Date.now() - startedAt),
@@ -2333,6 +2335,7 @@ export async function refreshLiteLlmGatewayCatalog(
   provider: ModelProviderConfig,
   signal: AbortSignal,
   correlationId: string,
+  background?: CatalogBackgroundAttempt,
 ): Promise<StartupCatalogResult> {
   const holder = deps.gatewayConfig;
   const config = holder?.configured?.() ?? holder?.current();
@@ -2340,7 +2343,7 @@ export async function refreshLiteLlmGatewayCatalog(
   const generation = holder.generation();
   const trace = createSetupDiscoveryTrace();
   const startedAt = Date.now();
-  const log = startupCatalogLogger(deps, provider, config, correlationId, startedAt);
+  const log = startupCatalogLogger(deps, provider, config, correlationId, startedAt, background);
   try {
     const result = await discoverConfiguredGatewayCatalog(
       deps,

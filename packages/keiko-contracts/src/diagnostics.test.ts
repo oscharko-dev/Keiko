@@ -2251,3 +2251,25 @@ it("accepts only closed catalog/selection stage evidence with truthful bounded c
     }),
   ).toBe(true);
 });
+
+it("accepts only stage-specific closed gateway profile outcomes", () => {
+  const report = {
+    kind: "stage",
+    stage: "gateway profile refresh",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 5,
+    correlationId: "profile-read-123",
+    parentCorrelationId: "catalog-read-123",
+    gatewayProfile: { outcome: "adopted", catalogReread: "skipped" },
+  };
+  expect(isClientStageIngestRequest(report)).toBe(true);
+  for (const gatewayProfile of [
+    { outcome: "adopted", catalogReread: "maybe" },
+    { outcome: "failed", catalogReread: "requested" },
+    { outcome: "adopted", catalogReread: "skipped", endpoint: "PRIVATE-URL" },
+  ])
+    expect(isClientStageIngestRequest({ ...report, gatewayProfile })).toBe(false);
+  expect(isClientStageIngestRequest({ ...report, stage: "window chunk" })).toBe(false);
+  expect(isClientStageIngestRequest({ ...report, phase: "started" })).toBe(false);
+});

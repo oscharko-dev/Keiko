@@ -1,5 +1,6 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import { newClientCorrelationId } from "./bff-correlation";
+import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
@@ -41,7 +42,10 @@ import {
 } from "./coding-workbench-live-state";
 
 type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
-type SourceRefresh = (catalogAlreadyCurrent?: boolean) => Promise<void>;
+type SourceRefresh = (
+  catalogAlreadyCurrent?: boolean,
+  parentCorrelationId?: string,
+) => Promise<void>;
 
 interface RefreshSequences {
   readonly profile: RefObject<number>;
@@ -53,7 +57,10 @@ interface RefreshSequences {
 
 export interface RuntimeResources {
   readonly refreshProfile: () => Promise<void>;
-  readonly refreshSource: (catalogAlreadyCurrent?: boolean) => Promise<void>;
+  readonly refreshSource: (
+    catalogAlreadyCurrent?: boolean,
+    parentCorrelationId?: string,
+  ) => Promise<void>;
   readonly prepareCodexSetup: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
@@ -129,22 +136,63 @@ function sourceVerificationPending(
   return profile.status === "unavailable" && profile.reason === "model-verification-pending";
 }
 
+function settleGatewayProfileRefresh(
+  correlationId: string,
+  parentCorrelationId: string | undefined,
+  startedAt: number,
+  outcome: "adopted" | "unavailable" | "failed" | "superseded",
+  catalogReread: "requested" | "skipped" | "none",
+): void {
+  reportGatewayProfileRefresh(correlationId, parentCorrelationId, {
+    durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+    evidence: { outcome, catalogReread },
+  });
+}
+
 async function refreshManagedGatewaySource(
   sequenceRef: RefObject<number>,
   sequence: number,
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
   catalogAlreadyCurrent: boolean,
+  parentCorrelationId?: string,
 ): Promise<void> {
+  const correlationId = newClientCorrelationId();
+  const startedAt = performance.now();
+  reportGatewayProfileRefresh(correlationId, parentCorrelationId);
   dispatch({ kind: "profile-empty" });
-  const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
-  if (sequenceRef.current !== sequence) return;
-  // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
-  // unproven context window) and stores it, so the model catalog the picker filters may have
-  // changed underneath: a catalog fetched before the read would show an empty picker.
-  if (!catalogAlreadyCurrent) requestGatewayModelCatalogRefresh();
-  dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
-  if (sourceVerificationPending(profile)) scheduleReread(sequence);
+  try {
+    const profile = await fetchCodingWorkbenchSidecarGatewayProfile(correlationId);
+    if (sequenceRef.current !== sequence) {
+      settleGatewayProfileRefresh(
+        correlationId,
+        parentCorrelationId,
+        startedAt,
+        "superseded",
+        "none",
+      );
+      return;
+    }
+    if (!catalogAlreadyCurrent) requestGatewayModelCatalogRefresh();
+    dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
+    if (sourceVerificationPending(profile)) scheduleReread(sequence);
+    settleGatewayProfileRefresh(
+      correlationId,
+      parentCorrelationId,
+      startedAt,
+      profile.status === "available" ? "adopted" : "unavailable",
+      catalogAlreadyCurrent ? "skipped" : "requested",
+    );
+  } catch (error) {
+    settleGatewayProfileRefresh(
+      correlationId,
+      parentCorrelationId,
+      startedAt,
+      sequenceRef.current === sequence ? "failed" : "superseded",
+      "none",
+    );
+    throw error;
+  }
 }
 
 // The re-read timer belongs to the mounted Workbench: a newer refresh replaces it, and unmounting
@@ -175,6 +223,18 @@ function useVerificationReread(
   );
 }
 
+function failSourceRefresh(
+  preference: CodingWorkbenchRuntimeState["runtimePreference"],
+  error: unknown,
+  dispatch: RuntimeDispatch,
+): void {
+  const mapped = codingWorkbenchRuntimeApiError(error);
+  const status = codingWorkbenchFailureStatus(mapped);
+  dispatch({ kind: "resource-failed", resource: "source", status, error: mapped });
+  if (preference === "codex-subscription")
+    dispatch({ kind: "resource-failed", resource: "profile", status, error: mapped });
+}
+
 function useSourceRefresh(
   sequenceRef: RefObject<number>,
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
@@ -183,7 +243,7 @@ function useSourceRefresh(
   const refreshRef = useRef<SourceRefresh>(async () => undefined);
   const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
   refreshRef.current = useCallback(
-    async (catalogAlreadyCurrent = false): Promise<void> => {
+    async (catalogAlreadyCurrent = false, parentCorrelationId?: string): Promise<void> => {
       const sequence = (sequenceRef.current += 1);
       const preference = stateRef.current.runtimePreference;
       dispatch({ kind: "resource-loading", resource: "source" });
@@ -195,6 +255,7 @@ function useSourceRefresh(
             dispatch,
             scheduleReread,
             catalogAlreadyCurrent,
+            parentCorrelationId,
           );
           return;
         }
@@ -204,21 +265,7 @@ function useSourceRefresh(
         setCodexSubscriptionSource(profile, dispatch);
       } catch (error) {
         if (sequenceRef.current !== sequence) return;
-        const mapped = codingWorkbenchRuntimeApiError(error);
-        dispatch({
-          kind: "resource-failed",
-          resource: "source",
-          status: codingWorkbenchFailureStatus(mapped),
-          error: mapped,
-        });
-        if (preference === "codex-subscription") {
-          dispatch({
-            kind: "resource-failed",
-            resource: "profile",
-            status: codingWorkbenchFailureStatus(mapped),
-            error: mapped,
-          });
-        }
+        failSourceRefresh(preference, error, dispatch);
       }
     },
     [dispatch, scheduleReread, sequenceRef, stateRef],

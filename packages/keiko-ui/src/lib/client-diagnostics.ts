@@ -70,6 +70,7 @@ import {
   type ClientComposerActivity,
   type ClientComposerSubmission,
   type ClientComposerCodeStage,
+  type ClientGatewayProfileRefreshEvidence,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
@@ -95,6 +96,7 @@ export type ClientDiagnosticStageReport = (
       readonly navigationOutcome?: ClientNavigationOutcome | undefined;
       readonly preview?: ClientSourcePreviewCounts | undefined;
       readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
+      readonly gatewayProfile?: ClientGatewayProfileRefreshEvidence | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
@@ -378,6 +380,31 @@ export function reportModelCatalogStage(
     correlationId,
     parentCorrelationId,
     stageReport: { stage, phase: "settled", ordinal: 1, durationMs: 0, modelCatalog },
+  });
+}
+
+/** A profile read uses its actual HTTP correlation; no catalog count can be inferred from it. */
+export function reportGatewayProfileRefresh(
+  correlationId: string,
+  parentCorrelationId: string | undefined,
+  settlement?: {
+    readonly durationMs: number;
+    readonly evidence: ClientGatewayProfileRefreshEvidence;
+  },
+): void {
+  reportClientDiagnostic("Workbench gateway profile refresh.", {
+    correlationId,
+    parentCorrelationId,
+    stageReport:
+      settlement === undefined
+        ? { stage: "gateway profile refresh", phase: "started", ordinal: 1 }
+        : {
+            stage: "gateway profile refresh",
+            phase: "settled",
+            ordinal: 1,
+            durationMs: settlement.durationMs,
+            gatewayProfile: settlement.evidence,
+          },
   });
 }
 

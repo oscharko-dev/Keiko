@@ -1638,3 +1638,51 @@ catalog drift suite passes 97 controls and the separately executed failure-surfa
 parents, closed outcomes/counts and optional selection digests; they do not publish raw model IDs,
 provider addresses, credentials or task content. Final global gates, profile-refresh qualification,
 remaining review repairs and final-head live/platform/package proofs are still pending.
+
+### Review closeout: factual profile correlation and generation-owned finite retries
+
+ROOT integrates profile freeze
+`56b810bd6d0211e353821a0995b943e7b72996251ea20c44c5d893015cd537fc` and gateway freeze
+`5a65dd59fcfac0c0423ba7b5f9613e12fd9c75615d107db5fbfbd4168406f537` against published
+parent `79a81668efb1098638aec27d76e6ccb0fc61629c`. All six gateway owning baselines
+match the frozen published bytes; 28 immutable gateway references, thread dispositions and the
+separate setup-failure supplement are checked. Derived inventories are regenerated in ROOT.
+
+Profile test-only controls record two genuine contract/ingest refusals and six UI assertion
+failures. Four UI controls expose dropped transport facts, an ignored actual HTTP correlation,
+missing profile-read correlation and an unforwarded catalog parent; two assertions and three
+uncaught missing-helper errors describe new producer prerequisites. After exact integration, all
+518 contract/server tests and 377 UI tests across eight owning suites pass without errors. Two
+actual catalog/profile writer-to-transport-to-ingest-to-formatter controls pass. A final rerun of
+the two Workbench selections passes all 247 tests against the combined profile transport. Profile
+outcomes are closed and truthful, durations are measured, and source-sequence supersession remains
+binding. Counts are emitted only by actual catalog decisions.
+
+ROOT separately reproduces all seven gateway behavioral failures: representative model changes
+repeat unchanged connection discovery; an older completion cancels the current generation's
+retry; a changed connection inherits the previous delay/parent; persistent tool-only failure
+causes unbounded forced initialization; retry identity/scheduling facts are missing; and two actual
+pending tool-readiness projections lose their different stored causes. The first targeted command
+selects four of these controls and the second selects the remaining three; both genuine RED logs
+are retained. The final owning three-suite selection passes 784/784. It also qualifies explicit
+reload recovery against an inherited cache deadline, all five actual catalog completion outcomes,
+and physical failed-event retention by the original incident reader with zero optional context
+budget. The isolated candidate's initial 385/388 expectation/phase-selection failures, complexity
+findings, early-reload correction RED and wrong-working-directory formatting setup failures remain
+disclosed; they are not claimed as additional independent product defects.
+
+The same initialization timer is limited to three startup steps per generation/burst. Explicit
+reload can start another bounded burst after exhaustion, retaining actual per-connection backoff;
+conversation renewal and interactive readiness continue through their existing owners. Connection
+cache reuse calls the existing comparator, without duplicating a fingerprint formula. An older
+catalog/readiness completion cannot mutate the new generation's retry. Existing catalog evidence
+is extended with an explicit retry-decision phase, actual ordinals/generations and observed
+schedule/deadline or skip dispositions; it does not invent provider IO. Pending readiness retains
+the closed original tool/context shortfall. No new operation, queue, poller, permission layer or
+native feature is introduced. ADR-0171 is amended in place to match this corrected behavior.
+
+Fresh affected build, ten contract/server and thirteen UI strict roots, zero-warning lint and
+formatting pass. ROOT regeneration resolves 539/539 proofs and 30/30 scenarios without violations;
+the actual catalog/failure-surface suites pass 111/111 controls. Final global gates/Sonar, remaining
+review repair and final-head live/platform/package qualification remain pending. All delegated
+assignments have ended; no sub-agent test or optimization job remains running.

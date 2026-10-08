@@ -1804,7 +1804,7 @@ function adoptBackgroundGatewayModels(
   if (!changed) return;
   invalidateSharedBootstrap();
   recordCatalogAdoption(models, "background", "changed", correlationId);
-  notifyGatewayModelCatalogUpdated();
+  notifyGatewayModelCatalogUpdated(correlationId);
 }
 
 function reportBackgroundGatewayFailure(error: unknown, correlationId: string): void {
