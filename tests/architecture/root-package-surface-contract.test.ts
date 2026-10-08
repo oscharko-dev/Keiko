@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import * as root from "../../dist/index.js";
+import * as root from "../../src/index.js";
 import * as workspace from "@oscharko-dev/keiko-workspace";
 import { memFs } from "../../packages/keiko-workspace/src/_memfs.js";
 
@@ -31,7 +31,7 @@ const contract = readRootPackageSurfaceContract(
 const manifest = readRootManifest(resolve(repoRoot, "package.json"));
 
 describe("root package surface contract", () => {
-  it("records the actual fresh root runtime exports without additions or removals", () => {
+  it("records the canonical root SDK exports without additions or removals", () => {
     expect(Object.keys(root).sort()).toEqual(contract.runtimeExports);
   });
   it("keeps the root package monolithic-root only", () => {
