@@ -2399,7 +2399,8 @@ function commitStartupCatalog(
   if (updated === current) return true;
   const inventoryChanged = JSON.stringify(updated.providers) !== JSON.stringify(current.providers);
   if (inventoryChanged) return holder.replaceCatalog?.(updated, generation, correlationId) ?? false;
-  holder.refine?.(updated, correlationId);
+  if (holder.refine === undefined) return false;
+  holder.refine(updated, correlationId);
   return true;
 }
 
@@ -2538,7 +2539,13 @@ function reconcileCatalogInventory(
     if (stored !== undefined && !catalogConnectionMatches(stored, connection)) continue;
     const produced = discoveredProviderConfig(configured, connection, id, discovery);
     providers.push(...produced.providers);
-    capabilities.push(...listConfiguredCapabilities(produced));
+    capabilities.push(
+      ...listConfiguredCapabilities(produced).map((model) => {
+        const retained =
+          stored === undefined ? undefined : findConfiguredCapability(configured, model.id);
+        return retained?.kind === model.kind ? retained : model;
+      }),
+    );
   }
   return { ...active, providers, capabilities };
 }
@@ -2553,19 +2560,52 @@ function refreshedLiteLlmCatalog(
   const refreshed = listConfiguredCapabilities(inventory).reduce((updated, model) => {
     const provider = inventory.providers.find((candidate) => candidate.modelId === model.id);
     const metadata = discovery.modelMetadata[model.id];
-    const window = metadata?.contextWindow;
     if (
       model.kind !== "chat" ||
       provider === undefined ||
       !catalogConnectionMatches(provider, connection) ||
-      window === undefined ||
-      !declaresContextWindow(metadata) ||
-      providerStatementLeavesWindow(model, window)
+      metadata === undefined
     )
       return updated;
-    return replaceCapabilityContextWindow(updated, model, window);
+    const replacement = catalogDeclaredCapability(model, metadata);
+    return {
+      ...updated,
+      capabilities: listConfiguredCapabilities(updated).map((existing) =>
+        existing.id === model.id ? replacement : existing,
+      ),
+    };
   }, inventory);
   return JSON.stringify(refreshed) === JSON.stringify(config) ? config : refreshed;
+}
+
+function catalogDeclaredLimit(
+  stored: number | undefined,
+  declared: number | undefined,
+): number | undefined {
+  if (declared === undefined || declared <= 0) return stored;
+  return stored === undefined || stored === 0 ? declared : Math.min(stored, declared);
+}
+
+function catalogDeclaredCapability(
+  model: ModelCapability,
+  metadata: GatewayDiscoveredModelMetadata,
+): ModelCapability {
+  const window = declaresContextWindow(metadata) ? metadata.contextWindow : undefined;
+  const contextWindow =
+    window === undefined
+      ? model.contextWindow
+      : model.contextWindowAssumed === true
+        ? window
+        : Math.min(model.contextWindow, window);
+  const maxInputTokens = catalogDeclaredLimit(model.maxInputTokens, metadata.maxInputTokens);
+  // A catalog declaration establishes a ceiling; retain smaller accepted or live learned limits.
+  return {
+    ...withContextWindowProvenance(model, metadata, { ...model, contextWindow }),
+    ...(maxInputTokens === undefined ? {} : { maxInputTokens }),
+    maxOutputTokens:
+      catalogDeclaredLimit(model.maxOutputTokens, metadata.maxOutputTokens) ??
+      model.maxOutputTokens,
+  };
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
@@ -8495,6 +8535,7 @@ function applyVerifiedCapabilityUpdate(
   if (gatewayConfig.replaceCatalog === undefined) gatewayConfig.set(updated, true, correlationId);
   else if (!gatewayConfig.replaceCatalog(updated, generation, correlationId))
     return staleCapabilityObservationResult();
+  clearAppliedCapabilityObservations(gatewayConfig, updated);
   for (const entry of observations) {
     gatewayConfig.recordVerifiedCapability(
       entry.modelId,
@@ -8505,6 +8546,13 @@ function applyVerifiedCapabilityUpdate(
     );
   }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
+}
+
+function clearAppliedCapabilityObservations(
+  holder: RuntimeGatewayConfig,
+  updated: GatewayConfig,
+): void {
+  for (const provider of updated.providers) holder.clearVerifiedCapability(provider.modelId);
 }
 
 function preservedVerifiedCapabilityFields(

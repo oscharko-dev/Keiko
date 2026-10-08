@@ -1348,3 +1348,19 @@ qualified module root; the final run explicitly uses the previously qualified or
 tree. These are inactive prerequisite controls, not original fixed-host production activation,
 new private-package qualification or customer/live-provider proof. Final combined dependency,
 quality, coverage, Sonar and live qualification remain pending.
+
+### Frozen-scope review closeout: gateway geometry and proof adoption
+
+ROOT independently matched the three source baselines and all frozen evidence inputs, then
+reproduced five catalog regressions and one capability-application regression against unchanged
+producers. Declared input/output limits now retain their actual provenance independently, and
+later metadata preserves smaller accepted or concurrent refinements. Model disappearance and
+recovery retain the declared ceiling. Missing refinement support returns a retryable failure.
+Capability adoption clears carried observations and restores only retained fields with the
+original separate feature/chat timestamps; unrelated tool-only evidence cannot grant chat readiness.
+
+ROOT passed **429 tests across two owning suites**, strict test types, a fresh affected server
+graph, scoped lint and formatting. No new probe, operation, queue or logger is added. Genuine RED
+and final GREEN receipts are retained as `root-closeout-geometry-{red,apply-red,green}.log`, with
+source/evidence qualification in `root-closeout-geometry-inputs.json`. These scoped controls do
+not replace final global gates, coverage, Sonar, live qualification or exact-head required CI.

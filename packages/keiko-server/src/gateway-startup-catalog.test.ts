@@ -475,6 +475,141 @@ async function explicitlyRefreshStartupCatalog(
   );
 }
 
+function configuredStartupWindow(deps: UiHandlerDeps): number | undefined {
+  return deps.gatewayConfig?.configured?.()?.capabilities?.[0]?.contextWindow;
+}
+
+function manualCatalogConfig(
+  changes: Partial<ReturnType<typeof createDefaultChatCapability>> = {},
+): ReturnType<typeof parseGatewayConfig> {
+  const config = startupConfig();
+  return {
+    ...config,
+    providers: config.providers.map(({ tokenCounter: _counter, ...provider }) => provider),
+    capabilities: (config.capabilities ?? []).map((model) => ({ ...model, ...changes })),
+  };
+}
+
+it("ends an assumed window with the same declared catalog provenance as setup", async () => {
+  stubReadyChat();
+  const deps = startupDeps(() =>
+    Promise.resolve({
+      ...discoveredCatalog(),
+      modelMetadata: { "chat-model": { contextWindow: 32_768 } },
+    }),
+  );
+  const config = manualCatalogConfig({ contextWindow: 4096, contextWindowAssumed: true });
+  deps.gatewayConfig?.set(config, true);
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(config));
+  expect(startupModels(deps)[0]).toMatchObject({ contextWindow: 32_768 });
+  expect(startupModels(deps)[0]?.contextWindowAssumed).not.toBe(true);
+  expect(startupModels(deps)[0]?.contextWindowReported).not.toBe(true);
+});
+
+it("applies independent declared input and output limits at catalog refresh", async () => {
+  stubReadyChat();
+  const deps = startupDeps(() =>
+    Promise.resolve({
+      ...discoveredCatalog(),
+      modelMetadata: {
+        "chat-model": {
+          contextWindow: 32_768,
+          maxInputTokens: 16_000,
+          maxOutputTokens: 4096,
+        },
+      },
+    }),
+  );
+  const config = manualCatalogConfig({
+    contextWindow: 4096,
+    contextWindowAssumed: true,
+    maxOutputTokens: 0,
+  });
+  deps.gatewayConfig?.set(config, true);
+  await explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(config));
+  expect(startupModels(deps)[0]).toMatchObject({
+    contextWindow: 32_768,
+    maxInputTokens: 16_000,
+    maxOutputTokens: 4096,
+  });
+});
+
+it("keeps a smaller live provider refinement when declared metadata arrives later", async () => {
+  stubReadyChat();
+  const pending = deferredValue<ReturnType<typeof parseModelDiscovery>>();
+  const deps = startupDeps(() => pending.promise);
+  const config = manualCatalogConfig({ contextWindow: 4096, contextWindowAssumed: true });
+  deps.gatewayConfig?.set(config, true);
+  const refresh = explicitlyRefreshStartupCatalog(deps, requiredStartupProvider(config));
+  const holder = deps.gatewayConfig;
+  holder?.refine?.({
+    ...config,
+    capabilities: (config.capabilities ?? []).map((model) => ({
+      ...model,
+      contextWindow: 32_768,
+      contextWindowAssumed: false,
+      contextWindowReported: true,
+    })),
+  });
+  pending.resolve(
+    parseModelDiscovery({
+      data: [{ model_name: "chat-model", model_info: { mode: "chat", max_model_len: 131_072 } }],
+    }),
+  );
+  await refresh;
+  expect(startupModels(deps)[0]?.contextWindow).toBe(32_768);
+});
+
+it("retains the accepted declared ceiling after disappearance and recovery", async () => {
+  stubReadyChat();
+  const discovery = vi
+    .fn()
+    .mockResolvedValue({ modelIds: [], chatModelIds: [], embeddingModelIds: [] });
+  const deps = startupDeps(discovery);
+  const manual = manualCatalogConfig({ contextWindow: 32_000 });
+  const config = {
+    ...manual,
+    providers: manual.providers.map((provider) => ({
+      ...provider,
+      catalogOrigin: "discovered" as const,
+    })),
+  };
+  deps.gatewayConfig?.set(config, true);
+  const provider = requiredStartupProvider(config);
+  await explicitlyRefreshStartupCatalog(deps, provider);
+  expect(startupProviderIds(deps)).toEqual([]);
+  expect(configuredStartupWindow(deps)).toBe(32_000);
+  discovery.mockResolvedValue({
+    ...discoveredCatalog(),
+    modelMetadata: { "chat-model": { contextWindow: 128_000 } },
+  });
+  await explicitlyRefreshStartupCatalog(deps, provider);
+  expect(startupModels(deps)[0]?.contextWindow).toBe(32_000);
+  expect(configuredStartupWindow(deps)).toBe(32_000);
+});
+
+it("refuses to report a catalog refinement as applied without its owner facet", async () => {
+  stubReadyChat();
+  const deps = startupDeps(() =>
+    Promise.resolve({
+      ...discoveredCatalog(),
+      modelMetadata: { "chat-model": { contextWindow: 32_000 } },
+    }),
+  );
+  const config = manualCatalogConfig();
+  deps.gatewayConfig?.set(config, true);
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) throw new TypeError("Expected gateway owner.");
+  const result = await refreshLiteLlmGatewayCatalog(
+    { ...deps, gatewayConfig: { ...holder, refine: undefined } },
+    requiredStartupProvider(config),
+    new AbortController().signal,
+    "corr-missing-refine",
+  );
+  expect(result).toEqual({ succeeded: false, retryable: true });
+  expect(holder.current()?.capabilities?.[0]?.contextWindow).toBe(64_000);
+});
+
 it("reconciles discovered model additions and removals using the current connection", async () => {
   stubReadyChat();
   const discovery = vi.fn().mockResolvedValue({

@@ -12952,6 +12952,51 @@ describe("gateway catalog source persistence", () => {
     await deps.dispose?.();
   });
 
+  it.each([false, true])(
+    "consumes unrelated tool-only evidence on apply, chat evidence present=%s",
+    async (withChatEvidence) => {
+      const deps = await catalogSetupDeps();
+      expect(
+        (
+          await handleGatewaySetup(
+            ctx({
+              baseUrl: "https://catalog.example.invalid/v1",
+              apiKey: "synthetic-catalog-secret",
+            }),
+            deps,
+          )
+        ).status,
+      ).toBe(200);
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("Expected catalog owner.");
+      const checkedAt = new Date().toISOString();
+      holder.recordVerifiedCapability("catalog-chat", { toolCalling: true }, checkedAt);
+      holder.recordVerifiedCapability(
+        "hidden-chat",
+        { toolCalling: true, ...(withChatEvidence ? { conversationReady: true } : {}) },
+        checkedAt,
+      );
+      expect(
+        (
+          await handleApplyGatewayVerifiedCapabilities(
+            { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "catalog-chat" } },
+            deps,
+          )
+        ).status,
+      ).toBe(200);
+      expect(holder.verifiedCapability("hidden-chat")?.fields.toolCalling).toBeUndefined();
+      expect(
+        (
+          await handleApplyGatewayVerifiedCapabilities(
+            { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "hidden-chat" } },
+            deps,
+          )
+        ).status,
+      ).toBe(409);
+      await deps.dispose?.();
+    },
+  );
+
   it("persists the accepted source without restoring removed active models during capability apply", async () => {
     const deps = await catalogSetupDeps();
     expect(

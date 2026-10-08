@@ -94,7 +94,12 @@ inactive models. A human configuration replacement remains authoritative. Invent
 the captured generation, reject stale credential responses, and preserve only truly unchanged live
 observations with their original measurement time. Context refinements use the current
 configuration and existing monotonic window-adoption rule, preserving declared ceilings and
-concurrent refinements. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
+concurrent refinements. Declared input and output ceilings retain their actual metadata provenance
+independently; later metadata cannot replace a smaller accepted or concurrently refined ceiling.
+Capability application clears carried observations before restoring only retained fields at their
+original feature and conversation measurement times, so an unrelated tool-only proof cannot grant
+conversation readiness. Missing refinement support fails as retryable rather than reporting an
+applied catalog update. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
 tool-call proofs without opening Settings or the Workbench. Unknown context windows use the
 existing context proof. Inconclusive discovery and tool checks retry after their one-minute
 cooldown, with exponential startup backoff capped at five minutes. Rejected credentials and
