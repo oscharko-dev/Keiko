@@ -89590,7 +89590,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2592",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:2591",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -89737,14 +89737,14 @@
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3143",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3142",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.readiness.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3160",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.ts:3159",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -90456,28 +90456,28 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2498",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2510",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2581",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2593",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2757",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2769",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2911",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2923",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

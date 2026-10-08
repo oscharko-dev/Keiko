@@ -2349,12 +2349,24 @@ function startWorkbenchProbeQueue(): void {
 
 async function drainWorkbenchProbeQueue(): Promise<void> {
   await Promise.resolve();
-  let entry = nextWorkbenchProbe();
-  while (entry !== undefined) {
-    entry.running = true;
-    await entry.perform();
-    entry = nextWorkbenchProbe();
+  return new Promise<void>((resolve, reject) => {
+    performNextWorkbenchProbe(resolve, reject);
+  });
+}
+
+function performNextWorkbenchProbe(resolve: () => void, reject: (error: unknown) => void): void {
+  const entry = nextWorkbenchProbe();
+  if (entry === undefined) {
+    resolve();
+    return;
   }
+  entry.running = true;
+  void entry
+    .perform()
+    .then(() => {
+      performNextWorkbenchProbe(resolve, reject);
+    })
+    .catch(reject);
 }
 
 export async function ensureCodingWorkbenchContextWindows(

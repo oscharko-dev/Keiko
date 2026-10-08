@@ -259,7 +259,7 @@ class GatewayStartupChecks {
   }
 }
 
-async function refreshCatalogs(
+function refreshCatalogs(
   deps: UiHandlerDeps,
   signal: AbortSignal,
   discovered: Set<CatalogDiscoveryState>,
@@ -267,26 +267,72 @@ async function refreshCatalogs(
   retryDelayMs: number,
   background: CatalogBackgroundAttempt,
 ): Promise<boolean> {
-  const holder = deps.gatewayConfig;
-  const config = configuredStartupGateway(deps);
-  if (config === undefined) return false;
-  let retry = false;
-  const connections = liteLlmDiscoveryConnections(config);
-  pruneCatalogConnections(discovered, connections);
-  for (const provider of connections) {
-    if (signal.aborted || holder?.generation() !== background.configurationGeneration) break;
-    retry =
-      (await refreshCatalogConnection(
-        deps,
-        signal,
-        discovered,
-        provider,
-        correlationId,
-        retryDelayMs,
-        background,
-      )) || retry;
+  return new Promise<boolean>((resolve, reject) => {
+    const holder = deps.gatewayConfig;
+    const config = configuredStartupGateway(deps);
+    if (config === undefined) {
+      resolve(false);
+      return;
+    }
+    const connections = liteLlmDiscoveryConnections(config);
+    pruneCatalogConnections(discovered, connections);
+    refreshNextCatalogConnection({
+      deps,
+      signal,
+      discovered,
+      correlationId,
+      retryDelayMs,
+      background,
+      holder,
+      connections: connections.values(),
+      retry: false,
+      resolve,
+      reject,
+    });
+  });
+}
+
+interface CatalogRefreshSequence {
+  readonly deps: UiHandlerDeps;
+  readonly signal: AbortSignal;
+  readonly discovered: Set<CatalogDiscoveryState>;
+  readonly correlationId: string;
+  readonly retryDelayMs: number;
+  readonly background: CatalogBackgroundAttempt;
+  readonly holder: UiHandlerDeps["gatewayConfig"];
+  readonly connections: Iterator<ModelProviderConfig>;
+  readonly resolve: (retry: boolean) => void;
+  readonly reject: (error: unknown) => void;
+  retry: boolean;
+}
+
+function refreshNextCatalogConnection(sequence: CatalogRefreshSequence): void {
+  if (
+    sequence.signal.aborted ||
+    sequence.holder?.generation() !== sequence.background.configurationGeneration
+  ) {
+    sequence.resolve(sequence.retry);
+    return;
   }
-  return retry;
+  const next = sequence.connections.next();
+  if (next.done === true) {
+    sequence.resolve(sequence.retry);
+    return;
+  }
+  void refreshCatalogConnection(
+    sequence.deps,
+    sequence.signal,
+    sequence.discovered,
+    next.value,
+    sequence.correlationId,
+    sequence.retryDelayMs,
+    sequence.background,
+  )
+    .then((retry) => {
+      sequence.retry = retry || sequence.retry;
+      refreshNextCatalogConnection(sequence);
+    })
+    .catch(sequence.reject);
 }
 
 async function refreshCatalogConnection(

@@ -2493,17 +2493,16 @@ function settleOpenCodeHandshake(
       if (bootstrap !== undefined && !bootstrap.canWrite()) {
         return { kind: "failed" as const, reason: "bootstrap-packet" };
       }
-      return adapter
-        .handshake({
-          runId: request.runId,
-          startupOutput: active.startupOutput ?? closedStartupOutput,
-          onPermission,
-          signal: controller.signal,
-          timeoutMs: request.startTimeoutMs,
-        })
-        .then((result): OpenCodeHandshakeSettlement =>
-          result.ok ? { kind: "ok" } : { kind: "failed", reason: result.reason },
-        );
+      const result = await adapter.handshake({
+        runId: request.runId,
+        startupOutput: active.startupOutput ?? closedStartupOutput,
+        onPermission,
+        signal: controller.signal,
+        timeoutMs: request.startTimeoutMs,
+      });
+      return result.ok
+        ? { kind: "ok" as const }
+        : { kind: "failed" as const, reason: result.reason };
     })
     .then(
       (result): OpenCodeHandshakeSettlement => result,

@@ -240,7 +240,7 @@ function useSourceRefresh(
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
 ): SourceRefresh {
-  const refreshRef = useRef<SourceRefresh>(async () => undefined);
+  const refreshRef = useRef<SourceRefresh>(() => Promise.resolve());
   const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
   refreshRef.current = useCallback(
     async (catalogAlreadyCurrent = false, parentCorrelationId?: string): Promise<void> => {
