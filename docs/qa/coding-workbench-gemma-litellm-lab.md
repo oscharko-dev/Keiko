@@ -456,6 +456,24 @@ other platform and final-head matrix obligations remain open. The private observ
 share one bounded owner, independently checked by 49 focused controls, 24 pure controls, ten
 critical-window assertions and an actual Fetch Response control.
 
+A distinct before-spawn observation on that repaired source admitted
+`run-79232098196233746470335735250655597924` once but already found two native children.
+It sent no signal, restarted nothing and acknowledged no recovery. The retained failed-window
+receipt does not qualify before-spawn interruption. The same read-only task subsequently
+succeeded with three model turns, two discovery calls, two workspace reads and zero edits.
+
+The native retry presentation was then qualified on clean compiled source `6ecb5b64428c` with
+one normal UI admission of `run-35312767360095442219196121822176788771` against real LiteLLM
+and Gemma in the isolated full Keiko repository. One task-bearing HTTP 409 caused the original
+native database row to record physical attempt 2 and its scheduled UTC time. Both matched the
+runtime SSE and visible status. The observer then proved that the same row cleared retry state,
+an explicit null SSE removed the UI badge and the same task succeeded. Gateway retry facts
+remained separate and absent. Canonical Activity Log evidence confirms five model turns, two
+discovery calls, two workspace reads, zero edits, zero verification commands and zero operator
+decisions. Repository fingerprints remained identical; no task was resubmitted or cancelled.
+The owned idle host and fault proxy were stopped afterwards and the private gateway configuration
+was restored. This qualifies this named Darwin retry case, not the complete final-head matrix.
+
 Discovery declares the served window through LiteLLM `model_info` (`context_window`,
 `max_output_tokens`, `supports_function_calling`). A customer route without those declarations
 is a separate case: Keiko then starts from the setup placeholder until its long-context probe
