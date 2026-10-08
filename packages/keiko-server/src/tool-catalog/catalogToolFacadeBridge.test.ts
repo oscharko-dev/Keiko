@@ -903,3 +903,36 @@ describe("private native snapshot canonical binding", () => {
     ).toMatchObject({ status: "timeout", reason: "deadline-exceeded" });
   });
 });
+
+it("passes the actual opaque catalog invocation to the private original-read delegate with one settlement", async () => {
+  const { bridge, log } = createBridge({ nativeTextSnapshotAvailable: true });
+  const request = { ...identity, action: "read" as const, relativePath: "README.md" };
+  const seen: string[] = [];
+  const result = await bridge.executeNativeReadInvocation?.(
+    request,
+    {
+      body: JSON.stringify(request),
+      capability: "capability",
+      context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+      offset: 0,
+      limit: 20,
+    },
+    (_signal, guard, invocationId): Promise<CodingToolResult> => {
+      expect(guard.check()).toBe(true);
+      seen.push(invocationId);
+      return Promise.resolve({
+        status: "completed",
+        evidence: [{ kind: "native-read-invocation", code: "completed" }],
+      });
+    },
+  );
+  expect(result?.status).toBe("completed");
+  const admitted = log.events.filter((event) => event.op === "tool-catalog.invocation-started");
+  const settled = log.events.filter((event) => event.op === "tool-catalog.invocation-settled");
+  expect(admitted).toHaveLength(1);
+  expect(settled).toHaveLength(1);
+  expect(seen).toEqual([admitted[0]?.extra?.invocationId]);
+  expect(settled[0]?.extra?.invocationId).toBe(seen[0]);
+  expect(JSON.stringify(log.events)).not.toContain("README.md");
+  expect(JSON.stringify(log.events)).not.toContain("capability");
+});

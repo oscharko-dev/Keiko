@@ -236,6 +236,31 @@ The fixed native entry itself retains its separately qualified database/cwd corr
 controls neither launch that entry through the production Manager nor qualify fresh packaged
 assets, canonical native IO admission, full platform coverage or complete Standalone parity.
 
+The next inactive original-Read parent facet independently reproduces two missing-facet failures
+and one CI lifetime failure on unchanged production. It joins hidden target/instruction text reads
+to one real catalog invocation, authority/budget admission and CI settlement. Root retains the
+prepared-service and accepted-session Location changes while merging the two independent test
+groups. An initial mixed compiled catalog run fails fourteen new controls; rebuilding the actual
+dependency graph removes that setup mismatch before the qualified runs. Strict thirteen-owner
+types and scoped lint pass. Root passes 360 tests across six owning suites, 97 registry controls
+and twelve actual observability probes. Five indirect failure callbacks are made explicit through
+the existing report owner; an additional real child rejection retains its parent until terminal
+settlement and proves body-free evidence. Nineteen-file formatting and the affected package graph
+pass. Controlled cancel/deadline/stop, rejected raw process and fresh reconcile
+controls retain recovery until real promise settlement; replay/forged/stale child packets execute
+nothing and emit only existing body-free outcomes.
+
+Root's actual pinned Node 24.18.0 Tool.snapshot/Read/SessionInstructions comparison uses the same
+workspace and real mint/canonical producer bodies. The unchanged per-primitive path consumes two
+admissions and fails the one-logical-tool criterion; the parent facet consumes one admission and
+settlement for the same two physical read promises. Exact serialized native output, content and
+original permission/context lineage match. Physical process promises and generated plugin setup
+ports are hermetic: no OS helper, service listener or model is launched. This text subset does not
+qualify KSR3 media/range/stat/list, paths beyond the public parser limit, initial/global instructions
+or production native advertisement/activation. Shared default tool projections remain unchanged;
+the original context capture gains read parameters/pagination, so no default-factory byte-identity
+claim follows from this increment.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

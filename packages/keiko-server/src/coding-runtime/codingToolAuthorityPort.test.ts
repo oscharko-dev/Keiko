@@ -2217,3 +2217,238 @@ it.each(["late-bytes", "technical-rejection"] as const)(
     }
   },
 );
+
+function nativeInvocationAuthorityFixture(): {
+  readonly facet: NonNullable<
+    NonNullable<ReturnType<typeof createRuntimeCodingToolFacade>["nativeTextRead"]>["invocations"]
+  >;
+  readonly producer: ReturnType<typeof vi.fn>;
+  readonly charges: ReturnType<typeof vi.fn>;
+  readonly settles: ReturnType<typeof vi.fn>;
+  readonly readGetter: ReturnType<typeof vi.fn>;
+  readonly registry: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly log: ReturnType<typeof createBufferedServerLogSink>;
+} {
+  const log = createBufferedServerLogSink();
+  const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+  const producer = vi.fn(() =>
+    Promise.resolve({
+      ok: true as const,
+      text: "PRIVATE_NATIVE_IO",
+      info: { type: "file" as const, size: 17, mtimeMs: 0 },
+    }),
+  );
+  const readGetter = vi.fn();
+  const settles = vi.fn();
+  const charges = vi.fn((): { readonly check: () => boolean; readonly settle: typeof settles } => ({
+    check: () => true,
+    settle: settles,
+  }));
+  const authority: Parameters<typeof createRuntimeCodingToolFacade>[0] = {
+    resolveCapabilityForDelegation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
+    revalidateCapabilityForMutation: () => ({ ok: true, envelope: fullyAuthorizedEnvelope }),
+  };
+  const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+    nativeTextRead: {
+      get readTextSnapshot(): typeof producer {
+        readGetter();
+        if (readGetter.mock.calls.length > 1) throw new TypeError("PRIVATE_SECOND_PRODUCER_GETTER");
+        return producer;
+      },
+    },
+    invocationRegistry: registry,
+    catalogActivityLog: log,
+    ciRepairBudget: {
+      admitTool: charges,
+      canChargePrompt: () => ({ accepted: true }),
+      chargePrompt: () => ({ accepted: true }),
+      observed: () => undefined,
+    },
+  });
+  const facet = facade.nativeTextRead?.invocations;
+  if (facet === undefined) throw new TypeError("Expected private native invocation facet");
+  return { facet, producer, charges, settles, readGetter, registry, log };
+}
+
+function originalReadBeginInput(): import("./codingToolFacadePorts.js").CodingToolNativeReadBeginInput {
+  return {
+    capability: "runtime-capability-secret",
+    body: JSON.stringify({
+      action: "read",
+      relativePath: "fixture.ts",
+      actionId: "native-original",
+      idempotencyKey: "native-original",
+    }),
+    context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+  };
+}
+
+it("retains one CI lease across target and instruction reads, settling only at canonical completion", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  try {
+    const begun = await f.facet.begin(originalReadBeginInput());
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+    for (const ordinal of [1, 2, 3])
+      expect(
+        (await f.facet.readTextSnapshot(begun.identity, { ordinal, relativePath: "fixture.ts" }))
+          .ok,
+      ).toBe(true);
+    expect(f.charges).toHaveBeenCalledOnce();
+    expect(f.settles).not.toHaveBeenCalled();
+    expect(f.producer).toHaveBeenCalledTimes(3);
+    expect(f.readGetter).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(
+      f.log.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_NATIVE_IO");
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("records an original-read child failure without exposing its body and releases its parent at terminal settlement", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  f.producer.mockRejectedValueOnce(new Error("PRIVATE_NATIVE_CHILD_FAILURE"));
+  try {
+    const begun = await f.facet.begin(originalReadBeginInput());
+    if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+    expect(
+      await f.facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" }),
+    ).toEqual({ ok: false, reason: "dispatch-refused" });
+    expect(f.settles).not.toHaveBeenCalled();
+    expect(await f.facet.close(begun.identity, "failed")).toBe(false);
+    await begun.settled;
+    expect(f.settles).toHaveBeenCalledOnce();
+    expect(
+      f.log.events.filter((event) => event.extra?.reason === "authority-resolution-failed"),
+    ).toMatchObject([
+      {
+        op: "coding-runtime.tool-result",
+        extra: {
+          actionKind: "read",
+          state: "discarded",
+          reason: "authority-resolution-failed",
+        },
+      },
+    ]);
+    expect(JSON.stringify(f.log.events)).not.toMatch(/PRIVATE_NATIVE_CHILD_FAILURE|fixture\.ts/u);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it.each(["accessor", "inherited", "symbol", "authority-claim", "header", "invalid-limit"] as const)(
+  "refuses %s original context or authority input before physical work",
+  async (kind) => {
+    const f = nativeInvocationAuthorityFixture();
+    const base = originalReadBeginInput();
+    const accessor = vi.fn(() => "PRIVATE_ACCESSOR");
+    const context = { ...base.context };
+    let input: import("./codingToolFacadePorts.js").CodingToolNativeReadBeginInput = {
+      ...base,
+      context,
+    };
+    if (kind === "accessor") Object.defineProperty(context, "id", { get: accessor });
+    else if (kind === "inherited") Object.setPrototypeOf(context, { PRIVATE_INHERITED: true });
+    else if (kind === "symbol") Object.assign(context, { [Symbol("PRIVATE_SYMBOL")]: true });
+    else if (kind === "authority-claim") input = { ...input, authority: "forged" } as typeof input;
+    else if (kind === "header") input = { ...input, headers: new Headers() };
+    else input = { ...input, limit: 0 };
+    try {
+      expect(await f.facet.begin(input)).toEqual({ ok: false, reason: "invalid-request" });
+      expect(accessor).not.toHaveBeenCalled();
+      expect(f.charges).not.toHaveBeenCalled();
+      expect(f.producer).not.toHaveBeenCalled();
+    } finally {
+      f.registry.dispose();
+    }
+  },
+);
+
+it("refuses forged identities and packet replay while retaining the real current parent", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  try {
+    const begun = await f.facet.begin(originalReadBeginInput());
+    if (!begun.ok) throw new TypeError("Expected admitted native invocation");
+    const packet = { ordinal: 1, relativePath: "fixture.ts" };
+    expect(
+      (await f.facet.readTextSnapshot({ ...begun.identity, invocationId: "forged" }, packet)).ok,
+    ).toBe(false);
+    expect((await f.facet.readTextSnapshot(begun.identity, packet)).ok).toBe(true);
+    expect((await f.facet.readTextSnapshot(begun.identity, packet)).ok).toBe(false);
+    expect(
+      (await f.facet.readTextSnapshot(begun.identity, { ...packet, relativePath: "other.ts" })).ok,
+    ).toBe(false);
+    for (const relativePath of ["../escape", ".env", "/absolute", "a".repeat(513)])
+      expect(
+        (await f.facet.readTextSnapshot(begun.identity, { ordinal: 2, relativePath })).ok,
+      ).toBe(false);
+    expect(f.producer).toHaveBeenCalledOnce();
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    expect(
+      (await f.facet.readTextSnapshot(begun.identity, { ordinal: 3, relativePath: "fixture.ts" }))
+        .ok,
+    ).toBe(false);
+    expect(await f.facet.begin(originalReadBeginInput())).toEqual({
+      ok: false,
+      reason: "dispatch-refused",
+    });
+    expect(f.producer).toHaveBeenCalledOnce();
+    expect(f.charges).toHaveBeenCalledOnce();
+    const discarded = f.log.events.filter(
+      (event) => event.op === "coding-runtime.tool-result" && event.extra?.reason === "denied",
+    );
+    expect(discarded.length).toBeGreaterThanOrEqual(3);
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.tool-result.emitted-line",
+        formatActivityLogProofLine(discarded[0] ?? {}),
+      ),
+    ).toMatchObject({ actionKind: "read", state: "discarded", reason: "denied" });
+    expect(JSON.stringify(discarded)).not.toMatch(/fixture\.ts|other\.ts|forged/u);
+  } finally {
+    f.registry.dispose();
+  }
+});
+
+it("owns original native context and body before admission awaits, while refusing accessor child packets without reading them", async () => {
+  const f = nativeInvocationAuthorityFixture();
+  const input = originalReadBeginInput();
+  const context = { ...input.context };
+  const body = Buffer.from(input.body);
+  const pending = f.facet.begin({ ...input, context, body });
+  context.id = "PRIVATE_MUTATED_NATIVE_CONTEXT";
+  body.fill(0);
+  try {
+    const begun = await pending;
+    if (!begun.ok) throw new TypeError("Expected captured native invocation");
+    const getter = vi.fn(() => "fixture.ts");
+    const packet = Object.defineProperty({ ordinal: 1 }, "relativePath", { get: getter }) as {
+      readonly ordinal: number;
+      readonly relativePath: string;
+    };
+    expect(await f.facet.readTextSnapshot(begun.identity, packet)).toEqual({
+      ok: false,
+      reason: "invalid-request",
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(f.producer).not.toHaveBeenCalled();
+    const forged = Object.defineProperty({ ...begun.identity }, "invocationId", { get: getter });
+    expect(f.facet.signalFor(forged)).toBeUndefined();
+    expect(getter).not.toHaveBeenCalled();
+    expect(
+      (await f.facet.readTextSnapshot(begun.identity, { ordinal: 1, relativePath: "fixture.ts" }))
+        .ok,
+    ).toBe(true);
+    expect(await f.facet.close(begun.identity, "completed")).toBe(true);
+    expect(f.readGetter).toHaveBeenCalledOnce();
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_MUTATED_NATIVE_CONTEXT");
+    expect(JSON.stringify(f.log.events)).not.toContain("PRIVATE_SECOND_PRODUCER_GETTER");
+  } finally {
+    f.registry.dispose();
+  }
+});

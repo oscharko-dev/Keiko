@@ -491,6 +491,17 @@ and receipt-only replay cannot recover text. Same-descriptor modification times 
 value, including dates before 1970. The private profile is never a model selector and leaves public
 direct/Code Mode projections and Chat read/search consumers unchanged.
 
+The inactive original-Read invocation facet attaches one lifetime to the existing claimed catalog
+record. The original session/message/call context, path and pagination facts are captured before
+admission awaits. One actual catalog invocation ID, authority admission, CI lease and effect-gate
+reservation cover the logical Read and its hidden text/instruction IO. Each immutable child ordinal
+and digest is claimed on that same record; duplicate or conflicting packets execute nothing. Closing
+cuts off new child IO immediately, while held raw promises retain the original reservation until
+actual settlement. Canonical terminal confirmation remains separate from physical drainage. This
+facet still uses the bounded private text snapshot and public read-path parser; native bytes/media,
+long paths, the full original Files surface and real service transport require further integration.
+It creates no replay cache of file contents and does not activate a native model-visible tool.
+
 A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
 immediate directory entries to original native file consumers. Its collected output limit is
 64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused

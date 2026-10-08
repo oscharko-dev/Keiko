@@ -335,7 +335,12 @@ it("binds an inactive fixed host factory to the same parent owner and lexical fa
   const tools = new Map<string, GeneratedTool>();
   const hooks = new Map<string, Hook>();
   const closed: string[] = [];
-  let owner: { readonly close: (context: NativeContext) => boolean } | undefined;
+  let owner:
+    | {
+        readonly close: (context: NativeContext) => boolean;
+        readonly capture: (context: NativeContext) => Promise<string>;
+      }
+    | undefined;
   const factory = new Script(
     `${create().replace("export default", "const generated =")}\ngenerated;`,
   ).runInNewContext({
@@ -395,12 +400,22 @@ it("binds an inactive fixed host factory to the same parent owner and lexical fa
   expect([...tools.keys()]).toEqual(opencodeRegistrationSet().entries.map((value) => value.alias));
   const before = hooks.get("execute.before");
   if (before === undefined || owner === undefined) throw new Error("host-owner-unbound");
+  const direct = await owner.capture(CONTEXT);
   await before({ ...CONTEXT, tool: "execute" });
+  const captured = await Promise.all([owner.capture(CONTEXT), owner.capture(CONTEXT)]);
+  expect(new Set([direct, ...captured]).size).toBe(3);
+  expect(
+    await owner.capture({ ...CONTEXT, messageID: "forged-message" }).then(
+      () => false,
+      () => true,
+    ),
+  ).toBe(true);
   const selected = tools.get("keiko_git_status");
   if (selected === undefined) throw new Error("host-tool-missing");
   await expect(selected.execute({}, CONTEXT)).resolves.toMatchObject({ output: RESPONSE });
   expect(owner.close(CONTEXT)).toBe(true);
   expect(owner.close(CONTEXT)).toBe(false);
+  await expect(owner.capture(CONTEXT)).rejects.toThrow("keiko-tool-invalid");
   await expect(selected.execute({}, CONTEXT)).rejects.toThrow("keiko-tool-invalid");
   expect(closed).toEqual([CONTEXT.id]);
 });

@@ -726,31 +726,100 @@ export function opencodeRegistrationSet(
 }
 
 /** Server-private same-descriptor snapshot contract; never composed into a model advertisement. */
-export function nativeTextSnapshotRegistrationSet(): CatalogRegistrationSet {
+export function nativeTextSnapshotRegistrationSet(
+  kind: "snapshot" | "invocation" = "snapshot",
+): CatalogRegistrationSet {
   return {
-    profile: { id: "opencode-native-text-io", version: 1 },
+    profile: {
+      id: kind === "snapshot" ? "opencode-native-text-io" : "opencode-native-read-invocation",
+      version: 1,
+    },
     adapterDialect: OPENCODE_DIALECT,
     adapterRuntime: OPENCODE_RUNTIME,
     nativeExtensions: [],
     compatibility: [],
-    entries: [
-      entryFor(
-        {
-          canonicalId: "keiko.native.workspace.text.snapshot",
-          alias: "native_workspace_text_snapshot",
-          description:
-            "Capture one bounded whole-file UTF-8 snapshot for the private native file service. Only a compact receipt enters catalog settlement; source text stays invocation-local.",
-          inputSchema: managedObjectSchema({ relativePath: workspaceTextPathSchema() }, [
-            "relativePath",
-          ]),
-          effects: ["workspace-read"],
-          idempotency: "read-only",
-          handlerId: "opencode-native-text-snapshot-port",
-        },
-        nativeTextSnapshotReceiptSchema(),
-      ),
-    ],
+    entries:
+      kind === "invocation"
+        ? [nativeReadInvocationEntry()]
+        : [
+            entryFor(
+              {
+                canonicalId: "keiko.native.workspace.text.snapshot",
+                alias: "native_workspace_text_snapshot",
+                description:
+                  "Capture one bounded whole-file UTF-8 snapshot for the private native file service. Only a compact receipt enters catalog settlement; source text stays invocation-local.",
+                inputSchema: managedObjectSchema({ relativePath: workspaceTextPathSchema() }, [
+                  "relativePath",
+                ]),
+                effects: ["workspace-read"],
+                idempotency: "read-only",
+                handlerId: "opencode-native-text-snapshot-port",
+              },
+              nativeTextSnapshotReceiptSchema(),
+            ),
+          ],
   };
+}
+
+function nativeReadInvocationEntry(): CatalogRegistrationSet["entries"][number] {
+  return entryFor(
+    {
+      canonicalId: "keiko.native.workspace.read.invocation",
+      alias: "native_workspace_read_invocation",
+      description:
+        "Own one original native read and its internal file operations under one current authority and budget admission. Only a compact terminal receipt enters catalog settlement.",
+      inputSchema: nativeReadInvocationInputSchema(),
+      effects: ["workspace-read"],
+      idempotency: "read-only",
+      handlerId: "opencode-native-read-invocation-port",
+    },
+    managedObjectSchema(
+      {
+        status: { type: "string", enum: ["completed"] },
+        evidence: {
+          type: "array",
+          minItems: 1,
+          maxItems: 1,
+          items: managedObjectSchema(
+            {
+              kind: { type: "string", enum: ["native-read-invocation"] },
+              code: { type: "string", enum: ["completed"] },
+            },
+            ["kind", "code"],
+          ),
+        },
+      },
+      ["status", "evidence"],
+    ),
+  );
+}
+
+function nativeReadInvocationInputSchema(): CatalogJsonObject {
+  return managedObjectSchema(
+    {
+      relativePath: workspaceTextPathSchema(),
+      context: managedObjectSchema(
+        Object.fromEntries(
+          ["sessionID", "messageID", "id", "agent"].map((name) => [
+            name,
+            { type: "string", minLength: 1, maxLength: 256 },
+          ]),
+        ),
+        ["sessionID", "messageID", "id", "agent"],
+      ),
+      offset: {
+        type: "array",
+        maxItems: 1,
+        items: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+      },
+      limit: {
+        type: "array",
+        maxItems: 1,
+        items: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+      },
+    },
+    ["relativePath", "context", "offset", "limit"],
+  );
 }
 
 function nativeTextSnapshotReceiptSchema(): CatalogJsonObject {

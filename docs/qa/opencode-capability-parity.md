@@ -35,6 +35,10 @@ IO owner now admits bounded waiting; forty original ancestor instructions retain
 ordered event and output digests with eight physical helpers at most. The BFF validates created and
 echoed native session Location before readiness. The private prepared host transport retains its
 distinct artifact-owned program and packet, but deliberately refuses unqualified host readiness.
+The private original-Read invocation now shares one actual canonical admission and CI lifetime
+across hidden text/instruction reads. It remains a text subset with the public parser's path bound;
+the guarded KSR3 primitives must join that same owner before native Read can be activated. Neither
+the default direct nor Code Mode gateway profile currently admits original native Read.
 T01 and the other production statuses below therefore remain incomplete native-parity acceptance.
 The owner requires complete functional parity with Standalone OpenCode. Every narrower, disabled
 or missing native capability is therefore an open acceptance item, including extension and

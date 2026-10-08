@@ -3,6 +3,7 @@ import {
   type ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
+import type { CodingToolNativeReadOwner } from "./codingToolFacadePorts.js";
 
 export const CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN = 8;
 export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = 262_144;
@@ -48,6 +49,20 @@ export type CodingToolInvocationInspection =
   | { readonly kind: "terminal"; readonly receipt?: ToolInvocationReceipt };
 
 export interface CodingToolInvocationRegistry {
+  readonly attachNativeRead: (
+    request: InvocationIdentity,
+    owner: CodingToolNativeReadOwner,
+  ) => boolean;
+  readonly nativeReadOwner: (
+    request: InvocationIdentity,
+    invocationId: string,
+  ) => CodingToolNativeReadOwner | undefined;
+  readonly claimNativeReadOperation: (
+    request: InvocationIdentity,
+    invocationId: string,
+    ordinal: number,
+    digest: string,
+  ) => "ready" | "duplicate" | "conflict" | "refused" | "busy";
   readonly stage: (request: CodingToolInvocationStage) => CodingToolInvocationStageResult;
   readonly take: (request: InvocationIdentity) => CodingToolInvocationTakeResult;
   readonly settle: (request: InvocationIdentity, receipt?: ToolInvocationReceipt) => boolean;
@@ -79,6 +94,11 @@ interface ClaimedEntry {
   readonly controller: AbortController;
   readonly timer: ReturnType<typeof setTimeout>;
   payload: Buffer;
+  nativeRead?: {
+    readonly owner: CodingToolNativeReadOwner;
+    readonly operations: Map<number, string>;
+    bytes: number;
+  };
 }
 
 interface Tombstone {
@@ -128,6 +148,68 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
       payload: entry.payload,
     });
     return { kind: "ready", payload: entry.payload, signal: entry.controller.signal };
+  }
+
+  public attachNativeRead(request: InvocationIdentity, owner: CodingToolNativeReadOwner): boolean {
+    this.expire();
+    const entry = this.claimed.get(identity(request));
+    if (
+      this.disposed ||
+      entry === undefined ||
+      entry.nativeRead !== undefined ||
+      entry.controller.signal.aborted
+    )
+      return false;
+    entry.nativeRead = { owner, operations: new Map(), bytes: 0 };
+    return true;
+  }
+
+  public nativeReadOwner(
+    request: InvocationIdentity,
+    invocationId: string,
+  ): CodingToolNativeReadOwner | undefined {
+    this.expire();
+    const entry = this.claimed.get(identity(request));
+    return this.disposed ||
+      entry?.controller.signal.aborted === true ||
+      entry?.nativeRead?.owner.invocationId !== invocationId
+      ? undefined
+      : entry.nativeRead.owner;
+  }
+
+  public claimNativeReadOperation(
+    request: InvocationIdentity,
+    invocationId: string,
+    ordinal: number,
+    digest: string,
+  ): "ready" | "duplicate" | "conflict" | "refused" | "busy" {
+    const owner = this.nativeReadOwner(request, invocationId);
+    const entry = this.claimed.get(identity(request));
+    const native = entry?.nativeRead;
+    if (
+      owner === undefined ||
+      entry === undefined ||
+      native === undefined ||
+      !validNativeOperation(ordinal, digest)
+    )
+      return "refused";
+    const previous = native.operations.get(ordinal);
+    if (previous !== undefined) return previous === digest ? "duplicate" : "conflict";
+    const bytes = Buffer.byteLength(digest) + 8;
+    if (
+      !nativePacketCapacity(
+        entry.payload.length,
+        native.operations.size,
+        native.bytes,
+        bytes,
+        this.totalBytes,
+      )
+    )
+      return "busy";
+    native.operations.set(ordinal, digest);
+    native.bytes += bytes;
+    this.totalBytes += bytes;
+    return "ready";
   }
 
   public settle(request: InvocationIdentity, receipt?: ToolInvocationReceipt): boolean {
@@ -272,7 +354,8 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
   ): void {
     clearTimeout(entry.timer);
     this.claimed.delete(key);
-    this.totalBytes -= entry.payload.length;
+    this.totalBytes -= entry.payload.length + (entry.nativeRead?.bytes ?? 0);
+    entry.nativeRead?.owner.revoke();
     wipeClaimed(entry);
     this.remember(key, entry.digest, entry.expiresAt, kind);
   }
@@ -320,6 +403,24 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
       this.revoked.delete(oldest);
     }
   }
+}
+
+function nativePacketCapacity(
+  payloadBytes: number,
+  packetCount: number,
+  packetBytes: number,
+  bytes: number,
+  totalBytes: number,
+): boolean {
+  return (
+    packetCount < MAX_IDENTITIES &&
+    payloadBytes + packetBytes + bytes <= CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY &&
+    totalBytes + bytes <= CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES
+  );
+}
+
+function validNativeOperation(ordinal: number, digest: string): boolean {
+  return Number.isSafeInteger(ordinal) && ordinal >= 1 && /^[a-f0-9]{64}$/u.test(digest);
 }
 
 function collisionOwnership(

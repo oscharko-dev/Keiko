@@ -52,6 +52,10 @@ import type {
   CodingToolFacadeInput,
   CodingToolNativeTextReadFacet,
   CodingToolNativeTextSnapshotResult,
+  CodingToolNativeReadInvocations,
+  CodingToolNativeReadBeginInput,
+  CodingToolNativeReadBeginResult,
+  CodingToolNativeReadIdentity,
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
@@ -1822,7 +1826,9 @@ function nativeToolBridgeFacet(
   const facet = deps.facade.nativeTextRead;
   const producer = facet?.readTextSnapshot.bind(facet);
   if (producer === undefined) return undefined;
+  const invocations = nativeInvocationBridgeFacet(deps, gate, active, facet?.invocations);
   return Object.freeze({
+    ...(invocations === undefined ? {} : { invocations }),
     readTextSnapshot: (
       input: CodingToolFacadeInput,
     ): Promise<CodingToolNativeTextSnapshotResult> => {
@@ -1837,6 +1843,172 @@ function nativeToolBridgeFacet(
       return executeNativeToolRequest(deps, producer, ownedBody, admission).finally(detach);
     },
   });
+}
+
+function nativeInvocationBridgeFacet(
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+  active: () => boolean,
+  supplied: CodingToolNativeReadInvocations | undefined,
+): CodingToolNativeReadInvocations | undefined {
+  if (supplied === undefined) return undefined;
+  const producer = Object.freeze({
+    begin: supplied.begin.bind(supplied),
+    readTextSnapshot: supplied.readTextSnapshot.bind(supplied),
+    signalFor: supplied.signalFor.bind(supplied),
+    close: supplied.close.bind(supplied),
+  });
+  return Object.freeze({
+    begin: (input): Promise<CodingToolNativeReadBeginResult> =>
+      beginNativeBridgeInvocation(deps, gate, active, producer, input),
+    signalFor: producer.signalFor,
+    readTextSnapshot: (identity, input): Promise<CodingToolNativeTextSnapshotResult> =>
+      boundedNativeInvocationCall(deps, active, producer, identity, () =>
+        producer.readTextSnapshot(identity, input),
+      ),
+    close: (identity, outcome): Promise<boolean> =>
+      closeNativeBridgeInvocation(deps, active, producer, identity, outcome),
+  } satisfies CodingToolNativeReadInvocations);
+}
+
+async function closeNativeBridgeInvocation(
+  deps: ToolBridgeExecutionDeps,
+  active: () => boolean,
+  producer: CodingToolNativeReadInvocations,
+  identity: CodingToolNativeReadIdentity,
+  outcome: "completed" | "failed" | "cancelled",
+): Promise<boolean> {
+  try {
+    if (!active() || producer.signalFor(identity) === undefined) return false;
+    // The canonical terminal promise is already deadline/cancellation bounded. Its successful
+    // settlement aborts the registry's signal too; racing that signal would fabricate failure.
+    return await producer.close(identity, outcome);
+  } catch (error) {
+    emitFacadeFailureDiagnostic(deps.diagnostics, identity.actionId, error);
+    return false;
+  }
+}
+
+async function boundedNativeInvocationCall(
+  deps: ToolBridgeExecutionDeps,
+  active: () => boolean,
+  producer: CodingToolNativeReadInvocations,
+  identity: CodingToolNativeReadIdentity,
+  execute: () => Promise<CodingToolNativeTextSnapshotResult>,
+): Promise<CodingToolNativeTextSnapshotResult> {
+  const refused = { ok: false as const, reason: "dispatch-refused" as const };
+  let signal: AbortSignal | undefined;
+  try {
+    if (!active()) return refused;
+    signal = producer.signalFor(identity);
+    if (signal === undefined || signal.aborted) return refused;
+    const work = execute();
+    return await raceAbort(work, signal);
+  } catch (error) {
+    if (signal?.aborted === true) return { ok: false, reason: "cancelled" };
+    emitFacadeFailureDiagnostic(deps.diagnostics, identity.actionId, error);
+    return refused;
+  }
+}
+
+async function beginNativeBridgeInvocation(
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+  active: () => boolean,
+  producer: CodingToolNativeReadInvocations,
+  input: CodingToolNativeReadBeginInput,
+): Promise<CodingToolNativeReadBeginResult> {
+  if (!active()) return { ok: false, reason: "dispatch-refused" };
+  const ownedInput = prepareNativeBridgeBeginInput(deps, input);
+  if (ownedInput === undefined) return { ok: false, reason: "invalid-request" };
+  const { signal } = ownedInput;
+  const ownedBody = ownedInput.body;
+  if (signal?.aborted === true) return { ok: false, reason: "cancelled" };
+  const admission = gate.admit(gate.limits.requestDeadlineMs);
+  if (admission === undefined) return { ok: false, reason: "busy" };
+  const detach = bindExternalAbort(signal, admission);
+  const work = callNativeReadBegin(producer, {
+    ...ownedInput,
+    body: ownedBody,
+    capability: deps.capability,
+    signal: admission.controller.signal,
+  });
+  const physicalWork = work.then(async (result): Promise<void> => {
+    if (result.ok) await result.settled;
+  });
+  releaseAdmissionWhenSettled(physicalWork, admission);
+  void physicalWork.then(detach, detach);
+  try {
+    return await raceAbort(work, admission.controller.signal);
+  } catch (error) {
+    const actionId = parseCodingToolRequest(ownedBody, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
+    if (!admission.controller.signal.aborted)
+      emitFacadeFailureDiagnostic(deps.diagnostics, actionId, error);
+    return {
+      ...nativeToolAbortResult(deps, actionId, admission),
+      ok: false,
+    } as CodingToolNativeReadBeginResult;
+  }
+}
+
+function prepareNativeBridgeBeginInput(
+  deps: ToolBridgeExecutionDeps,
+  input: CodingToolNativeReadBeginInput,
+): (CodingToolNativeReadBeginInput & { readonly body: string }) | undefined {
+  try {
+    const owned = ownNativeBridgeBeginInput(input);
+    if (owned === undefined) return undefined;
+    const body = nativeToolRequestBody(
+      owned.body,
+      owned.capability,
+      owned.headers,
+      deps.capability,
+    );
+    return body === undefined ? undefined : { ...owned, body };
+  } catch (error) {
+    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
+    return undefined;
+  }
+}
+
+function ownNativeBridgeBeginInput(
+  input: CodingToolNativeReadBeginInput,
+): CodingToolNativeReadBeginInput | undefined {
+  const prototype: unknown = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const allowed = new Set([
+    "body",
+    "capability",
+    "headers",
+    "signal",
+    "context",
+    "offset",
+    "limit",
+  ]);
+  const owned: Record<string, unknown> = {};
+  for (const key of Reflect.ownKeys(input)) {
+    if (typeof key !== "string" || !allowed.has(key)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor === undefined || !("value" in descriptor)) return undefined;
+    owned[key] = descriptor.value;
+  }
+  if (!nativeBridgeBeginValues(owned.body, owned.capability, owned.signal)) return undefined;
+  return owned as unknown as CodingToolNativeReadBeginInput;
+}
+
+function nativeBridgeBeginValues(body: unknown, capability: unknown, signal: unknown): boolean {
+  return (
+    (typeof body === "string" || Buffer.isBuffer(body)) &&
+    (capability === undefined || typeof capability === "string") &&
+    (signal === undefined || signal instanceof AbortSignal)
+  );
+}
+
+async function callNativeReadBegin(
+  producer: CodingToolNativeReadInvocations,
+  input: CodingToolNativeReadBeginInput,
+): Promise<CodingToolNativeReadBeginResult> {
+  return producer.begin(input);
 }
 
 function nativeToolRequestBody(

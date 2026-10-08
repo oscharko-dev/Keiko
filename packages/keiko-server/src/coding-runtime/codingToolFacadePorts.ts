@@ -213,6 +213,62 @@ export interface CodingToolNativeTextReadFacet {
   readonly readTextSnapshot: (
     input: CodingToolFacadeInput,
   ) => Promise<CodingToolNativeTextSnapshotResult>;
+  /** Inactive original-read lifetime; neither model JSON nor HTTP exposes this owner. */
+  readonly invocations?: CodingToolNativeReadInvocations | undefined;
+}
+
+export interface CodingToolNativeReadContext {
+  readonly sessionID: string;
+  readonly messageID: string;
+  readonly id: string;
+  readonly agent: string;
+}
+
+export interface CodingToolNativeReadBeginInput extends CodingToolFacadeInput {
+  readonly context: CodingToolNativeReadContext;
+  readonly offset?: number | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface CodingToolNativeReadIdentity {
+  readonly actionId: string;
+  readonly idempotencyKey: string;
+  readonly invocationId: string;
+}
+
+export type CodingToolNativeReadBeginResult =
+  | {
+      readonly ok: true;
+      readonly identity: CodingToolNativeReadIdentity;
+      readonly settled: Promise<void>;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "invalid-request" | "dispatch-refused" | "busy" | "cancelled" | "timeout";
+    };
+
+export interface CodingToolNativeReadInvocations {
+  readonly signalFor: (identity: CodingToolNativeReadIdentity) => AbortSignal | undefined;
+  readonly begin: (
+    input: CodingToolNativeReadBeginInput,
+  ) => Promise<CodingToolNativeReadBeginResult>;
+  readonly readTextSnapshot: (
+    identity: CodingToolNativeReadIdentity,
+    input: { readonly ordinal: number; readonly relativePath: string },
+  ) => Promise<CodingToolNativeTextSnapshotResult>;
+  readonly close: (
+    identity: CodingToolNativeReadIdentity,
+    outcome: "completed" | "failed" | "cancelled",
+  ) => Promise<boolean>;
+}
+
+/** Attached only by the actual authorized catalog handler, on its existing claimed record. */
+export interface CodingToolNativeReadOwner {
+  readonly signal: AbortSignal;
+  readonly invocationId: string;
+  readonly readTextSnapshot: (relativePath: string) => Promise<CodingToolNativeTextSnapshotResult>;
+  readonly close: (outcome: "completed" | "failed" | "cancelled") => Promise<boolean>;
+  readonly revoke: () => void;
 }
 
 export interface CodingToolFacade {

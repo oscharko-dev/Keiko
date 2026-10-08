@@ -1249,7 +1249,9 @@ function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "
     "  async setup(ctx) {",
     ...v2InvocationIdentitySource(host),
     ...(host
-      ? ["    bindOwner(Object.freeze({ close: closeParent, assertOpen: assertInvocationOpen }));"]
+      ? [
+          "    bindOwner(Object.freeze({ close: closeParent, assertOpen: assertInvocationOpen, capture: captureInvocationIdentity }));",
+        ]
       : []),
     '    await ctx.tool.hook("execute.before", (event) => {',
     '      if (event.tool !== "execute") return;',

@@ -26,6 +26,7 @@ import type {
   CodingToolAuthorityPort,
   CodingToolFacadeInput,
   CodingToolMutationGuard,
+  CodingToolNativeReadBeginInput,
 } from "../coding-runtime/codingToolFacadePorts.js";
 import type { CodingToolAuthorityPreview } from "../coding-runtime/codingToolAuthorityPort.js";
 import type { CodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
@@ -147,6 +148,15 @@ export interface CanonicalCatalogFacadeBridge {
     request: CodingToolActionRequest,
     input: CodingToolFacadeInput,
     run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  ) => Promise<CodingToolResult>;
+  readonly executeNativeReadInvocation?: (
+    request: Extract<CodingToolActionRequest, { readonly action: "read" }>,
+    input: CodingToolNativeReadBeginInput,
+    run: (
+      signal: AbortSignal,
+      guard: CodingToolMutationGuard,
+      invocationId: string,
+    ) => Promise<CodingToolResult>,
   ) => Promise<CodingToolResult>;
   readonly executeTextSnapshot?: (
     request: Extract<CodingToolActionRequest, { readonly action: "read" }>,
@@ -488,7 +498,11 @@ function bindingFor(
 function executionOverride(
   descriptor: ToolDescriptor,
   request: CodingToolActionRequest,
-  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  run: (
+    signal: AbortSignal,
+    mutationGuard: CodingToolMutationGuard,
+    invocationId: string,
+  ) => Promise<CodingToolResult>,
   recordResult: (result: CodingToolResult) => void,
 ): CatalogToolExecutionOverride {
   return {
@@ -499,7 +513,7 @@ function executionOverride(
       idempotencyKey: identity.idempotencyKey,
     }),
     execute: async (_argumentsValue, context): Promise<CatalogHandlerResult> => {
-      const result = await run(context.signal, context.mutationGuard);
+      const result = await run(context.signal, context.mutationGuard, context.invocationId);
       recordResult(result);
       if (result.status === "failed" && !isExecutedVerificationFailure(request, result))
         throw handlerFault(result);
@@ -782,7 +796,11 @@ function createDispatchBinder(
   descriptor: ToolDescriptor,
   request: CodingToolActionRequest,
   facadeInput: CodingToolFacadeInput,
-  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  run: (
+    signal: AbortSignal,
+    mutationGuard: CodingToolMutationGuard,
+    invocationId: string,
+  ) => Promise<CodingToolResult>,
   recordResult: (result: CodingToolResult) => void,
 ): ReturnType<typeof createCatalogToolBinderFromPreparation> {
   const current = bridgeInput.context();
@@ -813,7 +831,11 @@ async function executeCanonical(
   preparation: PreparedDispatchBinder,
   request: CodingToolActionRequest,
   facadeInput: CodingToolFacadeInput,
-  run: (signal: AbortSignal, mutationGuard: CodingToolMutationGuard) => Promise<CodingToolResult>,
+  run: (
+    signal: AbortSignal,
+    mutationGuard: CodingToolMutationGuard,
+    invocationId: string,
+  ) => Promise<CodingToolResult>,
   action: CatalogAction | undefined = catalogActionFor(request),
 ): Promise<CodingToolResult> {
   const current = bridgeInput.context();
@@ -879,7 +901,33 @@ export function createCanonicalCatalogFacadeBridge(
     bridgeInput.nativeTextSnapshotAvailable === true
       ? prepareDispatchBinder(bridgeInput, nativeSnapshotAdvertisement())
       : undefined;
+  const nativeRead =
+    bridgeInput.nativeTextSnapshotAvailable === true
+      ? prepareDispatchBinder(bridgeInput, nativeSnapshotAdvertisement("invocation"))
+      : undefined;
   return {
+    ...(nativeRead === undefined
+      ? {}
+      : {
+          executeNativeReadInvocation: (
+            request: Extract<CodingToolActionRequest, { readonly action: "read" }>,
+            input: CodingToolNativeReadBeginInput,
+            run: (
+              signal: AbortSignal,
+              guard: CodingToolMutationGuard,
+              invocationId: string,
+            ) => Promise<CodingToolResult>,
+          ): Promise<CodingToolResult> =>
+            executeCanonical(bridgeInput, nativeRead, request, input, run, {
+              toolId: "keiko.native.workspace.read.invocation",
+              arguments: {
+                relativePath: request.relativePath,
+                context: { ...input.context },
+                offset: input.offset === undefined ? [] : [input.offset],
+                limit: input.limit === undefined ? [] : [input.limit],
+              },
+            }),
+        }),
     covers: (request): boolean => catalogActionFor(request) !== undefined,
     recordUnbound: (request, _facadeInput): void => {
       recordUnbound(bridgeInput, request);
@@ -903,8 +951,10 @@ export function openCodeCatalogAliasFor(request: CodingToolActionRequest): strin
   )?.alias;
 }
 
-function nativeSnapshotAdvertisement(): ReturnType<typeof openCodeGatewayCatalogProjection> {
-  const set = nativeTextSnapshotRegistrationSet();
+function nativeSnapshotAdvertisement(
+  kind: "snapshot" | "invocation" = "snapshot",
+): ReturnType<typeof openCodeGatewayCatalogProjection> {
+  const set = nativeTextSnapshotRegistrationSet(kind);
   const catalog = createKeikoToolCatalog([set]);
   return { catalog, projection: compileToolProjection(catalog, set.profile) };
 }

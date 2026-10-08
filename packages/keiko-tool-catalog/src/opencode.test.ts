@@ -501,3 +501,44 @@ describe("private native text snapshot registration", () => {
     }
   });
 });
+
+it("compiles an inactive original-read lifetime without advertising another model tool", () => {
+  const set = registrationOwners.nativeTextSnapshotRegistrationSet("invocation");
+  const projection = compileToolProjection(createKeikoToolCatalog([set]), set.profile);
+  const tool = projection.tools[0];
+  if (tool === undefined) throw new TypeError("Expected native invocation descriptor");
+  expect(tool.toolRef.canonicalId).toBe("keiko.native.workspace.read.invocation");
+  const input = {
+    relativePath: "src/file.ts",
+    context: { sessionID: "session", messageID: "message", id: "call", agent: "build" },
+    offset: [],
+    limit: [],
+  };
+  expect(matchesCatalogSchema(tool.inputSchema, input)).toBe(true);
+  expect(matchesCatalogSchema(tool.inputSchema, { ...input, offset: [0], limit: [20] })).toBe(true);
+  for (const invalid of [
+    { ...input, context: { ...input.context, tool: "shell" } },
+    { ...input, limit: [0] },
+    { ...input, offset: [0, 1] },
+    { ...input, relativePath: "../escape" },
+    { ...input, capability: "forged" },
+  ])
+    expect(matchesCatalogSchema(tool.inputSchema, invalid)).toBe(false);
+  expect(
+    matchesCatalogSchema(tool.resultSchema, {
+      status: "completed",
+      evidence: [{ kind: "native-read-invocation", code: "completed" }],
+    }),
+  ).toBe(true);
+  expect(
+    matchesCatalogSchema(tool.resultSchema, {
+      status: "completed",
+      evidence: [{ kind: "native-read-invocation", code: "completed" }],
+      text: "PRIVATE_BYTES",
+    }),
+  ).toBe(false);
+  for (const profile of [undefined, "code-mode"] as const)
+    expect(
+      opencodeRegistrationSet(profile).entries.some((entry) => entry.alias === tool.alias),
+    ).toBe(false);
+});
