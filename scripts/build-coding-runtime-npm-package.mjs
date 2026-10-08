@@ -321,6 +321,8 @@ function lockedHostInputs(source, facts) {
     "@opencode/server": facts.moduleVersion,
     "@opencode/core": facts.moduleVersion,
     "@opencode/util": facts.moduleVersion,
+    "@opencode/ai": facts.moduleVersion,
+    "@opencode/plugin": facts.moduleVersion,
     effect: facts.effectVersion,
     "@effect/platform-node": facts.effectVersion,
     "@effect/platform-node-shared": facts.effectVersion,

@@ -1,6 +1,7 @@
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -25,6 +26,14 @@ const VERIFICATION_CONTINUATION_OPERATION = defineActivityLogOperation({
     attempt: { type: "integer", dataClass: "count", required: true },
     max: { type: "integer", dataClass: "count", required: true },
     errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -66,7 +75,7 @@ export function recordVerificationContinuation(
       {
         correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
         level: state === "continued" ? "info" : "warn",
-        ...(state === "continued" ? {} : { errorKind: "validation-failed" as const }),
+        ...(state === "continued" ? {} : { errorKind: continuationErrorKind(state) }),
       },
       {
         runId,
@@ -81,11 +90,22 @@ export function recordVerificationContinuation(
 
 function continuationErrorFields(error: unknown): {
   readonly errorClass: string;
+  readonly code?: string;
+  readonly causeChain?: readonly string[];
   readonly frames?: readonly string[];
 } {
   const description = describeError(error);
   return {
     errorClass: description.errorClass,
+    ...(description.code === undefined ? {} : { code: description.code }),
+    ...(description.causeChain === undefined ? {} : { causeChain: description.causeChain }),
     ...(description.frames === undefined ? {} : { frames: description.frames }),
   };
+}
+
+function continuationErrorKind(
+  state: Exclude<ContinuationState, "continued">,
+): ActivityLogErrorKind {
+  if (state === "run-superseded") return "conflict";
+  return state === "not-evidenced" ? "validation-failed" : "unavailable";
 }

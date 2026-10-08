@@ -245,6 +245,61 @@ describe("CodingRuntimeRunEffortLedger", () => {
     expect(ledger.needsVerification("run-a")).toBe(false);
   });
 
+  it("keeps a later human denial through in-flight completion and subsequent edits", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    const old = ledger.verificationAdmitted("run-a");
+    ledger.verificationBlocked("run-a", "verification-command-denied");
+    ledger.edit("run-a");
+    old?.("target-a");
+    expect(ledger.verificationBlockedReason("run-a")).toBe("verification-command-denied");
+    const current = ledger.verificationAdmitted("run-a");
+    current?.("target-a");
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    expect(ledger.needsVerification("run-a")).toBe(true);
+    ledger.verification("run-a", true, "target-a", ledger.verificationRevision("run-a"));
+    expect(ledger.needsVerification("run-a")).toBe(false);
+  });
+
+  it("does not make an unexecuted denied lint summary a new failing proof obligation", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    ledger.verification("run-a", true, "target-test", ledger.verificationRevision("run-a"));
+    ledger.verificationBlocked("run-a", "VERIFICATION_NOT_RUN", "target-lint");
+    ledger.verification("run-a", false, "target-lint", ledger.verificationRevision("run-a"));
+    expect(ledger.needsVerification("run-a")).toBe(false);
+    ledger.edit("run-a");
+    ledger.verificationAdmitted("run-a")?.("target-test");
+    ledger.verification("run-a", true, "target-test", ledger.verificationRevision("run-a"));
+    expect(ledger.needsVerification("run-a")).toBe(false);
+  });
+
+  it("never admits completion from an earlier record of a reused run id", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    const old = ledger.verificationAdmitted("run-a");
+    ledger.begin("run-a");
+    ledger.verificationBlocked("run-a", "verification-command-denied");
+    old?.("target-a");
+    expect(ledger.verificationBlockedReason("run-a")).toBe("verification-command-denied");
+  });
+
+  it("preserves blocked selected targets while ignoring an unavailable unrelated lint", () => {
+    const ledger = new CodingRuntimeRunEffortLedger();
+    ledger.begin("run-a");
+    ledger.edit("run-a");
+    ledger.verification("run-a", false, "target-test", ledger.verificationRevision("run-a"));
+    ledger.verificationBlocked("run-a", "NO_RUNNABLE_STEPS", "target-lint");
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    ledger.verificationBlocked("run-a", "NO_RUNNABLE_STEPS", "target-test");
+    ledger.edit("run-a");
+    expect(ledger.verificationBlockedReason("run-a")).toBe("NO_RUNNABLE_STEPS");
+    ledger.verificationAdmitted("run-a")?.("target-test");
+    expect(ledger.verificationBlockedReason("run-a")).toBeUndefined();
+    expect(ledger.needsVerification("run-a")).toBe(true);
+  });
+
   it("fails closed to zero host counts and reports only the wall time of an unobserved run", () => {
     const ledger = new CodingRuntimeRunEffortLedger();
     ledger.begin("run-a");

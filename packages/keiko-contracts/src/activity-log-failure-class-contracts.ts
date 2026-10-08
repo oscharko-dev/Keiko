@@ -2325,7 +2325,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-runtime.run.verification-continuation",
       "coding-runtime.verification",
     ],
-    requiredCauseOperations: ["coding-runtime.verification"],
+    requiredCauseOperations: [
+      "coding-runtime.run.verification-continuation",
+      "coding-runtime.verification",
+    ],
   },
   {
     contractKind: "activity-log-failure-class",

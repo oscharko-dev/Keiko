@@ -366,6 +366,15 @@ describe("coding runtime control plane", () => {
     const revision = vi.spyOn(control.orchestrator, "verificationRevision").mockReturnValue(3);
     expect(attached?.verificationRevision?.("run-1")).toBe(3);
     expect(revision).toHaveBeenCalledExactlyOnceWith("run-1");
+    const blocked = vi.spyOn(control.orchestrator, "observeVerificationBlocked");
+    attached?.verificationBlocked?.("run-1", "NO_RUNNABLE_STEPS", "a".repeat(64));
+    expect(blocked).toHaveBeenCalledExactlyOnceWith("run-1", "NO_RUNNABLE_STEPS", "a".repeat(64));
+    const completed = vi.fn();
+    const admitted = vi
+      .spyOn(control.orchestrator, "verificationAdmitted")
+      .mockReturnValue(completed);
+    expect(attached?.verificationAdmitted?.("run-1")).toBe(completed);
+    expect(admitted).toHaveBeenCalledExactlyOnceWith("run-1");
   });
 });
 

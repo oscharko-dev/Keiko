@@ -29,8 +29,7 @@
         "tests/architecture/fixtures/**",
         "tests/fixtures/**",
         "tests/e2e/fixtures/**",
-        "packages/keiko-ui/public/**",
-        "native/runtime-supervisor/**"
+        "packages/keiko-ui/public/**"
       ]
     },
     "packages/*": {
@@ -42,7 +41,8 @@
         "src/*/*.ts!",
         "src/**/index.ts!",
         "src/**/testing/fake-lsp-server.mjs!"
-      ]
+      ],
+      "ignoreBinaries": ["cc"]
     },
     "packages/keiko-contracts": {
       "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
@@ -79,6 +79,20 @@
     },
     "packages/keiko-workflows": {
       "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "native/opencode-service-host": {
+      "entry": ["host.mjs", "entry.mjs", "entry.test.mjs", "guard-seams.test.mjs", "host.test.mjs"],
+      "project": ["*.mjs"],
+      "vitest": false,
+      "ignoreDependencies": ["@effect/platform-node-shared"],
+      "ignoreUnresolved": [
+        "^\\./keiko-native-file-io-codec\\.mjs$",
+        "^\\./keiko-workspace-path-policy/ignore\\.js$",
+        "^\\./keiko-governed-tools\\.mjs$",
+        "^\\./keiko-governed-tools-code-mode\\.mjs$",
+        "^\\./keiko-host-packet-data\\.mjs$",
+        "^\\./keiko-native-context\\.mjs$"
+      ]
     }
   }
 }

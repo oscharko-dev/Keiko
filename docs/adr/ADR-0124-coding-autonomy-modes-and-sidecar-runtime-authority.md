@@ -166,6 +166,12 @@ for the task, not a global quality run. A model turn ending normally does not es
 continuations use the existing task dispatcher and unchanged authority to inspect results, repair
 the diagnosed cause, and retest. A refused continuation or exhausted continuation budget settles
 `verification-not-evidenced`; ordinary read-only tasks need no invented verification work.
+A human-denied verification command or an actually unavailable selected verifier stops automatic
+repair continuation without claiming verification. An unavailable unrelated verifier does not
+introduce a new proof obligation or block repair of the selected test. The existing ledger records
+these producer-owned facts. A later actually executed, still-authorized verifier may clear its
+applicable blocker through an invocation-local admission callback; a verifier admitted before a
+subsequent human denial cannot clear that denial by completing later. Edits do not clear denials.
 
 Runtime event contracts are content-free and closed. The shared event family includes:
 

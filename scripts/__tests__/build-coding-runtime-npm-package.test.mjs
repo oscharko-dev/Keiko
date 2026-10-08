@@ -16,8 +16,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, URL } from "node:url";
 import { dirname, join, relative } from "node:path";
+import ts from "typescript";
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as builder from "../build-coding-runtime-npm-package.mjs";
@@ -481,6 +482,58 @@ describe("coding runtime npm package", () => {
 });
 
 describe.skipIf(process.platform === "win32")("inactive original service package candidate", () => {
+  it("declares each actual original host import in its private locked dependencies", async () => {
+    const root = await builtServicePayload();
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    const imports = hostStaticImports(root).filter(
+      (specifier) => !specifier.startsWith(".") && !specifier.startsWith("node:"),
+    );
+    for (const specifier of imports) {
+      const packageName = specifier.startsWith("@")
+        ? specifier.split("/").slice(0, 2).join("/")
+        : specifier.split("/")[0];
+      expect(manifest.dependencies[packageName], specifier).toBeDefined();
+      expect(lock.packages[""].dependencies[packageName]).toBe(manifest.dependencies[packageName]);
+      expect(lock.packages[`node_modules/${packageName}`].version).toBe(
+        manifest.dependencies[packageName],
+      );
+    }
+    expect(manifest.private).toBe(true);
+  });
+
+  it("limits unresolved declarations to exact provenance-checked generated siblings", async () => {
+    const root = await builtServicePayload();
+    const config = JSON.parse(readFileSync(new URL("../../knip.json", import.meta.url), "utf8"));
+    const patterns = config.workspaces["native/opencode-service-host"]?.ignoreUnresolved ?? [];
+    const provenance = JSON.parse(
+      readFileSync(join(root, "evidence/build-provenance.json"), "utf8"),
+    );
+    const generated = new Map(provenance.generatedFiles.map((entry) => [entry.path, entry.sha256]));
+    const imports = [...new Set(hostStaticImports(root))].filter(
+      (specifier) => specifier.startsWith("./") && generated.has(specifier.slice(2)),
+    );
+
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) {
+      expect(patterns.filter((pattern) => new RegExp(pattern, "u").test(specifier))).toHaveLength(
+        1,
+      );
+      const actual = createHash("sha256")
+        .update(readFileSync(join(root, specifier)))
+        .digest("hex");
+      expect(actual).toBe(generated.get(specifier.slice(2)));
+    }
+    for (const pattern of patterns) {
+      expect(pattern.startsWith("^") && pattern.endsWith("$")).toBe(true);
+      expect(imports.filter((specifier) => new RegExp(pattern, "u").test(specifier))).toHaveLength(
+        1,
+      );
+      expect(new RegExp(pattern, "u").test("./keiko-unowned.mjs")).toBe(false);
+    }
+    expect(patterns).toHaveLength(imports.length);
+  });
+
   it("binds current static source/producer assets, npm metadata omissions, and full license refusal", async () => {
     const outDir = join(scratch(), "package");
     const result = await builder.buildCodingRuntimeNpmServiceHostCandidate({
@@ -616,6 +669,32 @@ describe.skipIf(process.platform === "win32")("inactive original service package
     expect(result.license.status).toBe("blocked");
   });
 });
+
+async function builtServicePayload() {
+  const outDir = join(scratch(), "package");
+  await builder.buildCodingRuntimeNpmServiceHostCandidate({
+    target: "macos-arm64",
+    version: "1.2.3",
+    outDir,
+    deps: serviceFixtureDeps(),
+  });
+  return join(outDir, "runtime/opencode-compatible/service-host/payload");
+}
+
+function hostStaticImports(root) {
+  return ["host.mjs", "entry.mjs", "guard-seams.mjs"].flatMap((name) => {
+    const source = ts.createSourceFile(
+      name,
+      readFileSync(join(root, name), "utf8"),
+      ts.ScriptTarget.Latest,
+    );
+    return source.statements
+      .filter(ts.isImportDeclaration)
+      .map((statement) => statement.moduleSpecifier)
+      .filter(ts.isStringLiteral)
+      .map((specifier) => specifier.text);
+  });
+}
 
 function serviceFixtureDeps() {
   return {

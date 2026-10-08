@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9e5a8f6dfa167a2b82b2df04b6b235132ebf1f3e4b7c5974099cb44e21d98385" as const;
+  "91c56961b0a35c4edb27318ce1478be3040605bd10bfe2d25ee4bc75214366b3" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -9874,6 +9874,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "code",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "errorClass",
               type: "string",
               dataClass: "error-kind",
@@ -9914,7 +9926,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           ],
           frameCauseEvidence: {
             frames: true,
-            causeChain: false,
+            causeChain: true,
           },
           proofIds: ["coding-runtime.run.verification-continuation.emitted-line"],
           replayReferences: [],

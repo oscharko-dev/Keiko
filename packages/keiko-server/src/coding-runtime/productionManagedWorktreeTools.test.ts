@@ -534,6 +534,8 @@ describe("production managed worktree tools", () => {
   });
   it("does not publish or complete verification after its repair lease expires in the runner", async () => {
     let repairLive = true;
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const records: ServerDiagnosticRecord[] = [];
     const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
@@ -544,6 +546,8 @@ describe("production managed worktree tools", () => {
     const facade = verificationFacade({
       records,
       events,
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       verifiedCommitService: service,
       ciRepairBudget: {
         admitTool: () => ({ check: (): boolean => repairLive, settle }),
@@ -570,6 +574,8 @@ describe("production managed worktree tools", () => {
     ).toMatchObject({ status: "failed" });
     expect(completeVerification).not.toHaveBeenCalled();
     expect(events).toEqual([]);
+    expect(executed).not.toHaveBeenCalled();
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith("verification-authority-revoked");
     expect(records).toContainEqual(
       expect.objectContaining({
         operation: "coding-runtime.verification",
@@ -1457,6 +1463,119 @@ describe("production managed worktree tools", () => {
     );
   });
 
+  it.each([
+    "PROJECT_NOT_FOUND",
+    "WORKSPACE_TRUST_REQUIRED",
+    "NO_RUNNABLE_STEPS",
+    "VERIFICATION_RUNNER_UNAVAILABLE",
+  ] as const)(
+    "reports actual impossible verification %s to the same run observer",
+    async (code) => {
+      const verificationBlocked = vi.fn();
+      const facade = verificationFacade({
+        records: [],
+        verificationBlocked,
+        runToReport: () => Promise.reject(new VerificationRunnerError(code, "PRIVATE_BLOCKER")),
+      });
+      await expect(
+        facade.execute({
+          capability: "opaque-capability",
+          body: JSON.stringify({
+            action: "verification",
+            actionId: "verification-blocked",
+            idempotencyKey: "verification-blocked-key",
+            verifierId: "test",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "failed", reasonCode: code });
+      expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+        code,
+        codingVerificationTargetDigest("test"),
+      );
+    },
+  );
+
+  it.each(["skipped", "denied", "cancelled"] as const)(
+    "keeps an actual %s report blocked without claiming execution",
+    async (status) => {
+      const verificationBlocked = vi.fn();
+      const executed = vi.fn();
+      const facade = verificationFacade({
+        records: [],
+        verificationBlocked,
+        verificationAdmitted: () => executed,
+        runToReport: () => Promise.resolve(verificationReport(status)),
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-not-run",
+          idempotencyKey: "not-run-key",
+          verifierId: "test",
+        }),
+      });
+      expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+        "VERIFICATION_NOT_RUN",
+        codingVerificationTargetDigest("test"),
+      );
+      expect(executed).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["passed", "failed", "timed-out", "resource-exceeded"] as const)(
+    "acknowledges only actual executed %s checks at their admitted completion",
+    async (status) => {
+      const verificationBlocked = vi.fn();
+      const executed = vi.fn();
+      const admitted = vi.fn(() => executed);
+      const facade = verificationFacade({
+        records: [],
+        verificationBlocked,
+        verificationAdmitted: admitted,
+        runToReport: () => {
+          expect(admitted).toHaveBeenCalledOnce();
+          expect(executed).not.toHaveBeenCalled();
+          const report = verificationReport(status);
+          return Promise.resolve({
+            ...report,
+            results: verificationReport("passed").results.map((result) => ({ ...result, status })),
+          });
+        },
+      });
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-executed",
+          idempotencyKey: "executed-key",
+          verifierId: "test",
+        }),
+      });
+      expect(executed).toHaveBeenCalledExactlyOnceWith(codingVerificationTargetDigest("test"));
+      expect(verificationBlocked).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a generic runner execution fault retryable rather than calling it impossible", async () => {
+    const verificationBlocked = vi.fn();
+    const facade = verificationFacade({
+      records: [],
+      verificationBlocked,
+      runToReport: () => Promise.reject(new VerificationRunnerError("INTERNAL", "PRIVATE_FAULT")),
+    });
+    await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-fault",
+        idempotencyKey: "fault-key",
+        verifierId: "test",
+      }),
+    });
+    expect(verificationBlocked).not.toHaveBeenCalled();
+  });
+
   // A refusal by the verification runner (no project row, missing script trust, nothing runnable)
   // reaches the model under the runner's own closed code and leaves a body-free diagnostic; a bare
   // "failed" made the agent re-run the verifier instead of reporting the blocker (workbench
@@ -1554,6 +1673,7 @@ describe("production managed worktree tools", () => {
     async (_label, verifierId, managedAccessLive, reasonCode) => {
       const records: ServerDiagnosticRecord[] = [];
       const runToReport = vi.fn();
+      const verificationBlocked = vi.fn();
       const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
         ...FACTS,
         actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
@@ -1570,6 +1690,7 @@ describe("production managed worktree tools", () => {
           }),
         },
         authorityRef: { runId: "run-verification-2", envelopeDigest: DIGEST },
+        verificationBlocked,
         workspaceRoot: "/managed/worktree",
         // Authority stays valid for decades, so a refusal here can only come from the liveness
         // recheck (or the unknown verifier), never from expiry.
@@ -1607,6 +1728,13 @@ describe("production managed worktree tools", () => {
         }),
       ).resolves.toMatchObject({ status: "failed", reasonCode });
       expect(runToReport).not.toHaveBeenCalled();
+      expect(verificationBlocked).toHaveBeenCalledOnce();
+      expect(verificationBlocked).toHaveBeenCalledWith(
+        reasonCode,
+        ...(reasonCode === "verification-verifier-unsupported"
+          ? [codingVerificationTargetDigest(verifierId)]
+          : []),
+      );
       expect(records).toEqual([
         expect.objectContaining({
           operation: "coding-runtime.verification",
@@ -3688,7 +3816,11 @@ describe("verification waiting on the operator's package-script trust decision",
         : Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
     );
     const log: ServerLogEvent[] = [];
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const facade = verificationFacade({
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       runToReport,
       scriptTrustFor: trustRefusedThenGranted(() => granted),
       requestOperatorDecision: (decision, outcome): void => {
@@ -3705,6 +3837,8 @@ describe("verification waiting on the operator's package-script trust decision",
 
     await expect(pending).resolves.toMatchObject({ status: "completed" });
     expect(runToReport).toHaveBeenCalledTimes(2);
+    expect(verificationBlocked).not.toHaveBeenCalled();
+    expect(executed).toHaveBeenCalledExactlyOnceWith(codingVerificationTargetDigest("test"));
     expect(announced).toEqual([
       { decision: "workspace-script-trust" },
       { decision: "workspace-script-trust", outcome: "accepted" },
@@ -3785,7 +3919,11 @@ describe("verification waiting on the operator's package-script trust decision",
       Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
     );
     const log: ServerLogEvent[] = [];
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const facade = verificationFacade({
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       runToReport,
       scriptTrustFor: trustRefusedThenGranted(() => false),
       requestOperatorDecision: (decision, outcome): void => {
@@ -3806,6 +3944,11 @@ describe("verification waiting on the operator's package-script trust decision",
       reasonCode: "WORKSPACE_TRUST_REQUIRED",
     });
     expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+      "WORKSPACE_TRUST_REQUIRED",
+      codingVerificationTargetDigest("test"),
+    );
+    expect(executed).not.toHaveBeenCalled();
     expect(announced.at(-1)).toEqual({
       decision: "workspace-script-trust",
       outcome: "limit-reached",
@@ -3822,7 +3965,11 @@ describe("verification waiting on the operator's package-script trust decision",
     const runToReport = vi.fn(() =>
       Promise.reject(new WorkspaceTrustRequiredError("repository-not-trusted")),
     );
+    const verificationBlocked = vi.fn();
+    const executed = vi.fn();
     const facade = verificationFacade({
+      verificationBlocked,
+      verificationAdmitted: () => executed,
       runToReport,
       scriptTrustFor: trustRefusedThenGranted(() => false),
       records: [],
@@ -3832,6 +3979,11 @@ describe("verification waiting on the operator's package-script trust decision",
       facade.execute(verificationCall("verification-trust-none")),
     ).resolves.toMatchObject({ status: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" });
     expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(verificationBlocked).toHaveBeenCalledExactlyOnceWith(
+      "WORKSPACE_TRUST_REQUIRED",
+      codingVerificationTargetDigest("test"),
+    );
+    expect(executed).not.toHaveBeenCalled();
   });
 
   // The load-bearing relation between the wait and the ceilings the governed verification call is
@@ -4000,6 +4152,8 @@ function verificationRunnerOptions(options: {
 }
 
 function verificationFacade(options: {
+  readonly verificationBlocked?: ProductionManagedWorktreeToolInput["verificationBlocked"];
+  readonly verificationAdmitted?: ProductionManagedWorktreeToolInput["verificationAdmitted"];
   readonly verificationRevision?: (() => number | undefined) | undefined;
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
@@ -4021,6 +4175,8 @@ function verificationFacade(options: {
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
     verificationRevision: options.verificationRevision,
+    verificationBlocked: options.verificationBlocked,
+    verificationAdmitted: options.verificationAdmitted,
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     ...(options.approvalProofVerifier === undefined
       ? {}

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9e5a8f6dfa167a2b82b2df04b6b235132ebf1f3e4b7c5974099cb44e21d98385"
+    "catalogDigest": "91c56961b0a35c4edb27318ce1478be3040605bd10bfe2d25ee4bc75214366b3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1431,7 +1431,8 @@
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
     "coding-runtime.run.verification-continuation.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingRuntimeVerificationContinuation.test.ts"
     ],
     "coding-runtime.safe-activity.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.test.ts"

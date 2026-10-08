@@ -1445,12 +1445,24 @@ function runObservers(
   >,
 ): Pick<
   ProductionManagedWorktreeToolInput,
-  "onRuntimeEvent" | "onToolSettled" | "verificationRevision"
+  | "onRuntimeEvent"
+  | "onToolSettled"
+  | "verificationRevision"
+  | "verificationBlocked"
+  | "verificationAdmitted"
 > {
   return {
     onRuntimeEvent: options.onRuntimeEvent,
     verificationRevision: (): number | undefined =>
       options.editOutcomes.current?.verificationRevision?.(options.minted.authorityRef.runId),
+    verificationBlocked: (reason, targetDigest): void =>
+      options.editOutcomes.current?.verificationBlocked?.(
+        options.minted.authorityRef.runId,
+        reason,
+        targetDigest,
+      ),
+    verificationAdmitted: () =>
+      options.editOutcomes.current?.verificationAdmitted?.(options.minted.authorityRef.runId),
     ...(options.onToolSettled === undefined ? {} : { onToolSettled: options.onToolSettled }),
   };
 }

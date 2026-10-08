@@ -380,6 +380,15 @@ function attachEditOutcomeObserver(
     {
       verificationRevision: (runId: string): number | undefined =>
         orchestrator.verificationRevision(runId),
+      verificationBlocked: (
+        ...args: Parameters<CodingRuntimeOrchestrator["observeVerificationBlocked"]>
+      ): void => {
+        orchestrator.observeVerificationBlocked(...args);
+      },
+      verificationAdmitted: (
+        runId: string,
+      ): ReturnType<CodingRuntimeOrchestrator["verificationAdmitted"]> =>
+        orchestrator.verificationAdmitted(runId),
     },
   );
   runtimeHost?.attachEditOutcomeObserver?.(observe);

@@ -20,6 +20,10 @@
 // calls per run. A settlement that names no open call, or a run this process did not start, is not
 // counted (fail closed); nothing is guessed.
 import type { CodingToolAction, CodingToolResult } from "./codingToolIpc.js";
+import type {
+  CodingVerificationBlockedReason,
+  CodingVerificationExecutedObserver,
+} from "./codingToolFacadePorts.js";
 
 const MAX_RETAINED_RUNS = 16;
 const MAX_OPEN_MODEL_CALLS = 64;
@@ -218,10 +222,19 @@ interface OrchestratorEffortRecord {
   verificationCount: number;
   verificationRequired: boolean;
   editRevision: number;
-  readonly verificationTargets: Map<string, boolean>;
+  readonly verificationTargets: Map<string, VerificationTargetState>;
+  verificationBlocker: CodingVerificationBlockedReason | undefined;
+  blockerRevision: number;
   operatorDecisionCount: number;
   operatorWaitMs: number;
   waitingSinceMs: number | undefined;
+}
+
+interface VerificationTargetState {
+  readonly passed: boolean;
+  readonly selected: boolean;
+  readonly notRun?: boolean;
+  readonly blockedReason?: CodingVerificationBlockedReason;
 }
 
 const NO_HOST_EFFORT: CodingRuntimeHostRunEffort = {
@@ -259,7 +272,9 @@ export class CodingRuntimeRunEffortLedger {
     if (run === undefined) return;
     run.verificationRequired = true;
     run.editRevision = boundedSum(run.editRevision, 1);
-    for (const target of run.verificationTargets.keys()) run.verificationTargets.set(target, false);
+    for (const [target, state] of run.verificationTargets) {
+      run.verificationTargets.set(target, { ...state, passed: false });
+    }
   }
 
   verificationRevision(runId: string): number | undefined {
@@ -276,18 +291,56 @@ export class CodingRuntimeRunEffortLedger {
     const run = this.runs.get(runId);
     if (run === undefined) return;
     run.verificationCount += 1;
-    if (passed === null) return;
-    if (
-      run.verificationRequired &&
-      (editRevision === undefined ||
-        editRevision !== run.editRevision ||
-        editRevision === Number.MAX_SAFE_INTEGER)
-    ) {
+    if (passed === null || run.verificationTargets.get(target)?.notRun === true) return;
+    if (!verificationAtCurrentRevision(run, editRevision)) {
       // A late old summary must not erase an already observed fresh pass for this same target.
-      if (!run.verificationTargets.has(target)) run.verificationTargets.set(target, false);
+      if (!run.verificationTargets.has(target))
+        run.verificationTargets.set(target, { passed: false, selected: true });
       return;
     }
-    run.verificationTargets.set(target, passed);
+    run.verificationTargets.set(target, { passed, selected: true });
+  }
+
+  verificationBlocked(
+    runId: string,
+    reason: CodingVerificationBlockedReason,
+    targetDigest?: string,
+  ): void {
+    const run = this.runs.get(runId);
+    if (run === undefined) return;
+    const selected = markVerificationNotRun(run, reason, targetDigest);
+    if (!verificationBlockerApplies(run, targetDigest, selected)) return;
+    run.blockerRevision = boundedSum(run.blockerRevision, 1);
+    setVerificationBlocker(run, reason, targetDigest);
+  }
+
+  verificationAdmitted(runId: string): CodingVerificationExecutedObserver | undefined {
+    const run = this.runs.get(runId);
+    if (run === undefined) return undefined;
+    const revision = run.blockerRevision;
+    return (targetDigest): void => {
+      if (
+        this.runs.get(runId) !== run ||
+        run.blockerRevision !== revision ||
+        revision === Number.MAX_SAFE_INTEGER
+      )
+        return;
+      run.verificationBlocker = undefined;
+      const selected = run.verificationTargets.get(targetDigest);
+      if (selected !== undefined) {
+        run.verificationTargets.set(targetDigest, { passed: selected.passed, selected: true });
+      }
+    };
+  }
+
+  verificationBlockedReason(runId: string): CodingVerificationBlockedReason | undefined {
+    const run = this.runs.get(runId);
+    return (
+      run?.verificationBlocker ??
+      [...(run?.verificationTargets.values() ?? [])].find(
+        (state) => state.selected && !state.passed && state.blockedReason !== undefined,
+      )?.blockedReason
+    );
   }
 
   needsVerification(runId: string): boolean {
@@ -295,8 +348,8 @@ export class CodingRuntimeRunEffortLedger {
     return (
       run !== undefined &&
       run.verificationRequired &&
-      (run.verificationTargets.size === 0 ||
-        [...run.verificationTargets.values()].some((passed) => !passed))
+      (!hasSelectedTargets(run) ||
+        [...run.verificationTargets.values()].some((state) => state.selected && !state.passed))
     );
   }
 
@@ -341,12 +394,72 @@ export class CodingRuntimeRunEffortLedger {
   }
 }
 
+function verificationAtCurrentRevision(
+  run: OrchestratorEffortRecord,
+  revision: number | undefined,
+): boolean {
+  return (
+    !run.verificationRequired ||
+    (revision !== undefined &&
+      revision !== Number.MAX_SAFE_INTEGER &&
+      revision === run.editRevision)
+  );
+}
+
+function markVerificationNotRun(
+  run: OrchestratorEffortRecord,
+  reason: CodingVerificationBlockedReason,
+  targetDigest: string | undefined,
+): VerificationTargetState | undefined {
+  const selected =
+    targetDigest === undefined ? undefined : run.verificationTargets.get(targetDigest);
+  if (reason === "VERIFICATION_NOT_RUN" && targetDigest !== undefined) {
+    run.verificationTargets.set(targetDigest, {
+      ...(selected ?? { passed: false, selected: false }),
+      notRun: true,
+    });
+  }
+  return selected;
+}
+
+function verificationBlockerApplies(
+  run: OrchestratorEffortRecord,
+  targetDigest: string | undefined,
+  selected: VerificationTargetState | undefined,
+): boolean {
+  return (
+    targetDigest === undefined ||
+    !hasSelectedTargets(run) ||
+    (selected?.selected === true && !selected.passed)
+  );
+}
+
+function setVerificationBlocker(
+  run: OrchestratorEffortRecord,
+  reason: CodingVerificationBlockedReason,
+  targetDigest: string | undefined,
+): void {
+  const selected =
+    targetDigest === undefined ? undefined : run.verificationTargets.get(targetDigest);
+  if (targetDigest !== undefined && selected?.selected === true) {
+    run.verificationTargets.set(targetDigest, { ...selected, blockedReason: reason });
+  } else {
+    run.verificationBlocker = reason;
+  }
+}
+
+function hasSelectedTargets(run: OrchestratorEffortRecord): boolean {
+  return [...run.verificationTargets.values()].some((state) => state.selected);
+}
+
 function newOrchestratorRecord(): OrchestratorEffortRecord {
   return {
     verificationCount: 0,
     verificationRequired: false,
     editRevision: 0,
     verificationTargets: new Map(),
+    verificationBlocker: undefined,
+    blockerRevision: 0,
     operatorDecisionCount: 0,
     operatorWaitMs: 0,
     waitingSinceMs: undefined,

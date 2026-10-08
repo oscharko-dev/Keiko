@@ -1543,3 +1543,54 @@ platform/process ownership, gateway health, large-repository performance and ful
 Original #3871–#3875 remain open; required checks, introduced defects and review findings stay in
 PR #3895. This checkpoint does not claim productive original-service activation or complete
 standalone parity.
+
+### Review closeout: bounded continuation, human refusal and private analysis ownership
+
+ROOT independently integrates continuation freeze
+`3006e8597c67beb5ae5cfbaf1c72d1d837f845d288a11a14e81094a72c8b94c8`, blocker freeze
+`ea8a3eb9695859d6bad7a2b6aa6693ed60fe78ca5f5f4adc01cdfb8e8f99d4ad` and private analysis
+freeze `6c5673cba52d47d3ae7324155abe8759d8f96836e3e5ed0b02cc7e469faaf022` against
+published parent `81a3e5b0995b51f7f94ca9064085b936d1c4de74`. The shared failure contract is
+merged only at the approved existing continuation cause-operation span, preserving the earlier
+runner-refusal digest evidence.
+
+Continuation reproduces **eight genuine failures**, then passes **249 tests across two suites**.
+Original typed code, cause classes and frames remain body-free; dispatch refusal/faults are
+unavailable, supersession is conflict and missing verification evidence is validation failure.
+Actual attempted continuation ordinals survive refused or thrown dispatch. All five registered
+emitted states are exercised. The first integrated run still used stale generated registration and
+is retained as failed setup evidence; canonical regeneration and rebuilding its leaf produce the
+qualified result, without a registry waiver.
+
+Blocker controls reproduce **six genuine failures**: human verification refusal, an older admitted
+verifier completing after that refusal and four actual typed impossible-verifier causes. The final
+owning selection passes **509 tests across six suites**. The same target ledger distinguishes
+executed failures from denied/cancelled/skipped checks without altering truthful wire counts.
+Invocation-local callbacks retain ledger identity and decision ordinal; only an actually executed
+check with current authority can reopen its applicable older blocker. A later denial cannot be
+erased by an older completion. Unrelated unavailable lint does not block a selected target, and
+unsupported verifier/trust/authority causes remain explicit. No new map owner, operation, planner
+or permission system is introduced.
+
+The private analysis slice matches **127 immutable references** and reproduces **four genuine
+failures**, then passes **46 tests across the two existing owning suites**. Actual narrow Knip
+analysis of the original-service owner reports zero issues. Node-test entries come from their
+actual imports, and generated sibling dispositions are exact anchored paths checked against the
+existing builder's produced files and hashes. The two actual original package imports become
+direct private dependencies at their already locked versions; all 451 non-root private lock
+members and the root package/lock remain unchanged. Existing private license refusal and inactive
+host state remain binding. No external install, full packed attestation or global dead-code gate
+is claimed by these bounded controls.
+
+Focused strict types include the new continuation test, zero-warning lint covers every changed
+TypeScript/MJS owner, and all changed files pass formatting. Fresh canonical generation resolves
+539/539 proofs and 30/30 scenarios without violations; the original catalog/failure-surface selection
+passes 111/111 controls. These are bounded owning checks, not the final complete quality matrix.
+
+Upgradeability is now an explicit parity requirement in
+[child #3908](https://github.com/oscharko-dev/Keiko/issues/3908), the eleventh native child of
+follow-up epic #3897. It requires one supported-interface/version boundary, producer-derived
+contracts and an actual upgrade/rollback comparison without distributed product rewrites or lost
+native capabilities. Service activation and final comparison issues link that prerequisite.
+Original acceptance remains open. Final global gates, remaining review repair and final-head
+live/platform/package qualification remain pending.

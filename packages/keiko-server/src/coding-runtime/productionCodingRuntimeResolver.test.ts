@@ -1,3 +1,4 @@
+import type { ProductionManagedWorktreeToolInput } from "./productionManagedWorktreeTools.js";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local resolver fixtures are contextually typed. */
 import * as processLog from "../process-log-sink.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -72,6 +73,8 @@ vi.mock("./productionCiRepairRuntime.js", async (importOriginal) => {
 const editOutcomeCapture = vi.hoisted(() => ({
   observers: [] as ((outcome: { readonly kind: "refused"; readonly reasonCode: string }) => void)[],
   revisions: [] as (() => number | undefined)[],
+  blocked: [] as NonNullable<ProductionManagedWorktreeToolInput["verificationBlocked"]>[],
+  admitted: [] as NonNullable<ProductionManagedWorktreeToolInput["verificationAdmitted"]>[],
 }));
 
 // PR #3876 review: the registry of rendered diffs the resolver hands each run's managed tool facade,
@@ -89,6 +92,10 @@ vi.mock("./productionManagedWorktreeTools.js", async (importOriginal) => {
       if (observe !== undefined) editOutcomeCapture.observers.push(observe);
       if (args[0].verificationRevision !== undefined)
         editOutcomeCapture.revisions.push(args[0].verificationRevision);
+      if (args[0].verificationBlocked !== undefined)
+        editOutcomeCapture.blocked.push(args[0].verificationBlocked);
+      if (args[0].verificationAdmitted !== undefined)
+        editOutcomeCapture.admitted.push(args[0].verificationAdmitted);
       materializedPatchesCapture.registries.push(args[0].materializedPatches);
       return original.createProductionManagedWorktreeToolFacade(...args);
     },
@@ -498,10 +505,19 @@ describe("production coding runtime resolver", () => {
     if (host === undefined) throw new Error("expected qualified host");
     const first = vi.fn();
     const readRevision = vi.fn(() => 5);
-    const latest = Object.assign(vi.fn(), { verificationRevision: readRevision });
+    const blocked = vi.fn();
+    const completed = vi.fn();
+    const admitted = vi.fn(() => completed);
+    const latest = Object.assign(vi.fn(), {
+      verificationRevision: readRevision,
+      verificationBlocked: blocked,
+      verificationAdmitted: admitted,
+    });
     host.attachEditOutcomeObserver?.(first);
     editOutcomeCapture.observers.length = 0;
     editOutcomeCapture.revisions.length = 0;
+    editOutcomeCapture.blocked.length = 0;
+    editOutcomeCapture.admitted.length = 0;
     const request = launchRequest(fixture.workspace);
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
     host.launchResolver.resolve(request);
@@ -515,6 +531,14 @@ describe("production coding runtime resolver", () => {
     expect(latest).toHaveBeenCalledExactlyOnceWith(request.runId, outcome);
     expect(editOutcomeCapture.revisions[0]?.()).toBe(5);
     expect(readRevision).toHaveBeenCalledExactlyOnceWith(request.runId);
+    editOutcomeCapture.blocked[0]?.("NO_RUNNABLE_STEPS", "a".repeat(64));
+    expect(blocked).toHaveBeenCalledExactlyOnceWith(
+      request.runId,
+      "NO_RUNNABLE_STEPS",
+      "a".repeat(64),
+    );
+    expect(editOutcomeCapture.admitted[0]?.()).toBe(completed);
+    expect(admitted).toHaveBeenCalledExactlyOnceWith(request.runId);
   });
 
   // PR #3876 review: a run's edit port registers the diff it renders in the one registry the editor

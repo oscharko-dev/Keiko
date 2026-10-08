@@ -40,6 +40,10 @@ import {
   type CodingRuntimeTerminalFailure,
   type CodingRuntimeTerminalFailureCode,
 } from "./codingRuntimeTerminalCause.js";
+import type {
+  CodingVerificationBlockedReason,
+  CodingVerificationExecutedObserver,
+} from "./codingToolFacadePorts.js";
 import {
   CodingRuntimeRunEffortLedger,
   type CodingRuntimeRunEffortRollUp,
@@ -2318,6 +2322,9 @@ export class CodingRuntimeOrchestrator {
         decision,
       );
       if (!permissionSettled) return this.stopAfterApprovalFailure(current);
+      if (decision === "denied" && actionKind === "verification-command") {
+        this.effort.verificationBlocked(current.runId, "verification-command-denied");
+      }
       // A denial rejects this one step: the runtime already told the model, and the run goes on
       // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
       this.dropActiveApproval(current.runId);
@@ -2917,6 +2924,24 @@ export class CodingRuntimeOrchestrator {
       : undefined;
   }
 
+  observeVerificationBlocked(
+    runId: string,
+    reason: CodingVerificationBlockedReason,
+    targetDigest?: string,
+  ): void {
+    const current = this.current();
+    if (current?.runId === runId && EFFORT_COUNTED_STATES.has(current.state)) {
+      this.effort.verificationBlocked(runId, reason, targetDigest);
+    }
+  }
+
+  verificationAdmitted(runId: string): CodingVerificationExecutedObserver | undefined {
+    const current = this.current();
+    return current?.runId === runId && EFFORT_COUNTED_STATES.has(current.state)
+      ? this.effort.verificationAdmitted(runId)
+      : undefined;
+  }
+
   observeEditOutcome(runId: string, outcome: CodingToolEditOutcome): void {
     const current = this.current();
     if (current?.runId !== runId) return;
@@ -2965,7 +2990,13 @@ export class CodingRuntimeOrchestrator {
 
   private async continueForVerification(live: CodingRuntimeSnapshot): Promise<boolean> {
     const attempt = (this.verificationContinuations.get(live.runId) ?? 0) + 1;
-    if (live.state !== "running" || attempt > VERIFICATION_CONTINUATION_MAX) return false;
+    if (
+      live.state !== "running" ||
+      attempt > VERIFICATION_CONTINUATION_MAX ||
+      this.effort.verificationBlockedReason(live.runId) !== undefined
+    )
+      return false;
+    this.verificationContinuations.set(live.runId, attempt);
     let dispatched: CodingRuntimeTaskDispatchResult;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch({
@@ -2997,7 +3028,6 @@ export class CodingRuntimeOrchestrator {
       recordVerificationContinuation(this.deps.activityLog, live.runId, attempt, "run-superseded");
       return true;
     }
-    this.verificationContinuations.set(live.runId, attempt);
     this.recordVerificationContinuation(live.runId, "continued");
     this.operations.observeContinuation(live.runId, dispatched.completion);
     this.advanceRevision(live, "task-submitted");

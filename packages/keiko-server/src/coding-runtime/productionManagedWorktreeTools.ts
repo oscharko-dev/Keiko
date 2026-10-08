@@ -79,6 +79,8 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingVerificationBlockedReason,
+  CodingVerificationExecutedObserver,
 } from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
@@ -623,6 +625,10 @@ export interface ProductionManagedWorktreeToolInput {
   readonly observeEditOutcome?: ((outcome: CodingToolEditOutcome) => void) | undefined;
   /** Server-owned edit revision captured before a verifier executes or waits for script trust. */
   readonly verificationRevision?: (() => number | undefined) | undefined;
+  readonly verificationBlocked?:
+    ((reason: CodingVerificationBlockedReason, targetDigest?: string) => void) | undefined;
+  readonly verificationAdmitted?:
+    (() => CodingVerificationExecutedObserver | undefined) | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -1689,19 +1695,14 @@ function buildVerificationRunner(
   let verificationSequence = 0;
   return {
     execute: async (request, signal, guard): Promise<VerificationPortResult> => {
-      const entryRefusal = verificationLivenessRefusal(input, guard, signal);
-      if (entryRefusal !== undefined) {
-        return verificationPortRefusal(input, "verification-authority-revoked", entryRefusal);
-      }
-      const kind = verificationKind(request.verifierId);
-      if (kind === undefined) {
-        return verificationPortRefusal(input, "verification-verifier-unsupported");
-      }
+      const kind = verificationRunnerEntry(input, request, guard, signal);
+      if (typeof kind !== "string") return kind;
       // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
       // catalog's ceilings both run from admission, so the wait below must be measured from here
       // and not from the moment the first attempt failed (owner review, PR #3452).
       const enteredAtMs = Date.now();
       const editRevision = input.verificationRevision?.();
+      const executed = input.verificationAdmitted?.();
       let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
       if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
         if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
@@ -1709,11 +1710,15 @@ function buildVerificationRunner(
         }
       }
       if (attempt.outcome === "refused") return attempt.result;
-      if (attempt.outcome === "threw") return verificationRefused(input, attempt.error);
+      if (attempt.outcome === "threw") {
+        recordVerificationBlocker(input, request, attempt.error);
+        return verificationRefused(input, attempt.error);
+      }
       const completionRefusal = verificationLivenessRefusal(input, guard, signal);
       if (completionRefusal !== undefined) {
         return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
       }
+      observeVerificationExecution(input, request, attempt.report, executed);
       verificationSequence += 1;
       publishVerification(
         input,
@@ -1728,6 +1733,72 @@ function buildVerificationRunner(
       return verificationOutcome(input, attempt, guard, signal);
     },
   };
+}
+
+function verificationRunnerEntry(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): VerificationKind | VerificationPortResult {
+  const refusal = verificationLivenessRefusal(input, guard, signal);
+  if (refusal !== undefined) {
+    return verificationPortRefusal(input, "verification-authority-revoked", refusal);
+  }
+  const kind = verificationKind(request.verifierId);
+  if (kind !== undefined) return kind;
+  input.verificationBlocked?.(
+    "verification-verifier-unsupported",
+    codingVerificationTargetDigest(request.verifierId, request.targetPath),
+  );
+  return verificationPortRefusal(input, "verification-verifier-unsupported");
+}
+
+function recordVerificationBlocker(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  error: unknown,
+): void {
+  if (!(error instanceof VerificationRunnerError)) return;
+  switch (error.code) {
+    case "PROJECT_NOT_FOUND":
+    case "WORKSPACE_TRUST_REQUIRED":
+    case "NO_RUNNABLE_STEPS":
+    case "VERIFICATION_RUNNER_UNAVAILABLE":
+      input.verificationBlocked?.(
+        error.code,
+        codingVerificationTargetDigest(request.verifierId, request.targetPath),
+      );
+  }
+}
+
+function observeVerificationExecution(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  report: VerificationReport,
+  executed: CodingVerificationExecutedObserver | undefined,
+): void {
+  const target = codingVerificationTargetDigest(request.verifierId, request.targetPath);
+  if (
+    report.results.some(
+      (result) =>
+        result.status === "passed" ||
+        EXECUTED_RED_STATUSES.some((status) => status === result.status),
+    )
+  ) {
+    executed?.(target);
+  } else {
+    input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
+  }
 }
 
 type VerificationAttempt =
@@ -2314,6 +2385,7 @@ function verificationPortRefusal(
   reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
   condition?: VerificationLivenessRefusal,
 ): VerificationPortResult {
+  if (reasonCode === "verification-authority-revoked") input.verificationBlocked?.(reasonCode);
   emitVerificationDiagnostic(input, reasonCode, "verification-refused", undefined, condition);
   return { status: "failed", reasonCode };
 }

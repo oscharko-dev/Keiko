@@ -168,6 +168,20 @@ export type CodingToolEditOutcome =
       readonly readReason?: EditReadReason | undefined;
     };
 
+/** Actual reasons a governed verifier could not execute, never inferred from model prose. */
+export type CodingVerificationBlockedReason =
+  | "verification-command-denied"
+  | "verification-authority-revoked"
+  | "verification-verifier-unsupported"
+  | "PROJECT_NOT_FOUND"
+  | "WORKSPACE_TRUST_REQUIRED"
+  | "NO_RUNNABLE_STEPS"
+  | "VERIFICATION_RUNNER_UNAVAILABLE"
+  | "VERIFICATION_NOT_RUN";
+
+/** Captured at actual admission; called only after an executed check remains authorized. */
+export type CodingVerificationExecutedObserver = (targetDigest: string) => void;
+
 /** The run-scoped form the run's orchestration receives an edit outcome in (F5, #3873). */
 export type CodingRuntimeEditOutcomeObserver = ((
   runId: string,
@@ -175,6 +189,11 @@ export type CodingRuntimeEditOutcomeObserver = ((
 ) => void) & {
   /** Same ledger revision, read synchronously at an admitted verifier's start. */
   readonly verificationRevision?: ((runId: string) => number | undefined) | undefined;
+  readonly verificationBlocked?:
+    | ((runId: string, reason: CodingVerificationBlockedReason, targetDigest?: string) => void)
+    | undefined;
+  readonly verificationAdmitted?:
+    ((runId: string) => CodingVerificationExecutedObserver | undefined) | undefined;
 };
 
 export interface CodingToolFacadeOptions {

@@ -8998,6 +8998,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      code: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",

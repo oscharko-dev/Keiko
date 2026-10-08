@@ -22,6 +22,7 @@ import {
 import type {
   CodingRuntimeTaskDispatcher,
   CodingRuntimeTaskOutcome,
+  CodingRuntimeTaskDispatchResult,
 } from "./productionCodingRuntimeHost.js";
 import {
   createCodingRuntimeOrchestrator,
@@ -7205,6 +7206,83 @@ describe("verification truth at task settlement", () => {
     },
   );
 
+  it("does not dispatch repair after the human denied the verification command", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const waiting = successfulSnapshot(
+      await f.orchestrator.ingest(verificationPermission("verification-denied")),
+    );
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "verification-denied",
+      decision: "denied",
+      expectedRevision: waiting.revision,
+    });
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+      });
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "verification-denied",
+      decision: "denied",
+    });
+  });
+
+  it("retains human denial when an already admitted verifier completes afterwards", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const admission: Partial<
+      Pick<ReturnType<typeof fixture>["orchestrator"], "verificationAdmitted">
+    > = f.orchestrator;
+    const complete = admission.verificationAdmitted?.("run-1");
+    const target = "a".repeat(64);
+    const waiting = successfulSnapshot(
+      await f.orchestrator.ingest(verificationPermission("permission-2")),
+    );
+    await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-2",
+      decision: "denied",
+      expectedRevision: waiting.revision,
+    });
+    complete?.(target);
+    await verification(f, "failed", undefined, target);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repair an impossible selected verifier", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const target = "a".repeat(64);
+    await verification(f, "failed", undefined, target);
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", target);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still repairs a selected failing test when unrelated lint is unavailable", async () => {
+    const { f, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    await verification(f, "failed", undefined, "a".repeat(64));
+    f.orchestrator.observeVerificationBlocked("run-1", "NO_RUNNABLE_STEPS", "b".repeat(64));
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+  });
+
   it("records an edit that applied during a script-trust decision wait", async () => {
     const { f, finish } = await runningTask();
     await f.orchestrator.ingest(taskSubmitted());
@@ -7352,6 +7430,21 @@ describe("verification truth at task settlement", () => {
           failureCode: "verification-not-evidenced",
         });
       });
+      const refused = requireLoggedEvent(
+        log.records.find(
+          (event) =>
+            event.op === "coding-runtime.run.verification-continuation" &&
+            event.extra?.state === "dispatch-refused",
+        ),
+        "Expected refused continuation dispatch",
+      );
+      expect(refused.errorKind).toBe("unavailable");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.verification-continuation.emitted-line",
+          formatActivityLogProofLine(refused),
+        ),
+      ).toMatchObject({ state: "dispatch-refused", attempt: 1 });
       const line = requireLoggedEvent(
         log.records.find(
           (event) =>
@@ -7410,7 +7503,7 @@ describe("verification truth at task settlement", () => {
   });
 
   it("continues a premature completion in the same run and succeeds after repair and retest", async () => {
-    const { f, finish } = await runningTask();
+    const { f, log, finish } = await runningTask();
     let finishRepair: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
     const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
       finishRepair = resolve;
@@ -7428,12 +7521,112 @@ describe("verification truth at task settlement", () => {
         taskIntent: VERIFICATION_CONTINUATION_INTENT,
       }),
     );
+    const continued = requireLoggedEvent(
+      log.records.find(
+        (line) =>
+          line.op === "coding-runtime.run.verification-continuation" &&
+          line.extra?.state === "continued",
+      ),
+      "Expected actual continued turn",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(continued),
+      ),
+    ).toMatchObject({ state: "continued", attempt: 1 });
     f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
     await verification(f, "passed");
     finishRepair?.("succeeded");
     await vi.waitFor(() => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
     });
+  });
+
+  it("keeps the attempted ordinal and actual cause when verification continuation transport throws", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    const error = Object.assign(
+      new Error("PRIVATE_CONTINUATION_CANARY", { cause: new TypeError("PRIVATE_CAUSE_CANARY") }),
+      { code: "TRANSPORT_UNAVAILABLE" },
+    );
+    f.taskDispatcher.dispatch.mockRejectedValueOnce(error);
+    finish();
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    const thrown = requireLoggedEvent(
+      log.records.find(
+        (line) =>
+          line.op === "coding-runtime.run.verification-continuation" &&
+          line.extra?.state === "dispatch-threw",
+      ),
+      "Expected actual dispatch failure",
+    );
+    expect(thrown.errorKind).toBe("unavailable");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(thrown),
+      ),
+    ).toMatchObject({
+      attempt: 1,
+      errorClass: "Error",
+      code: "TRANSPORT_UNAVAILABLE",
+      causeChain: ["TypeError"],
+      frames: expect.any(Array) as unknown,
+    });
+    const terminal = requireLoggedEvent(
+      log.records.find(
+        (line) =>
+          line.op === "coding-runtime.run.verification-continuation" &&
+          line.extra?.state === "not-evidenced",
+      ),
+      "Expected final verification disposition",
+    );
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(terminal),
+      ),
+    ).toMatchObject({ attempt: 1, state: "not-evidenced" });
+  });
+
+  it("records an actual operator stop that supersedes verification continuation dispatch", async () => {
+    const { f, log, finish } = await runningTask();
+    f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+    let release: ((result: CodingRuntimeTaskDispatchResult) => void) | undefined;
+    f.taskDispatcher.dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    finish();
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    release?.({ ok: true, completion: new Promise(() => undefined) });
+    await vi.waitFor(() => {
+      expect(log.records.some((line) => line.extra?.state === "run-superseded")).toBe(true);
+    });
+    const line = requireLoggedEvent(
+      log.records.find(
+        (entry) =>
+          entry.op === "coding-runtime.run.verification-continuation" &&
+          entry.extra?.state === "run-superseded",
+      ),
+      "Expected superseded dispatch",
+    );
+    expect(line.errorKind).toBe("conflict");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.verification-continuation.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ state: "run-superseded", attempt: 1 });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("cancelled");
   });
 
   it("bounds repeated premature completion without reporting a false success", async () => {
