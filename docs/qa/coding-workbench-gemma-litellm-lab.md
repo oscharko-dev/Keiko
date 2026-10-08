@@ -1364,3 +1364,34 @@ graph, scoped lint and formatting. No new probe, operation, queue or logger is a
 and final GREEN receipts are retained as `root-closeout-geometry-{red,apply-red,green}.log`, with
 source/evidence qualification in `root-closeout-geometry-inputs.json`. These scoped controls do
 not replace final global gates, coverage, Sonar, live qualification or exact-head required CI.
+
+### Frozen-scope review closeout: private dependency security
+
+The inactive private host keeps original OpenCode core/server/util **2.0.10** and Effect rc112.
+Its narrow overrides pair MCP client/core 2.2.0, replace only old provider-utils consumers with
+4.0.33, and move OpenTelemetry core to 2.8.0. The two existing provider-utils 4.0.57 copies remain
+unchanged. The js-yaml 3.15.2 library is retained while its argparse edge removes unpatched
+sprintf-js. No public runtime pin, dependency root, vendor source or license policy changes.
+
+ROOT freshly installed the exact private lock into an owned module root, checked its complete
+dependency graph, and passed **all 50 current host/guard/entry controls** with pinned Node 24.18.0.
+Seventeen actual-package old/fixed controls independently reproduce issuer-bound MCP refusal,
+declared-size download rejection and baggage limits, while preserving original provider generate/
+stream outputs and actual Effect span/log/metric export plus shutdown. An initial aggregate
+expectation misclassified the old lifecycle invocation's final baggage-cap assertion; its actual
+receipt proves the lifecycle passed while the old cap failed. Original logs and corrected
+classification are both retained. Synthetic transports perform no real credential submissions.
+
+Supported original frontmatter/YAML consumers pass. The unused upstream js-yaml CLI compatibility
+comparison remains failed: help/version formatting and deprecation warnings differ with argparse 2. The supported private installation disables bin links and the original consumer uses the library;
+this is a bounded compatibility limitation, not a green upstream CLI claim. Legacy issuerless and
+static MCP credentials still require migration and an expected-issuer binding before activation.
+
+ROOT matched all **434 actual package/version identities**, including alias targets, to the frozen
+complete primary OSV input. Its remaining braces 3.0.3 advisory is unresolved with no patched
+release: the actual watcher normalization exercised zero affected compile/expand calls, while direct
+expansion still fails. This is not a vulnerability-free closure or waiver. Fresh installed SBOM
+evaluation retains the existing **spdx-exceptions 2.5.0 / CC-BY-3.0** policy refusal. The host remains
+`private-functional-unapproved` and unreleasable; no ignore, exclusion or approval override is added.
+The earlier full private packed-tree proof does not qualify this changed dependency tree. A new
+complete packed-runtime attestation and final global gates remain pending.
