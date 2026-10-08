@@ -411,3 +411,41 @@ describe("OpenCode launch profile", () => {
     ).toBeUndefined();
   });
 });
+
+it("admits original execute only in the selected Code Mode configuration", () => {
+  const direct = v2Rules(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY));
+  const codeMode = v2Rules(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY, undefined, "code-mode"));
+  expect(finalPermissionAction(direct, "execute")).toBe("deny");
+  expect(finalPermissionAction(codeMode, "execute")).toBe("allow");
+  expect(finalPermissionAction(codeMode, "question")).toBe("allow");
+  expect(finalPermissionAction(codeMode, "keiko_workspace_read")).toBe("allow");
+  for (const action of ["read", "shell", "unknown_tool"]) {
+    expect(finalPermissionAction(codeMode, action)).toBe("deny");
+  }
+  expect(JSON.stringify(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY, undefined, "direct"))).toBe(
+    JSON.stringify(createFixedOpenCodeV2Config(CONTEXT_GEOMETRY)),
+  );
+});
+
+it("rejects unsupported native config profiles rather than silently using direct", () => {
+  expect(() => {
+    Reflect.apply(createFixedOpenCodeV2Config, undefined, [
+      CONTEXT_GEOMETRY,
+      undefined,
+      "unsupported",
+    ]);
+  }).toThrow(TypeError);
+});
+
+it("threads the selected profile into the actual launch configuration", () => {
+  const profile = buildOpenCodeLaunchProfile({
+    executable: "/managed/opencode",
+    stateRoot: "/private/run",
+    contextGeometry: CONTEXT_GEOMETRY,
+    toolProfile: "code-mode",
+    randomBytes: () => Buffer.alloc(32, 7),
+  });
+  if (!profile.ok) throw new Error("expected selected managed profile");
+  expect(finalPermissionAction(v2Rules(profile.configValue), "execute")).toBe("allow");
+  expect(profile.config).toBe(JSON.stringify(profile.configValue));
+});

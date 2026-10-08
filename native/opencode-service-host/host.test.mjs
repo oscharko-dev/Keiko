@@ -14,11 +14,11 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 
-const { Request, Response } = globalThis;
+const { Request, Response, TextDecoder, AbortController, fetch } = globalThis;
 
 const moduleRoot = process.env.KEIKO_TEST_QUALIFIED_HOST_MODULE_ROOT;
 if (!moduleRoot) throw new TypeError("qualified-host-test-modules-required");
-const { Effect, References, Option } = await import(
+const { Effect, References, Option, Context, Layer } = await import(
   pathToFileURL(join(moduleRoot, "effect/dist/index.js"))
 );
 const { NodeServices } = await import(
@@ -36,7 +36,7 @@ const profile = await import(
     import.meta.url,
   )
 );
-const { HttpTraceContext } = await import(
+const { HttpTraceContext, HttpRouter } = await import(
   pathToFileURL(join(moduleRoot, "effect/dist/unstable/http/index.js"))
 );
 const { fixedPostTransport } = await import("./guard-seams.mjs");
@@ -55,7 +55,7 @@ async function fixture() {
     ),
   ])
     mkdirSync(path, { recursive: true, mode: 0o700 });
-  for (const name of ["host.mjs", "guard-seams.mjs"])
+  for (const name of ["host.mjs", "guard-seams.mjs", "entry.mjs"])
     copyFileSync(join(source, name), join(root, name));
   symlinkSync(moduleRoot, join(root, "node_modules"));
   writeFileSync(
@@ -262,3 +262,312 @@ function assertOriginalLocation(handle, own) {
       );
   });
 }
+
+test("the fixed original native route graph serves authenticated routes before its owned scope closes", async () => {
+  const own = await fixture();
+  const previous = globalThis.fetch;
+  globalThis.fetch = () => assert.fail("outbound-transport-forbidden");
+  const original = globalThis.fetch;
+  try {
+    await run(
+      Effect.scoped(
+        Effect.gen(function* () {
+          assert.equal(typeof own.host.makeFixedOpenCodeServiceHostRoutes, "function");
+          const context = yield* own.host.makeFixedOpenCodeServiceHostRoutes(own.input);
+          const app = Context.get(context, HttpRouter.HttpRouter).asHttpEffect();
+          const { HttpEffect } = yield* Effect.promise(
+            () => import(pathToFileURL(join(moduleRoot, "effect/dist/unstable/http/index.js"))),
+          );
+          const handle = HttpEffect.toWebHandlerWith(context)(app);
+          const unauthenticated = yield* Effect.promise(() =>
+            handle(new Request("http://127.0.0.1/api/info")),
+          );
+          assert.equal(unauthenticated.status, 401);
+          yield* assertOriginalLocation(handle, own);
+        }),
+      ),
+    );
+    assert.equal(globalThis.fetch, original);
+  } finally {
+    globalThis.fetch = previous;
+    own.cleanup();
+  }
+});
+
+const { createRoutes } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/server/dist/routes.js"))
+);
+const { Bus } = await import(pathToFileURL(join(moduleRoot, "@opencode/core/dist/bus.js")));
+const { PersistentPty } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/core/dist/persistent-pty.js"))
+);
+const { PersistentPty: PersistentPtySchema } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/schema/dist/persistent-pty.js"))
+);
+const { Pty } = await import(pathToFileURL(join(moduleRoot, "@opencode/schema/dist/pty.js")));
+const { Session } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/schema/dist/session.js"))
+);
+const { NodeHttpServer } = await import(
+  pathToFileURL(join(moduleRoot, "@effect/platform-node/dist/index.js"))
+);
+const { WebSocket } = await import(pathToFileURL(join(moduleRoot, "ws/wrapper.mjs")));
+
+function privateEnvironment(own) {
+  const values = Object.fromEntries(
+    ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR"].map(
+      (key, index) => [
+        key,
+        join(own.stateRoot, ["home", "config", "data", "state", "cache", "tmp"][index]),
+      ],
+    ),
+  );
+  const before = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  return () => {
+    for (const key of Object.keys(values)) {
+      if (before[key] === undefined) Reflect.deleteProperty(process.env, key);
+      else process.env[key] = before[key];
+    }
+  };
+}
+
+function originalRoutes(own, overrides) {
+  return createRoutes(
+    {
+      app: { name: "keiko-capture-control", version: "2.0.10" },
+      password: own.input.password,
+      database: { path: join(own.stateRoot, "opencode.db") },
+      config: {
+        directory: join(own.stateRoot, "config", "opencode"),
+        project: false,
+        content: own.config,
+      },
+      models: { fetch: false },
+      fs: { fff: false, filewatcher: false },
+    },
+    () => [],
+    overrides,
+  ).pipe(Layer.provideMerge(NodeHttpServer.layerHttpServices));
+}
+
+function observeBus(counter) {
+  return Bus.node.replace(
+    Bus.node.mapLayer((layer) =>
+      layer.pipe(
+        Layer.flatMap((context) => {
+          const original = Context.get(context, Bus.Service);
+          return Layer.succeed(Bus.Service, {
+            ...original,
+            listen: (listener) =>
+              Effect.sync(() => counter.value++).pipe(Effect.andThen(original.listen(listener))),
+          });
+        }),
+      ),
+    ),
+  );
+}
+
+test("original EventFeed captures the guarded Bus before acquisition and ignores a late replacement", async () => {
+  const own = await fixture();
+  const restore = privateEnvironment(own);
+  const early = { value: 0 };
+  const late = { value: 0 };
+  try {
+    await run(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(originalRoutes(own, [observeBus(early)]));
+          const captured = early.value;
+          assert.ok(captured > 0);
+          const original = Context.get(context, Bus.Service);
+          const lateBus = {
+            ...original,
+            listen: (listener) =>
+              Effect.sync(() => late.value++).pipe(Effect.andThen(original.listen(listener))),
+          };
+          const app = Context.get(context, HttpRouter.HttpRouter)
+            .asHttpEffect()
+            .pipe(Effect.provideService(Bus.Service, lateBus));
+          const { HttpEffect } = yield* Effect.promise(
+            () => import(pathToFileURL(join(moduleRoot, "effect/dist/unstable/http/index.js"))),
+          );
+          const handle = HttpEffect.toWebHandlerWith(context)(app);
+          yield* Effect.promise(async () => {
+            const response = await handle(
+              new Request("http://127.0.0.1/api/event", {
+                headers: {
+                  authorization: `Basic ${Buffer.from(`opencode:${own.input.password}`).toString("base64")}`,
+                },
+              }),
+            );
+            const reader = response.body.getReader();
+            const frame = await reader.read();
+            assert.equal(
+              JSON.parse(new TextDecoder().decode(frame.value).split("\n\n")[0].slice(6)).type,
+              "server.connected",
+            );
+            await reader.cancel();
+          });
+          assert.equal(early.value, captured);
+          assert.equal(late.value, 0);
+        }),
+      ),
+    );
+  } finally {
+    restore();
+    own.cleanup();
+  }
+});
+
+function controlledPty(own, observed) {
+  const info = PersistentPtySchema.Info.make({
+    id: Pty.ID.create(),
+    sessionID: Session.ID.create(),
+    title: "native upgrade control",
+    command: "controlled",
+    args: [],
+    cwd: own.input.workspace,
+    status: "running",
+    pid: 0,
+    foregroundProcess: null,
+    size: { cols: 80, rows: 24 },
+    output: { head: 0, tail: 0 },
+  });
+  const replacement = PersistentPty.node.replace(
+    PersistentPty.node.mapLayer((layer) =>
+      layer.pipe(
+        Layer.flatMap((context) => {
+          const original = Context.get(context, PersistentPty.Service);
+          return Layer.succeed(PersistentPty.Service, {
+            ...original,
+            get: (id) => {
+              assert.equal(id, info.id);
+              return Effect.succeed(info);
+            },
+            attach: (id, input) =>
+              Effect.sync(() => {
+                assert.equal(id, info.id);
+                observed.attached++;
+                return {
+                  info,
+                  role: input.role,
+                  generation: 1,
+                  replay: {
+                    requestedOffset: input.cursor,
+                    availableOffset: 0,
+                    endOffset: 0,
+                    truncated: false,
+                    data: new Uint8Array(),
+                  },
+                  activate: () => {
+                    observed.activated++;
+                    input.onEvent({ type: "output", data: Buffer.from("original-native-upgrade") });
+                  },
+                  detach: () => {
+                    observed.detached++;
+                  },
+                };
+              }),
+          });
+        }),
+      ),
+    ),
+  );
+  return { info, replacement };
+}
+
+function connectNative(url) {
+  const socket = new WebSocket(url);
+  const messages = [];
+  const connected = new Promise((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  const closed = new Promise((resolve) => socket.once("close", resolve));
+  socket.on("message", (data) => messages.push(data.toString()));
+  return { socket, connected, closed, messages };
+}
+
+async function waitMessages(connection, count) {
+  const deadline = Date.now() + 2000;
+  while (connection.messages.length < count && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(connection.messages.length, count);
+}
+
+test("the original persistent PTY route retains Node upgrade, single-use tickets and native attachment finalization", async () => {
+  const own = await fixture();
+  const restore = privateEnvironment(own);
+  const observed = { attached: 0, activated: 0, detached: 0 };
+  const controlled = controlledPty(own, observed);
+  const controller = new AbortController();
+  const { serveFixedHostRoutes } = await import(pathToFileURL(join(own.root, "entry.mjs")));
+  let url;
+  const running = Effect.runPromise(
+    Effect.scoped(
+      serveFixedHostRoutes(
+        () => Layer.build(originalRoutes(own, [controlled.replacement])),
+        own.input,
+        controller.signal,
+        (value) => {
+          url = value;
+        },
+      ),
+    ).pipe(
+      Effect.provide(NodeHttpServer.layerHttpServices),
+      Effect.provideService(References.MinimumLogLevel, "None"),
+    ),
+    { signal: controller.signal },
+  );
+  const stopped = assert.rejects(running);
+  try {
+    const deadline = Date.now() + 2000;
+    while (!url && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(typeof url, "string");
+    const route = `${url}/api/experimental/persistent-pty/${controlled.info.id}`;
+    const headers = {
+      authorization: `Basic ${Buffer.from(`opencode:${own.input.password}`).toString("base64")}`,
+      "x-opencode-ticket": "1",
+    };
+    const wrongOrigin = await fetch(route + "/connect-token", {
+      method: "POST",
+      headers: { ...headers, origin: "http://untrusted.invalid" },
+    });
+    assert.equal(wrongOrigin.status, 403);
+    const missingTokenHeader = await fetch(route + "/connect-token", {
+      method: "POST",
+      headers: { authorization: headers.authorization },
+    });
+    assert.equal(missingTokenHeader.status, 403);
+    const invalidTicket = await fetch(route + "/connect?ticket=invalid");
+    assert.equal(invalidTicket.status, 403);
+    assert.equal(observed.attached, 0);
+    const tokenResponse = await fetch(route + "/connect-token", { method: "POST", headers });
+    assert.equal(tokenResponse.status, 200);
+    const token = await tokenResponse.json();
+    const connection = connectNative(
+      route.replace("http:", "ws:") + "/connect?ticket=" + token.data.ticket,
+    );
+    await connection.connected;
+    await waitMessages(connection, 3);
+    const attached = JSON.parse(connection.messages[0]);
+    assert.equal(attached.type, "attached");
+    assert.equal(attached.info.id, controlled.info.id);
+    assert.equal(JSON.parse(connection.messages[1]).type, "replay_complete");
+    assert.equal(connection.messages[2], "original-native-upgrade");
+    connection.socket.close();
+    await connection.closed;
+    const replay = await fetch(route + "/connect?ticket=" + token.data.ticket);
+    assert.equal(replay.status, 403);
+    assert.equal(observed.attached, 1);
+    assert.equal(observed.activated, 1);
+  } finally {
+    controller.abort();
+    // This test keeps an Effect-owned fiber, not a fabricated native after hook.
+    await stopped;
+    restore();
+    own.cleanup();
+  }
+  assert.equal(observed.detached, 1);
+});

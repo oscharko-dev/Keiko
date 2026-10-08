@@ -418,7 +418,9 @@ direct invocation identities remain unchanged. Completed-parent and supported Sc
 checks reject late calls. Native cancellation does not guarantee an `execute.after` hook; current
 server authority and budget checks remain mandatory for every request. Code Mode activation still
 requires the exact native execute advertisement, permission, network and lifecycle contracts;
-mapped tools retain `codemode: false` until those contracts are qualified.
+the default direct profile retains `codemode: false`. The captured Code Mode profile registers
+the same governed inner tools with `codemode: true` and explicitly permits original `execute`.
+Its generated source cache is immutable per closed profile; incoming fields cannot select it.
 
 The inactive explicit Code Mode catalog retains the same seventeen governed inner descriptors and
 actual handler coverage, while the original native model advertisement exposes only `question`
@@ -427,15 +429,16 @@ snapshot/provider producer. The server captures this distinct profile at registr
 an incoming model request cannot select it. Projection and handler identities remain profile-bound,
 and mixed direct/Code Mode offers, hidden direct calls, schema drift and expired offers are refused.
 The ordinary direct profile remains the default with its existing eighteen visible tools. This
-advertisement prerequisite neither registers native execute nor activates its effects or transport.
+profile prerequisite uses the original native execute producer, but does not activate production
+native workspace effects or select an unqualified service transport.
 
 The backend captures the selected profile once from the server-owned readiness registry and exposes
 an immutable resolver selection. The resolver captures that selection once again when composing its
 run tools; later changes to caller-owned input objects do not change the canonical facade binder.
 The same selected projection supplies prepared binding, expiry evidence and dispatch digests.
 Unknown profiles fail closed and incoming tool fields cannot select a profile. The existing direct
-profile and Chat repository search remain unchanged. Forwarding this captured selection into the
-native runtime composition and enabling an original service host remain separate prerequisites.
+profile and Chat repository search remain unchanged. The same captured selection reaches native configuration and generated plugin materialization.
+Enabling an original service host remains a separate prerequisite.
 
 Native composition now captures that same profile for history and safe-activity observation.
 Only the explicit Code Mode profile recognizes the original `execute` parent. Each inner action
@@ -504,8 +507,14 @@ provenance digests from one fresh stable pass through the existing attestation o
 receipt binds the inspected root and reports only supplementary byte qualification. It neither
 measures the archive/count/source claims nor proves executable suitability, current authority or
 point-of-launch freshness. Missing or unsafe files, cancellation and deadlines retain the owning
-attestation errors and registered body-free log. The exported service factory still needs its fixed
-executable stdin/listener entry and supervisor lifetime integration before selection or launch.
+attestation errors and registered body-free log. The inactive fixed executable entry now serves the original public `createRoutes` graph through
+the original Node HTTP/WebSocket server, preserving before-acquisition replacements. It accepts
+one bounded immutable binding packet, publishes readiness after acquisition and closes its native
+scope on stdin EOF. Existing authenticated Fetch factory behavior remains available. This
+transport prerequisite still needs the same Manager/supervisor lifetime, exact workspace location,
+consistent per-run database path, sealed selected-profile assets, current native IO authority and
+fresh final-payload qualification before production selection or launch. EOF closure alone does
+not prove settlement of delegated effects.
 
 Portable CLI discovery derives executable, license and SBOM digests from one fresh, bounded
 content pass over stable file descriptors. Those evidence digests and the payload digest belong

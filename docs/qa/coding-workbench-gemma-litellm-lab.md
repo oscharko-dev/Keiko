@@ -140,6 +140,39 @@ is clean. The exact root integration freeze binds sources and results.
 Native tool-context capture, original paging/directories/media/search/mutations/commands and the
 fixed executable service/supervisor path remain open. No full Standalone parity is claimed.
 
+The selected-profile/service-entry follow-up forwards the immutable captured profile into the
+actual config and generated plugin materialization. The original Code Mode snapshot initially
+refused `execute` with the baseline generated registrations/config; it now executes with the
+actual selected config and both plugin/fixed-factory producers, without a harness flag rewrite.
+Legacy bundle, default V2 plugins, default factory and config remain byte-identical to the preceding
+producer. A real materialization regression separately fails for Code Mode before forwarding;
+the direct control passes. Root independently passes 342 tests in eight owning suites, strict
+eight-file source/test types, twelve-file lint and a fresh forced server graph.
+
+The fixed inactive entry serves the original before-acquisition `createRoutes` graph using the
+original Node HTTP/WebSocket server. One bounded packet owns acquisition and stdin EOF ends the
+native service scope. Root independently checks all 41 frozen original/compiled inputs and runs
+the same final 27 tests: unchanged host source has fourteen actual failures, then the integrated
+source passes all 27. Original authentication, EventFeed acquisition, SSE, WebSocket tickets and
+attachment lifetime are covered; the PTY service is controlled, with no real PTY shell execution.
+The initial root RED control lacked the entry fixture and contained setup failures; only the
+corrected same-test control with that fixture available qualifies the comparison.
+
+Two unchanged private-facet controls also reproduce early return after catalog cancellation while
+actual delegate work is held. The private facet now awaits its raw admitted delegate Promise;
+the same composition admission gate separately bounds caller cancellation and retains capacity
+until settlement. Root repeats the original authority mint/canonical catalog/secure read-port
+proof with a held hermetic process Promise and same-FD response fixture. Stop/reopen remains
+unproven while held, then a fresh close succeeds after physical settlement. This does not execute
+an OS helper or establish drainage for every public nested effect. Existing body-free diagnostic
+and authority owners are reused. No native IO or full service activation is claimed.
+
+The parity inventory now treats disabled/narrower capabilities as required acceptance work rather
+than optional exclusions. Its mapped statuses do not establish native equivalence. Exact workspace
+Location binding, one per-run database path, sealed selected-profile assets, Manager packet ingress,
+original byte/range/stat/list/FSUtil/search/write/command effects, fresh packed approval, live-model
+comparisons and final complete gates remain open.
+
 The next F25 before-spawn attempt on `844576a7b556` used a freshly built normal CLI installation,
 current compiled helper and exact build receipt. Case `68563e3b-028e-4530-a9bb-73b90e482ca0`
 accepted one read-only UI task, observed `starting`, and refused to signal because a descendant had

@@ -1143,12 +1143,18 @@ async function dispatchNativeTextSnapshot(
     budget,
     activityLog,
   );
-  const result = await execute(request, input, async (signal, guard): Promise<CodingToolResult> => {
-    const outcome = await delegate.execute(request, signal, guard);
-    return completedSnapshotOutcome(outcome) && snapshot?.ok === true
-      ? nativeSnapshotReceipt(snapshot)
-      : nativeSnapshotFailureOutcome(outcome);
+  let delegateWork: Promise<unknown> | undefined;
+  const result = await execute(request, input, (signal, guard): Promise<CodingToolResult> => {
+    delegateWork = delegate.execute(request, signal, guard);
+    return delegateWork.then((outcome): CodingToolResult =>
+      completedSnapshotOutcome(outcome) && snapshot?.ok === true
+        ? nativeSnapshotReceipt(snapshot)
+        : nativeSnapshotFailureOutcome(outcome),
+    );
   });
+  // The catalog can cancel its response before the admitted read settles. This private facet's
+  // promise owns that real work so the composition's existing drain never releases it early.
+  if (delegateWork !== undefined) await delegateWork;
   if (result.status === "completed" && snapshot?.ok === true) return snapshot;
   if (snapshot?.ok === false) return snapshot;
   return { ok: false, reason: "dispatch-refused" };

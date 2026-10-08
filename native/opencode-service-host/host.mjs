@@ -8,10 +8,15 @@ import {
   realpathSync,
   existsSync,
 } from "node:fs";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Context, Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { ServerFetch } from "@opencode/server/fetch";
+import { createRoutes } from "@opencode/server/routes";
+import { NodeHttpServer } from "@effect/platform-node";
+import { SessionRestart } from "@opencode/core/session/execution/restart";
+import { runFixedHostEntry } from "./entry.mjs";
 import { requestExecutor } from "@opencode/core/effect/app-node-platform";
 import { RequestExecutor } from "@opencode/ai/route/executor";
 import { Tool } from "@opencode/core/tool";
@@ -38,22 +43,40 @@ export function makeFixedOpenCodeServiceHost(input) {
       Effect.sync(() => acquireHost(input)),
       (owned) => Effect.sync(() => owned.release()),
     );
-    return yield* ServerFetch.make(
-      {
-        app: { name: "keiko-opencode-service-host", version: "2.0.10" },
-        password: host.binding.password,
-        database: { path: join(host.binding.stateRoot, "opencode.db") },
-        config: {
-          directory: join(host.binding.stateRoot, "config", "opencode"),
-          project: false,
-          content: host.config,
-        },
-        models: { fetch: false },
-        fs: { fff: false, filewatcher: false },
-      },
-      { overrides: host.overrides },
-    );
+    return yield* ServerFetch.make(hostOptions(host), { overrides: host.overrides });
   });
+}
+
+/** The original published graph acquires replacements before its consumers capture services. */
+export function makeFixedOpenCodeServiceHostRoutes(input) {
+  return Effect.gen(function* () {
+    const host = yield* Effect.acquireRelease(
+      Effect.sync(() => acquireHost(input)),
+      (owned) => Effect.sync(() => owned.release()),
+    );
+    const context = yield* Layer.build(
+      createRoutes(hostOptions(host), () => [], host.overrides).pipe(
+        Layer.provideMerge(NodeHttpServer.layerHttpServices),
+      ),
+    );
+    yield* Effect.forkScoped(Context.get(context, SessionRestart.Service).resumeSuspendedSessions);
+    return context;
+  });
+}
+
+function hostOptions(host) {
+  return {
+    app: { name: "keiko-opencode-service-host", version: "2.0.10" },
+    password: host.binding.password,
+    database: { path: join(host.binding.stateRoot, "opencode.db") },
+    config: {
+      directory: join(host.binding.stateRoot, "config", "opencode"),
+      project: false,
+      content: host.config,
+    },
+    models: { fetch: false },
+    fs: { fff: false, filewatcher: false },
+  };
 }
 
 function acquireHost(input) {
@@ -277,3 +300,7 @@ function pluginOverride(plugins) {
     ),
   );
 }
+
+// The attested program remains this exact fixed entry; no packet/env field chooses executable code.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  process.exitCode = await runFixedHostEntry(makeFixedOpenCodeServiceHostRoutes);

@@ -18,6 +18,7 @@ interface GeneratedResult {
 interface GeneratedTool {
   readonly name: string;
   readonly output?: unknown;
+  readonly options?: { readonly permission?: string; readonly codemode?: boolean };
   readonly execute: (
     input: Record<string, unknown>,
     context: NativeContext,
@@ -46,6 +47,7 @@ const RESPONSE = {
 };
 async function registered(
   input: {
+    readonly profile?: "direct" | "code-mode";
     readonly answer?: unknown;
     readonly mode?: string;
     readonly responseStatus?: number;
@@ -61,7 +63,7 @@ async function registered(
   const hooks = new Map<string, Hook[]>();
   const bodies: Record<string, unknown>[] = [];
   const cleanups: (() => void)[] = [];
-  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins())) {
+  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins(input.profile))) {
     if (name === "keiko_native_context") continue;
     const plugin = new Script(
       `${source.replace("export default", "const generated =")}\ngenerated;`,
@@ -401,4 +403,36 @@ it("binds an inactive fixed host factory to the same parent owner and lexical fa
   expect(owner.close(CONTEXT)).toBe(false);
   await expect(selected.execute({}, CONTEXT)).rejects.toThrow("keiko-tool-invalid");
   expect(closed).toEqual([CONTEXT.id]);
+});
+
+it("registers every selected Code Mode handler with the original native catalog", async () => {
+  const fixture = await registered({ profile: "code-mode" });
+  expect([...fixture.tools.keys()]).toEqual(
+    opencodeRegistrationSet("code-mode").entries.map((entry) => entry.alias),
+  );
+  for (const tool of fixture.tools.values()) {
+    expect(tool.options).toEqual({ permission: tool.name, codemode: true });
+  }
+  fixture.dispose();
+});
+
+it("preserves the direct source while caching each immutable selected profile separately", () => {
+  const direct = createGeneratedOpenCodeV2Plugins();
+  const codeMode = createGeneratedOpenCodeV2Plugins("code-mode");
+  expect(direct).toBe(createGeneratedOpenCodeV2Plugins("direct"));
+  expect(codeMode).toBe(createGeneratedOpenCodeV2Plugins("code-mode"));
+  expect(codeMode).not.toBe(direct);
+  expect(codeMode.keiko_native_context).toBe(direct.keiko_native_context);
+  expect(Object.isFrozen(codeMode)).toBe(true);
+});
+
+it("rejects unsupported generated profiles before constructing a plugin or host factory", () => {
+  for (const factory of [
+    createGeneratedOpenCodeV2Plugins,
+    runtimeAdapter.createGeneratedOpenCodeV2HostFactory,
+  ]) {
+    expect(() => {
+      Reflect.apply(factory, undefined, ["unsupported"]);
+    }).toThrow(TypeError);
+  }
 });

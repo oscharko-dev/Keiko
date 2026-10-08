@@ -47,7 +47,12 @@ import {
   type CodingToolActionRequest,
   type CodingToolResult,
 } from "./codingToolIpc.js";
-import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolFacade,
+  CodingToolFacadeInput,
+  CodingToolNativeTextReadFacet,
+  CodingToolNativeTextSnapshotResult,
+} from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
   humanDecisionFeedback,
@@ -264,6 +269,8 @@ type SafeToolSettlement = NonNullable<
 >["settleTool"];
 
 export interface OpenCodeToolBridge {
+  /** Inactive server-private byte facet; model/HTTP dispatch never selects this surface. */
+  readonly nativeTextRead?: CodingToolNativeTextReadFacet | undefined;
   readonly url: string;
   /**
    * The SAME per-run deadline (ms) the admission gate applies to an in-flight facade call
@@ -839,10 +846,11 @@ async function materializePrepare(
     executable: request.executablePath,
     stateRoot: runRoot,
     contextGeometry: input.contextGeometry,
+    toolProfile: input.toolProfile,
   });
   if (!profile.ok) throw new Error("profile-invalid");
   const config = profile.config;
-  materialize(runRoot, config, createGeneratedOpenCodeV2Plugins());
+  materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
@@ -1699,7 +1707,9 @@ function createToolBridge(
   const gate = createToolBridgeAdmissionGate(limits);
   const handle: OpenCodeToolBridge["handle"] = (request) =>
     handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
+  const nativeTextRead = nativeToolBridgeFacet(deps, gate, () => listening);
   const publicPort: OpenCodeToolBridge = {
+    ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
     get url(): string {
       return toolFacadeOrigin;
     },
@@ -1728,6 +1738,87 @@ function createToolBridge(
       return closing;
     },
   };
+}
+
+function nativeToolBridgeFacet(
+  deps: ToolBridgeExecutionDeps,
+  gate: ToolBridgeAdmissionGate,
+  active: () => boolean,
+): CodingToolNativeTextReadFacet | undefined {
+  const facet = deps.facade.nativeTextRead;
+  const producer = facet?.readTextSnapshot.bind(facet);
+  if (producer === undefined) return undefined;
+  return Object.freeze({
+    readTextSnapshot: (
+      input: CodingToolFacadeInput,
+    ): Promise<CodingToolNativeTextSnapshotResult> => {
+      if (!active()) return Promise.resolve({ ok: false, reason: "dispatch-refused" });
+      const { body, capability, headers, signal } = input;
+      const ownedBody = nativeToolRequestBody(body, capability, headers, deps.capability);
+      if (ownedBody === undefined) return Promise.resolve({ ok: false, reason: "invalid-request" });
+      if (signal?.aborted === true) return Promise.resolve({ ok: false, reason: "cancelled" });
+      const admission = gate.admit(gate.limits.requestDeadlineMs);
+      if (admission === undefined) return Promise.resolve({ ok: false, reason: "busy" });
+      const detach = bindExternalAbort(signal, admission);
+      return executeNativeToolRequest(deps, producer, ownedBody, admission).finally(detach);
+    },
+  });
+}
+
+function nativeToolRequestBody(
+  body: CodingToolFacadeInput["body"],
+  capability: string | undefined,
+  headers: CodingToolFacadeInput["headers"],
+  ownedCapability: string,
+): string | undefined {
+  if (
+    headers !== undefined ||
+    (capability !== undefined && !safeEqual(capability, ownedCapability))
+  )
+    return undefined;
+  if (Buffer.byteLength(body) > CODING_TOOL_MAX_BODY_BYTES) return undefined;
+  const ownedBody = typeof body === "string" ? body : body.toString("utf8");
+  const request = parseCodingToolRequest(ownedBody, CODING_TOOL_MAX_BODY_BYTES);
+  return request?.action === "read" &&
+    request.startLine === undefined &&
+    request.maxLines === undefined
+    ? ownedBody
+    : undefined;
+}
+
+async function executeNativeToolRequest(
+  deps: ToolBridgeExecutionDeps,
+  producer: CodingToolNativeTextReadFacet["readTextSnapshot"],
+  body: string,
+  admission: AdmittedToolRequest,
+): Promise<CodingToolNativeTextSnapshotResult> {
+  const signal = admission.controller.signal;
+  const work = Promise.resolve().then(() =>
+    signal.aborted
+      ? { ok: false as const, reason: "cancelled" as const }
+      : producer({ body, capability: deps.capability, signal }),
+  );
+  releaseAdmissionWhenSettled(work, admission);
+  const actionId = parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES)?.actionId;
+  try {
+    const result = await raceAbort(work, signal);
+    return signal.aborted ? nativeToolAbortResult(deps, actionId, admission) : result;
+  } catch (error) {
+    if (signal.aborted) return nativeToolAbortResult(deps, actionId, admission);
+    emitFacadeFailureDiagnostic(deps.diagnostics, actionId, error);
+    return { ok: false, reason: "dispatch-refused" };
+  }
+}
+
+function nativeToolAbortResult(
+  deps: ToolBridgeExecutionDeps,
+  actionId: string | undefined,
+  admission: AdmittedToolRequest,
+): CodingToolNativeTextSnapshotResult {
+  if (abortReason(admission.controller.signal) !== DEADLINE_ABORT)
+    return { ok: false, reason: "cancelled" };
+  emitToolBridgeDeadlineDiagnostic(deps.diagnostics, actionId, admission);
+  return { ok: false, reason: "timeout" };
 }
 
 function handleDirectToolRequest(
@@ -2065,7 +2156,16 @@ function abortedToolResponse(
     service.delegateStarted,
   );
   if (reason !== DEADLINE_ABORT) return { status: 502, body: "" };
-  emitServerDiagnostic(deps.diagnostics, {
+  emitToolBridgeDeadlineDiagnostic(deps.diagnostics, actionId, admission);
+  return { status: 408, body: "" };
+}
+
+function emitToolBridgeDeadlineDiagnostic(
+  diagnostics: ServerDiagnosticSink | undefined,
+  actionId: string | undefined,
+  admission: AdmittedToolRequest,
+): void {
+  emitServerDiagnostic(diagnostics, {
     correlationId: actionCorrelationId(actionId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.tool-bridge",
@@ -2075,7 +2175,6 @@ function abortedToolResponse(
     httpStatus: 408,
     deadlineMs: admission.deadlineMs,
   });
-  return { status: 408, body: "" };
 }
 
 function responseForToolResult(
@@ -2203,10 +2302,7 @@ function emitFacadeFailureDiagnostic(
   });
 }
 
-function releaseAdmissionWhenSettled(
-  work: Promise<CodingToolResult>,
-  admission: AdmittedToolRequest,
-): void {
+function releaseAdmissionWhenSettled<T>(work: Promise<T>, admission: AdmittedToolRequest): void {
   void work.then(
     () => {
       admission.release();

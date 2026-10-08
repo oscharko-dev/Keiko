@@ -45,6 +45,8 @@ import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_PINNED_VERSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
+  openCodeVisibleToolNames,
+  type OpenCodeToolProfile,
 } from "./opencodeToolSchemas.js";
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -1209,22 +1211,32 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
-let cachedV2PluginSources: Readonly<Record<string, string>> | undefined;
+const cachedV2PluginSources = new Map<OpenCodeToolProfile, Readonly<Record<string, string>>>();
 
 /** Immutable source shared across runs; each supported setup creates fresh invocation state. */
-export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, string>> {
-  return (cachedV2PluginSources ??= Object.freeze({
-    keiko_governed_tools: sharedV2ToolPluginSource(),
+export function createGeneratedOpenCodeV2Plugins(
+  profile: OpenCodeToolProfile = "direct",
+): Readonly<Record<string, string>> {
+  openCodeVisibleToolNames(profile);
+  const cached = cachedV2PluginSources.get(profile);
+  if (cached !== undefined) return cached;
+  const sources = Object.freeze({
+    keiko_governed_tools: sharedV2ToolPluginSource(false, profile),
     keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
-  }));
+  });
+  cachedV2PluginSources.set(profile, sources);
+  return sources;
 }
 
 /** Fixed-source external host entry; it never selects or activates a runtime. */
-export function createGeneratedOpenCodeV2HostFactory(): string {
-  return sharedV2ToolPluginSource(true);
+export function createGeneratedOpenCodeV2HostFactory(
+  profile: OpenCodeToolProfile = "direct",
+): string {
+  openCodeVisibleToolNames(profile);
+  return sharedV2ToolPluginSource(true, profile);
 }
 
-function sharedV2ToolPluginSource(host = false): string {
+function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "direct"): string {
   return [
     ...(host
       ? [
@@ -1251,7 +1263,7 @@ function sharedV2ToolPluginSource(host = false): string {
     "    });",
     "    await ctx.tool.transform((editor) => {",
     ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) =>
-      toolSource(action, schemas, name, "v2"),
+      toolSource(action, schemas, name, "v2", profile === "code-mode"),
     ),
     ...OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name }) => `      register_${name}(editor);`),
     "    });",
@@ -1559,6 +1571,7 @@ function toolSource(
   schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
   name?: string,
   version: "v1" | "v2" = "v1",
+  nativeCodeMode = false,
 ): string {
   const argumentNames = Object.keys(schemas);
   const format = toolSourceFormat(action, name, version);
@@ -1588,7 +1601,7 @@ function toolSource(
     "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
     ...GOVERNED_TOOL_MODEL_CONTENT_SOURCE,
-    ...toolSourceRegistration(action, name, version),
+    ...toolSourceRegistration(action, name, version, nativeCodeMode),
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
@@ -1661,6 +1674,7 @@ function toolSourceRegistration(
   action: GeneratedToolAction,
   name: string | undefined,
   version: "v1" | "v2",
+  nativeCodeMode: boolean,
 ): readonly string[] {
   if (version === "v1") {
     return [
@@ -1676,7 +1690,7 @@ function toolSourceRegistration(
     `        description: ${JSON.stringify(toolDescription(action))},`,
     "        input: { type: 'object', properties: inputSchemas, required: argumentNames, additionalProperties: false },",
     "        output: resultSchema,",
-    `        options: { permission: ${JSON.stringify(name)}, codemode: false },`,
+    `        options: { permission: ${JSON.stringify(name)}, codemode: ${String(nativeCodeMode)} },`,
     "        async execute(args, context) {",
   ];
 }

@@ -2120,3 +2120,100 @@ describe("private native snapshot constructor admission", () => {
     expect(JSON.stringify({ events: log.events, diagnostics })).not.toContain("src/private.ts");
   });
 });
+
+it.each(["late-bytes", "technical-rejection"] as const)(
+  "retains the actual private native delegate after catalog cancellation: %s",
+  async (outcome) => {
+    let finish!: () => void;
+    const producer = {
+      readTextSnapshot: vi.fn(
+        () =>
+          new Promise<{
+            readonly ok: true;
+            readonly text: string;
+            readonly info: {
+              readonly type: "file";
+              readonly size: number;
+              readonly mtimeMs: number;
+            };
+          }>((resolve, reject) => {
+            finish = (): void => {
+              if (outcome === "technical-rejection")
+                reject(new Error("PRIVATE_LATE_NATIVE_FAILURE"));
+              else
+                resolve({
+                  ok: true,
+                  text: "PRIVATE_LATE_NATIVE_BYTES",
+                  info: { type: "file", size: 25, mtimeMs: 0 },
+                });
+            };
+          }),
+      ),
+    };
+    const authority: Parameters<typeof createRuntimeCodingToolFacade>[0] = {
+      resolveCapabilityForDelegation: () => ({
+        ok: true as const,
+        envelope: fullyAuthorizedEnvelope,
+      }),
+      revalidateCapabilityForMutation: () => ({
+        ok: true as const,
+        envelope: fullyAuthorizedEnvelope,
+      }),
+    };
+    const log = createBufferedServerLogSink();
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const diagnostics: unknown[] = [];
+    const facade = createRuntimeCodingToolFacade(authority, runtimeContext, governedPorts(), {
+      nativeTextRead: producer,
+      invocationRegistry: registry,
+      catalogActivityLog: log,
+      catalogDiagnostics: {
+        record: (record): void => {
+          diagnostics.push(record);
+        },
+      },
+    });
+    const abort = new AbortController();
+    let returned = false;
+    const pending = facade.nativeTextRead
+      ?.readTextSnapshot({
+        capability: "runtime-capability-secret",
+        signal: abort.signal,
+        body: JSON.stringify({
+          action: "read",
+          actionId: "private-held-delegate",
+          idempotencyKey: "private-held-delegate",
+          relativePath: "fixture.ts",
+        }),
+      })
+      .then((result) => {
+        returned = true;
+        return result;
+      });
+    try {
+      await vi.waitFor(() => {
+        expect(producer.readTextSnapshot).toHaveBeenCalledOnce();
+      });
+      abort.abort();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(
+        log.events.some(
+          (event) =>
+            event.op === "tool-catalog.invocation-settled" && event.extra?.status === "cancelled",
+        ),
+      ).toBe(true);
+      expect(returned).toBe(false);
+      finish();
+      expect(await pending).toEqual({ ok: false, reason: "dispatch-refused" });
+      expect(JSON.stringify({ events: log.events, diagnostics })).not.toMatch(
+        /PRIVATE_LATE_NATIVE/u,
+      );
+    } finally {
+      finish();
+      await pending;
+      registry.dispose();
+    }
+  },
+);
