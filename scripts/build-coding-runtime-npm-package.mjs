@@ -352,6 +352,13 @@ async function stageFixedHost(input, owners) {
   mkdirSync(root, { recursive: true });
   for (const member of HOST_SOURCE_MEMBERS) copyFileSync(join(source, member), join(root, member));
   const assets = fixedHostAssets(owners);
+  const codec = owners.artifact.createOpenCodeServiceHostNativeCodecAsset();
+  copyFileSync(codec.source, join(root, codec.filename));
+  const policyAssets = owners.artifact.createOpenCodeServiceHostNativePolicyAssets();
+  for (const asset of policyAssets) {
+    mkdirSync(dirname(join(root, asset.filename)), { recursive: true });
+    copyFileSync(asset.source, join(root, asset.filename));
+  }
   for (const [path, body] of Object.entries(assets)) writeFileSync(join(root, path), body);
   await (input.deps.installHost ?? installFixedHost)(root);
   const node = await stageFixedHostNode(input, root, facts);
@@ -365,10 +372,14 @@ async function stageFixedHost(input, owners) {
     path,
     sha256: sha256File(join(source, path)),
   }));
-  const generatedFiles = Object.entries(assets).map(([path, body]) => ({
-    path,
-    sha256: createHash("sha256").update(body).digest("hex"),
-  }));
+  const generatedFiles = [
+    ...Object.entries(assets).map(([path, body]) => ({
+      path,
+      sha256: createHash("sha256").update(body).digest("hex"),
+    })),
+    { path: codec.filename, sha256: sha256File(codec.source) },
+    ...policyAssets.map((asset) => ({ path: asset.filename, sha256: sha256File(asset.source) })),
+  ];
   writeEvidence(root, "evidence/build-provenance.json", {
     schemaVersion: 1,
     qualification: "private-functional-unapproved",

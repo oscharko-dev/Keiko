@@ -30,6 +30,8 @@ import {
   prepareOpenCodeServiceHostLaunch,
   reinspectPreparedOpenCodeServiceHost,
   createOpenCodeServiceHostPacketDataAsset,
+  createOpenCodeServiceHostNativeCodecAsset,
+  createOpenCodeServiceHostNativePolicyAssets,
   OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
   inspectOpenCodeServiceHostDisk,
   type OpenCodeServiceHostDiskInput,
@@ -661,5 +663,19 @@ describe("inactive artifact-owned fixed host packet", () => {
     expect(asset.profiles).toEqual(OPENCODE_TOOL_PROFILES);
     expect(Object.isFrozen(asset.profiles)).toBe(true);
     expect(source).not.toContain("process.env");
+    const codec = createOpenCodeServiceHostNativeCodecAsset();
+    expect(Object.isFrozen(codec)).toBe(true);
+    expect(codec.filename).toBe("keiko-native-file-io-codec.mjs");
+    expect(codec.source.href).toBe(
+      new URL("./secureWorkspaceTextReadProtocol.js", import.meta.url).href,
+    );
+    expect(createOpenCodeServiceHostNativeCodecAsset().source).not.toBe(codec.source);
+    const policy = createOpenCodeServiceHostNativePolicyAssets();
+    expect(Object.isFrozen(policy)).toBe(true);
+    expect(policy.every(Object.isFrozen)).toBe(true);
+    expect(policy.map((asset) => asset.filename)).toEqual([
+      "keiko-workspace-path-policy/ignore.js",
+      "keiko-workspace-path-policy/boundedMemo.js",
+    ]);
   });
 });

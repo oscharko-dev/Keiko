@@ -53,6 +53,9 @@ const { Tool } = await import(pathToFileURL(join(moduleRoot, "@opencode/core/dis
 const { LocationServiceMap } = await import(
   pathToFileURL(join(moduleRoot, "@opencode/core/dist/location-services.js"))
 );
+const { InstructionDiscovery } = await import(
+  pathToFileURL(join(moduleRoot, "@opencode/core/dist/instruction-discovery.js"))
+);
 const { Plugin } = await import(pathToFileURL(join(moduleRoot, "@opencode/core/dist/plugin.js")));
 const { Location } = await import(
   pathToFileURL(join(moduleRoot, "@opencode/core/dist/location.js"))
@@ -78,6 +81,12 @@ async function fixture(toolProfile = "direct") {
   for (const name of ["host.mjs", "guard-seams.mjs", "entry.mjs"])
     copyFileSync(join(source, name), join(root, name));
   symlinkSync(moduleRoot, join(root, "node_modules"));
+  const codecAsset = artifact.createOpenCodeServiceHostNativeCodecAsset();
+  copyFileSync(codecAsset.source, join(root, codecAsset.filename));
+  for (const asset of artifact.createOpenCodeServiceHostNativePolicyAssets()) {
+    mkdirSync(dirname(join(root, asset.filename)), { recursive: true });
+    copyFileSync(asset.source, join(root, asset.filename));
+  }
   writeFileSync(
     join(root, "keiko-governed-tools.mjs"),
     generated.createGeneratedOpenCodeV2HostFactory(),
@@ -613,10 +622,16 @@ for (const toolProfile of ["direct", "code-mode"]) {
   test(`the original native advertisement matches the fixed ${toolProfile} factory and canonical profile`, async (t) => {
     const own = await fixture(toolProfile);
     const previous = globalThis.fetch;
-    let transports = 0;
-    globalThis.fetch = () => {
-      transports++;
-      throw new Error("no-transport-qualified");
+    const initialPhases = [];
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, own.input.facadeURL);
+      const packet = JSON.parse(init.body);
+      assert.equal(packet.action, "native-initialization");
+      initialPhases.push(packet.phase);
+      return new Response(JSON.stringify({ ok: false, reason: "initialization-refused" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
     };
     try {
       await run(
@@ -679,10 +694,48 @@ for (const toolProfile of ["direct", "code-mode"]) {
           }),
         ),
       );
-      assert.equal(transports, 0);
+      assert.deepEqual(initialPhases, ["begin"]);
     } finally {
       globalThis.fetch = previous;
       own.cleanup();
     }
   });
 }
+
+test("the original initial instruction plugin acquires project instructions through the facade", async () => {
+  const own = await fixture();
+  writeFileSync(join(own.input.workspace, "AGENTS.md"), "Controlled original instruction.");
+  const previous = globalThis.fetch;
+  const phases = [];
+  globalThis.fetch = async (_url, init) => {
+    const packet = JSON.parse(init.body);
+    phases.push(packet.phase);
+    return new Response(JSON.stringify({ ok: false, reason: "initialization-refused" }), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    await run(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* own.host.makeFixedOpenCodeServiceHostRoutes(own.input);
+          const instance = yield* Context.get(context, LocationServiceMap.Service).contextEffect(
+            Location.Ref.make({ directory: own.input.workspace }),
+          );
+          yield* Context.get(instance, Plugin.Service).awaitActivation;
+          const inventory = yield* Context.get(instance, Plugin.Service).list();
+          assert.equal(inventory.length > 0, true);
+          assert.deepEqual(phases, ["begin"]);
+          assert.equal(
+            (yield* Context.get(instance, InstructionDiscovery.Service).list())._tag,
+            "Unavailable",
+          );
+        }),
+      ),
+    );
+  } finally {
+    globalThis.fetch = previous;
+    own.cleanup();
+  }
+});

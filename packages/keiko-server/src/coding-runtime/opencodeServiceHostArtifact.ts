@@ -182,6 +182,33 @@ export function createOpenCodeServiceHostPacketDataAsset(): string {
   );
 }
 
+/** Fixed original workspace policy modules; no host path reimplements the sensitive deny rule. */
+export function createOpenCodeServiceHostNativePolicyAssets(): readonly Readonly<{
+  readonly filename: string;
+  readonly source: URL;
+}>[] {
+  const owner = import.meta.resolve("@oscharko-dev/keiko-workspace");
+  return Object.freeze(
+    ["ignore.js", "boundedMemo.js"].map((filename) =>
+      Object.freeze({
+        filename: `keiko-workspace-path-policy/${filename}`,
+        source: new URL(`./${filename}`, owner),
+      }),
+    ),
+  );
+}
+
+/** Fixed sibling asset descriptor; bytes are the entire canonical compiled protocol producer. */
+export function createOpenCodeServiceHostNativeCodecAsset(): Readonly<{
+  readonly filename: "keiko-native-file-io-codec.mjs";
+  readonly source: URL;
+}> {
+  return Object.freeze({
+    filename: "keiko-native-file-io-codec.mjs",
+    source: new URL("./secureWorkspaceTextReadProtocol.js", import.meta.url),
+  });
+}
+
 function canonicalHostRoots(binding: OpenCodeServiceHostStartPacket): boolean {
   return [binding.workspace, binding.stateRoot].every(
     (root) => isAbsolute(root) && resolve(root) === root,

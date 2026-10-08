@@ -54,6 +54,12 @@ function fixture(toolProfile = "direct") {
   for (const name of ["host.mjs", "guard-seams.mjs", "entry.mjs"])
     if (existsSync(join(source, name))) copyFileSync(join(source, name), join(root, name));
   symlinkSync(moduleRoot, join(root, "node_modules"));
+  const codecAsset = artifact.createOpenCodeServiceHostNativeCodecAsset();
+  copyFileSync(codecAsset.source, join(root, codecAsset.filename));
+  for (const asset of artifact.createOpenCodeServiceHostNativePolicyAssets()) {
+    mkdirSync(dirname(join(root, asset.filename)), { recursive: true });
+    copyFileSync(asset.source, join(root, asset.filename));
+  }
   writeFileSync(
     join(root, "keiko-governed-tools.mjs"),
     generated.createGeneratedOpenCodeV2HostFactory(),

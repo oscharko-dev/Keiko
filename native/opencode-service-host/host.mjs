@@ -10,7 +10,12 @@ import {
 } from "node:fs";
 import { join, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, FileSystem, Layer, PlatformError } from "effect";
+import { FSUtil } from "@opencode/util/fs-util";
+import { ConfigInstructionPlugin } from "@opencode/core/config/plugin/instruction";
+import { InstructionDiscovery } from "@opencode/core/instruction-discovery";
+import * as nativeCodec from "./keiko-native-file-io-codec.mjs";
+import { isDenied } from "./keiko-workspace-path-policy/ignore.js";
 import { FetchHttpClient } from "effect/unstable/http";
 import { ServerFetch } from "@opencode/server/fetch";
 import { createRoutes } from "@opencode/server/routes";
@@ -32,6 +37,7 @@ import {
   denyAmbientFetch,
   decorateRequestExecutor,
   decorateSnapshot,
+  createInitialInstructionBoundary,
 } from "./guard-seams.mjs";
 
 const governedFactories = Object.freeze({
@@ -102,7 +108,7 @@ function acquireHost(input) {
     url: binding.facadeURL,
     capability: binding.facadeCapability,
   });
-  const overrides = fixedOverrides(binding, providerFetch, facadeFetch);
+  const overrides = fixedOverrides(binding, providerFetch, facadeFetch, config);
   const environment = hostEnvironment(binding);
   const before = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
   Object.assign(process.env, environment);
@@ -207,11 +213,18 @@ function hostEnvironment(binding) {
   });
 }
 
-function fixedOverrides(binding, providerFetch, facadeFetch) {
+function fixedOverrides(binding, providerFetch, facadeFetch, config) {
   let owner;
   const runtime = fixedRuntime(binding, facadeFetch, (value) => {
     if (owner !== undefined) throw new Error("host-owner-already-bound");
     owner = value;
+  });
+  const initial = createInitialInstructionBoundary(binding, facadeFetch, nativeCodec, {
+    Context,
+    Effect,
+    PlatformError,
+    isDenied,
+    config,
   });
   const plugins = [governedFactories[binding.toolProfile](runtime), nativeContextPlugin].map(
     (plugin) => ({
@@ -226,7 +239,11 @@ function fixedOverrides(binding, providerFetch, facadeFetch) {
       if (owner === undefined) throw new Error("host-owner-unavailable");
       return owner;
     }),
-    pluginOverride(plugins),
+    initialFilesystemOverride(initial),
+    InstructionDiscovery.node.replace(
+      InstructionDiscovery.configured({ project: true, global: false }),
+    ),
+    pluginOverride(plugins, initial),
   ];
 }
 
@@ -285,7 +302,7 @@ function toolOverride(currentOwner) {
   );
 }
 
-function pluginOverride(plugins) {
+function pluginOverride(plugins, initial) {
   return Plugin.node.replace(
     Plugin.node.mapLayer((layer) =>
       layer.pipe(
@@ -293,8 +310,39 @@ function pluginOverride(plugins) {
           const original = Context.get(context, Plugin.Service);
           return Layer.succeed(Plugin.Service, {
             ...original,
-            activate: (native, failures) => original.activate([...native, ...plugins], failures),
+            activate: (native, failures) =>
+              original.activate(
+                [...native.map((generation) => initialGeneration(generation, initial)), ...plugins],
+                failures,
+              ),
           });
+        }),
+      ),
+    ),
+  );
+}
+
+function initialGeneration(generation, initial) {
+  // PluginInternal.list owns the service-capturing effect wrapper for this builtin generation.
+  if (
+    generation.id !== ConfigInstructionPlugin.Plugin.id ||
+    generation.revision !== "internal" ||
+    generation.source?.type !== "builtin"
+  )
+    return generation;
+  return { ...generation, effect: initial.wrap(generation.effect) };
+}
+
+/** Preserve original up/resolve/readFileStringSafe closures over the decorated dependency. */
+function initialFilesystemOverride(initial) {
+  return FSUtil.node.replace(
+    FSUtil.node.mapLayer((original) =>
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const filesystem = yield* FileSystem.FileSystem;
+          return original.pipe(
+            Layer.provide(Layer.succeed(FileSystem.FileSystem, initial.filesystem(filesystem))),
+          );
         }),
       ),
     ),

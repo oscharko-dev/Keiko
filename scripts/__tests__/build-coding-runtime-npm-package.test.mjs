@@ -16,6 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { dirname, join, relative } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -583,6 +584,34 @@ describe.skipIf(process.platform === "win32")("inactive original service package
     expect(
       existsSync(join(outDir, "runtime/opencode-compatible/service-host/payload/runtime/node")),
     ).toBe(true);
+    const artifact =
+      await import("../../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js");
+    const codec = artifact.createOpenCodeServiceHostNativeCodecAsset();
+    const payload = join(outDir, "runtime/opencode-compatible/service-host/payload");
+    for (const asset of artifact.createOpenCodeServiceHostNativePolicyAssets()) {
+      expect(readFileSync(join(payload, asset.filename))).toEqual(readFileSync(asset.source));
+    }
+    const policy = await import(
+      pathToFileURL(join(payload, "keiko-workspace-path-policy/ignore.js")).href
+    );
+    expect(policy.isDenied("nested/.env")).toBe(true);
+    expect(policy.isDenied("nested/AGENTS.md")).toBe(false);
+    const stagedCodec = readFileSync(join(payload, codec.filename));
+    expect(stagedCodec).toEqual(readFileSync(codec.source));
+    const loaded = await import("data:text/javascript;base64," + stagedCodec.toString("base64"));
+    const frame = loaded.encodeSecureWorkspaceNativeResponse({
+      status: "ok",
+      info: { type: "file", size: 3, mtimeMs: 0 },
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    expect([...loaded.decodeSecureWorkspaceNativeResponse(frame).bytes]).toEqual([1, 2, 3]);
+    const provenance = JSON.parse(
+      readFileSync(join(payload, "evidence/build-provenance.json"), "utf8"),
+    );
+    expect(provenance.generatedFiles).toContainEqual({
+      path: codec.filename,
+      sha256: createHash("sha256").update(stagedCodec).digest("hex"),
+    });
     expect(result.qualification).toBe("private-functional-unapproved");
     expect(result.license.status).toBe("blocked");
   });

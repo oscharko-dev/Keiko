@@ -530,6 +530,22 @@ a production host. This prerequisite covers accepted-workspace initial acquisiti
 not authorize global or above-root reads, watcher refresh, a model selector or production host
 activation.
 
+The private original host now wraps the actual builtin `ConfigInstructionPlugin` generation after
+its original service capture, using one per-host Effect reference and the existing initialization
+route. The original FSUtil closures capture the decorated dependency before acquisition; project
+instruction discovery remains enabled while arbitrary project configuration and global instruction
+discovery remain disabled. The scope permanently closes after the first callback, including for
+inherited child fibers. The host copies decoded native bytes before wiping the canonical KSS3 frame.
+The package builder copies the complete canonical codec and workspace deny-policy modules as fixed
+sibling assets; it does not reimplement their formulas or accept an incoming module locator.
+Before the first callback, only the accepted workspace's lexically and canonically contained
+`realPath` metadata and the fixed private-state metadata are available. Fixed approved configuration
+uses its already checked bytes; unexpected JSONC configuration is refused. Actual original host
+acquisition matches one root instruction and preserves technical-unavailable output. Forty ancestor
+instructions are separately qualified with a controlled Location/Project, not genuine VCS discovery.
+Original Git discovery, the ready lifecycle and full native file/tool advertisement remain separate
+requirements; this private prerequisite does not activate the production service.
+
 A separately pinned, inactive `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and
 immediate directory entries to original native file consumers. Its collected output limit is
 64 MiB, matching the pinned original process-backed Files contract; directory overflow is refused

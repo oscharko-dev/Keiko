@@ -1177,3 +1177,34 @@ and repeated controls qualifies the final current registry. The synthetic supple
 fixture and controlled watcher stream prove this private transport only. Actual host ready lifecycle,
 Read-parent HTTP integration, trusted advertisement/history and full native Files/configuration
 functionality remain acceptance work; this change activates no production host or model tools.
+
+### Original host initialization and fixed npm assets (ROOT qualification on ad7fa6)
+
+ROOT independently matched nine source baselines and 174 frozen source/input/evidence references.
+The unchanged actual original host fails the new callback control without entering initialization.
+An earlier test-only builder run lacked the new asset helper; that setup failure is retained and is
+not the native behavioral regression. Minimal integration passes 47 original host/entry/guard
+controls and 87 artifact/package controls, scoped strict types, zero-warning lint, formatting,
+the fresh affected package graph, 97 catalog controls and twelve error-observability sites.
+
+The ROOT original-host proof uses the actual pinned 2.0.10 graph and current compiled producers.
+Its single accepted-root instruction exactly matches the standalone graph through five actual
+helper children, peak one, all closed. Initial acquisition consumes zero model tool calls; a
+subsequent actual Read consumes its one allowance. A separate controlled Location/Project proof
+matches forty ancestor instructions through 123 actual children, peak eight, all closed. This is
+not genuine VCS discovery. A held actual helper makes disposal refuse and retain state; the same
+physical gate remains busy until actual reap, after which fresh disposal removes state.
+
+ROOT independently extracted the new 175,599,204-byte private archive with the production archive
+owner and attested its complete 34,945-file, 466,508,541-byte payload. The frozen receipt matches
+the measured tree. Twelve fixed source/generated assets match current ROOT producers byte for byte,
+including the canonical codec, workspace deny policy and lock. The extracted original host also
+matches the one root instruction over real HTTP and preserves technical-unavailable behavior,
+with zero model requests. A second complete tree measurement after execution remains identical.
+These controls qualify this private frozen artifact, not a production release or service readiness.
+
+The controlled watcher, supplementary host-byte approval and helper verifier remain private proof
+fixtures. Original Git metadata/process discovery, global/above-root instructions, watcher refresh,
+full Files and tools, actual host ready lifecycle and platform qualification remain open. The exact
+spdx-exceptions 2.5.0 CC-BY-3.0 license refusal is retained; public runtime pins and selectors remain
+unchanged. Further parity work belongs to the open epic after the bounded customer-fix PR closes.
