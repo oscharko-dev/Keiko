@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -11,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   computePortableSidecarPayloadTreeDigest,
@@ -25,8 +26,89 @@ import {
 } from "./devLanePortableCodingRuntime.js";
 import { OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
+import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
+import { attestPortableSidecarTree } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 
 const roots: string[] = [];
+const discoveryIo = vi.hoisted(() => ({
+  selectedPath: "",
+  evidencePath: "",
+  evidenceDescriptor: undefined as number | undefined,
+  onEvidenceRead: undefined as (() => void) | undefined,
+  reversedDirectoryRoot: "",
+  selectedDescriptor: undefined as number | undefined,
+  selectedFullReads: 0,
+  selectedReadBytes: 0,
+  selectedReadCalls: 0,
+  maximumReadBufferBytes: 0,
+  onSelectedRead: undefined as (() => void) | undefined,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...original,
+    readdirSync: vi.fn((...args: Parameters<typeof original.readdirSync>) => {
+      const entries = original.readdirSync(...args);
+      return typeof args[0] === "string" &&
+        discoveryIo.reversedDirectoryRoot !== "" &&
+        args[0].startsWith(discoveryIo.reversedDirectoryRoot)
+        ? entries.reverse()
+        : entries;
+    }),
+    readFileSync: vi.fn((...args: Parameters<typeof original.readFileSync>) => {
+      const result = original.readFileSync(...args);
+      if (args[0] === discoveryIo.evidencePath) discoveryIo.onEvidenceRead?.();
+      if (args[0] === discoveryIo.selectedPath) {
+        discoveryIo.selectedFullReads += 1;
+        if (discoveryIo.selectedFullReads === 2) discoveryIo.onSelectedRead?.();
+      }
+      return result;
+    }),
+    openSync: vi.fn((...args: Parameters<typeof original.openSync>) => {
+      const descriptor = original.openSync(...args);
+      if (args[0] === discoveryIo.evidencePath) discoveryIo.evidenceDescriptor = descriptor;
+      if (args[0] === discoveryIo.selectedPath) discoveryIo.selectedDescriptor = descriptor;
+      return descriptor;
+    }),
+    readSync: vi.fn((...args: Parameters<typeof original.readSync>) => {
+      const result = original.readSync(...args);
+      if (args[0] === discoveryIo.evidenceDescriptor) discoveryIo.onEvidenceRead?.();
+      if (args[0] === discoveryIo.selectedDescriptor) {
+        discoveryIo.selectedReadBytes += result;
+        discoveryIo.selectedReadCalls += 1;
+        discoveryIo.maximumReadBufferBytes = Math.max(
+          discoveryIo.maximumReadBufferBytes,
+          args[1].byteLength,
+        );
+        discoveryIo.onSelectedRead?.();
+      }
+      return result;
+    }),
+    closeSync: vi.fn((descriptor: number): void => {
+      original.closeSync(descriptor);
+      if (descriptor === discoveryIo.evidenceDescriptor) discoveryIo.evidenceDescriptor = undefined;
+      if (descriptor === discoveryIo.selectedDescriptor) discoveryIo.selectedDescriptor = undefined;
+    }),
+  };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...original,
+    readdir: async (
+      ...args: Parameters<typeof original.readdir>
+    ): Promise<Awaited<ReturnType<typeof original.readdir>>> => {
+      const entries = await original.readdir(...args);
+      return typeof args[0] === "string" &&
+        discoveryIo.reversedDirectoryRoot !== "" &&
+        args[0].startsWith(discoveryIo.reversedDirectoryRoot)
+        ? entries.reverse()
+        : entries;
+    },
+  };
+});
 
 function fixture(target: DevLaneOpenCodeTarget = "macos-arm64"): DevLaneFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-dev-lane-")));
@@ -50,7 +132,122 @@ function expectRefusal(discovery: DevLaneOpenCodeDiscovery, reason: string): voi
 }
 
 afterEach(() => {
+  discoveryIo.selectedPath = "";
+  discoveryIo.evidencePath = "";
+  discoveryIo.evidenceDescriptor = undefined;
+  discoveryIo.onEvidenceRead = undefined;
+  discoveryIo.reversedDirectoryRoot = "";
+  discoveryIo.selectedDescriptor = undefined;
+  discoveryIo.selectedFullReads = 0;
+  discoveryIo.selectedReadBytes = 0;
+  discoveryIo.selectedReadCalls = 0;
+  discoveryIo.maximumReadBufferBytes = 0;
+  discoveryIo.onSelectedRead = undefined;
+  vi.clearAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function largeExecutableFixture(): DevLaneFixture {
+  const staged = fixture();
+  const executable = Buffer.alloc(1024 * 1024, 0x78);
+  writeFileSync(staged.paths.executable, executable);
+  const catalog = JSON.parse(readFileSync(staged.paths.catalog, "utf8")) as {
+    sidecarRuntimes: { archives: Record<string, { executableTreeSha256: string }> }[];
+  };
+  const archive = catalog.sidecarRuntimes[0]?.archives["macos-arm64"];
+  if (archive === undefined) throw new Error("expected fixture archive");
+  archive.executableTreeSha256 = computePortableSidecarPayloadTreeDigest([
+    { relativePath: "bin/opencode", sha256: createHash("sha256").update(executable).digest("hex") },
+  ]);
+  writeFileSync(staged.paths.catalog, JSON.stringify(catalog));
+  vi.clearAllMocks();
+  discoveryIo.selectedPath = staged.paths.executable;
+  return staged;
+}
+
+describe("discovery's single stable executable read", () => {
+  it("derives the executable and complete tree digests with one bounded body read", () => {
+    const staged = largeExecutableFixture();
+    const result = discover(staged);
+    expect(result.outcome).toBe("activated");
+    const selectedOpens = vi
+      .mocked(openSync)
+      .mock.calls.filter(([path]) => path === staged.paths.executable);
+    expect(selectedOpens.length + discoveryIo.selectedFullReads).toBe(1);
+    expect(discoveryIo.selectedFullReads).toBe(0);
+    expect(discoveryIo.selectedReadCalls).toBeGreaterThan(1);
+    expect(discoveryIo.selectedReadBytes).toBe(1024 * 1024);
+    expect(discoveryIo.maximumReadBufferBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(discoveryIo.selectedDescriptor).toBeUndefined();
+    if (result.outcome !== "activated") throw new Error("expected approved fixture");
+    expect(result.runtime.sidecar.shippedExecutableSha256).toBe(
+      createHash("sha256")
+        .update(Buffer.alloc(1024 * 1024, 0x78))
+        .digest("hex"),
+    );
+  });
+
+  it.each(["license", "sbom"] as const)(
+    "refuses %s replaced after approved bytes are returned before later discovery reads",
+    (evidence) => {
+      const staged = largeExecutableFixture();
+      discoveryIo.evidencePath = staged.paths[evidence];
+      let replaced = false;
+      discoveryIo.onEvidenceRead = (): void => {
+        discoveryIo.onEvidenceRead = undefined;
+        replaced = true;
+        writeFileSync(staged.paths[evidence], "replaced immediately after approved evidence read");
+      };
+      expectRefusal(discover(staged), "payload-tampered");
+      expect(replaced).toBe(true);
+    },
+  );
+
+  it("refuses approved provenance changed during the complete discovery content pass", () => {
+    const staged = largeExecutableFixture();
+    discoveryIo.onSelectedRead = (): void => {
+      discoveryIo.onSelectedRead = undefined;
+      writeFileSync(staged.paths.license, "changed during complete discovery pass");
+    };
+    expectRefusal(discover(staged), "payload-tampered");
+  });
+});
+
+describe("discovery's historical recursive tuple ordering", () => {
+  it.each([false, true])(
+    "matches the existing recursive producer with nested collation ties and reversed owner order %s",
+    async (reversed) => {
+      const staged = fixture();
+      const payload = join(staged.paths.stagedTargetRoot, "opencode-compatible", "payload");
+      const first = ["branch\u200d", "é", "tool"];
+      const second = ["branch", "e\u0301", "tool"];
+      expect(first[1]?.normalize("NFC")).toBe(second[1]?.normalize("NFC"));
+      expect(first.join("/").localeCompare(second.join("/"))).toBe(0);
+      mkdirSync(join(payload, ...first.slice(0, -1)), { recursive: true });
+      mkdirSync(join(payload, ...second.slice(0, -1)), { recursive: true });
+      writeFileSync(join(payload, ...first), "first nested body");
+      writeFileSync(join(payload, ...second), "second nested body");
+      writeFileSync(join(payload, "native\u200d"), "first sibling body");
+      writeFileSync(join(payload, "native"), "second sibling body");
+      if (reversed) discoveryIo.reversedDirectoryRoot = payload;
+      const result = discover(staged);
+      expect(result.outcome).toBe("activated");
+      if (result.outcome !== "activated") throw new Error("expected approved fixture");
+      expect(
+        inspectStagedSidecarPayload(result.runtime.installRoot, result.runtime.sidecar),
+      ).toEqual({
+        payloadPresent: true,
+        archiveDigestVerified: true,
+        executableTreeDigestVerified: true,
+      });
+      const asynchronous = await attestPortableSidecarTree(payload, "bin/opencode", {
+        deadline: Date.now() + 5_000,
+        now: Date.now,
+        yieldControl: () => Promise.resolve(),
+      });
+      expect(asynchronous.treeSha256).toBe(result.runtime.sidecar.summary.payloadSha256);
+    },
+  );
 });
 
 describe("dev-lane OpenCode discovery", () => {

@@ -1,3 +1,6 @@
+import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
+import { PortableTreeAttestationError } from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import { processServerLogSink } from "../process-log-sink.js";
 import { draftPendingApprovalReview } from "./productionDraftDeliveryRuntime.js";
 import { createHash } from "node:crypto";
 import { isDenied, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -44,7 +47,10 @@ import {
   type PortableSidecarAvailabilityInput,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
-import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
+import {
+  inspectStagedSidecarPayload,
+  inspectStagedSidecarPayloadAsync,
+} from "../update-portable-sidecar-staging-verification.js";
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
@@ -104,6 +110,7 @@ export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
 export type CodingRuntimeFailureCode =
   | "adapter-profile-mismatch"
+  | "authority-resolution-failed"
   | "archive-digest-mismatch"
   | "env-secret-denied"
   | "egress-unqualified"
@@ -289,6 +296,8 @@ export interface CodingRuntimeManagerDeps {
   /** Existing, server-owned local-secret root; Codex state is derived beneath it per run. */
   readonly codexLocalSecretRoot?: string | undefined;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+  /** Server-owned exact starting authority check; never supplied by a wire launch request. */
+  readonly canSpawnRuntime?: ((request: CodingRuntimeLaunchRequest) => boolean) | undefined;
   /**
    * Server-side egress verifier. Its receipt attests to network enforcement; environment
    * projection is configuration only and is never treated as confinement.
@@ -445,6 +454,7 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly codexLifecycleAdapter: CodexLifecycleAdapter | undefined;
   readonly codexLocalSecretRoot: string | undefined;
   readonly resolveWorkspaceRootAccess: (() => WorkspaceRootAccess | undefined) | undefined;
+  readonly canSpawnRuntime: ((request: CodingRuntimeLaunchRequest) => boolean) | undefined;
   readonly qualifyCodexEgress:
     ((request: CodingRuntimeLaunchRequest) => ReviewedCodexEgressPolicy | undefined) | undefined;
   readonly portableRuntimeResolver:
@@ -718,6 +728,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     codexLifecycleAdapter: deps.codexLifecycleAdapter,
     codexLocalSecretRoot: deps.codexLocalSecretRoot,
     resolveWorkspaceRootAccess: deps.resolveWorkspaceRootAccess,
+    canSpawnRuntime: deps.canSpawnRuntime,
     qualifyCodexEgress: deps.qualifyCodexEgress,
     portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
@@ -1090,18 +1101,76 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     lifecycleAdapter?: OpenCodeLifecycleAdapter,
     parentLifetime?: "stdin-eof",
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
-    const cancelled = cancellationFailure(request, this.deps);
-    if (cancelled !== undefined) return this.recordLaunchFailure(request, cancelled);
-    const portableAvailability = portableAvailabilityFailure(portable);
-    if (portableAvailability !== undefined) {
-      return this.recordLaunchFailure(request, portableAvailability);
+    if (portable === undefined) {
+      return this.spawnAttestedRuntime(
+        request,
+        executablePath,
+        env,
+        args,
+        lifecycleAdapter,
+        parentLifetime,
+      );
     }
+    return this.attestAndSpawnRuntime(
+      request,
+      executablePath,
+      env,
+      portable,
+      args,
+      lifecycleAdapter,
+      parentLifetime,
+    );
+  }
+
+  private async attestAndSpawnRuntime(
+    request: CodingRuntimeLaunchRequest,
+    executablePath: string,
+    env: Record<string, string>,
+    portable: ResolvedPortableRuntime,
+    args: readonly string[],
+    lifecycleAdapter?: OpenCodeLifecycleAdapter,
+    parentLifetime?: "stdin-eof",
+  ): Promise<CodingRuntimeStartResult> {
+    const deadline = this.deps.now() + request.startTimeoutMs;
+    const availability = await portableAvailabilityFailureAsync(
+      portable,
+      request,
+      this.deps,
+      deadline,
+    );
+    if (availability !== undefined) return this.recordLaunchFailure(request, availability);
+    if (this.deps.now() >= deadline)
+      return this.recordLaunchFailure(request, failure("start-timeout", true));
+    return await this.spawnAttestedRuntime(
+      request,
+      executablePath,
+      env,
+      args,
+      lifecycleAdapter,
+      parentLifetime,
+      deadline,
+    );
+  }
+
+  private spawnAttestedRuntime(
+    request: CodingRuntimeLaunchRequest,
+    executablePath: string,
+    env: Record<string, string>,
+    args: readonly string[],
+    lifecycleAdapter?: OpenCodeLifecycleAdapter,
+    parentLifetime?: "stdin-eof",
+    deadline?: number,
+  ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult> {
+    if (this.active !== undefined && this.active.status !== "stopped")
+      return this.recordLaunchFailure(request, failure("runtime-already-running", true));
     const proof = proveSpawnWorkspaceRoot(
       this.deps.resolveWorkspaceRootAccess,
       request.workspaceRoot,
     );
     if (!proof.ok)
       return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
+    const eligible = runtimeSpawnEligibilityFailure(request, this.deps, deadline);
+    if (eligible !== undefined) return this.recordLaunchFailure(request, eligible);
     const launched = this.deps.supervisor.spawnOwnedTree({
       ...supervisorLaunchRequest(request, executablePath, env, args, proof.cwd),
       ...(parentLifetime === undefined ? {} : { parentLifetime }),
@@ -1841,6 +1910,73 @@ function portableAvailabilityFailure(
     ...disk,
   });
   return availability.available ? undefined : failure(availability.reason, false);
+}
+
+function runtimeSpawnEligibilityFailure(
+  request: CodingRuntimeLaunchRequest,
+  deps: NormalizedCodingRuntimeManagerDeps,
+  deadline: number | undefined,
+): FailureResult | undefined {
+  try {
+    if (deps.canSpawnRuntime?.(request) === false)
+      return failure("authority-resolution-failed", false);
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: request.runId,
+      timestamp: new Date(deps.now()).toISOString(),
+      operation: "coding-runtime.spawn-authority",
+      source: "coding-runtime-manager.runtimeSpawnEligibilityFailure",
+      ...describeError(error),
+      message: "runtime-start-failed",
+    });
+    return failure("authority-resolution-failed", false);
+  }
+  const cancelled = cancellationFailure(request, deps);
+  if (cancelled !== undefined) return cancelled;
+  return deadline !== undefined && deps.now() >= deadline
+    ? failure("start-timeout", true)
+    : undefined;
+}
+
+async function portableAvailabilityFailureAsync(
+  resolved: ResolvedPortableRuntime,
+  request: CodingRuntimeLaunchRequest,
+  deps: NormalizedCodingRuntimeManagerDeps,
+  deadline: number,
+): Promise<FailureResult | undefined> {
+  try {
+    const disk = await inspectStagedSidecarPayloadAsync(
+      resolved.resourceRoot,
+      resolved.verification,
+      {
+        signal: request.signal,
+        deadline,
+        now: deps.now,
+        securityLogSink: bindSecurityLogCorrelation(processServerLogSink(), request.runId),
+      },
+    );
+    const availability = evaluatePortableSidecarAvailability(resolved.verification, {
+      target: resolved.target,
+      platformAttested:
+        resolved.admission === undefined || resolved.admission === "release-qualified",
+      ...disk,
+    });
+    return availability.available ? undefined : failure(availability.reason, false);
+  } catch (error) {
+    if (error instanceof PortableTreeAttestationError && error.kind === "cancelled")
+      return failure("start-aborted", true);
+    if (error instanceof PortableTreeAttestationError && error.kind === "timeout")
+      return failure("start-timeout", true);
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: request.runId,
+      timestamp: new Date(deps.now()).toISOString(),
+      operation: "coding-runtime.payload-attestation",
+      source: "coding-runtime-manager.portableAvailabilityFailureAsync",
+      ...describeError(error),
+      message: "runtime-start-failed",
+    });
+    return failure("payload-missing", false);
+  }
 }
 
 function cancellationFailure(

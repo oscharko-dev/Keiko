@@ -79,6 +79,7 @@ import type { CiRepairBudgetBlockReason } from "./codingRuntimeCiRepairBudgetTyp
 // Child tool mutations may only ever run against a RUNNING run; operator admissions (follow-up
 // dispatch, abort, question answers) legitimately reach a paused run — sticky pause holds the
 // runtime, not the human.
+const STARTING_ONLY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(["starting"]);
 const RUNNING_ONLY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(["running"]);
 const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "running",
@@ -1349,6 +1350,13 @@ export class CodingRuntimeAuthorityService {
       this.runtimeState.runId === reference.runId
       ? reference
       : undefined;
+  }
+
+  /** Revalidates the accepted starting lease only; does not admit a tool action or renew authority. */
+  public revalidateCapabilityForPendingSpawn(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeResolution {
+    return this.revalidateCapabilityForStates(input, STARTING_ONLY);
   }
 
   public revalidateCapabilityForMutation(

@@ -6,6 +6,31 @@ It complements the hermetic release gate in
 LiteLLM/vLLM twin and never calls a model. This lab answers the question that gate cannot: does a
 real open-weight model complete real coding tasks through the Workbench?
 
+## Current launch-attestation qualification
+
+The combined launch repair uses cooperative asynchronous IO before process creation and rechecks
+the current start, workspace and accepted authority after that await. Portable CLI discovery now
+reads the executable, license and SBOM once each, in at most 64 KiB content buffers, and derives
+their digests from the same stable full-tree pass. Launch independently rechecks the tree; there is
+no cross-call attestation cache. Regression controls preserve the historical locale-sorted digest
+for Unicode-equivalent names and refuse provenance changes during the pass. Discovery remains
+synchronous. These controls establish integrity and cancellation responsiveness, not a startup
+latency improvement or a new native directory-array allocation guarantee.
+
+The Chat repository and recursive search controls remain separate from the Coding Workbench
+integration: 92 focused tests passed without changing their consumers. Original OpenCode planning,
+context and execution remain the intended service boundary. Native tool and Code Mode activation
+still require the outstanding authority, transport, lifecycle and effect-observation qualification.
+
+An independent private Node 24.18.0 / OpenCode 2.0.10 proof reproduced six failing network and
+cancellation controls, then passed them using supported original RequestExecutor and Tool snapshot
+layer decorators. Provider transport remains scoped to the original request executor; generic
+model-facing fetch is denied. The existing parent guard closes exactly once on success, typed
+failure, defect and interruption, and late approved effects are refused. Native output, progress
+and advertised definitions are byte-identical between the two phases. This is an inactive factory
+proof, not a production host or full native capability qualification. Existing producer cancellation
+and current authority checks are still required for an already admitted effect.
+
 ## Deployment shape
 
 | Layer         | Lab                                                                                                                          | Customer                                          |

@@ -1147,3 +1147,49 @@ describe("operatorDecisionRequester", () => {
     ]);
   });
 });
+
+describe("production pending-spawn lease binding", () => {
+  it.each(["revoked", "expired", "root-drift", "run", "tree", "envelope", "workspace"] as const)(
+    "rechecks %s using the minted starting authority",
+    async (kind) => {
+      const fixture = workspaceFixture();
+      const confirmations = confirmationFixture();
+      const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+        backendRun(input.request.runId),
+      );
+      const host = createProductionCodingRuntimeHost(
+        resolverFor(fixture, createRun, confirmations.consumer),
+      );
+      if (host === undefined) throw new Error("expected qualified host");
+      const request = launchRequest(fixture.workspace);
+      confirmations.issue(
+        resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+      );
+      const resolved = host.launchResolver.resolve(request);
+      const backend = createRun.mock.calls[0]?.[0];
+      if (backend?.canSpawnRuntime === undefined)
+        throw new Error("expected server-owned spawn guard");
+      const launch = {
+        ...resolved,
+        runId: request.runId,
+        workspaceRoot: fixture.workspace,
+        requestedMode: request.requestedMode,
+      };
+      expect(backend.canSpawnRuntime(launch)).toBe(true);
+      if (kind === "revoked") await backend.authorityLifecycle.revokeRuntime(request.runId);
+      if (kind === "expired") fixture.advanceNow(121 * 60_000);
+      const replacements = {
+        run: { runId: "foreign-run" },
+        tree: { treeBindingId: "0".repeat(64) },
+        envelope: { authorityEnvelopeDigest: "0".repeat(64) },
+        workspace: { workspaceRoot: `${fixture.workspace}-foreign` },
+      };
+      const changed = {
+        ...launch,
+        ...(kind in replacements ? replacements[kind as keyof typeof replacements] : {}),
+      };
+      if (kind === "root-drift") fixture.revokeWorkspaceAccess();
+      expect(backend.canSpawnRuntime(changed)).toBe(false);
+    },
+  );
+});

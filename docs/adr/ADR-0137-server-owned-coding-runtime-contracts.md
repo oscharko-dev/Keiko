@@ -453,6 +453,13 @@ approval checks retain their pre-build path; supplemental host checks require th
 canonical contract. These shape checks do not replace disk, platform, current-authority,
 network or process-lifetime qualification and do not activate native tools.
 
+Portable CLI discovery derives executable, license and SBOM digests from one fresh, bounded
+content pass over stable file descriptors. Those evidence digests and the payload digest belong
+to the same before/after tree snapshot; a separately read provenance file is not sufficient.
+The existing locale-sorted payload digest remains byte-compatible, including complete paths that
+collate equally. Only those ties require the historical directory-enumeration order. Launch uses
+a separate fresh pass and never trusts cached discovery evidence for current disk contents.
+
 Codex subscription traffic remains a distinct runtime/model source. Its egress uses Keiko's shared
 enterprise proxy and custom-CA path, and any official authentication navigation target is validated
 server-side against the closed official-origin policy before the browser may open it. Credentials
@@ -520,6 +527,15 @@ again, so late preparation cannot create a tree after a successful stop. A delay
 waits for the interruption's teardown result and never dispatches the initial task or replaces its
 terminal state. An unproven teardown or a late live host remains `recovery-required`; cancellation
 does not substitute for process-tree exit proof (F25, #3873).
+
+Launch attestation uses asynchronous filesystem IO and bounded cooperative yields, so startup
+cancellation can run while a large immutable payload is checked. The existing startup deadline,
+tree and file bounds still apply. Immediately after that await and before process creation, the
+manager verifies the same active start, current workspace, cancellation and accepted authority.
+This check neither renews nor widens authority. Discovery retains its synchronous boundary and
+does not acquire a new launch deadline. Historical directory enumeration can allocate its native
+entry array before a concurrent tree growth is refused; this change makes no stronger allocation
+or startup-latency guarantee for that existing owner.
 
 The pinned OpenCode V2 Darwin application-sandbox backend also uses the native `serve --stdio`
 stdin-EOF lifetime lease. The verified V2 preparation producer and the existing process backend

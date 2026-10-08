@@ -7,11 +7,12 @@ import {
   openSync,
   opendirSync,
   readSync,
+  readdirSync,
   type BigIntStats,
   type Dir,
   type Dirent,
 } from "node:fs";
-import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
+import { lstat, open, opendir, readdir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import {
   activityLogEvent,
@@ -24,6 +25,7 @@ const MAX_TREE_ENTRIES = 60_000;
 const MAX_TREE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_TREE_PATH_BYTES = 16 * 1024 * 1024;
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
+const MAX_SELECTED_PATHS = 8;
 const BUFFER_BYTES = 64 * 1024;
 const ASYNC_READS_PER_YIELD = 64;
 const ASYNC_IO_STEPS_PER_YIELD = 256;
@@ -107,10 +109,12 @@ interface TreeEntrySnapshot {
 interface TreeSnapshot {
   readonly directories: readonly TreeEntrySnapshot[];
   readonly files: readonly TreeEntrySnapshot[];
+  readonly legacyFiles?: readonly TreeEntrySnapshot[];
 }
 
 type IoRequest =
   | { readonly kind: "lstat"; readonly path: string }
+  | { readonly kind: "directory-order"; readonly path: string }
   | {
       readonly kind: "open-directory";
       readonly id: number;
@@ -124,7 +128,60 @@ type IoRequest =
   | { readonly kind: "read-file"; readonly id: number }
   | { readonly kind: "close-file"; readonly id: number };
 
-type TreeMachine = Generator<IoRequest, string, unknown>;
+export interface PortableSidecarTreeAttestation {
+  readonly treeSha256: string;
+  readonly selectedFileSha256?: string;
+  readonly selectedFileSha256ByPath?: Readonly<Record<string, string>>;
+}
+
+type TreeMachine = Generator<IoRequest, PortableSidecarTreeAttestation, unknown>;
+
+/** The existing portable sidecar tuple format; KHT1 uses its separate fixed projection. */
+export function computePortableSidecarPayloadTreeDigest(
+  entries: readonly { readonly relativePath: string; readonly sha256: string }[],
+): string {
+  const hash = createHash("sha256");
+  const sorted = [...entries].sort((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
+  for (const entry of sorted) hash.update(`${entry.relativePath}\0${entry.sha256}\0`);
+  return hash.digest("hex");
+}
+
+function selectedArtifactPaths(
+  paths: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (paths === undefined) return undefined;
+  if (paths.length > MAX_SELECTED_PATHS)
+    fail("portable handoff selected artifact count is too large");
+  const selected = [...paths];
+  if (new Set(selected).size !== selected.length) fail("portable handoff selected paths repeat");
+  let bytes = 0;
+  for (const path of selected) {
+    if (
+      path.includes("\\") ||
+      path.split("/").some((part) => part === "" || part === "." || part === "..")
+    ) {
+      fail("portable handoff selected artifact path is unsafe");
+    }
+    bytes += Buffer.byteLength(path, "utf8");
+  }
+  if (bytes > MAX_TREE_PATH_BYTES) fail("portable handoff selected paths are too large");
+  return selected;
+}
+
+function selectedArtifactDigests(
+  entries: readonly { readonly relativePath: string; readonly sha256: string }[],
+  paths: readonly string[] | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (paths === undefined) return undefined;
+  const selected = paths.map((path) => {
+    const entry = entries.find((candidate) => candidate.relativePath === path);
+    if (entry === undefined) fail("portable handoff selected artifact is missing");
+    return [path, entry.sha256] as const;
+  });
+  return Object.freeze(Object.fromEntries<string>(selected));
+}
 
 function recordTreeEntry(budget: TreeBudget, name: string): void {
   budget.entries += 1;
@@ -150,6 +207,7 @@ interface SnapshotTraversal {
   readonly directorySnapshots: TreeEntrySnapshot[];
   readonly directories: TreeEntrySnapshot[];
   readonly budget: TreeBudget;
+  readonly orderedChildren?: Map<string, TreeEntrySnapshot[]>;
 }
 
 function* readSnapshotDirectory(
@@ -157,6 +215,8 @@ function* readSnapshotDirectory(
   directory: TreeEntrySnapshot,
 ): Generator<IoRequest, void, unknown> {
   const relativeDirectory = directory.name;
+  const children: TreeEntrySnapshot[] = [];
+  traversal.orderedChildren?.set(relativeDirectory, children);
   const id = traversal.handles.next;
   traversal.handles.next += 1;
   yield {
@@ -175,8 +235,10 @@ function* readSnapshotDirectory(
         kind: "lstat",
         path: portablePath(traversal.root, name),
       }) as BigIntStats;
-      if (treeEntryKind(entry, stat) === "directory") {
-        const snapshot = { name, stat };
+      const kind = treeEntryKind(entry, stat);
+      const snapshot = { name, stat };
+      if (traversal.orderedChildren !== undefined) children.push(snapshot);
+      if (kind === "directory") {
         traversal.directories.push(snapshot);
         traversal.directorySnapshots.push(snapshot);
       } else {
@@ -191,6 +253,7 @@ function* readSnapshotDirectory(
 function* snapshotTree(
   root: string,
   handles: { next: number },
+  legacyOrder = false,
 ): Generator<IoRequest, TreeSnapshot, unknown> {
   const rootStat = (yield { kind: "lstat", path: root }) as BigIntStats;
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
@@ -201,31 +264,119 @@ function* snapshotTree(
   const directorySnapshots: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
   const directories: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
   const budget: TreeBudget = { entries: 0, pathBytes: 0 };
-  const traversal = { root, handles, files, directorySnapshots, directories, budget };
+  const orderedChildren = legacyOrder ? new Map<string, TreeEntrySnapshot[]>() : undefined;
+  const traversal = {
+    root,
+    handles,
+    files,
+    directorySnapshots,
+    directories,
+    budget,
+    ...(orderedChildren === undefined ? {} : { orderedChildren }),
+  };
   while (directories.length > 0) {
     const directory = directories.pop();
     if (directory === undefined) break;
     yield* readSnapshotDirectory(traversal, directory);
   }
-  return { directories: directorySnapshots, files };
+  const legacyFiles =
+    orderedChildren === undefined
+      ? undefined
+      : yield* legacyDepthFirstFiles(root, files, directorySnapshots, orderedChildren);
+  return {
+    directories: directorySnapshots,
+    files,
+    ...(legacyFiles === undefined ? {} : { legacyFiles }),
+  };
+}
+
+function legacyOrderHasTies(files: readonly TreeEntrySnapshot[]): boolean {
+  const sorted = [...files].sort((left, right) => left.name.localeCompare(right.name));
+  return sorted.some((file, index) => {
+    const previous = sorted[index - 1];
+    return previous?.name.localeCompare(file.name) === 0;
+  });
+}
+
+function historicalChildren(
+  directory: string,
+  names: readonly string[],
+  children: readonly TreeEntrySnapshot[],
+): TreeEntrySnapshot[] {
+  if (names.length !== children.length) fail("portable handoff tree changed during attestation");
+  const captured = new Map(children.map((entry) => [entry.name, entry]));
+  return names.map((name) => {
+    const path = directory === "" ? name : `${directory}/${name}`;
+    const entry = captured.get(path);
+    if (entry === undefined) fail("portable handoff tree changed during attestation");
+    captured.delete(path);
+    return entry;
+  });
+}
+
+function assertUnchangedDirectory(expected: BigIntStats, current: BigIntStats): void {
+  assertOpenedDirectory(expected, current);
+  if (!sameTreeEntry({ name: "", stat: expected }, { name: "", stat: current })) {
+    fail("portable handoff tree changed during attestation");
+  }
+}
+
+function* restoreHistoricalDirectoryOrder(
+  root: string,
+  directories: readonly TreeEntrySnapshot[],
+  children: Map<string, TreeEntrySnapshot[]>,
+): Generator<IoRequest, void, unknown> {
+  for (const directory of directories) {
+    const path = portablePath(root, directory.name);
+    assertUnchangedDirectory(directory.stat, (yield { kind: "lstat", path }) as BigIntStats);
+    const names = (yield { kind: "directory-order", path }) as readonly string[];
+    children.set(
+      directory.name,
+      historicalChildren(directory.name, names, children.get(directory.name) ?? []),
+    );
+    assertUnchangedDirectory(directory.stat, (yield { kind: "lstat", path }) as BigIntStats);
+  }
+}
+
+// Stable locale sorting only depends on historical DFS input when complete paths collate equally.
+// Use the original readdir owner for those ties: opendir order differs, and native order is platform-specific.
+function* legacyDepthFirstFiles(
+  root: string,
+  capturedFiles: readonly TreeEntrySnapshot[],
+  directories: readonly TreeEntrySnapshot[],
+  children: Map<string, TreeEntrySnapshot[]>,
+): Generator<IoRequest, readonly TreeEntrySnapshot[], unknown> {
+  if (!legacyOrderHasTies(capturedFiles)) return capturedFiles;
+  yield* restoreHistoricalDirectoryOrder(root, directories, children);
+  const pending = [...(children.get("") ?? [])].reverse();
+  const files: TreeEntrySnapshot[] = [];
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === undefined) break;
+    if (entry.stat.isFile()) files.push(entry);
+    else pending.push(...[...(children.get(entry.name) ?? [])].reverse());
+  }
+  return files;
 }
 
 function comparePortablePaths(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
-function sortTreeEntries(entries: readonly TreeEntrySnapshot[]): readonly TreeEntrySnapshot[] {
+function sortTreeEntries(entries: readonly TreeEntrySnapshot[]): TreeEntrySnapshot[] {
   return [...entries].sort((left, right) => comparePortablePaths(left.name, right.name));
 }
 
 function* portableTreeSnapshot(
   root: string,
   handles: { next: number },
+  legacyOrder = false,
 ): Generator<IoRequest, TreeSnapshot, unknown> {
-  const snapshot = yield* snapshotTree(root, handles);
+  const snapshot = yield* snapshotTree(root, handles, legacyOrder);
   return {
     directories: sortTreeEntries(snapshot.directories),
     files: sortTreeEntries(snapshot.files),
+    ...(snapshot.legacyFiles === undefined ? {} : { legacyFiles: snapshot.legacyFiles }),
   };
 }
 
@@ -355,25 +506,47 @@ function* digestFile(
   }
 }
 
-function* portableTreeMachine(root: string): TreeMachine {
+function* portableTreeMachine(
+  root: string,
+  projection: "kht1" | "sidecar" = "kht1",
+  selectedRelativePath?: string,
+  selectedRelativePaths?: readonly string[],
+): TreeMachine {
+  const selectedPaths = selectedArtifactPaths(selectedRelativePaths);
   const handles = { next: 1 };
-  const snapshot = yield* portableTreeSnapshot(root, handles);
+  const snapshot = yield* portableTreeSnapshot(root, handles, projection === "sidecar");
   const hash = createHash("sha256");
   hash.update(TREE_HASH_SCHEMA, "ascii");
   hash.update(uint32(snapshot.files.length));
+  const entries: { relativePath: string; sha256: string }[] = [];
+  let selectedFileSha256: string | undefined;
   let totalBytes = 0n;
-  for (const file of snapshot.files) {
+  for (const file of snapshot.legacyFiles ?? snapshot.files) {
     const path = portablePath(root, file.name);
     const current = (yield { kind: "lstat", path }) as BigIntStats;
     totalBytes += current.size;
     if (totalBytes > BigInt(MAX_TREE_BYTES)) fail("portable handoff tree is too large");
-    const nameBytes = Buffer.from(file.name, "utf8");
-    hash.update(uint32(nameBytes.byteLength));
-    hash.update(nameBytes);
-    hash.update(yield* digestFile(path, handles));
+    const digest = yield* digestFile(path, handles);
+    if (projection === "sidecar") {
+      entries.push({ relativePath: file.name, sha256: digest.toString("hex") });
+    } else {
+      const nameBytes = Buffer.from(file.name, "utf8");
+      hash.update(uint32(nameBytes.byteLength));
+      hash.update(nameBytes);
+      hash.update(digest);
+    }
+    if (file.name === selectedRelativePath) selectedFileSha256 = digest.toString("hex");
   }
   assertSameTreeSnapshot(snapshot, yield* portableTreeSnapshot(root, handles));
-  return hash.digest("hex");
+  const selectedFileSha256ByPath = selectedArtifactDigests(entries, selectedPaths);
+  return {
+    treeSha256:
+      projection === "sidecar"
+        ? computePortableSidecarPayloadTreeDigest(entries)
+        : hash.digest("hex"),
+    ...(selectedFileSha256 === undefined ? {} : { selectedFileSha256 }),
+    ...(selectedFileSha256ByPath === undefined ? {} : { selectedFileSha256ByPath }),
+  };
 }
 
 interface SyncFileResource {
@@ -396,6 +569,8 @@ class SyncIo {
     switch (request.kind) {
       case "lstat":
         return lstatSync(request.path, { bigint: true });
+      case "directory-order":
+        return readdirSync(request.path);
       case "open-directory":
         this.#openDirectory(request);
         return undefined;
@@ -488,6 +663,8 @@ class AsyncIo {
     switch (request.kind) {
       case "lstat":
         return await lstat(request.path, { bigint: true });
+      case "directory-order":
+        return await readdir(request.path);
       case "open-directory":
         await this.#openDirectory(request);
         return undefined;
@@ -556,9 +733,11 @@ class AsyncIo {
   }
 }
 
-function runTreeMachineSync(root: string, deadline: number): string {
+function runTreeMachineSync(
+  machine: TreeMachine,
+  deadline: number,
+): PortableSidecarTreeAttestation {
   assertDeadline(deadline);
-  const machine = portableTreeMachine(root);
   const io = new SyncIo();
   let response: unknown;
   try {
@@ -573,12 +752,11 @@ function runTreeMachineSync(root: string, deadline: number): string {
   }
 }
 
-async function hashPortableTreeKht1Inner(
-  root: string,
+async function runTreeMachineAsync(
+  machine: TreeMachine,
   operation: PortableTreeKht1Operation,
-): Promise<string> {
+): Promise<PortableSidecarTreeAttestation> {
   assertDeadline(operation.deadline);
-  const machine = portableTreeMachine(root);
   const io = new AsyncIo();
   let response: unknown;
   let readSteps = 0;
@@ -629,9 +807,46 @@ export async function hashPortableTreeKht1(
   operation: PortableTreeKht1Operation,
 ): Promise<string> {
   try {
-    return await hashPortableTreeKht1Inner(root, operation);
+    return (await runTreeMachineAsync(portableTreeMachine(root), operation)).treeSha256;
   } catch (error) {
     logAttestationFailure(operation.securityLogSink, "async", error);
+    throw error;
+  }
+}
+
+/** Full stable content attestation in the approved legacy sidecar format, sharing the KHT1 IO owner. */
+export async function attestPortableSidecarTree(
+  root: string,
+  selectedRelativePath: string,
+  operation: PortableTreeKht1Operation,
+  selectedRelativePaths?: readonly string[],
+): Promise<PortableSidecarTreeAttestation> {
+  try {
+    return await runTreeMachineAsync(
+      portableTreeMachine(root, "sidecar", selectedRelativePath, selectedRelativePaths),
+      operation,
+    );
+  } catch (error) {
+    logAttestationFailure(operation.securityLogSink, "async", error);
+    throw error;
+  }
+}
+
+/** Fresh stable sidecar content evidence for callers with an existing synchronous boundary. */
+export function attestPortableSidecarTreeSync(
+  root: string,
+  selectedRelativePath: string,
+  deadline: number,
+  securityLogSink?: SecurityLogSink,
+  selectedRelativePaths?: readonly string[],
+): PortableSidecarTreeAttestation {
+  try {
+    return runTreeMachineSync(
+      portableTreeMachine(root, "sidecar", selectedRelativePath, selectedRelativePaths),
+      deadline,
+    );
+  } catch (error) {
+    logAttestationFailure(securityLogSink, "sync", error);
     throw error;
   }
 }
@@ -644,7 +859,10 @@ export function attestPortableTreeKht1Sync(
 ): void {
   try {
     if (!SHA256.test(expectedSha256)) fail("portable handoff tree digest is invalid");
-    const actual = Buffer.from(runTreeMachineSync(root, deadline), "hex");
+    const actual = Buffer.from(
+      runTreeMachineSync(portableTreeMachine(root), deadline).treeSha256,
+      "hex",
+    );
     const expected = Buffer.from(expectedSha256, "hex");
     if (!timingSafeEqual(actual, expected)) fail("portable handoff tree digest mismatch");
   } catch (error) {

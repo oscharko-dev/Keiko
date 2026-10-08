@@ -55,7 +55,11 @@ import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
-import type { OpenCodeGovernedSinkReceipt } from "./opencodeRuntimeAdapter.js";
+import {
+  createGeneratedOpenCodeV2Plugins,
+  openCodeToolClientTimeoutMs,
+  type OpenCodeGovernedSinkReceipt,
+} from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
@@ -68,7 +72,6 @@ import {
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
-import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 
@@ -116,6 +119,12 @@ const OPENAPI: unknown = JSON.parse(
   ),
 );
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(OPENAPI).digest;
+
+function materializedV2PluginPaths(runRoot: string): readonly string[] {
+  return Object.keys(createGeneratedOpenCodeV2Plugins()).map((name) =>
+    join(runRoot, "config", "opencode", "plugins", `${name}.ts`),
+  );
+}
 
 interface OpenCodeRuntimeComposition {
   readonly manager: CodingRuntimeManager;
@@ -165,6 +174,7 @@ interface OpenCodeRuntimeCompositionModule {
   ) => number;
   createOpenCodeRuntimeComposition(input: {
     readonly activityLog?: ServerLogSink;
+    readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
@@ -246,10 +256,14 @@ function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
   return Promise.resolve(loadedCompositionModule);
 }
 
-async function withDeterministicReadinessTimers<T>(operation: () => Promise<T>): Promise<T> {
+async function withDeterministicReadinessTimers<T>(
+  operation: () => Promise<T>,
+  beforeAdvance: Promise<void>,
+): Promise<T> {
   vi.useFakeTimers();
   try {
     const pending = operation();
+    await beforeAdvance;
     await vi.advanceTimersByTimeAsync(50);
     return await pending;
   } finally {
@@ -383,6 +397,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
   readonly onSpawn?: (() => void) | undefined;
   readonly stdinLifetime?: {
     readonly supports: true;
@@ -432,6 +447,12 @@ interface StartBridgeControl {
     runtime: OpenCodeRuntimeComposition,
     runRoot: string,
   ) => void | Promise<void>;
+}
+
+function optionalSpawnGuard(control: StartBridgeControl | undefined): {
+  readonly canSpawnRuntime?: NonNullable<StartBridgeControl["canSpawnRuntime"]>;
+} {
+  return control?.canSpawnRuntime === undefined ? {} : { canSpawnRuntime: control.canSpawnRuntime };
 }
 
 function optionalSafeActivity(control: StartBridgeControl | undefined): {
@@ -703,6 +724,7 @@ async function startBridgeFixture(
     ...optionalActivityLog(control),
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
+    ...optionalSpawnGuard(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> =>
         Promise.resolve(control?.gatewayRefused !== true),
@@ -852,7 +874,8 @@ afterAll(() => {
 });
 
 describe("unmounted OpenCode runtime composition", () => {
-  it("materializes native tools once without regenerating a discarded legacy bundle at readiness", async () => {
+  it("reuses cached native sources without regenerating a discarded legacy bundle at readiness", async () => {
+    createGeneratedOpenCodeV2Plugins();
     const before = { ...generatedToolSources };
     const atSpawn: (typeof before)[] = [];
     const fixture = await startBridgeFixture(
@@ -869,8 +892,7 @@ describe("unmounted OpenCode runtime composition", () => {
     );
     try {
       expect(atSpawn).toHaveLength(1);
-      expect(atSpawn[0]?.passes).toBe(before.passes + 1);
-      expect(atSpawn[0]?.utf8Bytes).toBeGreaterThan(before.utf8Bytes);
+      expect(atSpawn[0]).toEqual(before);
       expect(generatedToolSources).toEqual(atSpawn[0]);
       expect(fixture.runtime.manager.health()).toMatchObject({ status: "ready" });
     } finally {
@@ -999,6 +1021,10 @@ describe("unmounted OpenCode runtime composition", () => {
         },
       });
     let readinessStatusReads = 0;
+    let observePoll: (() => void) | undefined;
+    const readinessPolled = new Promise<void>((resolve) => {
+      observePoll = resolve;
+    });
     // eslint-disable-next-line complexity -- the finite mock endpoint table is intentionally explicit.
     const fetchMock = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
       const path = requestPath(url);
@@ -1025,10 +1051,12 @@ describe("unmounted OpenCode runtime composition", () => {
       if (path === "/api/session/ses_1/message") return Promise.resolve(v2Envelope([]));
       if (path.endsWith("/prompt")) return Promise.resolve(v2Envelope({}));
       if (path.endsWith("/interrupt")) return Promise.resolve(v2Envelope({}));
-      if (path === "/api/session/active")
+      if (path === "/api/session/active") {
+        observePoll?.();
         return Promise.resolve(
           v2Envelope(readinessStatusReads++ < 4 ? { ses_1: { type: "busy" } } : {}),
         );
+      }
       if (path === "/api/session" && init?.method === "POST")
         return Promise.resolve(v2Envelope({ id: "ses_1" }));
       if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_1" }]));
@@ -1098,37 +1126,39 @@ describe("unmounted OpenCode runtime composition", () => {
       authorityLifecycle,
     });
 
-    const startResult = await withDeterministicReadinessTimers(() =>
-      Promise.resolve(
-        runtime.manager.start({
-          runId: "run-1",
-          treeBindingId: "a".repeat(64),
-          authorityEnvelopeDigest: "b".repeat(64),
-          taskRef: "issue-2254",
-          workspaceRoot,
-          adapterKind: "opencode-compatible",
-          runtimeSource: "keiko-sidecar",
-          modelSource: "keiko-model-gateway",
-          requestedMode: "supervised-coding",
-          effectiveMode: "supervised-coding",
-          executablePath: executable,
-          managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-          // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
-          // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
-          gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
-          modelProfileId: "coding-safe-openai-compatible",
-          args: ["--caller"],
-          inheritedEnvAllowlist: [],
-          shutdownTimeoutMs: 5,
-          startTimeoutMs: 100,
-          confinement: {
-            platform: "darwin",
-            arch: "arm64",
-            backend: "macos-app-sandbox",
-            releaseReceipt: `sha256:${"a".repeat(64)}`,
-          },
-        }),
-      ),
+    const startResult = await withDeterministicReadinessTimers(
+      () =>
+        Promise.resolve(
+          runtime.manager.start({
+            runId: "run-1",
+            treeBindingId: "a".repeat(64),
+            authorityEnvelopeDigest: "b".repeat(64),
+            taskRef: "issue-2254",
+            workspaceRoot,
+            adapterKind: "opencode-compatible",
+            runtimeSource: "keiko-sidecar",
+            modelSource: "keiko-model-gateway",
+            requestedMode: "supervised-coding",
+            effectiveMode: "supervised-coding",
+            executablePath: executable,
+            managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
+            // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
+            // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
+            gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
+            modelProfileId: "coding-safe-openai-compatible",
+            args: ["--caller"],
+            inheritedEnvAllowlist: [],
+            shutdownTimeoutMs: 5,
+            startTimeoutMs: 100,
+            confinement: {
+              platform: "darwin",
+              arch: "arm64",
+              backend: "macos-app-sandbox",
+              releaseReceipt: `sha256:${"a".repeat(64)}`,
+            },
+          }),
+        ),
+      readinessPolled,
     );
     expect(startResult).toMatchObject({ ok: true });
     expect(readinessStatusReads).toBe(5);
@@ -1189,15 +1219,13 @@ describe("unmounted OpenCode runtime composition", () => {
         expect(statSync(path).mode & 0o777).toBe(0o700);
       for (const path of [
         join(runRoot, "config", "opencode", "opencode.json"),
-        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+        ...materializedV2PluginPaths(runRoot),
       ])
         expect(statSync(path).mode & 0o777).toBe(0o600);
     }
     const files = [
       join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+      ...materializedV2PluginPaths(runRoot),
     ]
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -1928,14 +1956,7 @@ describe("private OpenCode run control", () => {
     const retained = [
       JSON.stringify(governedEvents),
       readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
-      readFileSync(
-        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-        "utf8",
-      ),
-      readFileSync(
-        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
-        "utf8",
-      ),
+      ...materializedV2PluginPaths(runRoot).map((path) => readFileSync(path, "utf8")),
     ].join("\n");
     expect(retained).not.toContain(prompt);
     expect(retained).not.toContain(initialContext);
@@ -3597,5 +3618,29 @@ describe("private OpenCode tool bridge", () => {
     expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
     );
+  });
+});
+
+describe("production OpenCode pending-spawn guard wiring", () => {
+  it("forwards the server-owned live guard and refuses spawn before native readiness", async () => {
+    const spawned = vi.fn();
+    const guard = vi.fn<NonNullable<StartBridgeControl["canSpawnRuntime"]>>(() => false);
+    const bridge = await startBridgeFixture(
+      { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
+      undefined,
+      {
+        canSpawnRuntime: guard,
+        onSpawn: spawned,
+        expectedStart: { ok: false, failureCode: "authority-resolution-failed", retryable: false },
+      },
+    );
+    expect(guard).toHaveBeenCalledOnce();
+    expect(guard.mock.calls[0]?.[0]).toMatchObject({
+      runId: FIXTURE_RUN_ID,
+      treeBindingId: "b".repeat(64),
+      authorityEnvelopeDigest: "c".repeat(64),
+    });
+    expect(spawned).not.toHaveBeenCalled();
+    await bridge.stop();
   });
 });

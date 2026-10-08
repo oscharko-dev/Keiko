@@ -213,6 +213,7 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly fetch: typeof globalThis.fetch;
   readonly supervisor: RuntimeProcessSupervisor;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+  readonly canSpawnRuntime?: CodingRuntimeManagerDeps["canSpawnRuntime"];
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   /**
@@ -358,6 +359,7 @@ export function createOpenCodeRuntimeComposition(
     processEnv: {},
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
+    canSpawnRuntime: input.canSpawnRuntime,
     ...(input.resolveWorkspaceRootAccess === undefined
       ? {}
       : { resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess }),

@@ -4,17 +4,24 @@ import {
   mkdirSync,
   mkdtempSync,
   renameSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
+  type PathLike,
+  type Mode,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FileHandle } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent } from "./log-port.js";
 import {
   attestPortableTreeKht1Sync,
+  attestPortableSidecarTree,
+  attestPortableSidecarTreeSync,
+  computePortableSidecarPayloadTreeDigest,
   hashPortableTreeKht1,
   PortableTreeAttestationError,
   type PortableTreeKht1Operation,
@@ -24,10 +31,63 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
+const observedIo = vi.hoisted(() => ({
+  selectedPath: "",
+  selectedOpens: 0,
+  openHandles: 0,
+  directoryOrderRoot: "",
+  directoryOrderReads: 0,
+  onDirectoryOrder: undefined as ((names: string[]) => void) | undefined,
+}));
+
+function observeDirectoryNames(path: PathLike, names: string[]): string[] {
+  if (path === observedIo.directoryOrderRoot) {
+    observedIo.directoryOrderReads += 1;
+    observedIo.onDirectoryOrder?.(names);
+  }
+  return names;
+}
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...original,
+    readdirSync: (path: PathLike): string[] =>
+      observeDirectoryNames(path, original.readdirSync(path, { encoding: "utf8" })),
+  };
+});
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...original,
+    readdir: async (path: PathLike): Promise<string[]> =>
+      observeDirectoryNames(path, await original.readdir(path, { encoding: "utf8" })),
+    open: async (path: PathLike, flags: string | number, mode?: Mode): Promise<FileHandle> => {
+      const handle = await original.open(path, flags, mode);
+      observedIo.openHandles += 1;
+      if (path === observedIo.selectedPath) observedIo.selectedOpens += 1;
+      const close = handle.close.bind(handle);
+      Object.defineProperty(handle, "close", {
+        value: async (): Promise<void> => {
+          await close();
+          observedIo.openHandles -= 1;
+        },
+      });
+      return handle;
+    },
+  };
+});
+
 const roots: string[] = [];
 const workers: { readonly worker: Worker; readonly control: Int32Array }[] = [];
 
 afterEach(async () => {
+  expect(observedIo.openHandles).toBe(0);
+  observedIo.selectedPath = "";
+  observedIo.selectedOpens = 0;
+  observedIo.directoryOrderRoot = "";
+  observedIo.directoryOrderReads = 0;
+  observedIo.onDirectoryOrder = undefined;
   for (const { worker, control } of workers.splice(0)) {
     Atomics.store(control, 1, 1);
     Atomics.notify(control, 1);
@@ -49,6 +109,15 @@ function operation(overrides: Partial<PortableTreeKht1Operation> = {}): Portable
     yieldControl: () => Promise.resolve(),
     ...overrides,
   };
+}
+
+function legacyTieFixture(): string {
+  const root = fixtureRoot();
+  writeFileSync(join(root, "a\u200d"), "first");
+  writeFileSync(join(root, "a"), "second");
+  observedIo.directoryOrderRoot = root;
+  observedIo.selectedPath = join(root, "a");
+  return root;
 }
 
 function expectedKht1(entries: readonly (readonly [string, string | Buffer])[]): string {
@@ -360,4 +429,354 @@ describe("portable KHT1 tree attestation", () => {
       failureKind: "PortableTreeAttestationError",
     });
   });
+});
+
+describe("portable legacy sidecar tree attestation", () => {
+  it("retains the canonical legacy tuple digest and selects the executable in the same content pass", async () => {
+    const root = fixtureRoot();
+    const files = [
+      ["B.txt", "upper"],
+      ["a.txt", "lower"],
+      ["z/é.txt", "nested"],
+      ["line\nbreak.txt", "newline"],
+    ] as const;
+    mkdirSync(join(root, "z"));
+    for (const [name, body] of files) writeFileSync(join(root, name), body);
+    const entries = files.map(([relativePath, body]) => ({
+      relativePath,
+      sha256: createHash("sha256").update(body).digest("hex"),
+    }));
+    const expected = computePortableSidecarPayloadTreeDigest(entries);
+    observedIo.selectedPath = join(root, "a.txt");
+    expect(await attestPortableSidecarTree(root, "a.txt", operation())).toEqual({
+      treeSha256: expected,
+      selectedFileSha256: createHash("sha256").update(files[1][1]).digest("hex"),
+    });
+    expect(observedIo.selectedOpens).toBe(1);
+    expect(observedIo.openHandles).toBe(0);
+    expect(attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000)).toEqual({
+      treeSha256: expected,
+      selectedFileSha256: createHash("sha256").update(files[1][1]).digest("hex"),
+    });
+    expect(await hashPortableTreeKht1(root, operation())).not.toBe(expected);
+    expect(await attestPortableSidecarTree(root, "../outside", operation())).toEqual({
+      treeSha256: expected,
+    });
+    expect(attestPortableSidecarTreeSync(root, "../outside", Date.now() + 5_000)).toEqual({
+      treeSha256: expected,
+    });
+  });
+
+  it.each(["sync", "async"] as const)(
+    "returns only requested immutable provenance digests from the same %s content pass",
+    async (driver) => {
+      const root = fixtureRoot();
+      mkdirSync(join(root, "evidence"));
+      const files = [
+        ["bin", "executable"],
+        ["evidence/LICENSE", "approved license"],
+        ["evidence/sbom.json", "approved sbom"],
+        ["unrequested", "other tree content"],
+      ] as const;
+      for (const [path, body] of files) writeFileSync(join(root, path), body);
+      const requested = files.slice(0, 3).map(([path]) => path);
+      observedIo.selectedPath = join(root, "bin");
+      const result =
+        driver === "sync"
+          ? attestPortableSidecarTreeSync(root, "bin", Date.now() + 5_000, undefined, requested)
+          : await attestPortableSidecarTree(root, "bin", operation(), requested);
+      expect(observedIo.selectedOpens).toBe(driver === "async" ? 1 : 0);
+      const inventory = result.selectedFileSha256ByPath;
+      expect(Object.keys(inventory ?? {}).sort()).toEqual([...requested].sort());
+      expect(inventory).toEqual(
+        Object.fromEntries(
+          files
+            .slice(0, 3)
+            .map(([path, body]) => [path, createHash("sha256").update(body).digest("hex")]),
+        ),
+      );
+      expect(inventory?.bin).toBe(result.selectedFileSha256);
+      expect(Object.isFrozen(inventory)).toBe(true);
+      if (inventory === undefined) throw new Error("expected selected inventory");
+      expect(Reflect.set(inventory, "unrequested", "0".repeat(64))).toBe(false);
+      expect(Object.keys(inventory)).toHaveLength(3);
+    },
+  );
+
+  it("owns selected paths before async IO so a caller cannot change the attested inventory", async () => {
+    const root = fixtureRoot();
+    mkdirSync(join(root, "evidence"));
+    writeFileSync(join(root, "bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
+    writeFileSync(join(root, "evidence", "LICENSE"), "approved license");
+    writeFileSync(join(root, "unrequested"), "other content");
+    const requested = ["bin", "evidence/LICENSE"];
+    let replaced = false;
+    const result = await attestPortableSidecarTree(
+      root,
+      "bin",
+      operation({
+        yieldControl: () => {
+          replaced = true;
+          requested.splice(0, requested.length, "unrequested");
+          return Promise.resolve();
+        },
+      }),
+      requested,
+    );
+    expect(replaced).toBe(true);
+    expect(requested).toEqual(["unrequested"]);
+    expect(Object.keys(result.selectedFileSha256ByPath ?? {}).sort()).toEqual([
+      "bin",
+      "evidence/LICENSE",
+    ]);
+    expect(result.selectedFileSha256ByPath?.["evidence/LICENSE"]).toBe(
+      createHash("sha256").update("approved license").digest("hex"),
+    );
+  });
+
+  it.each([
+    ["../escape"],
+    ["bin", "bin"],
+    Array.from({ length: 9 }, (_, index) => `file${String(index)}`),
+    ["absent"],
+  ])("refuses unsafe, duplicate, oversized or missing selected paths %j", async (...paths) => {
+    const root = fixtureRoot();
+    writeFileSync(join(root, "bin"), "executable");
+    observedIo.selectedPath = join(root, "bin");
+    expect(() =>
+      attestPortableSidecarTreeSync(root, "bin", Date.now() + 5_000, undefined, paths),
+    ).toThrow(PortableTreeAttestationError);
+    await expect(attestPortableSidecarTree(root, "bin", operation(), paths)).rejects.toThrow(
+      PortableTreeAttestationError,
+    );
+    expect(observedIo.selectedOpens).toBe(paths[0] === "absent" ? 1 : 0);
+  });
+
+  it("preserves historical legacy DFS ordering when localeCompare considers paths equal", async () => {
+    const root = fixtureRoot();
+    mkdirSync(join(root, "z"));
+    writeFileSync(join(root, "z", "nested"), "last");
+    writeFileSync(join(root, "a.txt"), "middle");
+    mkdirSync(join(root, "a"));
+    writeFileSync(join(root, "a", "nested"), "first");
+    const entries = new Map([
+      [
+        "a",
+        { relativePath: "a/nested", sha256: createHash("sha256").update("first").digest("hex") },
+      ],
+      [
+        "a.txt",
+        { relativePath: "a.txt", sha256: createHash("sha256").update("middle").digest("hex") },
+      ],
+      [
+        "z",
+        { relativePath: "z/nested", sha256: createHash("sha256").update("last").digest("hex") },
+      ],
+    ]);
+    const historicalOrder = readdirSync(root).map((name) => {
+      const entry = entries.get(name);
+      if (entry === undefined) throw new Error("expected fixed fixture entry");
+      return entry;
+    });
+    const collation = vi.spyOn(String.prototype, "localeCompare").mockReturnValue(0);
+    try {
+      const expected = computePortableSidecarPayloadTreeDigest(historicalOrder);
+      expect(attestPortableSidecarTreeSync(root, "a/nested", Date.now() + 5_000).treeSha256).toBe(
+        expected,
+      );
+      expect((await attestPortableSidecarTree(root, "a/nested", operation())).treeSha256).toBe(
+        expected,
+      );
+    } finally {
+      collation.mockRestore();
+    }
+  });
+
+  it("skips historical enumeration when complete file paths have no collation ties", async () => {
+    const root = fixtureRoot();
+    writeFileSync(join(root, "a.txt"), "first");
+    writeFileSync(join(root, "z.txt"), "second");
+    observedIo.directoryOrderRoot = root;
+    attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000);
+    await attestPortableSidecarTree(root, "a.txt", operation());
+    expect(observedIo.directoryOrderReads).toBe(0);
+  });
+
+  it.each(["sync", "async"] as const)(
+    "refuses real directory membership mutation during historical enumeration through %s",
+    async (driver) => {
+      const root = legacyTieFixture();
+      observedIo.onDirectoryOrder = (names): void => {
+        observedIo.onDirectoryOrder = undefined;
+        writeFileSync(join(root, "added.txt"), "unexpected new file");
+        names.push("added.txt");
+      };
+      if (driver === "sync") {
+        expect(() => attestPortableSidecarTreeSync(root, "a", Date.now() + 5_000)).toThrow(
+          /changed during attestation/u,
+        );
+      } else {
+        await expect(attestPortableSidecarTree(root, "a", operation())).rejects.toThrow(
+          /changed during attestation/u,
+        );
+      }
+      expect(observedIo.directoryOrderReads).toBe(1);
+      expect(observedIo.selectedOpens).toBe(0);
+    },
+  );
+
+  it("checks cancellation immediately after historical enumeration before content opens", async () => {
+    const root = legacyTieFixture();
+    const controller = new AbortController();
+    observedIo.onDirectoryOrder = (): void => {
+      controller.abort();
+    };
+    await expect(
+      attestPortableSidecarTree(root, "a", operation({ signal: controller.signal })),
+    ).rejects.toThrow(/cancelled/u);
+    expect(observedIo.directoryOrderReads).toBe(1);
+    expect(observedIo.selectedOpens).toBe(0);
+  });
+
+  it.each(["sync", "async"] as const)(
+    "checks the deadline immediately after historical enumeration through %s",
+    async (driver) => {
+      const root = legacyTieFixture();
+      let clock = 1;
+      observedIo.onDirectoryOrder = (): void => {
+        clock = 3;
+      };
+      const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+      try {
+        if (driver === "sync") {
+          expect(() => attestPortableSidecarTreeSync(root, "a", 2)).toThrow(/timed out/u);
+        } else {
+          await expect(
+            attestPortableSidecarTree(root, "a", operation({ deadline: 2 })),
+          ).rejects.toThrow(/timed out/u);
+        }
+        expect(observedIo.directoryOrderReads).toBe(1);
+        expect(observedIo.selectedOpens).toBe(0);
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
+  it("refuses an expired sync projection without retaining a partial proof and logs its driver", () => {
+    const root = fixtureRoot();
+    writeFileSync(join(root, "body.txt"), "private fixture body");
+    const events: SecurityLogEvent[] = [];
+    expect(() =>
+      attestPortableSidecarTreeSync(root, "body.txt", 1, {
+        write: (event): void => void events.push(event),
+      }),
+    ).toThrow(PortableTreeAttestationError);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.errorKind).toBe("timeout");
+    expect(
+      expectActivityLogProof(
+        "security.portable-tree-attestation.failed.driver",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ driver: "sync", failureKind: "PortableTreeAttestationError" });
+    expect(JSON.stringify(events)).not.toContain(root);
+    expect(JSON.stringify(events)).not.toContain("private fixture body");
+  });
+
+  it("lets a scheduled callback run before the full attestation settles", async () => {
+    const root = fixtureRoot();
+    writeFileSync(join(root, "large.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
+    let serviced = false;
+    setImmediate(() => {
+      serviced = true;
+    });
+    await attestPortableSidecarTree(
+      root,
+      "large.bin",
+      operation({ yieldControl: () => new Promise<void>((resolve) => setImmediate(resolve)) }),
+    );
+    expect(serviced).toBe(true);
+  });
+
+  it("rejects a previously hashed leaf changing during the full pass", async () => {
+    const root = fixtureRoot();
+    const target = join(root, "a.txt");
+    writeFileSync(target, "old");
+    writeFileSync(join(root, "z.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
+    let mutated = false;
+    await expect(
+      attestPortableSidecarTree(
+        root,
+        "a.txt",
+        operation({
+          yieldControl: () => {
+            if (!mutated) {
+              mutated = true;
+              writeFileSync(target, "new");
+            }
+            return Promise.resolve();
+          },
+        }),
+      ),
+    ).rejects.toThrow(/changed during attestation/u);
+    expect(mutated).toBe(true);
+    expect(observedIo.openHandles).toBe(0);
+  });
+
+  it.each(["symbolic", "hard", "root"] as const)("refuses an unsafe %s link", async (kind) => {
+    const root = fixtureRoot();
+    const target = join(root, "a.txt");
+    writeFileSync(target, "content");
+    let inspectedRoot = root;
+    if (kind === "symbolic") symlinkSync(target, join(root, "alias.txt"));
+    if (kind === "hard") linkSync(target, join(root, "alias.txt"));
+    if (kind === "root") {
+      inspectedRoot = `${root}-alias`;
+      roots.push(inspectedRoot);
+      symlinkSync(root, inspectedRoot);
+    }
+    await expect(
+      attestPortableSidecarTree(inspectedRoot, "a.txt", operation()),
+    ).rejects.toBeInstanceOf(PortableTreeAttestationError);
+    expect(() => attestPortableSidecarTreeSync(inspectedRoot, "a.txt", Date.now() + 5_000)).toThrow(
+      PortableTreeAttestationError,
+    );
+    expect(observedIo.openHandles).toBe(0);
+  });
+
+  it.each(["cancelled", "timeout"] as const)(
+    "returns no partial proof on %s and closes every file",
+    async (kind) => {
+      const root = fixtureRoot();
+      writeFileSync(join(root, "large.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
+      const controller = new AbortController();
+      let clock = 10;
+      const events: SecurityLogEvent[] = [];
+      await expect(
+        attestPortableSidecarTree(
+          root,
+          "large.bin",
+          operation({
+            signal: controller.signal,
+            deadline: 100,
+            now: () => clock,
+            securityLogSink: { write: (event): void => void events.push(event) },
+            yieldControl: () => {
+              if (kind === "cancelled") controller.abort();
+              else clock = 101;
+              return Promise.resolve();
+            },
+          }),
+        ),
+      ).rejects.toMatchObject({ kind });
+      expect(observedIo.openHandles).toBe(0);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toMatchObject({
+        driver: "async",
+        failureKind: "PortableTreeAttestationError",
+      });
+      expect(JSON.stringify(events)).not.toContain(root);
+    },
+  );
 });

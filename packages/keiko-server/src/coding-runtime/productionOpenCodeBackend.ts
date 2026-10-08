@@ -256,11 +256,20 @@ function composeOpenCodeRun(
     onSandboxAttestation: observeOpenCodeSandboxAttestation(input, run),
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
-    resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
+    ...runtimeLaunchSafety(run),
     // #3873: one submitted task's whole agent loop is bounded by the run's own envelope duration,
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
   });
+}
+
+function runtimeLaunchSafety(
+  run: ProductionRuntimeBackendInput,
+): Pick<OpenCodeRuntimeCompositionInput, "resolveWorkspaceRootAccess" | "canSpawnRuntime"> {
+  return {
+    resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
+    canSpawnRuntime: run.canSpawnRuntime,
+  };
 }
 
 function observeOpenCodeSandboxAttestation(

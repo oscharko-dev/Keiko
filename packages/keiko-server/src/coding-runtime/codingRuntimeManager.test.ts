@@ -894,7 +894,7 @@ describe("coding runtime manager", () => {
     });
   });
 
-  it("blocks every sidecar request before supervisor spawn until #2256 provides server-owned provenance", () => {
+  it("blocks every sidecar request before supervisor spawn until #2256 provides server-owned provenance", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const manager = createTestCodingRuntimeManager({
@@ -903,14 +903,14 @@ describe("coding runtime manager", () => {
       portableRuntimeResolver: undefined,
     });
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({ ok: false, failureCode: "qualification-missing", retryable: false });
     expect(harness.children).toHaveLength(0);
   });
 
-  it("launches only the resolver-owned executable when the request supplies another path", () => {
+  it("launches only the resolver-owned executable when the request supplies another path", async () => {
     const fixture = createManagedFixture();
     const unmanaged = executable(tempDir("keiko-runtime-unmanaged-"));
     const harness = createSpawnHarness();
@@ -919,7 +919,7 @@ describe("coding runtime manager", () => {
       processEnv: { PATH: "/usr/bin", CODEX_ACCESS_TOKEN: "super-secret-token" },
     });
 
-    const result = manager.start(
+    const result = await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, unmanaged),
     );
 
@@ -930,7 +930,7 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(result)).not.toContain(unmanaged);
   });
 
-  it("fails closed when OpenCode is paired with a Codex subscription profile", () => {
+  it("fails closed when OpenCode is paired with a Codex subscription profile", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const manager = createTestCodingRuntimeManager({
@@ -942,7 +942,7 @@ describe("coding runtime manager", () => {
       modelSource: "chatgpt-codex-subscription-profile",
     };
 
-    const result = manager.start(request);
+    const result = await manager.start(request);
 
     expect(result).toEqual({
       ok: false,
@@ -1447,13 +1447,13 @@ describe("coding runtime manager", () => {
       activeRunId: "run-1988",
     });
     expect(
-      manager.start(
+      await manager.start(
         codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({ ok: false, failureCode: "runtime-already-running", retryable: true });
   });
 
-  it("preserves the existing OpenCode path when no Codex lifecycle adapter is injected", () => {
+  it("preserves the existing OpenCode path when no Codex lifecycle adapter is injected", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const manager = createCodexTestCodingRuntimeManager({
@@ -1462,14 +1462,14 @@ describe("coding runtime manager", () => {
     });
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
     expect(harness.children).toHaveLength(1);
   });
 
-  it("rejects a tampered resolver-owned executable immediately before spawn", () => {
+  it("rejects a tampered resolver-owned executable immediately before spawn", async () => {
     const fixture = createManagedFixture();
     const portable = createPortableRuntimeFixture();
     const harness = createSpawnHarness();
@@ -1485,7 +1485,7 @@ describe("coding runtime manager", () => {
     writeFileSync(portable.executablePath, "tampered executable\n");
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({
@@ -1496,7 +1496,7 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
-  it("rejects a stale shipped executable digest immediately before spawn", () => {
+  it("rejects a stale shipped executable digest immediately before spawn", async () => {
     const fixture = createManagedFixture();
     const portable = createPortableRuntimeFixture();
     const harness = createSpawnHarness();
@@ -1514,7 +1514,7 @@ describe("coding runtime manager", () => {
     });
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({
@@ -1525,7 +1525,7 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
-  it("rejects a tampered resolver-owned payload immediately before spawn", () => {
+  it("rejects a tampered resolver-owned payload immediately before spawn", async () => {
     const fixture = createManagedFixture();
     const portable = createPortableRuntimeFixture();
     const harness = createSpawnHarness();
@@ -1544,7 +1544,7 @@ describe("coding runtime manager", () => {
     );
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({ ok: false, failureCode: "archive-digest-mismatch", retryable: false });
@@ -1583,12 +1583,12 @@ describe("coding runtime manager", () => {
       });
     }
 
-    it("admits an honestly unqualified evaluation record whose disk facts verify", () => {
+    it("admits an honestly unqualified evaluation record whose disk facts verify", async () => {
       const fixture = createManagedFixture();
       const portable = createPortableRuntimeFixture();
       const harness = createSpawnHarness();
       expect(
-        evaluationManager(portable, harness).start(
+        await evaluationManager(portable, harness).start(
           launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
         ),
       ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
@@ -1600,7 +1600,7 @@ describe("coding runtime manager", () => {
       ["only the executable", "archive-digest-mismatch"],
     ] as const)(
       "keeps the discovery-to-launch tamper window fail-closed when %s drifts",
-      (scenario, failureCode) => {
+      async (scenario, failureCode) => {
         const fixture = createManagedFixture();
         const portable = createPortableRuntimeFixture();
         const harness = createSpawnHarness();
@@ -1614,7 +1614,7 @@ describe("coding runtime manager", () => {
           );
         }
         expect(
-          manager.start(
+          await manager.start(
             launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
           ),
         ).toEqual({ ok: false, failureCode, retryable: false });
@@ -1622,7 +1622,7 @@ describe("coding runtime manager", () => {
       },
     );
 
-    it("re-asserts every stored check inside the evaluation admission domain", () => {
+    it("re-asserts every stored check inside the evaluation admission domain", async () => {
       const fixture = createManagedFixture();
       for (const { overrides, failureCode } of [
         { overrides: { redistributionApproved: false }, failureCode: "redistribution-unapproved" },
@@ -1632,7 +1632,7 @@ describe("coding runtime manager", () => {
         const portable = createPortableRuntimeFixture();
         const harness = createSpawnHarness();
         expect(
-          evaluationManager(portable, harness, overrides).start(
+          await evaluationManager(portable, harness, overrides).start(
             launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
           ),
         ).toEqual({ ok: false, failureCode, retryable: false });
@@ -1672,34 +1672,34 @@ describe("coding runtime manager", () => {
       });
     }
 
-    it("admits an honestly unqualified dev-lane record whose disk facts verify", () => {
+    it("admits an honestly unqualified dev-lane record whose disk facts verify", async () => {
       const fixture = createManagedFixture();
       const portable = createPortableRuntimeFixture();
       const harness = createSpawnHarness();
       const manager = devLaneManager(portable, harness);
       expect(
-        manager.start(
+        await manager.start(
           launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
         ),
       ).toEqual({ ok: true, runId: "run-1988", status: "ready" });
       expect(harness.children).toHaveLength(1);
     });
 
-    it("keeps the discovery-to-launch tamper window fail-closed for dev-lane records", () => {
+    it("keeps the discovery-to-launch tamper window fail-closed for dev-lane records", async () => {
       const fixture = createManagedFixture();
       const portable = createPortableRuntimeFixture();
       const harness = createSpawnHarness();
       const manager = devLaneManager(portable, harness);
       writeFileSync(portable.executablePath, "tampered executable\n");
       expect(
-        manager.start(
+        await manager.start(
           launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
         ),
       ).toEqual({ ok: false, failureCode: "archive-digest-mismatch", retryable: false });
       expect(harness.children).toHaveLength(0);
     });
 
-    it("re-asserts every stored check inside the dev-lane admission domain", () => {
+    it("re-asserts every stored check inside the dev-lane admission domain", async () => {
       const fixture = createManagedFixture();
       const cases = [
         { overrides: { redistributionApproved: false }, failureCode: "redistribution-unapproved" },
@@ -1711,7 +1711,7 @@ describe("coding runtime manager", () => {
         const harness = createSpawnHarness();
         const manager = devLaneManager(portable, harness, overrides);
         expect(
-          manager.start(
+          await manager.start(
             launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
           ),
         ).toEqual({ ok: false, failureCode, retryable: false });
@@ -1719,7 +1719,7 @@ describe("coding runtime manager", () => {
       }
     });
 
-    it("keeps requiring the full packaged evidence set without a dev-lane admission", () => {
+    it("keeps requiring the full packaged evidence set without a dev-lane admission", async () => {
       const fixture = createManagedFixture();
       const portable = createPortableRuntimeFixture();
       const harness = createSpawnHarness();
@@ -1739,7 +1739,7 @@ describe("coding runtime manager", () => {
         }),
       });
       expect(
-        manager.start(
+        await manager.start(
           launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
         ),
       ).toEqual({ ok: false, failureCode: "signature-unverified", retryable: false });
@@ -1747,7 +1747,7 @@ describe("coding runtime manager", () => {
     });
   });
 
-  it("starts a managed sidecar with only allowlisted inherited env and runtime projection", () => {
+  it("starts a managed sidecar with only allowlisted inherited env and runtime projection", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const onSandboxAttestation = vi.fn();
@@ -1761,7 +1761,7 @@ describe("coding runtime manager", () => {
       },
     });
 
-    const result = manager.start(
+    const result = await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
 
@@ -1836,7 +1836,7 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
-  it("emits a content-free diagnostic when a runtime event fails validation", () => {
+  it("emits a content-free diagnostic when a runtime event fails validation", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
@@ -1852,7 +1852,7 @@ describe("coding runtime manager", () => {
       },
     });
 
-    const result = manager.start(
+    const result = await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
 
@@ -2153,7 +2153,7 @@ describe("coding runtime manager", () => {
     await expect(stopped).resolves.toEqual({ ok: true, status: "stopped" });
   });
 
-  it("rejects non-loopback gateway URLs before spawn", () => {
+  it("rejects non-loopback gateway URLs before spawn", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const manager = createTestCodingRuntimeManager({
@@ -2165,7 +2165,7 @@ describe("coding runtime manager", () => {
       gatewayUrl: "https://provider.example/v1",
     };
 
-    const result = manager.start(request);
+    const result = await manager.start(request);
 
     expect(result).toEqual({
       ok: false,
@@ -2175,12 +2175,12 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
-  it("performs zero spawn under the production-default unqualified supervisor", () => {
+  it("performs zero spawn under the production-default unqualified supervisor", async () => {
     const fixture = createManagedFixture();
     const manager = createTestCodingRuntimeManager({ processEnv: {} });
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toEqual({ ok: false, failureCode: "runtime-unqualified", retryable: false });
@@ -2206,7 +2206,7 @@ describe("coding runtime manager", () => {
     });
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toMatchObject({ ok: true });
@@ -2238,7 +2238,7 @@ describe("coding runtime manager", () => {
     });
 
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toMatchObject({ ok: true });
@@ -2285,7 +2285,7 @@ describe("coding runtime manager", () => {
       });
 
       expect(
-        manager.start(
+        await manager.start(
           launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
         ),
       ).toMatchObject({ ok: true });
@@ -2324,7 +2324,7 @@ describe("coding runtime manager", () => {
     const stop = manager.stop("run-1988");
     harness.children[0]?.exit(0);
     await stop;
-    const restart = manager.start(
+    const restart = await manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
 
@@ -2384,7 +2384,7 @@ describe("coding runtime manager", () => {
     expect(harness.children[0]?.kills).toEqual(["SIGTERM"]);
     expect(manager.health()).toEqual({ status: "stopped" });
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toMatchObject({ ok: true, status: "ready" });
@@ -3791,7 +3791,7 @@ describe("coding runtime manager", () => {
       restartDenied: true,
     });
     expect(
-      manager.start(
+      await manager.start(
         launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).toMatchObject({ ok: false, failureCode: "runtime-already-running" });
@@ -3935,7 +3935,9 @@ describe("coding runtime manager", () => {
     });
     await Promise.resolve();
 
-    expect(handshake).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(handshake).toHaveBeenCalledTimes(1);
+    });
     expect(settled).toBe(false);
     expect(events.some((event) => event.kind === "runtime-started")).toBe(false);
     expect(manager.health()).toMatchObject({ status: "starting", activeRunId: "run-1988" });
@@ -4246,6 +4248,10 @@ describe("coding runtime manager", () => {
       const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
       let observedSignal: AbortSignal | undefined;
       let resolveHandshake: ((result: { readonly ok: true }) => void) | undefined;
+      let entered: (() => void) | undefined;
+      const handshakeEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
       const manager = createTestCodingRuntimeManager({
         processEnv: {},
         diagnostics,
@@ -4259,6 +4265,7 @@ describe("coding runtime manager", () => {
         openCodeLifecycleAdapter: {
           handshake: ({ signal }) => {
             observedSignal = signal;
+            entered?.();
             return new Promise<{ readonly ok: true }>((resolve) => {
               resolveHandshake = resolve;
             });
@@ -4272,7 +4279,7 @@ describe("coding runtime manager", () => {
           startTimeoutMs: 50,
         }),
       );
-      await Promise.resolve();
+      await handshakeEntered;
       await vi.advanceTimersByTimeAsync(50);
 
       await expect(starting).resolves.toEqual({
@@ -5096,5 +5103,200 @@ describe("immutable draft delivery manager approvals", () => {
       await manager.stop("run-1");
       delivery.close();
     }
+  });
+});
+
+describe("asynchronous portable launch attestation", () => {
+  it("services a scheduled callback before a portable payload can spawn", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    let callbackObserved = false;
+    let observedAtSpawn = false;
+    const child = fakeChild();
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => {
+        observedAtSpawn = callbackObserved;
+        return child.handle;
+      }),
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+    setImmediate(() => {
+      callbackObserved = true;
+    });
+    expect(
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(observedAtSpawn).toBe(true);
+  });
+
+  it("rechecks accepted starting authority after awaiting the payload and refuses spawn", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    let authorized = true;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      canSpawnRuntime: () => authorized,
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+    setImmediate(() => {
+      authorized = false;
+    });
+    expect(
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(harness.children).toHaveLength(0);
+  });
+});
+
+describe("portable attestation post-await spawn controls", () => {
+  it.each(["cancel", "deadline", "root"] as const)(
+    "refuses %s while the full attestation is in flight",
+    async (kind) => {
+      const fixture = createManagedFixture();
+      const portable = createPortableRuntimeFixture();
+      const harness = createSpawnHarness();
+      const controller = new AbortController();
+      let clock = 1000;
+      let rootCurrent = true;
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        now: () => clock,
+        supervisor: testSupervisor(harness.spawn),
+        portableRuntimeResolver: () => ({
+          verification: portable.verification,
+          resourceRoot: portable.resourceRoot,
+          target: "windows-x64",
+        }),
+        resolveWorkspaceRootAccess: () =>
+          rootCurrent
+            ? {
+                kind: "managed-task",
+                canonicalRoot: fixture.workspaceRoot,
+                repositoryRoot: fixture.workspaceRoot,
+                fs: nodeWorkspaceFs,
+              }
+            : undefined,
+      });
+      const changes = {
+        cancel: (): void => {
+          controller.abort();
+        },
+        deadline: (): void => {
+          clock += 10000;
+        },
+        root: (): void => {
+          rootCurrent = false;
+        },
+      };
+      const reasons = {
+        cancel: "start-aborted",
+        deadline: "start-timeout",
+        root: "workspace-root-denied",
+      };
+      setImmediate(changes[kind]);
+      const result = await manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        signal: controller.signal,
+        startTimeoutMs: 100,
+      });
+      expect(result).toMatchObject({ ok: false, failureCode: reasons[kind] });
+      expect(harness.children).toHaveLength(0);
+      expect(manager.health()).toEqual({ status: "stopped" });
+    },
+  );
+
+  it("checks cancellation even when the final authority callback changes it", async () => {
+    const fixture = createManagedFixture();
+    const controller = new AbortController();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      canSpawnRuntime: () => {
+        controller.abort();
+        return true;
+      },
+    });
+    expect(
+      await manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        signal: controller.signal,
+      }),
+    ).toMatchObject({ ok: false, failureCode: "start-aborted" });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("checks the attestation deadline after the final authority callback", async () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    let clock = 1_000;
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      now: () => clock,
+      supervisor: testSupervisor(harness.spawn),
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+      canSpawnRuntime: () => {
+        clock += 1_000;
+        return true;
+      },
+    });
+    expect(
+      await manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        startTimeoutMs: 100,
+      }),
+    ).toMatchObject({ ok: false, failureCode: "start-timeout" });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("preserves a throwing live authority proof in body-free diagnostics and refuses spawn", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      diagnostics,
+      supervisor: testSupervisor(harness.spawn),
+      canSpawnRuntime: () => {
+        throw new Error("private error body", { cause: new TypeError("private nested body") });
+      },
+    });
+    expect(
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: false, failureCode: "authority-resolution-failed" });
+    expect(harness.children).toHaveLength(0);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "run-1988",
+        operation: "coding-runtime.spawn-authority",
+        errorClass: "Error",
+        message: "runtime-start-failed",
+        causeChain: ["TypeError"],
+      }),
+    );
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private error body");
+    expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain("private nested body");
   });
 });

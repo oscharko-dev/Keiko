@@ -171,6 +171,7 @@ export interface ProductionRuntimeBackendInput {
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
+  readonly canSpawnRuntime?: CodingRuntimeManagerDeps["canSpawnRuntime"];
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly contextUsage?: CodingRuntimeContextUsageRegistry | undefined;
 }
@@ -1195,24 +1196,38 @@ function createBackendRun({
       parentCorrelationId: request.correlationId,
     }),
     onRuntimeEvent,
-    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) reads as "not
-    // current": the runtime must not keep acting on a workspace the product cannot verify.
-    workspaceIsCurrent: (): boolean => {
-      try {
-        return (
-          input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
-          context.workspaceId
-        );
-      } catch (error) {
-        if (isIdentityProofFailure(error)) return false;
-        throw error;
-      }
-    },
+    canSpawnRuntime: pendingSpawnGuard({
+      input,
+      context,
+      minted,
+      authority,
+      controller,
+      resolveWorkspaceRootAccess,
+    }),
+    workspaceIsCurrent: runtimeWorkspaceIsCurrent(input, context),
     resolveWorkspaceRootAccess,
     contextUsage,
   });
   validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
   return backend;
+}
+
+function runtimeWorkspaceIsCurrent(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+): () => boolean {
+  // IDENTITY_PROOF_FAILED is already logged by the proof owner; an unavailable proof is not current.
+  return (): boolean => {
+    try {
+      return (
+        input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
+        context.workspaceId
+      );
+    } catch (error) {
+      if (isIdentityProofFailure(error)) return false;
+      throw error;
+    }
+  };
 }
 
 // KfQ-confirmed: `validateBackendLaunch` runs AFTER `input.backend.createRun(...)` has already
@@ -1585,6 +1600,34 @@ function researchApprovalRequester(
     const event = buildResearchPermissionEvent({ runId, requestId, sequence, nowMs });
     if (event !== undefined) onRuntimeEvent(event);
   };
+}
+
+function pendingSpawnGuard({
+  input,
+  context,
+  minted,
+  authority,
+  controller,
+  resolveWorkspaceRootAccess,
+}: Pick<
+  CreateBackendRunInput,
+  "input" | "context" | "minted" | "authority" | "controller" | "resolveWorkspaceRootAccess"
+>): NonNullable<CodingRuntimeManagerDeps["canSpawnRuntime"]> {
+  return (launch): boolean =>
+    launch.runId === minted.authorityRef.runId &&
+    launch.treeBindingId === minted.treeBindingId &&
+    launch.authorityEnvelopeDigest === minted.authorityRef.envelopeDigest &&
+    launch.workspaceRoot === context.workspaceRoot &&
+    !controller.signal.aborted &&
+    resolveWorkspaceRootAccess()?.canonicalRoot === context.workspaceRoot &&
+    authority.revalidateCapabilityForPendingSpawn({
+      capability: minted.toolFacadeCapability,
+      adapterKind: adapterKind(context),
+      liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+      workspaceRoot: context.workspaceRoot,
+      deploymentCeiling: context.deploymentCeiling,
+      nowIso: runtimeNow(input).toISOString(),
+    }).ok;
 }
 
 function runtimeMutationLive(
