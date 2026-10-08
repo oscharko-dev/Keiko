@@ -834,6 +834,10 @@
     "./runtime/governed-tool-bridge": {
       "types": "./dist/governed-tool-bridge.d.ts",
       "import": "./dist/governed-tool-bridge.js"
+    },
+    "./runtime/opencode-service-host": {
+      "types": "./dist/opencode-service-host.d.ts",
+      "import": "./dist/opencode-service-host.js"
     }
   },
   "scripts": {

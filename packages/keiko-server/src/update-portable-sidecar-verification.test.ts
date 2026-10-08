@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -486,5 +487,64 @@ describe("the platform-attested availability order", () => {
         platformAttested: false,
       }),
     ).toEqual({ available: false, reason: "platform-unsupported" });
+  });
+});
+
+describe("inactive separately typed original OpenCode service-host projection", () => {
+  function hostFixture(): Record<string, unknown> {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as { readonly approval: Record<string, unknown> };
+    return fixture.approval;
+  }
+
+  it("preserves the separately bound host identity and leaves the existing CLI target intact", () => {
+    const runtime = sidecarRuntime(evaluationSigning());
+    const host = hostFixture();
+    runtime.serviceHost = { "macos-arm64": host };
+    const result = verifyPortableAttestedSidecars(
+      { sidecarRuntimes: [runtime] },
+      "macos-arm64",
+      "evaluation-unqualified",
+    ).sidecars[0];
+    expect(result).toBeDefined();
+    expect(result?.serviceHost).toEqual(host);
+    expect(result?.executablePath).toBe(runtime.executablePath);
+    expect(result?.availability.signatureVerified).toBe(false);
+    expect(result?.availability.qualificationVerified).toBe(false);
+  });
+
+  it("rejects malformed host metadata instead of silently discarding it", () => {
+    const runtime = sidecarRuntime(evaluationSigning());
+    runtime.serviceHost = { "macos-arm64": { ...hostFixture(), bootstrapPath: "arbitrary.mjs" } };
+    expect(() =>
+      verifyPortableAttestedSidecars(
+        { sidecarRuntimes: [runtime] },
+        "macos-arm64",
+        "evaluation-unqualified",
+      ),
+    ).toThrow(PortableSidecarVerificationError);
+  });
+
+  it("owns immutable supplemental facts independently of later input mutations", () => {
+    const runtime = sidecarRuntime(evaluationSigning());
+    const host = hostFixture();
+    runtime.serviceHost = { "macos-arm64": host };
+    const projected = verifyPortableAttestedSidecars(
+      { sidecarRuntimes: [runtime] },
+      "macos-arm64",
+      "evaluation-unqualified",
+    ).sidecars[0]?.serviceHost;
+    const original = structuredClone(host);
+    host.bootstrapSha256 = "a".repeat(64);
+    runtime.serviceHost = {};
+    expect(projected).toEqual(original);
+    expect(Object.isFrozen(projected)).toBe(true);
   });
 });

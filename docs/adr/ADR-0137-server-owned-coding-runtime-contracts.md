@@ -443,6 +443,16 @@ new snapshot capability unavailable. Existing workspace-read evidence records on
 IO/instruction purposes and refusal reasons. This bounded text prerequisite does not activate a
 native host or qualify original Read paging, directories, media or large-file semantics.
 
+An original Node service host has its own supplemental immutable artifact identity: final npm
+payload and archive, fixed Node executable and bootstrap, dependency lock, license inventory,
+SBOM and build-provenance evidence. Existing CLI archive approval neither approves nor selects
+that host. The shared closed metadata contract distinguishes npm byte integrity from unavailable
+upstream source-build attestation. Its inactive launch-shape producer admits only the fixed
+bootstrap argument and rejects ambient Node loader or native-library injection. Ordinary CLI
+approval checks retain their pre-build path; supplemental host checks require the compiled
+canonical contract. These shape checks do not replace disk, platform, current-authority,
+network or process-lifetime qualification and do not activate native tools.
+
 Codex subscription traffic remains a distinct runtime/model source. Its egress uses Keiko's shared
 enterprise proxy and custom-CA path, and any official authentication navigation target is validated
 server-side against the closed official-origin policy before the browser may open it. Credentials

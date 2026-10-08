@@ -462,6 +462,20 @@ log contracts pass. No artifact approval, shipped pin,
 selector or original native tool is activated. Original-host current-authority routing, paging,
 media, directories and large reads remain separate qualification obligations.
 
+The next inactive service-host prerequisite gives the separately packaged original Node host a
+closed immutable identity and one fixed bootstrap launch shape. Existing CLI approval remains
+separate. Genuine parser/projection RED controls and a clean-checkout pre-build import RED preceded
+the fix. Independent forced affected-graph and strict source/test types, scoped lint/format,
+134 tests, the compiled public-subpath import and a contracts package dry run pass. The independently
+copied final npm payload was recomputed through the canonical disk inspector; its declared
+34,947 files and 465,881,511 bytes retain the qualified private tree digest. The receipt-derived
+fixture matches the producer exactly and records npm byte integrity with reference-only upstream
+source provenance. Initial private driver path refusals were retained before the corrected
+inventory run. This is declared artifact identity, not host approval, platform qualification or
+native activation. Current-authority routing, fixed supervisor/EOF integration, fresh database
+ownership, model-selected same-origin network refusal and complete native capability parity remain
+open. The complete assembled package-surface gate remains part of final qualification.
+
 The retained failed-baseline recovery was acknowledged once on clean source `41769633a8f8`
 only after the original captured processes were absent and the new host had no current or
 previously observed surviving child. Both selection guards returned 409 before acknowledgement
