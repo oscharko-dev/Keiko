@@ -63,7 +63,7 @@ describe("runVerification — repository filesystem containment", () => {
     expect(rec.calls()[0]?.args).toEqual(
       expect.arrayContaining(["--bind", realpathSync(ws.info.root), "/keiko-execution-root"]),
     );
-    expect(rec.calls()[0]?.args).toEqual(expect.arrayContaining(target.args));
+    expect(rec.calls()[0]?.args).toEqual(expect.arrayContaining([...target.args]));
   });
 
   it("returns nested Vitest failure locations relative to the bound repository", async () => {

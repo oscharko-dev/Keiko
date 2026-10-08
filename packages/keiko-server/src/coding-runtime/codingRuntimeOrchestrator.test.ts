@@ -1003,7 +1003,7 @@ describe("CodingRuntimeOrchestrator", () => {
     );
     expect(event.extra?.taskIntentDigest).toBe(sha256Hex(taskIntent));
     expect(event.extra?.taskIntentDigest).not.toBe(sha256Hex(taskIntent.trim()));
-    expect(event.extra?.taskIntentDigest).not.toBe(f.orchestrator.current()?.taskDigest);
+    expect(event.extra?.taskIntentDigest).not.toBe(rowFor(f.rows, "run-1").taskDigest);
     expectActivityLogProof(
       "coding-runtime.run.started.emitted-line",
       formatActivityLogProofLine(event),
