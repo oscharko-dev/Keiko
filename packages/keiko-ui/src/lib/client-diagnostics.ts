@@ -63,6 +63,7 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type ClientModelCatalogEvidence,
   type HealthDiagnosticsInvalidReason,
   type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
@@ -71,6 +72,7 @@ import {
   type ClientComposerCodeStage,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "./bff-correlation";
 import {
   clientDefectContext,
   type ActivityLogErrorKind,
@@ -92,6 +94,7 @@ export type ClientDiagnosticStageReport = (
       readonly durationMs: number;
       readonly navigationOutcome?: ClientNavigationOutcome | undefined;
       readonly preview?: ClientSourcePreviewCounts | undefined;
+      readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
@@ -357,6 +360,25 @@ export function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefine
 export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
   publishGlobalClientFailure(meta);
   writer(message, meta);
+}
+
+/** One instant adoption/selection decision, not the duration of a held model or network request. */
+export function reportModelCatalogStage(
+  stage: "gateway catalog adoption" | "model selection availability",
+  modelCatalog: ClientModelCatalogEvidence,
+  parentCorrelationId?: string,
+): void {
+  const correlationId = newClientCorrelationId();
+  reportClientDiagnostic("Model catalog decision started.", {
+    correlationId,
+    parentCorrelationId,
+    stageReport: { stage, phase: "started", ordinal: 1 },
+  });
+  reportClientDiagnostic("Model catalog decision settled.", {
+    correlationId,
+    parentCorrelationId,
+    stageReport: { stage, phase: "settled", ordinal: 1, durationMs: 0, modelCatalog },
+  });
 }
 
 /**

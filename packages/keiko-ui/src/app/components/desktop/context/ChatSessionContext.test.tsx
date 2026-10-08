@@ -400,3 +400,22 @@ describe("ChatSessionContext", () => {
     expect(onFullRender).toHaveBeenCalledTimes(2);
   });
 });
+
+it("retains the actual catalog read separately from the filtered conversation picker", () => {
+  const read = {
+    capabilities: [],
+    source: "background" as const,
+    correlationId: "catalog-read-123",
+  };
+  const observe = vi.fn();
+  function ReadProbe(): ReactNode {
+    observe(useChatSessionCatalog().modelCatalogRead);
+    return null;
+  }
+  render(
+    <ChatSessionProvider value={session({ modelCatalogRead: read })}>
+      <ReadProbe />
+    </ChatSessionProvider>,
+  );
+  expect(observe).toHaveBeenCalledWith(read);
+});

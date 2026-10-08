@@ -3237,3 +3237,65 @@ describe("actual source reveal lifecycle", () => {
     },
   );
 });
+
+it("persists closed model selection stage evidence through the existing formatter at info", async () => {
+  const sink = captureServerLog();
+  const parentCorrelationId = "catalog-read-123";
+  const selectionDigest = "a".repeat(64);
+  const body = {
+    kind: "stage",
+    stage: "model selection availability",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 0,
+    correlationId: "model-decision-123",
+    parentCorrelationId,
+    modelCatalog: {
+      surface: "chat",
+      source: "background",
+      outcome: "held",
+      configuredModelCount: 2,
+      usableModelCount: 1,
+      selectionProvenance: "human",
+      selectionDigest,
+    },
+  };
+  expect(await handleClientDiagnosticIngest(context(JSON.stringify(body)))).toEqual({
+    status: 204,
+    body: null,
+  });
+  const events = clientStageEvents(sink, "client.stage.settled");
+  expect(events).toHaveLength(1);
+  const line = formatActivityLogProofLine(events[0] ?? {});
+  expectActivityLogProof("client.stage.settled.line", line);
+  expect(JSON.parse(line)).toMatchObject({
+    level: "info",
+    correlationId: "model-decision-123",
+    parentCorrelationId,
+    stage: "model-selection-availability",
+    modelSurface: "chat",
+    catalogSource: "background",
+    catalogOutcome: "held",
+    configuredModelCount: 2,
+    usableModelCount: 1,
+    selectionProvenance: "human",
+    selectionDigest,
+    completeness: "complete",
+    loss: "none",
+  });
+  expect(clientDiagnosticEvents(sink)).toEqual([]);
+  for (const invalid of [
+    { ...body.modelCatalog, modelId: "PRIVATE_MODEL" },
+    { ...body.modelCatalog, usableModelCount: 3 },
+    { ...body.modelCatalog, outcome: "changed" },
+  ]) {
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...body, modelCatalog: invalid })),
+        )
+      ).status,
+    ).toBe(400);
+  }
+  expect(clientStageEvents(sink, "client.stage.settled")).toHaveLength(1);
+});

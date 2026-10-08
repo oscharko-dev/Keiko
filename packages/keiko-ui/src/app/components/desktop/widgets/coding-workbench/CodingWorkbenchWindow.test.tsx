@@ -1,3 +1,4 @@
+import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 import { CODING_MODEL_STORAGE_KEY } from "./codingModelPreference";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
@@ -84,6 +85,8 @@ const chatCatalogMock = vi.hoisted(() => ({
   // `clearSessionModelsForPendingRefresh`, useChatSession.ts) publishing an empty list mid-flight.
   models: [] as ModelCapability[],
   configuredModelIds: undefined as readonly string[] | undefined,
+  modelCatalogRead: undefined as
+    import("../../hooks/useChatSession").ChatModelCatalogRead | undefined,
 }));
 // PR #3625 review: whether the latest catalog refresh settled, so a test can tell an empty list
 // published mid-refresh from one a successful refresh settled on.
@@ -211,6 +214,7 @@ vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
       projects: chatCatalogMock.projects,
       models: chatCatalogMock.models,
       configuredModelIds: chatCatalogMock.configuredModelIds,
+      modelCatalogRead: chatCatalogMock.modelCatalogRead,
       noEligibleModels: true,
     }),
   };
@@ -474,6 +478,7 @@ beforeEach(() => {
   chatCatalogMock.projects = [];
   chatCatalogMock.models = [];
   chatCatalogMock.configuredModelIds = undefined;
+  chatCatalogMock.modelCatalogRead = undefined;
   catalogRefreshMock.settled = false;
   // Every other suite in this file leaves the journey read unmocked-in-spirit: it never sets up an
   // observed outcome, so it must keep resolving to a valid "nothing observed" envelope rather than
@@ -4549,6 +4554,94 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
     expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
     expect(liveActions.setReasoningEffort).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: "embedding" as const },
+    { toolCalling: false },
+    {
+      toolCallingVerification: {
+        status: "unsupported" as const,
+        checkedAt: new Date().toISOString(),
+        probe: "gateway-tool-calling-v1" as const,
+        configurationFingerprint: "fingerprint-1",
+      },
+    },
+    {
+      toolCallingVerification: {
+        status: "verified" as const,
+        checkedAt: "2000-01-01T00:00:00.000Z",
+        probe: "gateway-tool-calling-v1" as const,
+        configurationFingerprint: "fingerprint-1",
+      },
+    },
+  ])("does not hold an actually ineligible configured coding choice (%j)", (patch) => {
+    const unavailable = { ...MODEL_B, ...patch };
+    chatCatalogMock.models = [MODEL_A, unavailable];
+    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    chatCatalogMock.modelCatalogRead = {
+      capabilities: [MODEL_A, unavailable],
+      source: "background",
+      correlationId: "actual-catalog-123",
+    };
+    const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+  });
+
+  it("records actual Workbench catalog and held/restored selection without raw identifiers", () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const pending = { ...MODEL_B, conversationReady: undefined };
+    chatCatalogMock.models = [MODEL_A, pending];
+    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    chatCatalogMock.modelCatalogRead = {
+      capabilities: [MODEL_A, pending],
+      source: "background",
+      correlationId: "catalog-read-123",
+    };
+    window.localStorage.setItem(CODING_MODEL_STORAGE_KEY, MODEL_B.id);
+    runtimeHookMock.mockReturnValue({
+      state: liveState({ selectedModelId: MODEL_B.id }),
+      actions: actions(),
+    });
+    const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        parentCorrelationId: "catalog-read-123",
+        stageReport: expect.objectContaining({
+          phase: "settled",
+          modelCatalog: expect.objectContaining({
+            surface: "coding-workbench",
+            outcome: "held",
+            selectionProvenance: "human",
+            selectionDigest: sha256Hex(MODEL_B.id),
+            configuredModelCount: 2,
+            usableModelCount: 1,
+          }),
+        }),
+      }),
+    );
+    chatCatalogMock.models = [MODEL_A, MODEL_B];
+    chatCatalogMock.modelCatalogRead = {
+      capabilities: [MODEL_A, MODEL_B],
+      source: "background",
+      correlationId: "catalog-read-456",
+    };
+    view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        parentCorrelationId: "catalog-read-456",
+        stageReport: expect.objectContaining({
+          phase: "settled",
+          modelCatalog: expect.objectContaining({ outcome: "restored", usableModelCount: 2 }),
+        }),
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(MODEL_B.id);
+    window.localStorage.removeItem(CODING_MODEL_STORAGE_KEY);
+    resetClientDiagnosticWriter();
   });
 
   // #3873 live review: after a run with "gemma-4-31b-it" the composer fell back to the first offered

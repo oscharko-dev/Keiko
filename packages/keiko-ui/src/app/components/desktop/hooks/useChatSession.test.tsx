@@ -46,6 +46,7 @@ import {
   RUN_SUMMARY_SYNC_INTERVAL_MS,
   resolveSelectedModelId,
   type SendMessageOutcome,
+  type UseChatSessionResult,
   type ChatSessionApi,
   useChatSession,
   useGatewayModelCatalogSettled,
@@ -65,6 +66,7 @@ import {
   notifyGatewayModelReadinessUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 
+import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 beforeAll(async () => {
@@ -118,6 +120,7 @@ vi.mock("@/lib/memory-session-api", () => ({
 }));
 
 afterEach(() => {
+  vi.useRealTimers();
   clearCanonicalVoicePageOutboxForTests();
   vi.clearAllMocks();
   clearChatSessionBootstrapCacheForTests();
@@ -289,7 +292,7 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(fetchModels).toHaveBeenCalledWith(undefined, true);
+    expect(fetchModels).toHaveBeenCalledWith(expect.any(String), true);
   });
 
   it("continues quick projection reads during reload discovery even for already-ready models", async () => {
@@ -467,7 +470,7 @@ describe("useChatSession bootstrap", () => {
     });
     await act(() => vi.advanceTimersByTimeAsync(5_000));
     expect(result.current.selectedModel).toBeUndefined();
-    expect(result.current.noEligibleModels).toBe(true);
+    expect(result.current.noEligibleModels).toBe(false);
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-live" }), model({ id: "chat-alt" })],
     });
@@ -528,21 +531,21 @@ describe("useChatSession bootstrap", () => {
     vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic transport outage."));
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(fetchModels).toHaveBeenCalledTimes(calls + 3);
-    expect(diagnostic).toHaveBeenCalledOnce();
+    expect(diagnostic.mock.calls.filter(([, meta]) => meta?.kind === "other")).toHaveLength(1);
     expect(diagnostic).toHaveBeenCalledWith(
       expect.stringContaining("Background model catalog refresh failed (TypeError)"),
       expect.objectContaining({ kind: "other", correlationId: expect.any(String) }),
     );
-    expect(diagnostic.mock.calls[0]?.[1].correlationId).toBe(
-      vi.mocked(fetchModels).mock.calls[calls]?.[0],
-    );
+    expect(
+      diagnostic.mock.calls.find(([, meta]) => meta?.kind === "other")?.[1].correlationId,
+    ).toBe(vi.mocked(fetchModels).mock.calls[calls]?.[0]);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     act(() => window.dispatchEvent(new Event("focus")));
     await act(() => vi.advanceTimersByTimeAsync(1));
     vi.mocked(fetchModels).mockRejectedValue(new TypeError("Synthetic second outage."));
     act(() => window.dispatchEvent(new Event("focus")));
     await act(() => vi.advanceTimersByTimeAsync(1));
-    expect(diagnostic).toHaveBeenCalledTimes(2);
+    expect(diagnostic.mock.calls.filter(([, meta]) => meta?.kind === "other")).toHaveLength(2);
     unmount();
     resetClientDiagnosticWriter();
     vi.useRealTimers();
@@ -5618,4 +5621,221 @@ describe("ungrounded streaming refusal recovery", () => {
       }
     },
   );
+});
+
+async function mountSelectionReview(
+  models: readonly ModelCapability[],
+  chats: readonly Chat[] = [],
+): Promise<ReturnType<typeof renderHook<UseChatSessionResult, unknown>>> {
+  vi.useFakeTimers();
+  vi.mocked(fetchModels).mockResolvedValue({ models: [...models] });
+  vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+  vi.mocked(fetchChats).mockResolvedValue({ chats });
+  vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+  const mounted = renderHook(() => useChatSession({ autoCreate: false }));
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  return mounted;
+}
+
+async function adoptReviewCatalog(models: readonly ModelCapability[]): Promise<void> {
+  vi.mocked(fetchModels).mockResolvedValue({ models: [...models] });
+  act(() => window.dispatchEvent(new Event("focus")));
+  await act(() => vi.advanceTimersByTimeAsync(1));
+}
+
+describe("review model selection admission", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetClientDiagnosticWriter();
+  });
+
+  it("elects a ready alternative when an automatic choice becomes unready", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })]);
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBe("chat-b");
+    expect(result.current.noEligibleModels).toBe(false);
+  });
+
+  it("keeps ready picker alternatives available while a human choice is held", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })]);
+    act(() => result.current.setSelectedModel("chat-a"));
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.models.map((item) => item.id)).toEqual(["chat-b"]);
+    expect(result.current.noEligibleModels).toBe(false);
+  });
+
+  it("holds a persisted unready human choice on bootstrap rather than silently substituting", async () => {
+    const { result } = await mountSelectionReview(
+      [model({ conversationReady: false }), model({ id: "chat-b" })],
+      [chat()],
+    );
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.noEligibleModels).toBe(false);
+    await adoptReviewCatalog([model(), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBe("chat-a");
+  });
+
+  it("holds the newly opened chat's persisted unready choice", async () => {
+    const second = chat({ id: "chat-2", selectedModel: "chat-b", updatedAt: 0 });
+    const { result } = await mountSelectionReview(
+      [model(), model({ id: "chat-b", conversationReady: false })],
+      [chat(), second],
+    );
+    await act(() => result.current.openChat(second));
+    expect(result.current.activeChat?.id).toBe("chat-2");
+    expect(result.current.selectedModel).toBeUndefined();
+    await adoptReviewCatalog([model(), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBe("chat-b");
+  });
+
+  it("preserves a held human choice through a same-chat metadata upsert", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })], [chat()]);
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    act(() => notifyChatUpsert(chat({ title: "Updated title" })));
+    expect(result.current.selectedModel).toBeUndefined();
+    await adoptReviewCatalog([model(), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBe("chat-a");
+  });
+
+  it("does not hold a choice that is structurally ineligible for conversation", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })], [chat()]);
+    await adoptReviewCatalog([
+      model({ kind: "embedding", conversationReady: false }),
+      model({ id: "chat-b" }),
+    ]);
+    expect(result.current.selectedModel).toBe("chat-b");
+  });
+
+  it("gives explicit held-selection feedback for send, regenerate and new chat", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })], [chat()]);
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    act(() => result.current.setDraft("A small task"));
+    await act(() => result.current.sendMessage());
+    expect(result.current.error).toContain("selected model is temporarily unavailable");
+    act(() => result.current.clearError?.());
+    await act(() => result.current.regenerateMessage("assistant-1"));
+    expect(result.current.error).toContain("selected model is temporarily unavailable");
+    act(() => result.current.clearError?.());
+    await act(() => result.current.openNewChat());
+    expect(result.current.error).toContain("selected model is temporarily unavailable");
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    expect(regenerateDesktopChat).not.toHaveBeenCalled();
+    expect(createDesktopChat).not.toHaveBeenCalled();
+  });
+
+  it("does not rebroadcast an unchanged first background catalog", async () => {
+    const updated = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-updated", updated);
+    const { unmount } = await mountSelectionReview([model()]);
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(updated).not.toHaveBeenCalled();
+    unmount();
+    window.removeEventListener("keiko:gateway-model-catalog-updated", updated);
+  });
+
+  it("triggers startup discovery once across expired-cache remounts", async () => {
+    const first = await mountSelectionReview([model()]);
+    first.unmount();
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(
+      vi.mocked(fetchModels).mock.calls.filter(([, refresh]) => refresh === true),
+    ).toHaveLength(1);
+    second.unmount();
+  });
+});
+
+describe("actual model selection lifecycle evidence", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetClientDiagnosticWriter();
+  });
+
+  it("joins real held/restored/refused decisions to the sent catalog read without raw model ids", async () => {
+    const privateId = "PRIVATE-HUMAN-MODEL";
+    const { result } = await mountSelectionReview(
+      [model({ id: privateId }), model({ id: "chat-b" })],
+      [chat({ selectedModel: privateId })],
+    );
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    await adoptReviewCatalog([
+      model({ id: privateId, conversationReady: false }),
+      model({ id: "chat-b" }),
+    ]);
+    const outageCorrelation = vi.mocked(fetchModels).mock.calls.at(-1)?.[0];
+    await act(() => result.current.sendMessage({ text: "PRIVATE-TASK" }));
+    await act(() => result.current.regenerateMessage("assistant-1"));
+    await act(() => result.current.openNewChat());
+    await adoptReviewCatalog([model({ id: privateId }), model({ id: "chat-b" })]);
+    const decisions = diagnostic.mock.calls
+      .map(([, meta]) => meta)
+      .filter(
+        (meta) =>
+          meta?.stageReport?.stage === "model selection availability" &&
+          meta.stageReport.phase === "settled",
+      );
+    expect(decisions.map((meta) => meta.stageReport.modelCatalog.outcome)).toEqual([
+      "held",
+      "refused",
+      "refused",
+      "refused",
+      "restored",
+    ]);
+    expect(decisions[0]).toMatchObject({
+      parentCorrelationId: outageCorrelation,
+      stageReport: {
+        durationMs: 0,
+        modelCatalog: {
+          surface: "chat",
+          source: "background",
+          configuredModelCount: 2,
+          usableModelCount: 1,
+          selectionProvenance: "human",
+          selectionDigest: sha256Hex(privateId),
+        },
+      },
+    });
+    expect(decisions.at(-1)?.parentCorrelationId).toBe(
+      vi.mocked(fetchModels).mock.calls.at(-1)?.[0],
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE-");
+  });
+
+  it("records an automatic ready fallback with elected provenance", async () => {
+    const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })]);
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    await adoptReviewCatalog([model({ conversationReady: false }), model({ id: "chat-b" })]);
+    expect(result.current.selectedModel).toBe("chat-b");
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        parentCorrelationId: vi.mocked(fetchModels).mock.calls.at(-1)?.[0],
+        stageReport: expect.objectContaining({
+          phase: "settled",
+          modelCatalog: expect.objectContaining({
+            outcome: "fallback",
+            selectionProvenance: "elected",
+            usableModelCount: 1,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("seeds the background baseline from an actual foreground adoption", async () => {
+    const updated = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-updated", updated);
+    const { unmount } = await mountSelectionReview([model()]);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model(), model({ id: "chat-b" })] });
+    act(() => requestGatewayModelCatalogRefresh());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(updated).not.toHaveBeenCalled();
+    unmount();
+    window.removeEventListener("keiko:gateway-model-catalog-updated", updated);
+  });
 });

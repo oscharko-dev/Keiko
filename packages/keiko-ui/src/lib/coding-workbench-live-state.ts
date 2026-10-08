@@ -332,10 +332,18 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
   // such request. Keep the draft editable, but do not present a Start or Retry action that is
   // guaranteed to fail authority resolution.
   const pairingReady = state.pairing === "paired";
+  const modelSelected =
+    state.runtimePreference !== "managed-gateway" || state.selectedModelId !== null;
   return {
     ...state,
     canStart:
-      sourceReady && workspaceReady && authorityReady && runReady && mutationIdle && pairingReady,
+      sourceReady &&
+      workspaceReady &&
+      authorityReady &&
+      runReady &&
+      mutationIdle &&
+      pairingReady &&
+      modelSelected,
     canRetry:
       sourceReady &&
       workspaceReady &&
@@ -465,11 +473,12 @@ const runtimeActionHandlers = {
   "select-mode": (state, action): CodingWorkbenchRuntimeState => selectMode(state, action.mode),
   "select-runtime-preference": (state, action): CodingWorkbenchRuntimeState =>
     selectPreference(state, action.preference),
-  "select-model": (state, action): CodingWorkbenchRuntimeState => ({
-    ...state,
-    selectedModelId: action.modelId,
-    reasoningEffort: null,
-  }),
+  "select-model": (state, action): CodingWorkbenchRuntimeState =>
+    projectReadiness({
+      ...state,
+      selectedModelId: action.modelId,
+      reasoningEffort: null,
+    }),
   "select-reasoning-effort": (state, action): CodingWorkbenchRuntimeState => ({
     ...state,
     reasoningEffort: action.effort,

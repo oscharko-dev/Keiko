@@ -903,6 +903,8 @@ export const CLIENT_STAGE_IDS = [
   "files directory navigation",
   "files project selection",
   "editor project selection",
+  "gateway catalog adoption",
+  "model selection availability",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -944,6 +946,17 @@ export interface ClientSourcePreviewCounts {
   readonly binaryReason?: "too-large" | "unsupported" | undefined;
 }
 
+export interface ClientModelCatalogEvidence {
+  readonly surface: "chat" | "coding-workbench";
+  readonly source: "bootstrap" | "foreground" | "background" | "workbench";
+  readonly outcome:
+    "unchanged" | "changed" | "adopted" | "held" | "restored" | "fallback" | "refused";
+  readonly configuredModelCount: number;
+  readonly usableModelCount: number;
+  readonly selectionProvenance?: "human" | "elected" | undefined;
+  readonly selectionDigest?: string | undefined;
+}
+
 export interface ClientStageSettledIngestRequest {
   readonly kind: "stage";
   readonly stage: ClientStageId;
@@ -955,6 +968,7 @@ export interface ClientStageSettledIngestRequest {
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
   readonly navigationOutcome?: ClientNavigationOutcome | undefined;
   readonly preview?: ClientSourcePreviewCounts | undefined;
+  readonly modelCatalog?: ClientModelCatalogEvidence | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -973,6 +987,7 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "deletion",
   "navigationOutcome",
   "preview",
+  "modelCatalog",
 ]);
 
 export const CLIENT_NAVIGATION_OUTCOMES = [
@@ -1067,11 +1082,62 @@ function hasValidSourcePreview(value: Record<string, unknown>): boolean {
   );
 }
 
+const MODEL_CATALOG_KEYS = new Set([
+  "surface",
+  "source",
+  "outcome",
+  "configuredModelCount",
+  "usableModelCount",
+  "selectionProvenance",
+  "selectionDigest",
+]);
+const MODEL_CATALOG_STAGES = new Set(["gateway catalog adoption", "model selection availability"]);
+
+function hasValidModelCatalogCounts(value: Record<string, unknown>): boolean {
+  return (
+    isBoundedNonNegativeInteger(value.configuredModelCount, CLIENT_STAGE_ORDINAL_MAX) &&
+    isBoundedNonNegativeInteger(value.usableModelCount, CLIENT_STAGE_ORDINAL_MAX) &&
+    value.usableModelCount <= value.configuredModelCount
+  );
+}
+
+function hasValidModelCatalogOutcome(stage: unknown, value: Record<string, unknown>): boolean {
+  if (stage === "model selection availability")
+    return (
+      isOneOf(value.outcome, ["held", "restored", "fallback", "refused"]) &&
+      isOneOf(value.selectionProvenance, ["human", "elected"])
+    );
+  return (
+    isOneOf(value.outcome, ["unchanged", "changed", "adopted"]) &&
+    value.selectionProvenance === undefined &&
+    value.selectionDigest === undefined
+  );
+}
+
+function hasValidModelCatalogStage(value: Record<string, unknown>): boolean {
+  const isModelStage = typeof value.stage === "string" && MODEL_CATALOG_STAGES.has(value.stage);
+  if (value.modelCatalog === undefined) return !isModelStage || value.phase !== "settled";
+  if (!isModelStage || value.phase !== "settled" || !isRecord(value.modelCatalog)) return false;
+  return hasValidModelCatalogEvidence(value.stage, value.modelCatalog);
+}
+
+function hasValidModelCatalogEvidence(stage: unknown, evidence: Record<string, unknown>): boolean {
+  return (
+    Object.keys(evidence).every((key) => MODEL_CATALOG_KEYS.has(key)) &&
+    isOneOf(evidence.surface, ["chat", "coding-workbench"]) &&
+    isOneOf(evidence.source, ["bootstrap", "foreground", "background", "workbench"]) &&
+    hasValidModelCatalogCounts(evidence) &&
+    hasValidModelCatalogOutcome(stage, evidence) &&
+    isOptional(evidence.selectionDigest, isReportDigest)
+  );
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
   return (
     hasValidStageDeletion(value) &&
     hasValidNavigationOutcome(value) &&
     hasValidSourcePreview(value) &&
+    hasValidModelCatalogStage(value) &&
     isOptional(value.parentCorrelationId, isActivityLogCorrelationId)
   );
 }

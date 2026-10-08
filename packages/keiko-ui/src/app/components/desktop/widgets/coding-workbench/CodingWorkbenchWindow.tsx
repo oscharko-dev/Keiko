@@ -1,5 +1,7 @@
 "use client";
 
+import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
 import { SupportReportButton } from "../../SupportReportButton";
 import {
@@ -29,7 +31,8 @@ import {
 } from "react";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
+import { reportModelCatalogStage, reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffCodeErrorKind } from "@/lib/http";
 import type {
@@ -170,7 +173,11 @@ import {
 } from "./CodingWorkbenchRunStatus";
 import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
-import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
+import {
+  offeredSavedCodingModel,
+  rememberCodingModel,
+  savedCodingModel,
+} from "./codingModelPreference";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
@@ -879,6 +886,7 @@ export function CodingWorkbenchWindow({
     catalogInconclusive(chatCatalog, catalogSettled),
     pendingCodingModelIds(chatCatalog),
   );
+  useWorkbenchCatalogEvidence(state, chatCatalog);
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
@@ -1020,10 +1028,12 @@ function pendingSelectedSource(
 }
 
 function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly string[] | undefined {
-  const refuted = new Set(
-    catalog?.models.filter((model) => model.conversationReady === false).map((model) => model.id),
+  const actual = catalog?.modelCatalogRead?.capabilities;
+  if (actual !== undefined) return actual.filter(isCodingWorkbenchModel).map((model) => model.id);
+  const excluded = new Set(
+    catalog?.models.filter((model) => !isCodingWorkbenchModel(model)).map((model) => model.id),
   );
-  return catalog?.configuredModelIds?.filter((id) => !refuted.has(id));
+  return catalog?.configuredModelIds?.filter((id) => !excluded.has(id));
 }
 
 function useCodingModelSelection(
@@ -1066,6 +1076,109 @@ function useCodingModelSelection(
       : (efforts.find((effort) => effort === "medium") ?? efforts[0] ?? null);
     if (next !== state.reasoningEffort) actions.setReasoningEffort(next);
   }, [actions, catalogUnavailable, selected, state.reasoningEffort]);
+}
+
+interface WorkbenchCatalogEvidenceState {
+  readonly catalogDigest: string;
+  readonly selectionDigest: string | undefined;
+  readonly held: boolean;
+  readonly key: string;
+}
+
+function workbenchSelectionOutcome(
+  previous: WorkbenchCatalogEvidenceState | undefined,
+  next: WorkbenchCatalogEvidenceState,
+  fresh: boolean,
+  human: boolean,
+): "held" | "restored" | "fallback" | "refused" | undefined {
+  if (next.held) return "held";
+  if (next.selectionDigest !== undefined && !fresh) return "refused";
+  if (previous?.held === true && previous.selectionDigest === next.selectionDigest)
+    return "restored";
+  if (previous !== undefined && previous.selectionDigest !== next.selectionDigest && !human)
+    return "fallback";
+  return undefined;
+}
+
+interface WorkbenchCatalogEvidenceSnapshot {
+  readonly next: WorkbenchCatalogEvidenceState;
+  readonly fresh: boolean;
+  readonly human: boolean;
+  readonly evidence: Pick<
+    ClientModelCatalogEvidence,
+    "surface" | "source" | "configuredModelCount" | "usableModelCount"
+  >;
+}
+
+function workbenchCatalogEvidenceSnapshot(
+  selectedId: string | null,
+  read: NonNullable<ChatSessionCatalog["modelCatalogRead"]>,
+): WorkbenchCatalogEvidenceSnapshot {
+  const selected = read.capabilities.find((model) => model.id === selectedId);
+  const fresh = isFreshSelectedCodingModel(selected);
+  const human = selectedId !== null && savedCodingModel() === selectedId;
+  const selectionDigest = selectedId === null ? undefined : sha256Hex(selectedId);
+  const held = selected !== undefined && isCodingWorkbenchModel(selected) && !fresh;
+  const catalogDigest = sha256Hex(JSON.stringify(read.capabilities));
+  return {
+    next: {
+      catalogDigest,
+      selectionDigest,
+      held,
+      key: JSON.stringify([selectionDigest, held, fresh, human]),
+    },
+    fresh,
+    human,
+    evidence: {
+      surface: "coding-workbench",
+      source: read.source,
+      configuredModelCount: read.capabilities.length,
+      usableModelCount: read.capabilities.filter(isFreshSelectedCodingModel).length,
+    },
+  };
+}
+
+function reportWorkbenchCatalogDecision(
+  previous: WorkbenchCatalogEvidenceState | undefined,
+  snapshot: WorkbenchCatalogEvidenceSnapshot,
+  correlationId: string,
+): void {
+  const { next, fresh, human, evidence } = snapshot;
+  if (previous?.catalogDigest !== next.catalogDigest)
+    reportModelCatalogStage(
+      "gateway catalog adoption",
+      {
+        ...evidence,
+        outcome: previous === undefined ? "adopted" : "changed",
+      },
+      correlationId,
+    );
+  const outcome = workbenchSelectionOutcome(previous, next, fresh, human);
+  if (previous?.key === next.key || outcome === undefined) return;
+  reportModelCatalogStage(
+    "model selection availability",
+    {
+      ...evidence,
+      outcome,
+      selectionProvenance: human ? "human" : "elected",
+      ...(next.selectionDigest === undefined ? {} : { selectionDigest: next.selectionDigest }),
+    },
+    correlationId,
+  );
+}
+
+function useWorkbenchCatalogEvidence(
+  state: CodingWorkbenchRuntimeState,
+  catalog: ChatSessionCatalog | null,
+): void {
+  const previous = useRef<WorkbenchCatalogEvidenceState | undefined>(undefined);
+  useEffect(() => {
+    const read = catalog?.modelCatalogRead;
+    if (state.runtimePreference !== "managed-gateway" || read === undefined) return;
+    const snapshot = workbenchCatalogEvidenceSnapshot(state.selectedModelId, read);
+    reportWorkbenchCatalogDecision(previous.current, snapshot, read.correlationId);
+    previous.current = snapshot.next;
+  }, [catalog?.modelCatalogRead, state.runtimePreference, state.selectedModelId]);
 }
 
 interface WorkbenchContentProps {

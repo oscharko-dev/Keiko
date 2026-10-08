@@ -4048,6 +4048,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "files-directory-navigation",
           "files-project-selection",
           "editor-project-selection",
+          "gateway-catalog-adoption",
+          "model-selection-availability",
         ],
       },
       ordinal: {
@@ -4069,6 +4071,46 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      modelSurface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["chat", "coding-workbench"],
+      },
+      catalogSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["bootstrap", "foreground", "background", "workbench"],
+      },
+      catalogOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unchanged", "changed", "adopted", "held", "restored", "fallback", "refused"],
+      },
+      configuredModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      usableModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      selectionProvenance: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["human", "elected"],
+      },
+      selectionDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
       previewKind: {
         type: "string",
@@ -4142,6 +4184,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "files-directory-navigation",
           "files-project-selection",
           "editor-project-selection",
+          "gateway-catalog-adoption",
+          "model-selection-availability",
         ],
       },
       ordinal: {

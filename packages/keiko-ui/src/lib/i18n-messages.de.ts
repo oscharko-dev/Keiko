@@ -465,6 +465,8 @@ export const DE_MESSAGES = {
 
   // #3591: Gateway-Fehler auf den Desktop-Chat-Oberflächen (format-error.ts). Ein langsames Gateway
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
+  "chat.modelSelectionUnavailable":
+    "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
   "chat.error.scopeChanged.title": "Verbundene Quellen wurden geändert",
   "chat.error.scopeChanged.message":
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",

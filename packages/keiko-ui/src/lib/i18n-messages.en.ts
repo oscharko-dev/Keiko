@@ -452,6 +452,8 @@ export const EN_MESSAGES = {
 
   // #3591: gateway failures on the desktop chat surfaces (format-error.ts). A slow gateway is not a
   // broken gateway, and neither text blames the size of the request.
+  "chat.modelSelectionUnavailable":
+    "The selected model is temporarily unavailable. Choose another available model or wait for it to recover.",
   "chat.error.scopeChanged.title": "Connected sources changed",
   "chat.error.scopeChanged.message":
     "The connected sources changed in the meantime. The request was not run with an outdated source list.",

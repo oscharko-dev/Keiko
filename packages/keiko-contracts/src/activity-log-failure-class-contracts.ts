@@ -1048,7 +1048,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["client.stage.settled", "client.stage.started"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["client.stage.settled", "client.stage.started"],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

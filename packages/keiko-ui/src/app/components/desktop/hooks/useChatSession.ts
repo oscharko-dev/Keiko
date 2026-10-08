@@ -63,7 +63,9 @@ import { createVisibilityPoller } from "@/lib/visibility-poller";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportClientDiagnostic, reportModelCatalogStage } from "@/lib/client-diagnostics";
+import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { sha256Hex } from "./canonical-voice-hasher-runtime";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -1471,6 +1473,13 @@ async function reconcileCanonicalVoiceTargetRuntimes(
   await Promise.all(reconciliations);
 }
 
+/** The actual BFF read, before conversation and Coding picker eligibility filters. */
+export interface ChatModelCatalogRead {
+  readonly capabilities: readonly ModelCapability[];
+  readonly source: ClientModelCatalogEvidence["source"];
+  readonly correlationId: string;
+}
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -1482,10 +1491,11 @@ export interface UseChatSessionResult {
   /** True when the server catalog contains configured models, even if none is conversation-ready. */
   readonly configuredModelsAvailable?: boolean | undefined;
   readonly configuredModelIds?: readonly string[] | undefined;
+  readonly modelCatalogRead?: ChatModelCatalogRead | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
-  // undefined when no conversation-eligible model is configured (AC #1 / #4).
-  // Downstream surfaces must render an accessible error and block submission.
+  // Undefined when no usable model is offered or a deliberate choice is temporarily held.
+  // Ready alternatives remain selectable while the held choice cannot submit.
   selectedModel: string | undefined;
   // true when loading is complete and no eligible model is available.
   noEligibleModels: boolean;
@@ -1579,6 +1589,10 @@ interface SessionState {
   models: ModelCapability[];
   configuredModelsAvailable: boolean;
   configuredModelIds: readonly string[];
+  unreadyConversationModelIds: readonly string[];
+  catalogCapabilities: readonly ModelCapability[];
+  catalogSource: ClientModelCatalogEvidence["source"];
+  catalogCorrelationId: string | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1629,26 +1643,21 @@ function sessionAfterChatCreate(
 
 function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
   if (!chatBelongsToSessionCatalog(previous, chat)) return previous;
-  const resolved = resolveSelection(chat.selectedModel, previous.models);
-  // An upsert that resolves to the id the session already shows carries no new provenance —
-  // keep ours. Without this, the server-persisted record of an AUTOMATIC creation laundered
-  // the elected default into a "deliberate" choice on the next upsert (review finding, #3221).
+  const active = previous.activeChat?.id === chat.id;
+  const sameChoice = active && previous.activeChat?.selectedModel === chat.selectedModel;
   const selection =
-    previous.activeChat?.id === chat.id
-      ? {
-          id: resolved.id,
-          elected:
-            resolved.id === previous.selectedModel
-              ? previous.selectedModelElected
-              : resolved.elected,
-        }
-      : { id: previous.selectedModel, elected: previous.selectedModelElected };
+    !active || sameChoice
+      ? sessionModelSelection(previous)
+      : selectionForChatSwitch(
+          chat.selectedModel,
+          previous.models,
+          previous.unreadyConversationModelIds,
+        );
   return {
     ...previous,
     chats: upsertChatIntoList(previous.chats, chat),
-    activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
-    selectedModel: selection.id,
-    selectedModelElected: selection.elected,
+    activeChat: active ? chat : previous.activeChat,
+    ...selection,
   };
 }
 
@@ -1673,6 +1682,10 @@ const INITIAL_STATE: SessionState = {
   models: [],
   configuredModelsAvailable: false,
   configuredModelIds: [],
+  unreadyConversationModelIds: [],
+  catalogCapabilities: [],
+  catalogSource: "bootstrap",
+  catalogCorrelationId: undefined,
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
@@ -1695,6 +1708,7 @@ interface SharedBootstrapCacheEntry {
 let sharedBootstrapCache: SharedBootstrapCacheEntry | undefined;
 let sharedBootstrapInflight: Promise<Partial<SessionState>> | undefined;
 let sharedBootstrapVersion = 0;
+let gatewayBootstrapRefreshRequested = false;
 
 /** A project's chat list and the correlation id of the load that answered it (#3557). */
 export interface ChatListLoad {
@@ -1716,7 +1730,12 @@ const sharedChatMessagesInflight = new Map<
 >();
 type GatewayModelRefreshResult =
   | { readonly kind: "pending" }
-  | { readonly kind: "success"; readonly models: readonly ModelCapability[] }
+  | {
+      readonly kind: "success";
+      readonly models: readonly ModelCapability[];
+      readonly source: "foreground" | "background";
+      readonly correlationId: string;
+    }
   | { readonly kind: "failure"; readonly message: string };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
 let gatewayModelRefreshGeneration = 0;
@@ -1737,7 +1756,7 @@ function refreshGatewayModelsInBackground(): void {
     .then(
       ({ models }): void => {
         if (generation !== gatewayModelRefreshGeneration) return;
-        adoptBackgroundGatewayModels(models);
+        adoptBackgroundGatewayModels(models, correlationId);
       },
       (error: unknown): void => {
         if (generation === gatewayModelRefreshGeneration) {
@@ -1750,19 +1769,42 @@ function refreshGatewayModelsInBackground(): void {
     });
 }
 
-function adoptBackgroundGatewayModels(models: readonly ModelCapability[]): void {
+function recordCatalogAdoption(
+  models: readonly ModelCapability[],
+  source: ClientModelCatalogEvidence["source"],
+  outcome: "adopted" | "changed",
+  correlationId: string,
+): void {
+  backgroundGatewayModelSnapshot = JSON.stringify(models);
+  reportModelCatalogStage(
+    "gateway catalog adoption",
+    {
+      surface: "chat",
+      source,
+      outcome,
+      configuredModelCount: models.length,
+      usableModelCount: models.filter(isUsableConversationModel).length,
+    },
+    correlationId,
+  );
+}
+
+function adoptBackgroundGatewayModels(
+  models: readonly ModelCapability[],
+  correlationId: string,
+): void {
   const snapshot = JSON.stringify(models);
-  const changed = snapshot !== backgroundGatewayModelSnapshot;
+  const changed =
+    backgroundGatewayModelSnapshot !== undefined && snapshot !== backgroundGatewayModelSnapshot;
   backgroundGatewayFailureCount = 0;
-  // Ready cached models do not imply the reload's fresh gateway discovery has already settled.
   const fast = changed || Date.now() < backgroundGatewayFastUntil;
   backgroundGatewayNextReadAt = Date.now() + (fast ? 5_000 : 60_000);
+  backgroundGatewayModelSnapshot = snapshot;
+  publishGatewayModelRefresh({ kind: "success", models, source: "background", correlationId });
+  if (!changed) return;
   invalidateSharedBootstrap();
-  publishGatewayModelRefresh({ kind: "success", models });
-  if (changed) {
-    backgroundGatewayModelSnapshot = snapshot;
-    notifyGatewayModelCatalogUpdated();
-  }
+  recordCatalogAdoption(models, "background", "changed", correlationId);
+  notifyGatewayModelCatalogUpdated();
 }
 
 function reportBackgroundGatewayFailure(error: unknown, correlationId: string): void {
@@ -1794,7 +1836,6 @@ function startGatewayModelReads(): void {
   backgroundGatewayNextReadAt = 0;
   backgroundGatewayFastUntil = Date.now() + 120_000;
   backgroundGatewayFailureCount = 0;
-  backgroundGatewayModelSnapshot = undefined;
   gatewayModelRefreshPoller = createVisibilityPoller(pollGatewayModels, 5_000);
   gatewayModelRefreshPoller.start();
   window.addEventListener("focus", resumeGatewayModelReads);
@@ -1822,10 +1863,17 @@ function refreshGatewayModels(): void {
   // until this exact refresh succeeds so a stale model can never be selected during a request or
   // after its failure.
   publishGatewayModelRefresh({ kind: "pending" });
-  void fetchModels().then(
+  const correlationId = newClientCorrelationId();
+  void fetchModels(correlationId).then(
     ({ models }): void => {
       if (generation === gatewayModelRefreshGeneration) {
-        publishGatewayModelRefresh({ kind: "success", models });
+        recordCatalogAdoption(models, "foreground", "adopted", correlationId);
+        publishGatewayModelRefresh({
+          kind: "success",
+          models,
+          source: "foreground",
+          correlationId,
+        });
       }
     },
     (error_: unknown): void => {
@@ -1997,6 +2045,7 @@ function sharedFetchChatMessages(
 
 export function clearChatSessionBootstrapCacheForTests(): void {
   invalidateSharedBootstrap();
+  gatewayBootstrapRefreshRequested = false;
   backgroundGatewayModelSnapshot = undefined;
   gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
@@ -2230,14 +2279,17 @@ function sharedRunSummaryPatch(
 }
 
 async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
-  const modelPayload = await fetchModels(undefined, true);
+  const refresh = !gatewayBootstrapRefreshRequested;
+  gatewayBootstrapRefreshRequested = true;
+  const correlationId = newClientCorrelationId();
+  const modelPayload = await fetchModels(correlationId, refresh);
+  recordCatalogAdoption(modelPayload.models, "bootstrap", "adopted", correlationId);
+  const catalog = sessionCatalogState(modelPayload.models, "bootstrap", correlationId);
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
   // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at
   // create/send decides honestly; only an observed `false` filters out.
   const chatModels = modelPayload.models.filter(isUsableConversationModel);
-  const configuredModelsAvailable = modelPayload.models.length > 0;
-  const configuredModelIds = modelPayload.models.map((model) => model.id);
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects();
@@ -2250,13 +2302,14 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const latestChat = pickResumableChat(sortedChats);
   if (project !== undefined && latestChat !== undefined) {
     const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
-    const selection = resolveSelection(latestChat.selectedModel, chatModels);
+    const selection = selectionForChatSwitch(
+      latestChat.selectedModel,
+      chatModels,
+      catalog.unreadyConversationModelIds,
+    );
     return {
-      models: chatModels,
-      configuredModelsAvailable,
-      configuredModelIds,
-      selectedModel: selection.id,
-      selectedModelElected: selection.elected,
+      ...catalog,
+      ...selection,
       projects: Array.from(projects),
       activeProject: project,
       chats: sortedChats,
@@ -2272,9 +2325,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   // be resumed: Chat History's Deleted tab is the surface that restores them.
   if (defaultModel === undefined || !autoCreate) {
     return {
-      models: chatModels,
-      configuredModelsAvailable,
-      configuredModelIds,
+      ...catalog,
       selectedModel: defaultModel,
       selectedModelElected: true,
       projects: Array.from(projects),
@@ -2294,9 +2345,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   );
   notifyChatUpsert(created.chat);
   return {
-    models: chatModels,
-    configuredModelsAvailable,
-    configuredModelIds,
+    ...catalog,
     selectedModel: created.chat.selectedModel,
     // The server's walk elected this model for the auto-created chat; no user chose it.
     selectedModelElected: true,
@@ -2336,12 +2385,75 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   return pending.then(cloneSessionPatch);
 }
 
+type SessionModelSelection = Pick<
+  SessionState,
+  "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
+>;
+
+function sessionModelSelection(state: SessionState): SessionModelSelection {
+  return {
+    selectedModel: state.selectedModel,
+    selectedModelElected: state.selectedModelElected,
+    restorableModelId: state.restorableModelId,
+    restorableModelElected: state.restorableModelElected,
+  };
+}
+
+function selectSessionModel(
+  remembered: string | undefined,
+  elected: boolean,
+  models: readonly ModelCapability[],
+  unreadyIds: readonly string[],
+): SessionModelSelection {
+  if (!elected && remembered !== undefined && unreadyIds.includes(remembered)) {
+    return {
+      selectedModel: undefined,
+      selectedModelElected: false,
+      restorableModelId: remembered,
+      restorableModelElected: false,
+    };
+  }
+  const selection = resolveSelection(remembered, models);
+  return {
+    selectedModel: selection.id,
+    selectedModelElected: selection.elected || elected,
+    restorableModelId: undefined,
+    restorableModelElected: false,
+  };
+}
+
+function sessionCatalogState(
+  capabilities: readonly ModelCapability[],
+  source: ClientModelCatalogEvidence["source"],
+  correlationId: string,
+): Pick<
+  SessionState,
+  | "models"
+  | "configuredModelIds"
+  | "configuredModelsAvailable"
+  | "unreadyConversationModelIds"
+  | "catalogCapabilities"
+  | "catalogSource"
+  | "catalogCorrelationId"
+> {
+  return {
+    models: capabilities.filter(isUsableConversationModel),
+    configuredModelIds: capabilities.map((model) => model.id),
+    configuredModelsAvailable: capabilities.length > 0,
+    unreadyConversationModelIds: capabilities
+      .filter((model) => isConversationEligibleModel(model) && model.conversationReady === false)
+      .map((model) => model.id),
+    catalogCapabilities: capabilities,
+    catalogSource: source,
+    catalogCorrelationId: correlationId,
+  };
+}
+
 function sessionSelectionUnavailable(state: SessionState): boolean {
-  const remembered = state.selectedModel ?? state.restorableModelId;
   return (
-    remembered !== undefined &&
-    state.configuredModelIds.includes(remembered) &&
-    !isPreservedSelection(remembered, state.models)
+    state.restorableModelId !== undefined &&
+    !state.restorableModelElected &&
+    state.unreadyConversationModelIds.includes(state.restorableModelId)
   );
 }
 
@@ -2353,51 +2465,100 @@ function currentSessionModelId(state: SessionState): string | undefined {
 
 function refreshSessionModels(
   previous: SessionState,
-  capabilities: readonly ModelCapability[],
+  result: Extract<GatewayModelRefreshResult, { kind: "success" }>,
 ): SessionState {
-  const models = capabilities.filter(isUsableConversationModel);
-  const configuredModelIds = capabilities.map((model) => model.id);
-  const remembered = previous.selectedModel ?? previous.restorableModelId;
-  const pending =
-    remembered !== undefined &&
-    configuredModelIds.includes(remembered) &&
-    !isPreservedSelection(remembered, models);
-  const selection = pending
-    ? { id: undefined, elected: false }
-    : resolveSelection(remembered, models);
-  const keptProvenance =
+  const catalog = sessionCatalogState(result.models, result.source, result.correlationId);
+  const elected =
     previous.selectedModel !== undefined
       ? previous.selectedModelElected
       : previous.restorableModelElected;
   return {
     ...previous,
-    models,
-    configuredModelIds,
-    configuredModelsAvailable: capabilities.length > 0,
-    selectedModel: selection.id,
-    selectedModelElected: selection.elected || keptProvenance,
-    restorableModelId: pending ? remembered : undefined,
-    restorableModelElected: pending && keptProvenance,
+    ...catalog,
+    ...selectSessionModel(
+      previous.selectedModel ?? previous.restorableModelId,
+      elected,
+      catalog.models,
+      catalog.unreadyConversationModelIds,
+    ),
   };
 }
 
-// A chat switch rebinds both the live selection and the pending-refresh memo to the newly
-// opened chat's persisted model, so a refresh that lands after a mid-pending switch cannot
-// restore the previous chat's choice.
 function selectionForChatSwitch(
   persistedModelId: string | undefined,
   models: readonly ModelCapability[],
-): Pick<
-  SessionState,
-  "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
-> {
-  const selection = resolveSelection(persistedModelId, models);
+  unreadyIds: readonly string[],
+): SessionModelSelection {
+  return selectSessionModel(persistedModelId, false, models, unreadyIds);
+}
+
+function reportSessionSelection(
+  state: SessionState,
+  outcome: "held" | "restored" | "fallback" | "refused",
+): void {
+  const id = state.selectedModel ?? state.restorableModelId;
+  reportModelCatalogStage(
+    "model selection availability",
+    {
+      surface: "chat",
+      source: state.catalogSource,
+      outcome,
+      configuredModelCount: state.configuredModelIds.length,
+      usableModelCount: state.models.length,
+      selectionProvenance:
+        state.selectedModelElected || state.restorableModelElected ? "elected" : "human",
+      ...(id === undefined ? {} : { selectionDigest: sha256Hex(id) }),
+    },
+    state.catalogCorrelationId,
+  );
+}
+
+interface SessionSelectionEvidenceState {
+  readonly id: string | undefined;
+  readonly held: boolean;
+  readonly elected: boolean;
+  readonly key: string;
+}
+
+function selectionEvidenceState(state: SessionState): SessionSelectionEvidenceState {
+  const id = state.selectedModel ?? state.restorableModelId;
+  const held = sessionSelectionUnavailable(state);
   return {
-    selectedModel: selection.id,
-    selectedModelElected: selection.elected,
-    restorableModelId: persistedModelId,
-    restorableModelElected: false,
+    id,
+    held,
+    elected: state.selectedModelElected,
+    key: JSON.stringify([state.activeChat?.id, id, held, state.selectedModelElected]),
   };
+}
+
+function selectionEvidenceOutcome(
+  previous: SessionSelectionEvidenceState | undefined,
+  next: SessionSelectionEvidenceState,
+): "held" | "restored" | "fallback" | undefined {
+  if (next.held) return "held";
+  if (previous?.held === true && previous.id === next.id) return "restored";
+  if (next.elected && previous !== undefined && previous.id !== next.id) return "fallback";
+  return undefined;
+}
+
+function useSessionSelectionEvidence(state: SessionState): void {
+  const previous = useRef<SessionSelectionEvidenceState | undefined>(undefined);
+  useEffect(() => {
+    if (state.catalogCorrelationId === undefined) return;
+    const next = selectionEvidenceState(state);
+    if (previous.current?.key === next.key) return;
+    const outcome = selectionEvidenceOutcome(previous.current, next);
+    previous.current = next;
+    if (outcome !== undefined) reportSessionSelection(state, outcome);
+  }, [state]);
+}
+
+function selectionForPersistedChat(state: SessionState, chat: Chat): SessionModelSelection {
+  return selectionForChatSwitch(
+    chat.selectedModel,
+    state.models,
+    state.unreadyConversationModelIds,
+  );
 }
 
 // Pending-refresh variant: empties the picker so a stale model cannot be selected mid-refresh,
@@ -2408,6 +2569,7 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
   return {
     ...previous,
     models: [],
+    catalogCorrelationId: undefined,
     // Pinned choreography: the selection is invalidated synchronously so no send can target
     // a model that may no longer exist — but the id is remembered so the success path can
     // restore it against the refreshed catalog instead of falling back to the first ready
@@ -3336,7 +3498,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const recoveredError = catalogError;
       catalogError = undefined;
       setError((previous) => (previous === recoveredError ? undefined : previous));
-      setState((previous) => refreshSessionModels(previous, result.models));
+      setState((previous) => refreshSessionModels(previous, result));
     });
   }, []);
 
@@ -3511,6 +3673,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const selectedSessionModelId = currentSessionModelId(state);
   const selectionUnavailable = sessionSelectionUnavailable(state);
+  useSessionSelectionEvidence(state);
+  const refuseHeldSelection = useCallback((): void => {
+    setError(t("chat.modelSelectionUnavailable"));
+    reportSessionSelection(sessionStateRef.current, "refused");
+  }, [t]);
 
   const openNewChat = useCallback(
     async (
@@ -3521,7 +3688,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
       const modelId = selectedSessionModelId;
       if (modelId === undefined) {
-        setError(NO_CONVERSATION_MODEL_MESSAGE);
+        if (selectionUnavailable) refuseHeldSelection();
+        else setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
       }
       setError(undefined);
@@ -3558,6 +3726,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     },
     [
       resetComposerForConversationSwitch,
+      selectionUnavailable,
+      refuseHeldSelection,
       state.selectedModel,
       state.selectedModelElected,
       selectedSessionModelId,
@@ -3605,7 +3775,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ...previous,
           chats: sorted,
           activeChat: latest,
-          ...selectionForChatSwitch(latest.selectedModel, state.models),
+          ...selectionForPersistedChat(previous, latest),
           messages: mergeCanonicalVoiceProjections(
             messagePayload.messages,
             latest.id,
@@ -3618,13 +3788,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [
-      autoCreate,
-      canonicalVoiceProjectionRef,
-      openNewChat,
-      resetComposerForConversationSwitch,
-      state.models,
-    ],
+    [autoCreate, canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch],
   );
 
   const openChat = useCallback(
@@ -3659,7 +3823,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             ...previous,
             activeProject: project,
             activeChat: chat,
-            ...selectionForChatSwitch(chat.selectedModel, state.models),
+            ...selectionForPersistedChat(previous, chat),
             messages: mergeCanonicalVoiceProjections(
               messagePayload.messages,
               chat.id,
@@ -3672,12 +3836,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [
-      canonicalVoiceProjectionRef,
-      resetComposerForConversationSwitch,
-      state.activeChat?.id,
-      state.models,
-    ],
+    [canonicalVoiceProjectionRef, resetComposerForConversationSwitch, state.activeChat?.id],
   );
 
   const addProject = useCallback(
@@ -4326,6 +4485,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         sendInFlight: isInFlight(sendStatusRef.current),
       });
       if (admission.kind === "rejected") {
+        if (selectionUnavailable && options?.canonicalVoiceTarget === undefined)
+          refuseHeldSelection();
         if (admission.error !== undefined) setError(admission.error);
         return { status: "not-sent" };
       }
@@ -4425,6 +4586,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [
       draftState,
       selectionUnavailable,
+      refuseHeldSelection,
       state.activeChat,
       state.selectedModel,
       state.models,
@@ -4837,6 +4999,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const regenerateMessage = useCallback(
     async (assistantMessageId: string): Promise<void> => {
       if (isInFlight(sendStatusRef.current)) return;
+      if (selectionUnavailable) {
+        refuseHeldSelection();
+        return;
+      }
       const chat = state.activeChat;
       const project = state.activeProject;
       const modelId = selectedSessionModelId;
@@ -4906,6 +5072,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [
       state.activeChat,
       state.activeProject,
+      selectionUnavailable,
+      refuseHeldSelection,
       selectedSessionModelId,
       buildMemoryRequest,
       updateOwnedSendStatus,
@@ -4932,7 +5100,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setNotice(undefined);
   }, []);
 
-  const noEligibleModels = !loading && selectedSessionModelId === undefined;
+  const modelCatalogRead = useMemo<ChatModelCatalogRead | undefined>(
+    () =>
+      state.catalogCorrelationId === undefined
+        ? undefined
+        : {
+            capabilities: state.catalogCapabilities,
+            source: state.catalogSource,
+            correlationId: state.catalogCorrelationId,
+          },
+    [state.catalogCapabilities, state.catalogSource, state.catalogCorrelationId],
+  );
+  const noEligibleModels = !loading && state.models.length === 0;
 
   return useMemo<UseChatSessionResult>(
     () => ({
@@ -4943,6 +5122,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       models: state.models,
       configuredModelsAvailable: state.configuredModelsAvailable,
       configuredModelIds: state.configuredModelIds,
+      modelCatalogRead,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -4998,6 +5178,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.models,
       state.configuredModelsAvailable,
       state.configuredModelIds,
+      modelCatalogRead,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

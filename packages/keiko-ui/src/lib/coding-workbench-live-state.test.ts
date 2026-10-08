@@ -109,6 +109,10 @@ function readyState(
     },
   });
   state = codingWorkbenchRuntimeReducer(state, { kind: "runtime-set", readiness: readiness() });
+  state = codingWorkbenchRuntimeReducer(state, {
+    kind: "select-model",
+    modelId: "verified-fixture-model",
+  });
   if (pairing === null) return state;
   return codingWorkbenchRuntimeReducer(state, { kind: "pairing-set", pairing });
 }
@@ -573,4 +577,21 @@ describe("mode selection, setup plans, and mutation failures", () => {
     const recovered = codingWorkbenchRuntimeReducer(failed, { kind: "mutation-complete" });
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
+});
+
+it("keeps the actual managed-gateway Start projection closed when its model selection clears", () => {
+  const ready = codingWorkbenchRuntimeReducer(readyState(false), {
+    kind: "run-set",
+    snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+  });
+  const selected = codingWorkbenchRuntimeReducer(ready, {
+    kind: "select-model",
+    modelId: "verified-model",
+  });
+  expect(selected.canStart).toBe(true);
+  const cleared = codingWorkbenchRuntimeReducer(selected, {
+    kind: "select-model",
+    modelId: null,
+  });
+  expect(cleared.canStart).toBe(false);
 });

@@ -2202,3 +2202,52 @@ describe("coding task composer submission evidence (#3877)", () => {
     expect(isClientDiagnosticIngestRequest({ ...report, composerActivity: undefined })).toBe(false);
   });
 });
+
+it("accepts only closed catalog/selection stage evidence with truthful bounded counts", () => {
+  const modelCatalog = {
+    surface: "chat",
+    source: "background",
+    outcome: "held",
+    configuredModelCount: 2,
+    usableModelCount: 1,
+    selectionProvenance: "human",
+    selectionDigest: "a".repeat(64),
+  };
+  const request = {
+    kind: "stage",
+    stage: "model selection availability",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 0,
+    modelCatalog,
+  };
+  expect(isClientStageIngestRequest(request)).toBe(true);
+  for (const invalid of [
+    { ...modelCatalog, modelId: "PRIVATE_MODEL" },
+    { ...modelCatalog, usableModelCount: 3 },
+    { ...modelCatalog, configuredModelCount: 1_000_001 },
+    { ...modelCatalog, selectionDigest: "PRIVATE_MODEL" },
+    { ...modelCatalog, selectionProvenance: undefined },
+    { ...modelCatalog, outcome: "changed" },
+    { ...modelCatalog, source: "PRIVATE_ENDPOINT" },
+  ])
+    expect(isClientStageIngestRequest({ ...request, modelCatalog: invalid })).toBe(false);
+  expect(isClientStageIngestRequest({ ...request, stage: "chat bind" })).toBe(false);
+  expect(isClientStageIngestRequest({ ...request, phase: "started", durationMs: undefined })).toBe(
+    false,
+  );
+  expect(isClientStageIngestRequest({ ...request, modelCatalog: undefined })).toBe(false);
+  expect(
+    isClientStageIngestRequest({
+      ...request,
+      stage: "gateway catalog adoption",
+      modelCatalog: {
+        surface: "coding-workbench",
+        source: "workbench",
+        outcome: "adopted",
+        configuredModelCount: 2,
+        usableModelCount: 1,
+      },
+    }),
+  ).toBe(true);
+});

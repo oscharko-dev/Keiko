@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "91c56961b0a35c4edb27318ce1478be3040605bd10bfe2d25ee4bc75214366b3" as const;
+  "d8fbbfdffe2d47ce868d207455052e45dd6f1103c25cf350b355dc4f8533eacc" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -4768,6 +4768,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "catalogOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "catalogSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "configuredModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "deletedCount",
               type: "integer",
               dataClass: "count",
@@ -4777,6 +4795,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "failedCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "modelSurface",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -4804,6 +4828,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "selectionDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "selectionProvenance",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "sourceTextBytesRead",
               type: "integer",
               dataClass: "count",
@@ -4815,8 +4851,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "usableModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

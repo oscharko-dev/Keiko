@@ -151,6 +151,7 @@ function clientStagePostBody(
         ordinal: report.ordinal,
         durationMs: report.durationMs,
         preview: report.preview,
+        ...(report.modelCatalog === undefined ? {} : { modelCatalog: report.modelCatalog }),
         ...(report.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: report.navigationOutcome }),

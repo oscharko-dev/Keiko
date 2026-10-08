@@ -1594,3 +1594,47 @@ contracts and an actual upgrade/rollback comparison without distributed product 
 native capabilities. Service activation and final comparison issues link that prerequisite.
 Original acceptance remains open. Final global gates, remaining review repair and final-head
 live/platform/package qualification remain pending.
+
+### Review closeout: truthful catalog selection and existing client-stage transport
+
+ROOT independently integrates the nine-owner model-stage, six-owner Chat-selection and four-owner
+Workbench-selection freezes against published parent
+`0ac9490356f80a94a1e39a3b0c5a1b1ef1319bfd`. Immutable manifests are
+`39d317f40eeff20c9ffedde796f83e1db98e2076c68b14bc38af57a925488e76`,
+`23cf09a3f182c040ec89a342112ca88b195996c9cbb64dcd5e1e537872fcd205` and
+`e411276172f1abcc0585dd07d8ffb05180269fd34d7d689ae6ab99f828d47b6d`.
+Only the existing client-stage evidence span is merged into the shared failure contract, retaining
+both published verification cause and runner-refusal digest obligations.
+
+The model-stage baseline rejects two actual contract/ingest controls and drops evidence in the
+actual UI transport; the new producer's absence is a separately recorded prerequisite failure.
+After integration, ROOT passes 516 contract/server tests, 116 UI tests and one actual
+UI-writer-to-transport-to-ingest-to-formatter control. The first generation used stale compiled
+leaf contracts and is retained as failed setup evidence; rebuilding the owning leaf before
+regeneration resolves it without a registry waiver. The initial private fixture outside the Vite
+root and scoped type-library lookup errors are also retained; the unchanged fixture is qualified
+from an owned temporary directory with actual production imports and deterministic cleanup, and
+strict types use the actual installed declaration files.
+
+The Chat test-only baseline reproduces nine behavioral failures and the missing actual catalog
+context; all 191 owning tests pass after integration. A deliberate, conversation-eligible choice
+is held during an observed outage and restored on recovery. Healthy alternatives stay selectable,
+automatically elected choices can fall back, and structurally ineligible models are not held.
+Persisted chat switches and metadata upserts preserve that distinction. Send, regenerate and new
+Chat give localized feedback when the deliberate choice is held. Unchanged background catalogs
+avoid redundant rebroadcast; initial reload discovery is requested once across expired-cache
+remounts. The existing visibility/backoff owner, Voice and repository-search behavior remain.
+
+Workbench controls reproduce six failures and then pass all 247 owning tests: four actual
+ineligible coding-model cases, cleared managed selection incorrectly allowing Start, and missing
+actual held/restored lifecycle evidence. The Workbench uses the actual unfiltered capability read
+for coding eligibility and truthfully projects a cleared managed selection as unavailable for a
+new Start. Saved human choices and the existing legacy runtime profile remain supported.
+
+Five contract/server and fourteen UI roots pass focused strict types and zero-warning lint.
+Canonical generation resolves 539/539 proofs and 30/30 scenarios with no violations. The actual
+catalog drift suite passes 97 controls and the separately executed failure-surface suite passes
+14 controls. Catalog and selection decisions use the existing routine client-stage transport with real catalog request
+parents, closed outcomes/counts and optional selection digests; they do not publish raw model IDs,
+provider addresses, credentials or task content. Final global gates, profile-refresh qualification,
+remaining review repairs and final-head live/platform/package proofs are still pending.

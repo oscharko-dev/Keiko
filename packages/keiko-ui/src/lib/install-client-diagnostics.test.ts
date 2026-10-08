@@ -1551,3 +1551,37 @@ it("delivers citation activation as routine closed evidence without consuming fa
   });
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });
+
+it("transports model selection facts through the existing routine stage owner", () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const modelCatalog = {
+    surface: "chat" as const,
+    source: "background" as const,
+    outcome: "held" as const,
+    configuredModelCount: 2,
+    usableModelCount: 1,
+    selectionProvenance: "human" as const,
+    selectionDigest: "a".repeat(64),
+  };
+  fanOutClientDiagnostic("Model selection stage", {
+    correlationId: "model-decision-123",
+    parentCorrelationId: "catalog-read-123",
+    stageReport: {
+      stage: "model selection availability",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 0,
+      modelCatalog,
+    },
+  });
+  const body = lastPostedBody(fetchMock);
+  expect(body).toMatchObject({
+    kind: "stage",
+    correlationId: "model-decision-123",
+    parentCorrelationId: "catalog-read-123",
+    modelCatalog,
+  });
+  expect(isClientStageIngestRequest(body)).toBe(true);
+});
