@@ -24,8 +24,9 @@ store.
 
 ### D1 — Only an admitted unread declaration can trigger the pass
 
-The server parses the bounded `<keiko-insufficient-evidence>` declaration as untrusted answer data.
-It classifies the answer and validates every declared path through the same explicit-path admission
+The server parses at most three distinct exact prose lines, `Missing evidence: [relative/path]`,
+as untrusted answer data. Quoted, indented and code examples cannot declare a read. It classifies the
+answer and validates every declared path through the same explicit-path admission
 used for connected-folder query references. The pass requires `answerKind === "insufficiency"`, at
 least one admitted unread in-scope path, and available authority and budgets.
 

@@ -1,4 +1,12 @@
-import type { GroundedAnswerEvidenceDeclaration } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  repairGroundedAnswer,
+  observeGroundedCitationBehaviour,
+} from "./grounded-answer-repair.js";
+import type {
+  CitationRepairDisposition,
+  GroundedCitationBehaviour,
+  GroundedAnswerEvidenceDeclaration,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { validateSingleAnswerEvidence } from "./grounded-answer-evidence.js";
 import {
   rerankGroundedCandidates,
@@ -1028,9 +1036,17 @@ export interface GroundedAnswerOptions {
   readonly modelOutputTokensMax?: number | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly currentQuestion?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly deadlineAtMs?: number | undefined;
 }
 
 export interface GroundedAnswerer {
+  repair?(
+    question: string,
+    pack: ConnectedContextPack,
+    original: string,
+    options: GroundedAnswerOptions,
+  ): Promise<GroundedAnswerPayload>;
   // The seam the route uses: production supplies a Model Gateway-backed answerer, while tests can
   // keep deterministic answerers.
   answer(
@@ -1062,6 +1078,8 @@ export interface OrchestratorInput {
 }
 
 export interface OrchestratorDeps {
+  readonly reliableCitationBehaviour?: GroundedCitationBehaviour | undefined;
+  readonly observeCitationBehaviour?: ((behaviour: GroundedCitationBehaviour) => void) | undefined;
   readonly answerer: GroundedAnswerer;
   readonly nowMs?: () => number;
   readonly signal?: AbortSignal | undefined;
@@ -1108,6 +1126,7 @@ export interface OrchestratorDeps {
 }
 
 export interface OrchestratorOutput extends GroundedAnswerEvidenceDeclaration {
+  readonly citationRepairDisposition?: CitationRepairDisposition | undefined;
   readonly sentEvidencePacks?: readonly ConnectedContextPack[] | undefined;
   readonly filesInPrompt?: number | undefined;
   readonly insufficiencyObservation?: GroundedAnswerResult["insufficiencyObservation"];
@@ -9624,6 +9643,29 @@ function answeredContextPack(
   };
 }
 
+async function refinedGroundedAnswer(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+  pack: ConnectedContextPack,
+  start: number,
+  nowMs: () => number,
+): Promise<import("./grounded-answer-repair.js").GroundedRepairResult> {
+  const initial = await groundedAnswerForPack(input, deps, pack);
+  const repairContext = {
+    answer: initial,
+    pack,
+    deps,
+    nowMs,
+    question: input.answerQuestion ?? input.query.text,
+    deadlineAtMs: pack.budget.elapsedMsMax === null ? undefined : start + pack.budget.elapsedMsMax,
+  };
+  const repair = await repairGroundedAnswer(repairContext);
+  return {
+    ...repair,
+    answer: observeGroundedCitationBehaviour({ ...repairContext, answer: repair.answer }),
+  };
+}
+
 async function answerWithAvailableContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -9633,7 +9675,8 @@ async function answerWithAvailableContext(
   start: number,
   nowMs: () => number,
 ): Promise<OrchestratorOutput> {
-  const answer = await groundedAnswerForPack(input, deps, pack);
+  const repair = await refinedGroundedAnswer(input, deps, pack, start, nowMs);
+  const answer = repair.answer;
   const elapsedMs = Math.max(0, nowMs() - start);
   const sentPack = answer.sentEvidencePacks?.[0] ?? pack;
   const unsupportedMarker = citationCoverageMarkerFor(
@@ -9641,7 +9684,7 @@ async function answerWithAvailableContext(
     sentPack,
     nowMs(),
     deps.correlationId,
-    citationObservation(input, answer),
+    { ...citationObservation(input, answer), citationRepairDisposition: repair.disposition },
   );
   const entailmentMarkers =
     answer.modelInvoked === false
@@ -9657,7 +9700,7 @@ async function answerWithAvailableContext(
     elapsedMs,
     modelInvoked: answer.modelInvoked ?? true,
     ...answerEvidenceFields(answer),
-    ...(answer.promptContext === undefined ? {} : { promptContext: answer.promptContext }),
+    citationRepairDisposition: repair.disposition,
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };
@@ -9700,6 +9743,8 @@ function answerEvidenceFields(
   answer: GroundedAnswerResult,
 ): Pick<
   OrchestratorOutput,
+  | "citationBehaviour"
+  | "promptContext"
   | "noEvidence"
   | "answerKind"
   | "insufficiencyDeclarations"
@@ -9708,6 +9753,10 @@ function answerEvidenceFields(
   | "filesInPrompt"
 > {
   return {
+    ...(answer.citationBehaviour === undefined
+      ? {}
+      : { citationBehaviour: answer.citationBehaviour }),
+    ...(answer.promptContext === undefined ? {} : { promptContext: answer.promptContext }),
     ...(answer.noEvidence === true ? { noEvidence: true } : {}),
     ...(answer.answerKind === undefined ? {} : { answerKind: answer.answerKind }),
     ...(answer.insufficiencyDeclarations === undefined

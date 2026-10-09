@@ -36,3 +36,86 @@ describe("single-source validated declaration delivery", () => {
     expect(result.pack.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
   });
 });
+
+describe("single-source bounded citation repair", () => {
+  it("repairs a substantive uncited answer once and preserves cumulative usage", async () => {
+    let calls = 0;
+    const answerer = {
+      answer: async () => {
+        calls += 1;
+        return {
+          content: "Feature returns true.",
+          usage: { promptTokens: 100, completionTokens: 10 },
+        };
+      },
+      repair: async () => {
+        calls += 1;
+        return {
+          content: "Feature returns true [src/Feature.ts:1].",
+          usage: { promptTokens: 120, completionTokens: 15 },
+        };
+      },
+    };
+    const result = await runConnectedRetrievalEval({ files, query: "Explain feature", answerer });
+    expect(calls).toBe(2);
+    expect(result.answer).toMatchObject({
+      citationBehaviour: "cites-after-repair",
+      citationRepairDisposition: "applied",
+    });
+    expect(result.pack.usage).toMatchObject({ modelInputTokens: 220, modelOutputTokens: 25 });
+    expect(result.pack.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(false);
+  });
+
+  it("retains the original answer when repair changes substantive text", async () => {
+    const result = await runConnectedRetrievalEval({
+      files,
+      query: "Explain feature",
+      answerer: {
+        answer: async () => "Feature returns true.",
+        repair: async () => "Feature returns false [src/Feature.ts:1].",
+      },
+    });
+    expect(result.answer).toMatchObject({
+      assistantContent: "Feature returns true.",
+      citationRepairDisposition: "rejected-content-changed",
+      citationBehaviour: "never",
+    });
+  });
+
+  it("keeps the original when an extra provider call fails", async () => {
+    const result = await runConnectedRetrievalEval({
+      files,
+      query: "Explain feature",
+      answerer: {
+        answer: async () => "Feature returns true.",
+        repair: async () => {
+          throw new TypeError("synthetic repair fault");
+        },
+      },
+    });
+    expect(result.answer).toMatchObject({
+      assistantContent: "Feature returns true.",
+      citationRepairDisposition: "failed",
+    });
+  });
+
+  it.each(["Which function do you mean?", "Missing evidence: [src/Feature.ts]"])(
+    "never repairs %s",
+    async (answer) => {
+      let repairCalls = 0;
+      const result = await runConnectedRetrievalEval({
+        files,
+        query: "Explain feature",
+        answerer: {
+          answer: async () => answer,
+          repair: async () => {
+            repairCalls += 1;
+            return answer;
+          },
+        },
+      });
+      expect(repairCalls).toBe(0);
+      expect(result.answer).toMatchObject({ citationRepairDisposition: "not-needed" });
+    },
+  );
+});

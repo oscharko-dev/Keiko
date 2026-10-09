@@ -1615,6 +1615,13 @@ export interface GroundedInsufficiencyDeclaration {
 
 export type GroundedAnswerKind = "answer" | "refusal" | "clarification" | "insufficiency";
 export type GroundedCitationBehaviour = "cites" | "cites-after-repair" | "never";
+export type CitationRepairDisposition =
+  | "not-needed"
+  | "applied"
+  | "rejected-content-changed"
+  | "failed"
+  | "skipped-budget"
+  | "skipped-capability";
 
 export interface GroundedAnswerEvidenceDeclaration {
   readonly answerKind?: GroundedAnswerKind | undefined;
