@@ -1,0 +1,354 @@
+import {
+  SUPPORT_RETRIEVAL_MISS_FINDING_SCHEMA_VERSION,
+  SUPPORT_RETRIEVAL_MISS_REASONS,
+  isActivityLogIdentityDigest,
+  isActivityLogInstanceId,
+  isActivityLogProcessId,
+  type SupportRetrievalMissFields,
+  type SupportRetrievalMissFinding,
+  type SupportRetrievalMissReason,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { groupConnectedContextOmissions } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CANDIDATE_OMISSION_REASONS,
+  type CandidateOmissionReason,
+} from "@oscharko-dev/keiko-contracts/connected-context";
+
+interface RetrievalLine {
+  readonly op: string;
+  readonly correlationId?: string | undefined;
+  readonly pid?: number | undefined;
+  readonly instanceId?: string | undefined;
+  readonly extra?: Readonly<Record<string, unknown>> | undefined;
+}
+
+type MutableFields = {
+  -readonly [Key in keyof SupportRetrievalMissFields]: SupportRetrievalMissFields[Key];
+};
+type ObservedFields = {
+  readonly [Key in keyof SupportRetrievalMissFields]?: SupportRetrievalMissFields[Key] | undefined;
+};
+interface QueryObservation {
+  readonly queryIdentitySha256?: string;
+  readonly fields: MutableFields;
+  declaredUnreadInScopeCount: number;
+  omissionGroups?: SupportRetrievalMissFinding["omissionGroups"];
+}
+interface TurnObservation {
+  readonly correlationId: string;
+  readonly process?: SupportRetrievalMissFinding["process"];
+  readonly scopeIdentitySha256?: string;
+  readonly queries: Map<string, QueryObservation>;
+  answered: boolean;
+}
+
+const COUNT_FIELDS = [
+  "declaredUnreadInScopeCount",
+  "explicitPathRejectedCount",
+  "addressedBasenameDedupDemotedCount",
+  "followUpPassCount",
+  "selectedFileCount",
+] as const;
+const REJECTION_REASONS = [
+  "outside-scope",
+  "denied",
+  "missing",
+  "ignored",
+  "generated",
+  "binary",
+  "size-exceeded",
+  "unsupported-format",
+] as const;
+const OMISSION_FIELDS = {
+  "outside-scope": "omittedOutsideScopeCount",
+  binary: "omittedBinaryCount",
+  generated: "omittedGeneratedCount",
+  ignored: "omittedIgnoredCount",
+  "size-exceeded": "omittedSizeExceededCount",
+  "near-duplicate": "omittedNearDuplicateCount",
+  "low-relevance": "omittedLowRelevanceCount",
+  "redacted-only": "omittedRedactedOnlyCount",
+  "budget-exhausted": "omittedBudgetExhaustedCount",
+  "tool-unavailable": "omittedToolUnavailableCount",
+  "unsupported-format": "omittedUnsupportedFormatCount",
+  "no-text-layer": "omittedNoTextLayerCount",
+  "malformed-document": "omittedMalformedDocumentCount",
+  "encrypted-document": "omittedEncryptedDocumentCount",
+} as const satisfies Readonly<Record<CandidateOmissionReason, string>>;
+
+function count(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function enumValue<const Values extends readonly string[]>(
+  value: unknown,
+  values: Values,
+): Values[number] | undefined {
+  return typeof value === "string" ? values.find((candidate) => candidate === value) : undefined;
+}
+
+function observedEnums(extra: Readonly<Record<string, unknown>>): ObservedFields {
+  return {
+    followUpOutcome: enumValue(extra.followUpOutcome, [
+      "answered",
+      "still-insufficient",
+      "budget-refused",
+      "elapsed-refused",
+      "disabled",
+    ]),
+    semanticProviderDisposition: enumValue(extra.semanticProviderDisposition, [
+      "not-evaluated",
+      "unavailable",
+      "suppressed",
+      "not-used",
+      "used",
+      "rejected",
+    ]),
+    retrievalIntent: enumValue(extra.retrievalIntent, [
+      "project-metadata",
+      "repository-overview",
+      "targeted-code-search",
+      "diagnostic-search",
+      "conversational-follow-up",
+      "clarification-needed",
+    ]),
+    continuityReferentSource: enumValue(extra.continuityReferentSource, [
+      "none",
+      "previous-user-question",
+      "assistant-paths",
+      "assistant-declaration",
+      "assistant-paths-and-declaration",
+    ]),
+  };
+}
+
+function assignDefined(fields: MutableFields, incoming: ObservedFields): void {
+  for (const key of Object.keys(incoming)) {
+    const descriptor = Object.getOwnPropertyDescriptor(incoming, key);
+    if (descriptor?.value !== undefined)
+      Object.defineProperty(fields, key, {
+        value: descriptor.value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+  }
+}
+
+function updateFields(fields: MutableFields, extra: Readonly<Record<string, unknown>>): void {
+  for (const key of COUNT_FIELDS) {
+    const value = count(extra[key]);
+    if (value !== undefined) fields[key] = value;
+  }
+  if (typeof extra.keepOneFallbackApplied === "boolean")
+    fields.keepOneFallbackApplied = extra.keepOneFallbackApplied;
+  if (Array.isArray(extra.explicitPathRejectionReasons)) {
+    const reasons = extra.explicitPathRejectionReasons.map((value: unknown) =>
+      enumValue(value, REJECTION_REASONS),
+    );
+    if (reasons.length <= 8 && reasons.every((value) => value !== undefined))
+      fields.explicitPathRejectionReasons = reasons;
+  }
+  assignDefined(fields, observedEnums(extra));
+}
+
+function omissionGroups(
+  extra: Readonly<Record<string, unknown>>,
+): SupportRetrievalMissFinding["omissionGroups"] {
+  const counts: Record<CandidateOmissionReason, number> = Object.create(null) as Record<
+    CandidateOmissionReason,
+    number
+  >;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    const value = count(extra[OMISSION_FIELDS[reason]]);
+    if (value === undefined) return undefined;
+    counts[reason] = value;
+  }
+  return groupConnectedContextOmissions(counts);
+}
+
+function observeQuery(
+  turn: TurnObservation,
+  extra: Readonly<Record<string, unknown>>,
+  index: number,
+): void {
+  const queryIdentitySha256 = isActivityLogIdentityDigest(extra.queryIdentitySha256)
+    ? extra.queryIdentitySha256
+    : undefined;
+  const key = queryIdentitySha256 ?? `unknown:${String(index)}`;
+  const query = turn.queries.get(key) ?? {
+    ...(queryIdentitySha256 === undefined ? {} : { queryIdentitySha256 }),
+    fields: {},
+    declaredUnreadInScopeCount: 0,
+  };
+  updateFields(query.fields, extra);
+  query.omissionGroups = omissionGroups(extra) ?? query.omissionGroups;
+  query.declaredUnreadInScopeCount = Math.max(
+    query.declaredUnreadInScopeCount,
+    count(extra.declaredUnreadInScopeCount) ?? 0,
+  );
+  if ((query.fields.followUpPassCount ?? 0) > 0 && query.fields.followUpOutcome === "answered")
+    turn.answered = true;
+  turn.queries.set(key, query);
+}
+
+function observedTurns(
+  correlationId: string,
+  lines: readonly RetrievalLine[],
+): readonly TurnObservation[] {
+  const turns = new Map<string, TurnObservation>();
+  lines.forEach((line, index) => {
+    const extra = retrievalExtra(line);
+    if (extra === undefined) return;
+    const scopeIdentitySha256 = isActivityLogIdentityDigest(extra.scopeIdentitySha256)
+      ? extra.scopeIdentitySha256
+      : undefined;
+    const actualCorrelation = line.correlationId ?? correlationId;
+    const key = JSON.stringify([
+      actualCorrelation,
+      line.pid,
+      line.instanceId,
+      scopeIdentitySha256 ?? `unknown:${String(index)}`,
+    ]);
+    const turn = turns.get(key) ?? {
+      correlationId: actualCorrelation,
+      ...observedProcess(line),
+      ...(scopeIdentitySha256 === undefined ? {} : { scopeIdentitySha256 }),
+      queries: new Map(),
+      answered: false,
+    };
+    observeQuery(turn, extra, index);
+    turns.set(key, turn);
+  });
+  return [...turns.values()];
+}
+
+function retrievalExtra(line: RetrievalLine): Readonly<Record<string, unknown>> | undefined {
+  if (!line.op.startsWith("search.connected-context.") && !line.op.startsWith("search.citations."))
+    return undefined;
+  const extra = line.extra;
+  if (extra === undefined) return undefined;
+  const names = [
+    ...COUNT_FIELDS,
+    "keepOneFallbackApplied",
+    "explicitPathRejectionReasons",
+    "followUpOutcome",
+    "semanticProviderDisposition",
+    "retrievalIntent",
+    "continuityReferentSource",
+  ];
+  return names.some((name) => Object.hasOwn(extra, name)) ? extra : undefined;
+}
+
+function observedProcess(line: RetrievalLine): Pick<TurnObservation, "process"> {
+  return isActivityLogProcessId(line.pid) && isActivityLogInstanceId(line.instanceId)
+    ? { process: { pid: line.pid, instanceId: line.instanceId } }
+    : {};
+}
+
+function pickFields(
+  fields: SupportRetrievalMissFields,
+  keys: readonly (keyof SupportRetrievalMissFields)[],
+): SupportRetrievalMissFields {
+  const picked: MutableFields = {};
+  for (const key of keys) {
+    if (fields[key] !== undefined)
+      Object.defineProperty(picked, key, { value: fields[key], enumerable: true });
+  }
+  return picked;
+}
+
+function basicReasons(fields: SupportRetrievalMissFields): readonly SupportRetrievalMissReason[] {
+  const reasons: SupportRetrievalMissReason[] = [];
+  if ((fields.explicitPathRejectedCount ?? 0) > 0) reasons.push("explicit-path-rejected");
+  if (fields.keepOneFallbackApplied === true) reasons.push("low-confidence-selection");
+  if ((fields.addressedBasenameDedupDemotedCount ?? 0) > 0)
+    reasons.push("basename-dedup-demoted-explicit");
+  if (stillInsufficient(fields)) reasons.push("follow-up-still-insufficient");
+  if (overviewOnFollowUp(fields)) reasons.push("intent-overview-on-follow-up");
+  return reasons;
+}
+
+function stillInsufficient(fields: SupportRetrievalMissFields): boolean {
+  return (fields.followUpPassCount ?? 0) > 0 && fields.followUpOutcome === "still-insufficient";
+}
+
+function overviewOnFollowUp(fields: SupportRetrievalMissFields): boolean {
+  return (
+    fields.retrievalIntent === "repository-overview" &&
+    fields.continuityReferentSource !== undefined &&
+    fields.continuityReferentSource !== "none"
+  );
+}
+
+function semanticMiss(fields: SupportRetrievalMissFields, actualMiss: boolean): boolean {
+  const unavailable =
+    fields.semanticProviderDisposition === "unavailable" ||
+    fields.semanticProviderDisposition === "rejected";
+  const emptyTargeted =
+    fields.selectedFileCount === 0 &&
+    (fields.retrievalIntent === "targeted-code-search" ||
+      fields.retrievalIntent === "diagnostic-search");
+  return unavailable && (actualMiss || emptyTargeted);
+}
+
+const TRIGGER_FIELDS = {
+  "declared-unread-in-scope": ["declaredUnreadInScopeCount"],
+  "explicit-path-rejected": ["explicitPathRejectedCount", "explicitPathRejectionReasons"],
+  "low-confidence-selection": ["keepOneFallbackApplied"],
+  "basename-dedup-demoted-explicit": ["addressedBasenameDedupDemotedCount"],
+  "follow-up-still-insufficient": ["followUpPassCount", "followUpOutcome"],
+  "semantic-unavailable-with-miss": [
+    "semanticProviderDisposition",
+    "declaredUnreadInScopeCount",
+    "explicitPathRejectedCount",
+    "keepOneFallbackApplied",
+    "addressedBasenameDedupDemotedCount",
+    "followUpPassCount",
+    "followUpOutcome",
+    "selectedFileCount",
+    "retrievalIntent",
+  ],
+  "intent-overview-on-follow-up": ["retrievalIntent", "continuityReferentSource"],
+} as const satisfies Readonly<
+  Record<SupportRetrievalMissReason, readonly (keyof SupportRetrievalMissFields)[]>
+>;
+
+function queryFindings(
+  turn: TurnObservation,
+  query: QueryObservation,
+): readonly SupportRetrievalMissFinding[] {
+  const fields = { ...query.fields };
+  const reasons = new Set(basicReasons(fields));
+  const unresolved = !turn.answered && query.declaredUnreadInScopeCount > 0;
+  if (unresolved) {
+    fields.declaredUnreadInScopeCount = query.declaredUnreadInScopeCount;
+    reasons.add("declared-unread-in-scope");
+  }
+  if (semanticMiss(fields, reasons.size > 0)) reasons.add("semantic-unavailable-with-miss");
+  return SUPPORT_RETRIEVAL_MISS_REASONS.filter((reason) => reasons.has(reason)).map((reason) => ({
+    kind: "retrieval-miss",
+    schemaVersion: SUPPORT_RETRIEVAL_MISS_FINDING_SCHEMA_VERSION,
+    correlationId: turn.correlationId,
+    reason,
+    ...(turn.process === undefined ? {} : { process: turn.process }),
+    ...(turn.scopeIdentitySha256 === undefined
+      ? {}
+      : { scopeIdentitySha256: turn.scopeIdentitySha256 }),
+    ...(query.queryIdentitySha256 === undefined
+      ? {}
+      : { queryIdentitySha256: query.queryIdentitySha256 }),
+    fields: pickFields(fields, TRIGGER_FIELDS[reason]),
+    ...(query.omissionGroups === undefined ? {} : { omissionGroups: query.omissionGroups }),
+  }));
+}
+
+/** Pure derivation from reader-validated timeline records; no registry supplied by a report. */
+export function projectRetrievalMisses(
+  correlationId: string,
+  lines: readonly RetrievalLine[],
+): readonly SupportRetrievalMissFinding[] {
+  return observedTurns(correlationId, lines).flatMap((turn) =>
+    [...turn.queries.values()].flatMap((query) => queryFindings(turn, query)),
+  );
+}

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyGroundedAnswerKind,
+  declaredInsufficiencyPaths,
+  validateGroundedAnswerEvidence,
   missingCitationMarkerFor,
   parseInlineCitations,
   parseInsufficiencyDeclarations,
@@ -26,6 +28,36 @@ function declaration(path: string): string {
 }
 
 describe("verified missing-evidence declarations", () => {
+  it("exposes only bounded syntactic paths for legacy continuity, without claiming membership", () => {
+    expect(
+      declaredInsufficiencyPaths(
+        [
+          declaration("src/not-discovered.ts"),
+          declaration("../outside.ts"),
+          declaration("src/missing.ts"),
+          declaration("README.md"),
+        ].join("\n"),
+      ),
+    ).toEqual(["src/not-discovered.ts", "src/missing.ts"]);
+    expect(declaredInsufficiencyPaths("```\nMissing evidence: [src/missing.ts]\n```")).toEqual([]);
+  });
+
+  it("retains original rejection counts while projecting an honest nonempty fallback", () => {
+    const result = validateGroundedAnswerEvidence(
+      declaration("private/outside.ts"),
+      scopeIndex,
+      "Welche Belege gibt es?",
+    );
+    expect(result.content).toContain("nicht bestätigt");
+    expect(result.answerKind).toBe("insufficiency");
+    expect(result.insufficiencyDeclarations).toBeUndefined();
+    expect(result.insufficiencyObservation).toMatchObject({
+      declaredCount: 1,
+      inScopeCount: 0,
+      notInScopeCount: 1,
+    });
+    expect(JSON.stringify(result)).not.toContain("private/outside.ts");
+  });
   it("projects only verified paths with their actual read state and body-free counts", () => {
     const result = parseInsufficiencyDeclarations(
       [
