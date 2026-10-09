@@ -77,6 +77,33 @@ a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description a
 checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
 scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
 
+Connected-folder retrieval joins `search.connected-context.source-details`, `selection-details`,
+`completion-details`, and `answer-details` with the completed operation under the same request
+correlation, process, and source/query digests. These typed siblings retain the existing contextual
+field cap. Source details describe actual path/reference admission and eligibility; selection
+details describe calibrated floors, high/low confidence, addressed-file demotion, reranker
+disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
+final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.
+Only counts, closed dispositions and digests enter the log, never paths, declarations or answers.
+
+`search.connected-context.answer-details` records answer kind, observed citation behaviour,
+declaration counts, repair disposition, and actual follow-up trigger, pass/admission counts,
+outcome and configuration disposition. Technical failures retain the existing closed error header,
+reduced frames and causes. Initial synthesis plus either marker repair or an insufficiency follow-up
+shares two synthesis slots and the original remaining budgets. Provider retries and the separately
+bounded entailment stage keep their existing contracts. Normalized output is buffered before
+publication; rejected declarations cannot escape through streamed chunks. The existing allocator's
+high/exceeded pressure refuses follow-up. `KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX` defaults to `1`;
+explicit `0` disables it, and other explicit values fail closed to zero passes with an invalid
+configuration observation. See [ADR-0180](docs/adr/ADR-0180-bounded-connected-folder-follow-up.md).
+
+Support analysis joins these siblings rather than assuming every metric appears on the completed
+line. An answered follow-up disposes the initial unread declaration for its original source and
+logical turn even if the selection fingerprint changes. Missing historical fields remain unknown.
+Healthy lexical answers do not become retrieval misses because semantic search is unconfigured.
+Optional live semantic refresh separately requires `KEIKO_REPO_SEMANTIC_REFRESH_FILES_MAX`; its
+default is `0`, its enabled cap is eight safe fragments, and it never mutates a persisted pod.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
